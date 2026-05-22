@@ -47,6 +47,14 @@ import tempfile
 
 GRACE_SECONDS = 4200  # I-3: > 3600s ScheduleWakeup clamp ceiling + slack.
 DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-unit stall timeout default.
+# Bug #9: a `driver=="self"` chain whose last beat is older than THIS is treated
+# as a DEAD chain by the Stop hook (it no longer blocks stop). It sits ABOVE the
+# 3600s ScheduleWakeup max-tick-delay + slack (so a healthy slow chain is never
+# false-flagged as dead and prematurely un-blocked) yet BELOW GRACE_SECONDS (so a
+# dead chain stops blocking stop BEFORE is_orphaned would surface it for resume —
+# the two purposes are reconciled by this ordering: 600 stall < 3900 stop-stale <
+# 4200 orphan-grace). See on-stop.py's module docstring.
+DRIVER_SELF_STALE_SECONDS = 3900
 
 LOOP_PHASES = ("plan", "seam", "work", "done")
 # Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
@@ -92,6 +100,16 @@ class LedgerExists(LedgerError):
 
 class InvalidTransition(LedgerError):
     """Raised when a state transition is not in the grammar."""
+
+
+class StaleVerdict(LedgerError):
+    """Raised when ``record_verdict`` carries an ``attempt`` older than the unit's
+    current ``attempt`` (Bug #6 — a verdict from a SUPERSEDED dispatch attempt).
+
+    Distinct from ``InvalidTransition`` so a caller can tell "rejected because the
+    verdict is stale" (a slow agent from a retried-past attempt) apart from
+    "rejected because the grammar forbids it". The ledger is NOT written.
+    """
 
 
 class UnknownUnit(LedgerError):
@@ -480,6 +498,14 @@ def _normalize_unit(u: dict) -> dict:
             u.get("stall_threshold_seconds", DEFAULT_STALL_THRESHOLD_SECONDS)
         ),
         "last_error": u.get("last_error"),
+        # Bug #6 (attempt-identity): the dispatch generation counter. Each
+        # pending->dispatched bump increments it; record_verdict carries the
+        # attempt it is writing for and a verdict whose attempt is OLDER than this
+        # is rejected (a stale verdict from a superseded attempt — e.g. a slow
+        # agent that was retried). Defaults to 0 — additive / backward-compatible:
+        # an old ledger with no `attempt` field reads as 0 and behaves identically
+        # when record_verdict is called without an explicit attempt.
+        "attempt": int(u.get("attempt", 0) or 0),
         "findings": list(u.get("findings") or []),
     }
 
@@ -540,12 +566,51 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
-def record_verdict(repo_root, run_id, unit_id, findings):
-    """dispatched -> verdict-returned: OVERWRITE findings + set verdict_at.
+# States from which record_verdict may write a verdict. This is a record_verdict
+# -ONLY transition set, deliberately WIDER than ALLOWED_TRANSITIONS (which governs
+# the findings-free `transition()` path). It is NOT added to ALLOWED_TRANSITIONS
+# because doing so would let `transition()` move state without findings — exactly
+# what the "use record_verdict() to write findings" guard blocks.
+#
+#   * dispatched        — the normal first verdict self-write (§3 grammar edge).
+#   * verdict-returned   — a re-verdict (the re-review path; latest-only findings).
+#   * stalled            — Bug #7 RECOVERY: a healthy-but-slow review that was
+#                          marked `stalled` past stall_threshold_seconds finishes
+#                          and self-writes a GENUINE verdict. That is real work;
+#                          throwing it away (InvalidTransition, silently) loses a
+#                          completed verdict AND leaves last_error null so it looks
+#                          identical to a true timeout. We RECOVER it instead. The
+#                          attempt-identity check (Bug #6) still rejects a recovery
+#                          from a SUPERSEDED attempt (an operator retried, a fresh
+#                          agent already verdicted), so a stale late verdict from a
+#                          retried-past attempt is NOT recovered.
+_VERDICT_WRITABLE_STATES = frozenset({"dispatched", "verdict-returned", "stalled"})
+
+
+def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
+    """{dispatched, verdict-returned, stalled} -> verdict-returned: OVERWRITE
+    findings + set verdict_at.
 
     This is the background-agent verdict-self-write path (U10). It is the ONLY
     writer of ``findings[]`` (§4.2). ``findings`` fully REPLACES the prior array.
     Predicate recomputed in the same atomic snapshot (I-1).
+
+    ``attempt`` (Bug #6 — attempt-identity): the dispatch generation the verdict is
+    written FOR. The orchestrator increments a unit's ``attempt`` on each
+    pending->dispatched dispatch; a background agent launched for attempt N carries
+    N here. A verdict whose ``attempt`` is OLDER than the unit's current ``attempt``
+    is REJECTED (``StaleVerdict``) — it is a stale verdict from a SUPERSEDED attempt
+    (e.g. a slow agent A stalled, the operator retried, agent B was dispatched as a
+    fresh attempt and verdicted; A then finishes and tries to clobber B's verdict
+    with stale findings). ``attempt=None`` skips the check (back-compat: callers /
+    tests that do not track attempts behave exactly as before). Equal-attempt is
+    ACCEPTED (the legitimate re-review / recovery path).
+
+    Bug #7 (late-verdict recovery): a genuine verdict arriving from a unit currently
+    in ``stalled`` is RECOVERED to verdict-returned (it is real work — see
+    ``_VERDICT_WRITABLE_STATES``), UNLESS Bug #6's attempt check rejects it as
+    stale. The two interact: recovery is only for the CURRENT attempt; a late
+    verdict from a superseded attempt is still rejected, never recovered.
     """
     norm = []
     for f in findings or []:
@@ -554,16 +619,48 @@ def record_verdict(repo_root, run_id, unit_id, findings):
             raise LedgerError(f"invalid finding severity: {sev!r}")
         norm.append({"severity": sev, "note": f.get("note", "")})
 
+    skip_attempt = (
+        os.environ.get("CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK") == "1"
+    )
+    skip_recovery = (
+        os.environ.get("CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY") == "1"
+    )
+
     def mutate(ledger):
         unit = _find_unit(ledger, unit_id)
         current = unit.get("state")
-        if "verdict-returned" not in ALLOWED_TRANSITIONS.get(current, set()) and current != "verdict-returned":
+
+        # Bug #6: reject a verdict from a superseded attempt BEFORE any write. This
+        # is checked first so a stale late verdict is never recovered (it interacts
+        # with Bug #7's recovery: only a current-attempt late verdict recovers).
+        if not skip_attempt and attempt is not None:
+            cur_attempt = int(unit.get("attempt", 0) or 0)
+            if int(attempt) < cur_attempt:
+                raise StaleVerdict(
+                    f"verdict for unit {unit_id!r} carries attempt {attempt} "
+                    f"but current attempt is {cur_attempt} — superseded; rejected"
+                )
+
+        # Bug #7: a stalled unit's GENUINE late verdict is recoverable. The
+        # deliberate-fail hatch forces the old (pre-fix) check that ONLY permitted
+        # dispatched/verdict-returned, so a late verdict from a stalled unit is
+        # lost to InvalidTransition.
+        writable = (
+            {"dispatched", "verdict-returned"}
+            if skip_recovery
+            else _VERDICT_WRITABLE_STATES
+        )
+        if current not in writable:
             raise InvalidTransition(
                 f"{current!r} -> 'verdict-returned' not permitted for unit {unit_id!r}"
             )
+
         unit["state"] = "verdict-returned"
         unit["findings"] = norm
         unit["verdict_at"] = _now_iso()
+        # A recovered late verdict is real work — clear any stale last_error so the
+        # unit no longer looks like an unresolved timeout/raise.
+        unit["last_error"] = None
         return norm
 
     return _with_locked_ledger(repo_root, run_id, mutate)

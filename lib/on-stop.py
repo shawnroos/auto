@@ -36,6 +36,30 @@ FRESHNESS: we read exit_predicate_result.met directly (the I-1-fresh field —
 schema §5). No cached/derived `done` copy exists; a re-review reopening the
 predicate (verdict-returned → pending) is reflected on that very write, so the
 hook can never read a stale met:true and allow a premature stop.
+
+STALE-CHAIN CARVE-OUT (Bug #9):
+    The `driver == "self"` block above assumes a LIVE tick chain. But a tick can
+    be killed AFTER it writes the beat and BEFORE it re-arms its successor. That
+    leaves a ledger with driver=="self", met==false, and a fresh-ISH last_beat_at
+    — a DEAD chain that, without a freshness check, would block EVERY session's
+    stop in the repo until last_beat_at finally ages past GRACE (≈70 min, when
+    is_orphaned surfaces it for resume). So we add a freshness gate: a
+    driver=="self" run whose last_beat_at is older than DRIVER_SELF_STALE_SECONDS
+    is treated as a DEAD chain → it does NOT block stop (it will be surfaced for
+    resume by the SessionStart hook instead).
+
+    THREE THRESHOLDS, reconciled (smallest → largest, no overlap of purpose):
+      * DEFAULT_STALL_THRESHOLD_SECONDS = 600  — per-UNIT dispatch timeout (tick).
+      * DRIVER_SELF_STALE_SECONDS       = 3900 — per-RUN dead-chain gate (THIS
+            hook). Above the 3600s ScheduleWakeup max-tick-delay + slack, so a
+            healthy slow-paced chain (last beat ≤3600s ago) is NEVER misread as
+            dead and prematurely un-blocked (a false un-block could let a real
+            loop stop early). Below GRACE so a dead chain stops blocking BEFORE
+            is_orphaned would surface it — the two purposes (anti-false-double-
+            drive vs anti-stale-block) do not fight: by the time we DECLINE to
+            block (3900s), the resume path has not yet (4200s) claimed it, so
+            there is a clean ~300s hand-off window and no double-claim.
+      * GRACE_SECONDS                   = 4200 — orphan/resume window (I-3).
 """
 
 from __future__ import annotations
@@ -67,7 +91,7 @@ def _read_stop_hook_active(raw: str) -> bool:
     return bool(isinstance(data, dict) and data.get("stop_hook_active"))
 
 
-def _blocking_runs(repo_root: str):
+def _blocking_runs(repo_root: str, now=None):
     """Return [(run_id, predicate_dict)] for every ACTIVE run that is NOT met.
 
     Lock-free: each ledger file is read as a whole via the atomic-rename
@@ -75,6 +99,19 @@ def _blocking_runs(repo_root: str):
     a bad ledger break the stop machinery).
     """
     ledger = _load_ledger()
+    # Bug #9: the dead-self-chain freshness gate. A driver=="self" run whose last
+    # beat is older than this is treated as a dead chain (it does NOT block stop).
+    # The hatch forces the OLD behaviour (no freshness check) so the deliberate-
+    # fail test can prove a stale chain WOULD block without the gate.
+    skip_staleness = (
+        os.environ.get("CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK") == "1"
+    )
+    stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
+    import datetime
+
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+
     dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
     blocking = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
@@ -87,11 +124,25 @@ def _blocking_runs(repo_root: str):
             continue
         if led.get("loop_phase") == "done":
             continue
+        loop = led.get("loop") or {}
         # SEAM/MANUAL carve-out: a manual-driver run is the engine signaling a
         # valid stop-point awaiting human input (seam pause). Only a live tick
         # chain (driver == "self") expects to keep going, so only it gates stop.
-        if (led.get("loop") or {}).get("driver") == "manual":
+        if loop.get("driver") == "manual":
             continue
+        # Bug #9 STALE-CHAIN carve-out: a driver=="self" run whose last_beat_at is
+        # older than DRIVER_SELF_STALE_SECONDS is a DEAD chain (tick killed after
+        # the beat, before the re-arm). It must NOT block stop — it will be
+        # surfaced for resume by the SessionStart hook. A healthy slow chain (last
+        # beat within the threshold) STILL blocks. A missing/unparseable
+        # last_beat_at on a self-driver run is treated as stale (no proof of
+        # liveness → do not hold the stop hostage on a chain that never beat).
+        if not skip_staleness and loop.get("driver") == "self":
+            last_beat = ledger._parse_iso(loop.get("last_beat_at"))
+            if last_beat is None:
+                continue
+            if (now - last_beat).total_seconds() > stale_threshold:
+                continue
         predicate = led.get("exit_predicate_result") or {}
         # Read the I-1-fresh `met` directly (never re-derived).
         if not predicate.get("met"):

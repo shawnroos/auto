@@ -423,6 +423,105 @@ else
   fail "st_u1=$st_u1 st_u2=$st_u2 sev_u1=$sev_u1 sev_u2=$sev_u2 blockers=$blockers majors=$majors (expected verdict-returned x2 / blocker / major / 1 / 1)"
 fi
 
+# ─── Scenario 9: Bug #8 — a launch raise does not abandon the wave ────────────
+# launch_fn raises on unit 2 of 4. The guarded launch must: (a) still process
+# units 1, 3, 4 (they dispatch + launch normally), (b) record unit 2 as
+# launch-failed and mark it `stalled` with a launch last_error (NOT a phantom
+# `dispatched` with no agent), and (c) NOT propagate the raise / abandon the batch.
+it "Bug #8: launch_fn raises on unit 2 of 4 -> units 1,3,4 still dispatched, unit 2 recorded launch-failed (stalled), batch not abandoned"
+ledger_init "launch-fail" \
+  '[{"id":"U1","state":"pending"},{"id":"U2","state":"pending"},{"id":"U3","state":"pending"},{"id":"U4","state":"pending"}]' \
+  >/dev/null 2>&1
+lf="$("$PY" - "$REPO" "launch-fail" "$ORCH_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, orch_py, ledger_py = sys.argv[1:5]
+ospec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+o = importlib.util.module_from_spec(ospec); ospec.loader.exec_module(o)
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(m)
+
+launched = []
+def flaky_launch(uid, attempt=0):
+    if uid == "U2":
+        raise RuntimeError("agent spawn failed for U2")
+    launched.append(uid)
+
+# A SINGLE dispatch_batch over all 4, cap high enough to take them all. U2's
+# launch raises; the wave must continue.
+res = o.dispatch_batch(repo, run, ["U1","U2","U3","U4"], 4, launch_fn=flaky_launch)
+status = {uid: st for uid, st in res}
+led = m.read_ledger(repo, run)
+states = {u["id"]: u["state"] for u in led["units"]}
+u2 = next(u for u in led["units"] if u["id"] == "U2")
+print(json.dumps({
+    "launched": sorted(launched),
+    "u1_status": status.get("U1"),
+    "u2_status_prefix": (status.get("U2") or "").split(":")[0],
+    "u3_status": status.get("U3"),
+    "u4_status": status.get("U4"),
+    "u2_state": states.get("U2"),
+    "u1_state": states.get("U1"),
+    "u2_err_call": (u2.get("last_error") or {}).get("call"),
+    "n_results": len(res),
+}))
+PYEOF
+)"
+launched="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['launched']))" "$lf")"
+u1s="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u1_status'])" "$lf")"
+u2sp="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u2_status_prefix'])" "$lf")"
+u3s="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u3_status'])" "$lf")"
+u4s="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u4_status'])" "$lf")"
+u2state="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u2_state'])" "$lf")"
+u1state="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u1_state'])" "$lf")"
+u2errcall="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u2_err_call'])" "$lf")"
+nres="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['n_results'])" "$lf")"
+# Units 1,3,4 launched + dispatched; U2 launch-failed -> stalled w/ a launch
+# last_error (not a phantom dispatched); all 4 in the results (batch not abandoned).
+if [ "$launched" = "U1,U3,U4" ] && [ "$u1s" = "dispatched" ] && [ "$u2sp" = "launch-failed" ] \
+   && [ "$u3s" = "dispatched" ] && [ "$u4s" = "dispatched" ] && [ "$u2state" = "stalled" ] \
+   && [ "$u1state" = "dispatched" ] && [ "$u2errcall" = "launch" ] && [ "$nres" = "4" ]; then
+  pass
+else
+  fail "launched=[$launched] u1=$u1s u2=$u2sp u3=$u3s u4=$u4s u2state=$u2state u1state=$u1state u2errcall=$u2errcall nres=$nres (expected U1,U3,U4 / dispatched / launch-failed / dispatched / dispatched / stalled / dispatched / launch / 4)"
+fi
+
+it "Bug #8 deliberate-fail control: the injected launch_fn genuinely raises on U2 (so the wave-survival above is real guarding, not a benign no-op)"
+# Call the launcher directly OUTSIDE dispatch_batch's guard: it MUST propagate on
+# U2. Proves the prior test's clean continuation came from the try/except, not a
+# silently-benign launcher.
+raised8="$("$PY" - <<'PYEOF'
+def flaky_launch(uid, attempt=0):
+    if uid == "U2":
+        raise RuntimeError("agent spawn failed for U2")
+try:
+    flaky_launch("U2")
+    print("DID-NOT-RAISE")
+except RuntimeError:
+    print("raised")
+PYEOF
+)"
+assert_eq "raised" "$raised8"
+
+it "Bug #8: attempt counter increments on dispatch (the burnt-attempt record for a launch failure)"
+# Verify the Bug #6 attempt bump happens at dispatch: a fresh pending unit goes to
+# attempt 1 on its first dispatch (so a launch-failed unit's burnt attempt is
+# recorded, and a later retry would be attempt 2).
+ledger_init "attempt-bump" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
+a0="$(ledger_field "attempt-bump" 'L["units"][0]["attempt"]')"
+"$PY" - "$REPO" "attempt-bump" "$ORCH_PY" <<'PYEOF' >/dev/null
+import sys, importlib.util
+repo, run, orch_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+o.dispatch_batch(repo, run, ["U1"], 4)
+PYEOF
+a1="$(ledger_field "attempt-bump" 'L["units"][0]["attempt"]')"
+if [ "$a0" = "0" ] && [ "$a1" = "1" ]; then
+  pass
+else
+  fail "attempt before=$a0 after=$a1 (expected 0 then 1)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"

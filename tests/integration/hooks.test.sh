@@ -252,6 +252,70 @@ PYEOF
 out="$(printf '{"stop_hook_active":true}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "" "$(jget "$out" decision)"
 
+# ─── on-stop: Bug #9 — dead driver==self chain does NOT stale-block ───────────
+# A tick killed AFTER its beat write but BEFORE re-arm leaves driver==self,
+# met==false, and a last_beat_at that ages. WITHOUT a freshness gate this dead
+# chain blocks EVERY session's stop until last_beat_at > GRACE (~70 min). The gate
+# (DRIVER_SELF_STALE_SECONDS=3900) treats a driver==self run whose last_beat_at is
+# older than the threshold as a dead chain -> does NOT block stop (it surfaces for
+# resume instead). A FRESH driver==self chain (recent beat) still blocks.
+it "on-stop: dead driver==self chain (last_beat_at > stale threshold) does NOT block stop"
+REPO="$(mkrepo stop-stale-self)"
+pyledger "$REPO" <<'PYEOF'
+import sys, importlib.util, json, datetime
+repo, ledger_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+# Unmet work run, driver==self (a live-looking chain), but the beat is stale:
+# older than DRIVER_SELF_STALE_SECONDS (yet still younger than GRACE, so this is
+# specifically the stale-block window, not the orphan window).
+L.init_ledger(repo,"deadself",adapter="ce",loop_phase="work",
+              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+old = (datetime.datetime.now(datetime.timezone.utc)
+       - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+p = L.ledger_path(repo,"deadself")
+with open(p) as f: led = json.load(f)
+led["loop"]["last_beat_at"] = old
+led["loop"]["driver"] = "self"
+with open(p,"w") as f: json.dump(led,f)
+PYEOF
+out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
+assert_empty "$out"
+
+it "on-stop: a FRESH driver==self chain (recent beat) + unmet still BLOCKS (the gate only frees DEAD chains)"
+REPO="$(mkrepo stop-fresh-self)"
+pyledger "$REPO" <<'PYEOF'
+import sys, importlib.util
+repo, ledger_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+# init_ledger stamps last_beat_at = now (fresh) and driver=self; unmet (blocker).
+L.init_ledger(repo,"liveself",adapter="ce",loop_phase="work",
+              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+PYEOF
+out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
+assert_eq "block" "$(jget "$out" decision)"
+
+it "on-stop Bug #9 deliberate-fail: WITHOUT the staleness gate, the dead self-chain DOES block (the stale-block bug)"
+# NO_STALENESS_CHECK forces the pre-fix behaviour (no freshness gate). The same
+# dead chain from the first scenario then blocks stop — proving the gate is
+# load-bearing and the prior allow came from the freshness check, not by accident.
+REPO="$(mkrepo stop-stale-nofix)"
+pyledger "$REPO" <<'PYEOF'
+import sys, importlib.util, json, datetime
+repo, ledger_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_ledger(repo,"deadself2",adapter="ce",loop_phase="work",
+              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+old = (datetime.datetime.now(datetime.timezone.utc)
+       - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+p = L.ledger_path(repo,"deadself2")
+with open(p) as f: led = json.load(f)
+led["loop"]["last_beat_at"] = old
+led["loop"]["driver"] = "self"
+with open(p,"w") as f: json.dump(led,f)
+PYEOF
+out="$(printf '{}' | CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
+assert_eq "block" "$(jget "$out" decision)"
+
 # ─── on-stop: the .sh shim never exits non-zero on a malformed ledger ─────────
 it "on-stop.sh shim: malformed ledger -> exit 0 (rel-001)"
 REPO="$(mkrepo stop-malformed)"

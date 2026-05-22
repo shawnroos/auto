@@ -39,17 +39,42 @@ This mirrors ledger.py's "single chokepoint" discipline for I-1.
 THE AGENT-LAUNCH BOUNDARY (documented interface for U5 to wire)
 ────────────────────────────────────────────────────────────────
 For U10 we implement the orchestration + ledger interactions. The actual
-background-agent launch is an INJECTED callable ``launch_fn(unit_id)``; U5's
-driver passes the real wrapper around an ``Agent`` ``run_in_background`` dispatch
-whose prompt instructs the agent to call ``ledger.record_verdict`` on completion.
-For tests (and a documented default) ``launch_fn`` defaults to a no-op recorder.
+background-agent launch is an INJECTED callable ``launch_fn(unit_id, attempt)``;
+U5's driver passes the real wrapper around an ``Agent`` ``run_in_background``
+dispatch whose prompt instructs the agent to call ``ledger.record_verdict`` on
+completion — passing ``attempt`` so the verdict carries the dispatch generation it
+was launched for (Bug #6 attempt-identity). For tests (and a documented default)
+``launch_fn`` defaults to a no-op recorder.
+
 The launch fires ONLY AFTER the pending->dispatched transition succeeds — never
 launch-then-fail-to-mark, which would orphan a verdict with nothing to link it to.
+
+THE LAUNCH GUARD (Bug #8)
+─────────────────────────
+``launch_fn`` is real I/O (a background-agent spawn) and CAN raise. The launch is
+wrapped in a PER-UNIT try/except: a launch failure marks that unit ``stalled`` with
+``last_error = {call:"launch", ...}`` (reusing the ``dispatched -> stalled`` edge —
+no new grammar) and records ``"launch-failed:<class>:<msg>"`` in the per-unit
+results, then CONTINUES the wave. Without the guard a single launch raise would
+leave the unit committed as ``dispatched`` with no agent running (a phantom unit
+recoverable only via the stall timeout) AND propagate out of the loop, abandoning
+every remaining unit in the wave. The burnt attempt is naturally recorded in the
+unit's ``attempt`` counter (incremented at dispatch); the operator can
+``/dispatch-resume retry`` the stalled unit.
+
+ATTEMPT-IDENTITY (Bug #6)
+─────────────────────────
+Each ``pending -> dispatched`` transition INCREMENTS the unit's ``attempt`` counter
+(in the SAME atomic snapshot as the state change, via the transition's ``**fields``
+— never a separate write, which would reopen a race). The launched agent carries
+this attempt; ``ledger.record_verdict`` rejects a verdict whose attempt is older
+than the unit's current attempt (a stale verdict from a superseded retry).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import os
 import sys
 
@@ -189,16 +214,56 @@ def ready_units(repo_root: str, run_id: str):
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
 
-def _default_launch_fn(unit_id: str) -> None:
+def _default_launch_fn(unit_id: str, attempt: int = 0) -> None:
     """Default agent-launch: a no-op recorder.
 
     The real launch is injected by U5's driver — a wrapper around an ``Agent``
     ``run_in_background`` dispatch whose prompt instructs the spawned agent to
-    call ``ledger.record_verdict`` on completion (the durable self-write). For
-    U10 (and tests) this default does nothing observable; the dispatch_batch
-    return value is what tests assert against.
+    call ``ledger.record_verdict(... attempt=attempt)`` on completion (the durable
+    self-write, tagged with the dispatch generation — Bug #6). For U10 (and tests)
+    this default does nothing observable; the dispatch_batch return value is what
+    tests assert against.
+
+    Signature note (RAISED as a contract change): ``launch_fn`` now takes
+    ``(unit_id, attempt)`` so the agent can carry its attempt into the verdict.
+    ``_invoke_launch`` below calls back-compat-safely via ``inspect.signature`` so
+    a legacy single-arg ``launch_fn(unit_id)`` still works.
     """
     return None
+
+
+def _invoke_launch(launch_fn, unit_id: str, attempt: int) -> None:
+    """Call ``launch_fn`` tolerating BOTH the new ``(unit_id, attempt)`` signature
+    and a legacy single-arg ``(unit_id)`` one (back-compat for any U5 wiring
+    written against the old contract). Defensive, not load-bearing — the canonical
+    signature is two-arg.
+    """
+    try:
+        params = inspect.signature(launch_fn).parameters
+        # A *args launcher, or one accepting >=2 positional params, gets attempt.
+        accepts_attempt = (
+            any(
+                p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()
+            )
+            or len(
+                [
+                    p
+                    for p in params.values()
+                    if p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                ]
+            )
+            >= 2
+        )
+    except (TypeError, ValueError):
+        accepts_attempt = True  # builtins / C funcs: assume the new signature.
+    if accepts_attempt:
+        launch_fn(unit_id, attempt)
+    else:
+        launch_fn(unit_id)
 
 
 def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
@@ -213,16 +278,26 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
         current state is ``pending`` (the idempotency guard — any non-pending
         unit, e.g. already ``dispatched``, is REJECTED and skipped, never
         double-launched), and truncate the eligible set to ``cap``.
-      * For each selected unit: ``transition(... "dispatched", dispatched_at=now)``
-        FIRST (which inherits I-1 atomicity + flock from ledger.py), THEN call
-        ``launch_fn(unit_id)``. Transition-before-launch ordering is deliberate:
-        a launch with no recorded dispatch would orphan the eventual verdict.
+      * For each selected unit: ``transition(... "dispatched", dispatched_at=now,
+        attempt=current+1)`` FIRST (which inherits I-1 atomicity + flock from
+        ledger.py, and bumps the Bug #6 attempt counter in the SAME atomic
+        snapshot), THEN call ``launch_fn(unit_id, attempt)``. Transition-before-
+        launch ordering is deliberate: a launch with no recorded dispatch would
+        orphan the eventual verdict.
+      * Bug #8 — the ``launch_fn`` call is wrapped in a PER-UNIT try/except. A
+        launch raise marks the unit ``stalled`` (``dispatched -> stalled`` with
+        ``last_error = {call:"launch", ...}``), records ``"launch-failed:..."`` in
+        the results, and CONTINUES the wave — it does NOT leave a phantom
+        ``dispatched`` unit with no agent, and does NOT abandon the rest of the
+        batch by propagating the raise.
 
     Per-unit results are returned as a list of ``(unit_id, status)`` tuples where
-    status is ``"dispatched"`` or ``"rejected:<reason>"`` — so callers/tests can
-    assert the precise outcome of a mixed batch (some pending, some already in
-    flight). The rejection is per-unit, NOT fail-fast: a stray already-dispatched
-    unit in the list does not block the genuinely-pending ones.
+    status is ``"dispatched"``, ``"rejected:<reason>"``, or
+    ``"launch-failed:<class>:<msg>"`` — so callers/tests can assert the precise
+    outcome of a mixed batch (some pending, some already in flight, some whose
+    launch raised). The rejection is per-unit, NOT fail-fast: a stray
+    already-dispatched unit in the list does not block the genuinely-pending ones,
+    and one unit's launch failure does not abandon the rest of the wave.
 
     Idempotency note: an already-``dispatched`` unit fails the
     ``pending -> dispatched`` grammar edge in ledger.py (``transition`` raises
@@ -256,18 +331,51 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
             results.append((uid, "rejected:over-cap"))
             continue
 
-        # Transition FIRST (records dispatched_at atomically under flock + I-1),
-        # then launch. If the transition raises (e.g. a concurrent dispatch beat
-        # us to it), record the rejection and DO NOT launch.
+        # Transition FIRST (records dispatched_at + bumps the attempt counter
+        # atomically under flock + I-1), then launch. If the transition raises
+        # (e.g. a concurrent dispatch beat us to it), record the rejection and DO
+        # NOT launch. The attempt increment is part of the SAME atomic snapshot as
+        # the state change (Bug #6) — never a separate write, which would reopen a
+        # race between the bump and the dispatch.
+        next_attempt = int(unit.get("attempt", 0) or 0) + 1
         try:
             _transition(
-                repo_root, run_id, uid, "dispatched", dispatched_at=_now_iso()
+                repo_root,
+                run_id,
+                uid,
+                "dispatched",
+                dispatched_at=_now_iso(),
+                attempt=next_attempt,
             )
         except InvalidTransition as exc:
             results.append((uid, f"rejected:invalid-transition({exc})"))
             continue
 
-        launch_fn(uid)
+        # Bug #8: guard the real I/O per-unit. A launch raise must NOT leave the
+        # unit a phantom `dispatched` with no agent, NOR abandon the rest of the
+        # wave. Mark the unit stalled (dispatched -> stalled, reusing the existing
+        # grammar edge) with a launch-failure last_error, record the failure, and
+        # CONTINUE. The operator can /dispatch-resume retry it; the burnt attempt
+        # is already recorded in the attempt counter.
+        try:
+            _invoke_launch(launch_fn, uid, next_attempt)
+        except Exception as exc:  # noqa: BLE001 — any launch raise is recorded.
+            err = {
+                "call": "launch",
+                "message": f"{type(exc).__name__}: {exc}",
+                "at": _now_iso(),
+            }
+            try:
+                _transition(repo_root, run_id, uid, "stalled", last_error=err)
+            except (InvalidTransition, LedgerError):
+                # Best-effort: even if the rollback transition fails, do not
+                # propagate — record the launch failure and keep the wave going.
+                pass
+            results.append(
+                (uid, f"launch-failed:{type(exc).__name__}:{exc}")
+            )
+            continue
+
         dispatched_count += 1
         results.append((uid, "dispatched"))
 

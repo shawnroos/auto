@@ -548,9 +548,204 @@ else
   fail "met=$met_nv all_units_terminal=$aut_nv (expected True/True)"
 fi
 
+# ─── Scenario 14: Bug #6 — stall+retry verdict clobber (attempt-identity) ─────
+# A slow agent A is dispatched (attempt 1), stalls, the operator retries, agent B
+# is dispatched as a FRESH attempt (attempt 2) and self-writes a clean verdict.
+# Agent A — still alive — then self-writes a verdict for attempt 1. The
+# attempt-identity check MUST reject A's stale verdict (StaleVerdict) so it does
+# NOT clobber B's findings. Without the check, A's stale findings would win
+# (latest-write-wins keyed only on unit_id).
+#
+# Verify-RED: set CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK=1 — record_verdict skips
+# the attempt rejection, A's stale verdict overwrites B's, and the assertion that
+# B's findings survive flips RED (proven below + by the deliberate-fail control).
+it "Bug #6: a late verdict from a SUPERSEDED attempt is rejected (does not clobber the fresh attempt's verdict)"
+clobber="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "bug6-clobber"
+import os
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+
+# Attempt 1: dispatch (attempt -> 1). Simulate the orchestrator's bump.
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+a1 = m.read_ledger(repo, run)["units"][0]["attempt"]
+# A stalls.
+m.transition(repo, run, "U1", "stalled")
+# Operator retries: stalled -> pending (clears last_error).
+m.transition(repo, run, "U1", "pending")
+# Attempt 2: re-dispatch (attempt -> 2). Agent B.
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:20:00Z", attempt=2)
+a2 = m.read_ledger(repo, run)["units"][0]["attempt"]
+# Agent B (attempt 2) self-writes a CLEAN verdict.
+m.record_verdict(repo, run, "U1", [], attempt=2)
+after_b = m.read_ledger(repo, run)["units"][0]
+sev_b = "clean" if not after_b["findings"] else after_b["findings"][0]["severity"]
+
+# Agent A (still alive, attempt 1) self-writes a STALE blocker verdict. MUST be
+# rejected — it would otherwise clobber B's clean verdict.
+rejected = "NO"
+try:
+    m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-from-A"}], attempt=1)
+except m.StaleVerdict:
+    rejected = "yes"
+after_a = m.read_ledger(repo, run)["units"][0]
+# B's clean verdict must survive: findings still empty, state still verdict-returned.
+survived = "clean" if not after_a["findings"] else after_a["findings"][0]["severity"]
+print("%s,%s,%s,%s,%s" % (a1, a2, sev_b, rejected, survived))
+PYEOF
+)"
+# attempt 1 -> 2 ; B verdict clean ; A's stale rejected ; B's clean survives.
+if [ "$clobber" = "1,2,clean,yes,clean" ]; then
+  pass
+else
+  fail "a1,a2,sev_b,rejected,survived = $clobber (expected 1,2,clean,yes,clean)"
+fi
+
+it "Bug #6 deliberate-fail: WITHOUT the attempt check, A's stale verdict CLOBBERS B's clean one"
+# Same scenario, but NO_ATTEMPT_CHECK neuters the rejection: A's attempt-1 stale
+# blocker overwrites B's attempt-2 clean verdict (the clobber the fix prevents).
+clobbered="$(CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "bug6-clobber-nofix"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+m.transition(repo, run, "U1", "stalled")
+m.transition(repo, run, "U1", "pending")
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:20:00Z", attempt=2)
+m.record_verdict(repo, run, "U1", [], attempt=2)  # B clean.
+# A's stale blocker for attempt 1 — with the hatch, this is NOT rejected.
+clobbered = "no"
+try:
+    m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-from-A"}], attempt=1)
+    after = m.read_ledger(repo, run)["units"][0]
+    if after["findings"] and after["findings"][0]["severity"] == "blocker":
+        clobbered = "yes"
+except m.StaleVerdict:
+    clobbered = "rejected-unexpectedly"
+print(clobbered)
+PYEOF
+)"
+# Without the fix, the stale verdict wins: clobbered == "yes".
+assert_eq "yes" "$clobbered"
+
+# ─── Scenario 15: Bug #7 — healthy slow review's late verdict recovered ───────
+# A legit review takes longer than stall_threshold_seconds, gets marked `stalled`
+# (a plain timeout, last_error null). It THEN finishes and self-writes a genuine
+# verdict. The recovery edge (stalled -> verdict-returned) must accept it (it is
+# real work) instead of silently discarding it via InvalidTransition. Coordinated
+# with Bug #6: a late verdict from a SUPERSEDED attempt is still REJECTED.
+#
+# Verify-RED: set CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY=1 — record_verdict
+# reverts to the pre-fix check that rejects a stalled unit's verdict, so the
+# genuine late verdict is lost to InvalidTransition (proven by the control below).
+it "Bug #7: a genuine late verdict from a STALLED unit (current attempt) is RECOVERED to verdict-returned"
+recovered="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "bug7-recover"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+# Attempt 1 dispatch, then a plain timeout stall (last_error stays null).
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+m.transition(repo, run, "U1", "stalled")
+le_before = m.read_ledger(repo, run)["units"][0]["last_error"]
+# The slow-but-healthy review finishes and self-writes a clean verdict for its
+# CURRENT attempt (1). Recovery must accept it.
+m.record_verdict(repo, run, "U1", [], attempt=1)
+after = m.read_ledger(repo, run)["units"][0]
+le_after = after["last_error"]
+print("%s,%s,%s,%s" % (after["state"], "null" if le_before is None else le_before,
+                       "null" if le_after is None else le_after,
+                       m.read_ledger(repo, run)["exit_predicate_result"]["met"]))
+PYEOF
+)"
+# state recovered to verdict-returned; last_error was null (plain timeout) and
+# stays null after recovery; clean verdict -> met True (terminal, no findings).
+if [ "$recovered" = "verdict-returned,null,null,True" ]; then
+  pass
+else
+  fail "state,le_before,le_after,met = $recovered (expected verdict-returned,null,null,True)"
+fi
+
+it "Bug #7: a STALE late verdict (superseded attempt) from a stalled unit is still REJECTED (not recovered)"
+# Recovery must NOT resurrect a stale verdict: agent A (attempt 1) stalls, operator
+# retries, B is dispatched (attempt 2). A finishes and tries to recover-via-late-
+# verdict for attempt 1 — but its attempt is superseded, so StaleVerdict, NOT a
+# recovery to verdict-returned. (B is still in flight as `dispatched` here.)
+stale_recover="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "bug7-stale-recover"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+m.transition(repo, run, "U1", "stalled")
+# Operator retries; B dispatched as attempt 2 (unit now `dispatched`, attempt 2).
+m.transition(repo, run, "U1", "pending")
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:20:00Z", attempt=2)
+# A (attempt 1) tries to land its late verdict — superseded -> StaleVerdict.
+outcome = "ACCEPTED"
+try:
+    m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-A"}], attempt=1)
+except m.StaleVerdict:
+    outcome = "rejected-stale"
+after = m.read_ledger(repo, run)["units"][0]
+# Unit must remain `dispatched` (B in flight) — A's stale verdict had NO effect.
+print("%s,%s" % (outcome, after["state"]))
+PYEOF
+)"
+assert_eq "rejected-stale,dispatched" "$stale_recover"
+
+it "Bug #7 deliberate-fail: WITHOUT the recovery edge, a genuine late verdict from a stalled unit is LOST to InvalidTransition"
+# NO_STALLED_RECOVERY forces the pre-fix check: a stalled unit's verdict raises
+# InvalidTransition (the silent-discard bug), instead of being recovered.
+lost="$(CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "bug7-recover-nofix"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+m.transition(repo, run, "U1", "stalled")
+outcome = "RECOVERED"
+try:
+    m.record_verdict(repo, run, "U1", [], attempt=1)
+except m.InvalidTransition:
+    outcome = "lost-invalid-transition"
+# Without recovery the unit is STILL stalled (verdict discarded).
+state = m.read_ledger(repo, run)["units"][0]["state"]
+print("%s,%s" % (outcome, state))
+PYEOF
+)"
+assert_eq "lost-invalid-transition,stalled" "$lost"
+
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
-it "fence: no production file sets CLAUDE_DISPATCH_TEST_NO_LOCK/NO_RECOMPUTE=1"
-offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_NO_(LOCK|RECOMPUTE)[[:space:]]*=[[:space:]]*[\"']?1" \
+it "fence: no production file sets a CLAUDE_DISPATCH_TEST_NO_* hatch to 1"
+offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)[[:space:]]*=[[:space:]]*[\"']?1" \
   "${DISPATCH_ROOT}/lib" 2>/dev/null || true)"
 if [ -z "$offenders" ]; then
   pass

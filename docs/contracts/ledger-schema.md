@@ -73,6 +73,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
       "verdict_at": "2026-05-21T14:02:00Z",
       "stall_threshold_seconds": 600,
       "last_error": null,
+      "attempt": 0,
       "findings": [
         { "severity": "major", "note": "..." }
       ]
@@ -125,7 +126,8 @@ recompute it.
 | `dispatched_at` | `<iso>`/null | when the orchestrator marked it `dispatched`; null until then |
 | `verdict_at` | `<iso>`/null | timestamp of the **latest** verdict self-write (overwrites on re-verdict — latest-only semantics; null until first verdict) |
 | `stall_threshold_seconds` | int | per-unit timeout; adapter-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
-| `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`). Cleared on `stalled → pending` (retry) |
+| `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
+| `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the orchestrator on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
 | `findings` | array | LATEST review verdict's findings; each `{ "severity": "blocker"\|"major"\|"minor", "note": str }`. See §4 findings semantics |
 
 ### 2.4 `loop` object (liveness — I-3)
@@ -151,9 +153,31 @@ verdict-returned → pending             (no fix needed / next round: re-dispatc
 fixed            → pending             (a TICK that applied fixes re-enqueues for re-review — this is the closure loop)
 stalled          → pending             (OPERATOR: /dispatch-resume retry <unit>; clears last_error)
 stalled          → terminal-skip       (OPERATOR: /dispatch-resume skip <unit>; counts as terminal for I-2)
+stalled          → verdict-returned     (RECOVERY, record_verdict-ONLY — Bug #7; see below)
 ```
 
 Terminal sink: `terminal-skip` has no outgoing transition.
+
+**`record_verdict`-only edges** (NOT in `transition()`'s grammar — they write
+`findings[]`, which `transition()` forbids). `record_verdict` accepts a verdict
+from a unit currently in `{dispatched, verdict-returned, stalled}`:
+
+- `dispatched → verdict-returned` — the normal first verdict self-write.
+- `verdict-returned → verdict-returned` — a re-verdict (re-review; latest-only).
+- **`stalled → verdict-returned`** (Bug #7 **late-verdict recovery**) — a healthy
+  but slow review that was marked `stalled` past `stall_threshold_seconds`
+  finishes and self-writes a GENUINE verdict. That is real work; discarding it
+  (the pre-fix behaviour silently raised `InvalidTransition` and left `last_error`
+  null, so a lost verdict looked identical to a true timeout) is wrong. We RECOVER
+  it to `verdict-returned` and clear `last_error`. **Coordinated with Bug #6
+  attempt-identity:** recovery is only for the CURRENT attempt — a late verdict
+  from a SUPERSEDED attempt (the operator already retried and a fresh agent
+  verdicted) is still rejected (`StaleVerdict`), never recovered. So a stale late
+  verdict cannot resurrect itself by routing through the recovery edge.
+
+These edges are enforced in `record_verdict`, NOT `ALLOWED_TRANSITIONS`, because
+adding them to the latter would let `transition()` change state without findings —
+exactly what the "use `record_verdict()` to write findings" guard blocks.
 
 **Explicitly rejected** (illustrative — anything not in the table above is rejected):
 `pending → fixed` (skips review), `pending → verdict-returned`, `pending → terminal-skip`,
@@ -327,6 +351,7 @@ not hardcode copies — hardcoding causes drift.
 | constant | value | meaning |
 |----------|-------|---------|
 | `GRACE_SECONDS` | `4200` | orphan-detection grace window (I-3) |
+| `DRIVER_SELF_STALE_SECONDS` | `3900` | Bug #9 dead-self-chain gate for the Stop hook: a `driver=="self"` run whose `last_beat_at` is older than this is treated as a dead chain and does NOT block stop. Sits ABOVE the 3600s max-tick-delay + slack (a healthy slow chain is never falsely un-blocked) and BELOW `GRACE_SECONDS` (a dead chain stops blocking before `is_orphaned` surfaces it for resume) |
 | `DEFAULT_STALL_THRESHOLD_SECONDS` | `600` | per-unit stall timeout default |
 | `LOOP_PHASES` | `("plan","seam","work","done")` | valid `loop_phase` values |
 | `PLAN_STEPS` | `("plan","deepen","review_plan")` | valid non-null `plan_step` values (`null` is also valid: no step yet) |
@@ -365,6 +390,9 @@ asserts no production file enables them.
 | `CLAUDE_DISPATCH_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
 | `CLAUDE_DISPATCH_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
 | `CLAUDE_DISPATCH_TEST_NO_REENQUEUE` | `=1` makes the tick's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/tick.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
+| `CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK` | `=1` makes `record_verdict` SKIP the Bug #6 attempt-identity rejection | the stall+retry clobber test goes RED (a stale verdict from a superseded attempt overwrites the fresh one) without the attempt check |
+| `CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY` | `=1` makes `record_verdict` reject a verdict from a `stalled` unit (the pre-fix behaviour) | the late-verdict recovery test goes RED (a genuine slow verdict is lost to `InvalidTransition`) without the recovery edge |
+| `CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK` | `=1` makes `lib/on-stop.py::_blocking_runs` SKIP the Bug #9 dead-self-chain freshness gate | the stale-block test goes RED (a dead `driver=="self"` chain keeps blocking stop) without the gate |
 
 ---
 
@@ -378,7 +406,7 @@ Consumers use these; the schema above is what they read/write through them.
 | `init_ledger(repo_root, run_id, *, adapter, adapter_scale, units, loop_phase=..., plan_step=None)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write. `plan_step` defaults to `null` (no plan step yet) |
 | `read_ledger(repo_root, run_id)` | return the ledger dict; raises a clean error (no partial file) on unknown run-id |
 | `transition(repo_root, run_id, unit_id, new_state, **fields)` | grammar-checked state change under flock; recompute + atomic write |
-| `record_verdict(repo_root, run_id, unit_id, findings)` | `dispatched → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; recompute + atomic write (the verdict-self-write path, U10) |
+| `record_verdict(repo_root, run_id, unit_id, findings, attempt=None)` | `{dispatched, verdict-returned, stalled} → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; clears `last_error`; recompute + atomic write (the verdict-self-write path, U10). `attempt` (Bug #6) is the dispatch generation the verdict is for — a verdict whose attempt is older than the unit's current `attempt` is rejected (`StaleVerdict`); `None` skips the check. Accepts `stalled` as a recovery edge (Bug #7) unless the verdict is stale |
 | `set_loop(repo_root, run_id, *, loop_phase=None, seam_paused=None, driver=None, beat=False, plan_step=<unset>)` | phase / liveness / plan-step updates (U4); recompute + atomic write. `plan_step` uses an UNSET sentinel default (not `None`) because `null` is a valid stored value — pass `plan_step=None` to clear it, or a step name to set it |
 | `set_gaps_open(repo_root, run_id, gaps_open)` | persist the plan-loop open-gap count from `review_plan`'s return length (U4); writes `exit_predicate_result.gaps_open` then recompute + atomic write (I-1). The ONLY writer of `gaps_open` |
 | `unit_is_terminal(unit)` | pure `terminal(u)` predicate (§4.1) |
