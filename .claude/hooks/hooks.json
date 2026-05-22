@@ -1,0 +1,4 @@
+{
+  "description": "claude-dispatch plugin hooks. SCAFFOLD ONLY (U2): no hook handlers are wired yet. U7 adds SessionStart (orphan + seam-paused surfacing) and a CONDITIONAL Stop hook (only if the U9 /goal-mechanism spike recommends an un-goaled fallback; otherwise native /goal covers deliberate-stop). An empty 'hooks' object is a valid, loadable manifest.",
+  "hooks": {}
+}

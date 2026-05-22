@@ -1,0 +1,5 @@
+# Placeholder so the skills/ dir (wired in .claude-plugin/plugin.json) exists
+# and the plugin loads before its skills are authored.
+#   skills/dispatch/SKILL.md          -> U5  (the loop driver)
+#   skills/dispatch-adapter/SKILL.md  -> U6a (adapter contract authoring)
+# Remove this file once a real SKILL.md lands.
