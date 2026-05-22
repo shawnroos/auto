@@ -395,6 +395,114 @@ PYEOF
 )"
 assert_eq "stuck" "$stuck"
 
+# ─── Scenario 8: Bug #5 — gaps_open persisted from a DICT review_plan return ──
+# advance_plan_loop must persist gaps_open from BOTH a bare list AND a dict
+# envelope carrying `gap_set` (the LIVE adapters return a dict — that branch was
+# previously dead, so gaps_open was never written from a real review and plan-met
+# fired after a SINGLE review pass, making the deepen-refinement loop unreachable).
+# We exercise the DICT path specifically with a stub adapter whose review_plan
+# returns {"gap_set": [...]} of length N.
+#
+# Verify-RED: lib/tick.py advance_plan_loop, delete the
+#   `elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):`
+# branch (the dict extraction). gap_set stays None for the dict envelope, the
+# `step == "review_plan" and gap_set is not None` write never fires, gaps_open
+# stays 0, and these dict-path assertions go RED.
+it "Bug #5: dict review_plan return with gap_set of N -> gaps_open==N, plan NOT met (deepen loop stays open)"
+# Seed plan_step="deepen" so the stub's next_plan_step -> "review_plan" lands on
+# the review step (the only step that persists gaps).
+ledger_init "gaps-dict-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+"$PY" - "$REPO" "gaps-dict-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+gaps_dict="$("$PY" - "$REPO" "gaps-dict-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+
+class DictGapAdapter:
+    # Live-adapter shape: review_plan returns a DICT envelope carrying gap_set.
+    def next_plan_step(self, ledger):
+        return "review_plan"
+    def review_plan(self, ledger):
+        return {"op": "review_plan", "gap_set": [{"id": "g1"}, {"id": "g2"}, {"id": "g3"}]}
+
+led = ledg.read_ledger(repo, run)
+t.advance_plan_loop(repo, run, led, DictGapAdapter())
+print(ledg.read_ledger(repo, run)["exit_predicate_result"]["gaps_open"])
+PYEOF
+)"
+# gaps_open must equal the gap_set length (3), persisted from the dict envelope.
+assert_eq "3" "$gaps_dict"
+
+it "Bug #5: gaps_open==3 keeps the PLAN loop open (plan-met requires gaps_open==0)"
+# With three gaps open, the plan predicate is NOT met regardless of plan_step.
+met_dict="$(ledger_field "gaps-dict-run" 'L["exit_predicate_result"]["met"]')"
+gaps_chk="$(ledger_field "gaps-dict-run" 'L["exit_predicate_result"]["gaps_open"]')"
+phase_chk="$(ledger_field "gaps-dict-run" 'L["loop_phase"]')"
+if [ "$met_dict" = "False" ] && [ "$gaps_chk" = "3" ] && [ "$phase_chk" = "plan" ]; then
+  pass
+else
+  fail "met=$met_dict gaps_open=$gaps_chk phase=$phase_chk (expected False/3/plan)"
+fi
+
+it "Bug #5: dict review_plan return with EMPTY gap_set -> gaps_open==0; next_plan_step -> done (real length, not accidental zero)"
+# Empty gap_set must write gaps_open==0 (the actual length), AND because the dict
+# path persisted plan_step="review_plan", the REAL ce sequencer then returns
+# "done" (gaps closed by a real review). Proves the write is len(gap_set), not a
+# default 0 that happened to match.
+ledger_init "gaps-empty-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+"$PY" - "$REPO" "gaps-empty-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+empty_out="$("$PY" - "$REPO" "gaps-empty-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Use the REAL ce adapter for next_plan_step (the live sequencer) but feed an
+# empty-gap_set dict via a thin subclass of its review_plan, so the "done"
+# coherence guard is exercised end-to-end after a real (empty) review.
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+
+class EmptyGapAdapter(ace.Adapter):
+    def review_plan(self, ledger):
+        return {"op": "review_plan", "gap_set": []}
+
+led = ledg.read_ledger(repo, run)
+adapter = EmptyGapAdapter()
+t.advance_plan_loop(repo, run, led, adapter)
+led2 = ledg.read_ledger(repo, run)
+gaps = led2["exit_predicate_result"]["gaps_open"]
+# Now ask the live sequencer for the next step: review_plan persisted +
+# gaps_open==0 -> the §4.1 coherence guard returns "done".
+nxt = adapter.next_plan_step(led2)
+print("%s,%s,%s" % (gaps, led2.get("plan_step"), nxt))
+PYEOF
+)"
+# gaps_open==0 (real length of empty list), plan_step persisted as review_plan,
+# next step "done" — the plan loop CAN now reach met (gaps closed by a real review).
+if [ "$empty_out" = "0,review_plan,done" ]; then
+  pass
+else
+  fail "gaps,plan_step,next = $empty_out (expected 0,review_plan,done)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"

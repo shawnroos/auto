@@ -173,19 +173,26 @@ def _parse_iso(value):
 # Pure predicate logic (I-2 / §4).
 
 
-def unit_is_terminal(unit: dict) -> bool:
+def unit_is_terminal(unit: dict, scale: str = "three-tier") -> bool:
     """terminal(u) per §4.1 of the contract.
 
     A unit is terminal iff it is ``terminal-skip``, OR it is ``verdict-returned``
-    / ``fixed`` AND carries no open blocker/major finding. A ``fixed`` unit with
-    a stale blocker is NOT terminal (the findings-closure livelock guard).
+    / ``fixed`` AND carries no open *gating* finding. A ``fixed`` unit with a stale
+    gating finding is NOT terminal (the findings-closure livelock guard).
+
+    SCALE-AWARE (Bug #3): which severities gate depends on ``adapter_scale``.
+    Under ``"three-tier"`` (CE / default) both ``blocker`` and ``major`` gate.
+    Under ``"blocker-only"`` (native) only ``blocker`` gates — majors are
+    advisory (surfaced at exit, never blocking terminality), matching the
+    work-loop ``met`` predicate so the two cannot disagree about done-ness.
     """
+    gating = ("blocker",) if scale == "blocker-only" else GATING_SEVERITIES
     state = unit.get("state")
     if state == "terminal-skip":
         return True
     if state in ("verdict-returned", "fixed"):
         for finding in unit.get("findings") or []:
-            if finding.get("severity") in GATING_SEVERITIES:
+            if finding.get("severity") in gating:
                 return False
         return True
     return False
@@ -205,8 +212,16 @@ def recompute_predicate(ledger: dict) -> dict:
         any review has run (at ``plan`` / ``deepen`` / ``null``) must NOT
         short-circuit the loop to met (schema §3.1) — only a completed
         ``review_plan`` whose gap-set is empty closes the plan loop.
-      * otherwise (``"work"`` / ``"seam"`` / ``"done"``) — the work-loop exit:
-        ``blockers == 0 AND majors == 0 AND all_units_terminal == true``.
+      * otherwise (``"work"`` / ``"seam"`` / ``"done"``) — the work-loop exit,
+        SCALE-AWARE on ``adapter_scale`` (§2.2 ``met`` row):
+          - ``"three-tier"`` (CE; the default for any missing/unknown value):
+            ``blockers == 0 AND majors == 0 AND all_units_terminal AND units``.
+          - ``"blocker-only"`` (native): majors are advisory (surfaced at exit,
+            not gating), so ``blockers == 0 AND all_units_terminal AND units``.
+        The ``units`` (non-empty) conjunct closes the vacuous-exit hole: a work
+        phase with ZERO dispatched units must NOT declare done (``all([]) ==
+        True`` would otherwise short-circuit it before any fan-out). A *plan*
+        phase with no units is fine — it never reaches this branch.
 
     Returns the new dict (does NOT mutate ``ledger``; the caller assigns it).
     """
@@ -226,8 +241,9 @@ def recompute_predicate(ledger: dict) -> dict:
     prev = ledger.get("exit_predicate_result") or {}
     gaps_open = int(prev.get("gaps_open", 0) or 0)
 
+    scale = ledger.get("adapter_scale", "three-tier")
     all_units_terminal = all(
-        unit_is_terminal(u) for u in ledger.get("units", [])
+        unit_is_terminal(u, scale) for u in ledger.get("units", [])
     )
 
     if ledger.get("loop_phase") == "plan":
@@ -235,7 +251,25 @@ def recompute_predicate(ledger: dict) -> dict:
         # default gaps_open==0 before any review must not short-circuit).
         met = gaps_open == 0 and ledger.get("plan_step") == "review_plan"
     else:
-        met = blockers == 0 and majors == 0 and all_units_terminal
+        # Work-loop exit, SCALE-AWARE (Bug #3 — adapter_scale was stored but never
+        # read). The native adapter declares adapter_scale="blocker-only": its
+        # majors are advisory (surfaced at exit) and do NOT gate the loop, so a
+        # native run with majors>0 / blockers==0 must still be able to exit.
+        # CE (or any missing/unknown value) defaults to the three-tier gate where
+        # majors DO gate. Unknown → three-tier is the safe default (gates more,
+        # never under-blocks). I-2: all_units_terminal stays required either way.
+        # `scale` is read once above and also drives unit_is_terminal so the
+        # terminality check and the met predicate agree on whether majors gate.
+        no_majors = majors == 0 if scale != "blocker-only" else True
+        # Bug #4 — vacuous work-phase exit. all_units_terminal = all([]) is
+        # vacuously True, so an auto plan→work flip with ZERO units dispatched
+        # would declare `met` before the orchestrator ever fanned out work. The
+        # work-loop is not met until at least one unit exists; an empty plan phase
+        # is fine (handled by the plan branch above). We do NOT redefine
+        # all_units_terminal globally — the pure all([])==True is correct and read
+        # elsewhere; the empty-units guard lives only in the work-loop met.
+        has_units = bool(ledger.get("units"))
+        met = blockers == 0 and no_majors and all_units_terminal and has_units
 
     return {
         "met": bool(met),

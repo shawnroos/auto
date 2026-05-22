@@ -390,10 +390,13 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     GAPS persist (gap-write, adapter-contract §2.2): when the executed step is
     ``review_plan``, its return is the gap-set; the engine reads ONLY its length
     and persists ``gaps_open = len(gap_set)`` via ``ledger.set_gaps_open`` (the
-    I-1 atomic write path). The live adapters PREPARE an envelope (a dict) that
-    the model fills out-of-band, so we persist length ONLY when the return is a
-    list — a dict envelope leaves ``gaps_open`` untouched (the model writes it
-    through the parse path).
+    I-1 atomic write path). The gap-set arrives either as a bare list (a direct
+    return) OR inside the live PREPARE envelope (a dict) under the canonical
+    ``gap_set`` key (§2.2), which the model fills out-of-band before the engine
+    reads. We extract from whichever shape carries the array; a bare envelope
+    that has no ``gap_set`` yet leaves ``gaps_open`` untouched (no default-0
+    short-circuit). This is what makes plan-met depend on a REAL review having
+    reported its gaps, not the default — closing the deepen-refinement loop.
     """
     step = adapter.next_plan_step(ledger_dict)
     if step == "done":
@@ -407,10 +410,23 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     # try/except so a raise becomes a recorded last_error, not a crash.
     result = op(ledger_dict)
     # review_plan returns the gap-set; the engine reads ONLY its length and
-    # persists it (adapter-contract §2.2). Persist only for an actual array —
-    # a live PREPARE-envelope (dict) is filled by the model elsewhere.
-    if step == "review_plan" and isinstance(result, list):
-        ledger.set_gaps_open(repo_root, run_id, len(result))
+    # persists it (adapter-contract §2.2). The gap-set arrives in one of two
+    # shapes (Bug #5 — gaps_open was never written from the LIVE adapters, which
+    # return a dict envelope, so plan-met fired after a SINGLE review pass and the
+    # deepen-refinement loop was unreachable):
+    #   * a bare array — direct return (e.g. a test/synchronous adapter); OR
+    #   * the live PREPARE envelope (a dict) with the model-filled ``gap_set``
+    #     array under the canonical ``gap_set`` key (contract §2.2). The bare
+    #     envelope ships WITHOUT ``gap_set``; the model fills it before the engine
+    #     reads, so a freshly-prepared envelope with no key leaves gaps_open
+    #     untouched (never a default 0 that would short-circuit plan-met).
+    gap_set = None
+    if isinstance(result, list):
+        gap_set = result
+    elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):
+        gap_set = result["gap_set"]
+    if step == "review_plan" and gap_set is not None:
+        ledger.set_gaps_open(repo_root, run_id, len(gap_set))
     # Op succeeded — persist the step so the NEXT fresh-process tick advances
     # from it instead of re-reading null and re-planning (the livelock).
     ledger.set_loop(repo_root, run_id, plan_step=step)

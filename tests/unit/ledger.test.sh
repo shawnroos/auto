@@ -86,6 +86,22 @@ print(eval(expr))
 PYEOF
 }
 
+# init_scale <run> <json-units> <adapter_scale> [phase]  — like ledger_init but
+# threads adapter_scale (the ledger_init helper above is fixed at the default
+# "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
+ledger_init_scale() {
+  local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
+import json, sys, importlib.util
+repo, run, units_json, scale, phase, ledger_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+adapter = "native" if scale == "blocker-only" else "ce"
+m.init_ledger(repo, run, adapter=adapter, adapter_scale=scale,
+              units=json.loads(units_json), loop_phase=phase)
+PYEOF
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 echo "ledger.test.sh"
 
@@ -417,6 +433,119 @@ if [ "$ps_init" = "None" ] && [ "$plan_step_walk" = "plan,deepen,deepen,None,rej
   pass
 else
   fail "ps_init=$ps_init walk=$plan_step_walk (expected None / plan,deepen,deepen,None,rejected-bogus)"
+fi
+
+# ─── Scenario 11: Bug #3 — scale-aware met predicate (blocker-only / native) ──
+# Under adapter_scale="blocker-only" (native), majors are ADVISORY: a unit whose
+# ONLY finding is a major is terminal, and a work run with majors>0 / blockers==0
+# reaches met==true. A blocker, by contrast, still gates. recompute_predicate
+# reads adapter_scale (the fix); unit_is_terminal uses the SAME scale so the two
+# cannot disagree about done-ness.
+#
+# Verify-RED (neutralize BOTH sites of the fix, then run, then restore):
+#   lib/ledger.py unit_is_terminal: force  gating = GATING_SEVERITIES  (drop the
+#     `("blocker",) if scale == "blocker-only"` branch); AND
+#   lib/ledger.py recompute_predicate: force  no_majors = majors == 0  (drop the
+#     `if scale != "blocker-only" else True`).
+# Both limbs are load-bearing: with only the major finding present, the unit is
+# terminal ONLY because majors don't gate (limb 1), and met is True ONLY because
+# no_majors is vacuously True under blocker-only (limb 2). Neutralizing either
+# limb flips this test RED (unit non-terminal -> all_units_terminal False, OR
+# no_majors False) — confirmed independently in the verify pass.
+it "Bug #3: blocker-only + major-only verdict -> met==True (majors advisory, not gating)"
+ledger_init_scale "scale-major" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"major","note":"advisory"}]}]' \
+  blocker-only >/dev/null 2>&1
+met_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["met"]')"
+majors_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["majors"]')"
+aut_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["all_units_terminal"]')"
+# Two-part claim: the major finding is GENUINELY present (majors==1) AND the
+# scale gates it out (met==True, unit terminal). A regression flips one or both.
+if [ "$met_major" = "True" ] && [ "$majors_major" = "1" ] && [ "$aut_major" = "True" ]; then
+  pass
+else
+  fail "met=$met_major majors=$majors_major all_units_terminal=$aut_major (expected True/1/True)"
+fi
+
+it "Bug #3: blocker-only + blocker verdict -> met==False (blockers always gate)"
+ledger_init_scale "scale-blocker" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"hard"}]}]' \
+  blocker-only >/dev/null 2>&1
+met_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["met"]')"
+blk_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["blockers"]')"
+aut_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["all_units_terminal"]')"
+# blocker present (blockers==1), unit NOT terminal, met False.
+if [ "$met_blk" = "False" ] && [ "$blk_blk" = "1" ] && [ "$aut_blk" = "False" ]; then
+  pass
+else
+  fail "met=$met_blk blockers=$blk_blk all_units_terminal=$aut_blk (expected False/1/False)"
+fi
+
+# ─── Scenario 12: Bug #3 control — three-tier (CE/default) majors GATE ────────
+# The contrasting scale: under "three-tier" a major DOES gate (met==False), while
+# a minor does NOT (met==True). This proves the blocker-only behaviour above is a
+# real scale switch, not majors becoming globally advisory.
+it "Bug #3 control: three-tier + major verdict -> met==False (majors gate)"
+ledger_init_scale "tier-major" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"major","note":"gating"}]}]' \
+  three-tier >/dev/null 2>&1
+met_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["met"]')"
+majors_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["majors"]')"
+aut_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["all_units_terminal"]')"
+# Same major finding as scale-major, opposite verdict because the scale gates it.
+if [ "$met_tm" = "False" ] && [ "$majors_tm" = "1" ] && [ "$aut_tm" = "False" ]; then
+  pass
+else
+  fail "met=$met_tm majors=$majors_tm all_units_terminal=$aut_tm (expected False/1/False)"
+fi
+
+it "Bug #3 control: three-tier + minor-only verdict -> met==True (minors never gate)"
+ledger_init_scale "tier-minor" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"nit"}]}]' \
+  three-tier >/dev/null 2>&1
+met_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["met"]')"
+minors_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["minors"]')"
+aut_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["all_units_terminal"]')"
+if [ "$met_tn" = "True" ] && [ "$minors_tn" = "1" ] && [ "$aut_tn" = "True" ]; then
+  pass
+else
+  fail "met=$met_tn minors=$minors_tn all_units_terminal=$aut_tn (expected True/1/True)"
+fi
+
+# ─── Scenario 13: Bug #4 — vacuous work-phase exit guard ──────────────────────
+# all_units_terminal = all([]) is vacuously True. WITHOUT the non-empty `units`
+# conjunct (has_units) in recompute_predicate, an auto plan->work flip with ZERO
+# dispatched units would declare met==True before any fan-out. The guard makes a
+# work-phase ledger with units==[] NOT met. A contrasting work run WITH one
+# terminal unit IS met — proving the guard is the empty-set check, not a blanket
+# false on the work phase.
+#
+# Verify-RED: lib/ledger.py recompute_predicate, drop the `and has_units` conjunct
+# from the work-loop `met = ...` line (or force has_units = True). The empty-units
+# test then flips to met==True -> RED.
+it "Bug #4: work phase with ZERO units -> met==False (vacuous-exit guard; all([])==True is NOT done)"
+ledger_init "vacuous-run" '[]' ce work >/dev/null 2>&1
+met_vac="$(ledger_field "vacuous-run" 'L["exit_predicate_result"]["met"]')"
+aut_vac="$(ledger_field "vacuous-run" 'L["exit_predicate_result"]["all_units_terminal"]')"
+phase_vac="$(ledger_field "vacuous-run" 'L["loop_phase"]')"
+# all_units_terminal is vacuously True (all([])), yet met must be False because
+# the work-loop requires at least one unit. The guard is what breaks the tie.
+if [ "$met_vac" = "False" ] && [ "$aut_vac" = "True" ] && [ "$phase_vac" = "work" ]; then
+  pass
+else
+  fail "met=$met_vac all_units_terminal=$aut_vac phase=$phase_vac (expected False/True/work)"
+fi
+
+it "Bug #4 contrast: work phase WITH one terminal unit -> met==True (guard is the empty-set check, not a blanket work-phase false)"
+ledger_init "nonvacuous-run" '[{"id":"U1","state":"verdict-returned","findings":[]}]' ce work >/dev/null 2>&1
+met_nv="$(ledger_field "nonvacuous-run" 'L["exit_predicate_result"]["met"]')"
+aut_nv="$(ledger_field "nonvacuous-run" 'L["exit_predicate_result"]["all_units_terminal"]')"
+# Identical work phase, one terminal defect-free unit -> met True. Proves the
+# vacuous test's False comes from the empty-set guard, not from "work never met".
+if [ "$met_nv" = "True" ] && [ "$aut_nv" = "True" ]; then
+  pass
+else
+  fail "met=$met_nv all_units_terminal=$aut_nv (expected True/True)"
 fi
 
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
