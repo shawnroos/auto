@@ -7,8 +7,8 @@
 ## Question
 
 Can a process started inside a cmux terminal drive the cmux control socket to
-spawn a fresh terminal running a given prompt? If yes, `claude-dispatch` can
-auto-resume a loop after a full session exit by spawning a `/dispatch-resume`
+spawn a fresh terminal running a given prompt? If yes, `auto` can
+auto-resume a loop after a full session exit by spawning a `/auto-resume`
 terminal (unit U8).
 
 ## Answer
@@ -52,9 +52,9 @@ carry its own `command` — useful if U8 ever needs a multi-pane resume layout.
 
 ```sh
 cmux new-workspace \
-  --name "dispatch-resume" \
+  --name "auto-resume" \
   --cwd "<repo path>" \
-  --command "sleep 1; claude '/dispatch-resume <args>'" \
+  --command "sleep 1; claude '/auto-resume <args>'" \
   --focus false
 ```
 

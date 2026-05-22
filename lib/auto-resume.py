@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""claude-dispatch U7: /dispatch-resume subcommand logic behind resume.sh.
+"""auto U7: /auto-resume subcommand logic behind resume.sh.
 
 Parses the resume argument string into a subcommand and applies the ledger
 transition via ledger.py (so the per-run RMW flock is inherited — no new flock).
 
 Subcommands:
     [<run>]            default continue: flip a paused seam -> work, then emit a
-                       re-arm INTENT (the model fires /dispatch-tick).
+                       re-arm INTENT (the model fires /auto-tick).
     continue <run>     explicit continue (same as default with a run-id).
     abort <run>        loop_phase -> "done" (cancellation marker).
     retry <run> <unit> stalled unit -> pending (clears last_error via ledger.py).
@@ -36,13 +36,13 @@ from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.pa
 
 
 def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_DISPATCH_REPO, else walk up from cwd for .claude/dispatch."""
-    env = os.environ.get("CLAUDE_DISPATCH_REPO")
+    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto."""
+    env = os.environ.get("CLAUDE_AUTO_REPO")
     if env:
         return env
     dir_ = os.getcwd()
     while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "dispatch")):
+        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
             return dir_
         dir_ = os.path.dirname(dir_)
     return os.getcwd()
@@ -52,7 +52,7 @@ def _resumable_runs(ledger, repo_root: str):
     """Run-ids that are resumable (seam-paused OR is_orphaned)."""
     import glob
 
-    dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     runs = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
         try:
@@ -74,12 +74,12 @@ def _resumable_runs(ledger, repo_root: str):
 
 
 def _emit_rearm(run_id: str, note: str) -> int:
-    """Emit the re-arm INTENT — the model fires the actual /dispatch-tick."""
+    """Emit the re-arm INTENT — the model fires the actual /auto-tick."""
     json.dump(
         {
             "action": "arm-tick",
             "run": run_id,
-            "prompt": f"/dispatch-tick {run_id}",
+            "prompt": f"/auto-tick {run_id}",
             "note": note,
         },
         sys.stdout,
@@ -158,7 +158,7 @@ def _resolve_run_or_disambiguate(ledger, repo_root: str, run_id):
         return None
     sys.stdout.write(
         "resume: multiple resumable runs — specify one:\n"
-        + "".join(f"  /dispatch-resume {r}\n" for r in runs)
+        + "".join(f"  /auto-resume {r}\n" for r in runs)
     )
     return None
 

@@ -1,12 +1,12 @@
 # U9 Spike: How does native `/goal` register/evaluate its Stop hook, and can an external engine feed it a predicate?
 
 **Date:** 2026-05-22
-**Unit:** U9 (investigation that decides U7 — whether claude-dispatch ships a Stop hook)
-**Verdict:** `/goal` is **model-evaluated, not file-evaluated**. An external engine **cannot** feed `/goal` a predicate result via a status file or queryable state. U7 should therefore **not** try to drive `/goal`. claude-dispatch should ship its **own thin Stop hook** for un-goaled loops; that hook reads engine-written state, and `goal-status.sh` writes that state for *claude-dispatch's* hook (not for native `/goal`).
+**Unit:** U9 (investigation that decides U7 — whether auto ships a Stop hook)
+**Verdict:** `/goal` is **model-evaluated, not file-evaluated**. An external engine **cannot** feed `/goal` a predicate result via a status file or queryable state. U7 should therefore **not** try to drive `/goal`. auto should ship its **own thin Stop hook** for un-goaled loops; that hook reads engine-written state, and `goal-status.sh` writes that state for *auto's* hook (not for native `/goal`).
 
 ## Question
 
-Does native `/goal` register a Stop hook we can interoperate with, and can an external engine make `/goal` block "stop" until the engine's loop is done by writing a predicate result somewhere `/goal` reads? This decides whether claude-dispatch ships any Stop hook of its own (U7).
+Does native `/goal` register a Stop hook we can interoperate with, and can an external engine make `/goal` block "stop" until the engine's loop is done by writing a predicate result somewhere `/goal` reads? This decides whether auto ships any Stop hook of its own (U7).
 
 ## Method
 
@@ -71,15 +71,15 @@ Note: `/goal` requires hooks to be *enabled* to run, but that is because it oper
 
 ## 4. U7 recommendation
 
-1. **Do not build U7 on top of native `/goal`.** `/goal` is a closed, model-judged continuation loop with no external predicate input. There is no interop seam: claude-dispatch cannot make `/goal` block until *claude-dispatch's* loop is done.
-2. **Ship a thin claude-dispatch Stop hook** (settings.json `Stop` entry or plugin hook) for **un-goaled runs**. It is the binary's `p.preventContinuation` path (exit code 2 / `decision:"block"`), which the code shows is **independent** of the native goal loop — both gates coexist, so a dispatch Stop hook composes cleanly with `/goal` if a user also sets one.
-3. **The hook reads engine-written state**, and **`goal-status.sh` is needed** — but its consumer is **claude-dispatch's own Stop hook, not native `/goal`**. Recommended shape:
-   - `goal-status.sh` writes a small JSON status file the dispatch Stop hook reads, e.g. `~/.claude/state/claude-dispatch/<session-id>.json` (or under the dispatch run dir):
+1. **Do not build U7 on top of native `/goal`.** `/goal` is a closed, model-judged continuation loop with no external predicate input. There is no interop seam: auto cannot make `/goal` block until *auto's* loop is done.
+2. **Ship a thin auto Stop hook** (settings.json `Stop` entry or plugin hook) for **un-goaled runs**. It is the binary's `p.preventContinuation` path (exit code 2 / `decision:"block"`), which the code shows is **independent** of the native goal loop — both gates coexist, so an auto Stop hook composes cleanly with `/goal` if a user also sets one.
+3. **The hook reads engine-written state**, and **`goal-status.sh` is needed** — but its consumer is **auto's own Stop hook, not native `/goal`**. Recommended shape:
+   - `goal-status.sh` writes a small JSON status file the auto Stop hook reads, e.g. `~/.claude/state/auto/<session-id>.json` (or under the auto run dir):
      ```json
      { "active": true, "loop": "review-fix", "done": false, "reason": "P1 findings remain", "iterations": 3 }
      ```
-   - Dispatch Stop hook logic: if no status file or `active:false` → allow stop (exit 0). If `active:true && done:false` → block (exit 2) and surface `reason` to the agent. If `done:true` → allow stop. This mirrors the native shape (`met`/`reason`/`iterations`) so behavior is familiar, but the verdict is **deterministic and engine-owned** rather than model-judged — consistent with Shawn's "deterministic over probabilistic for load-bearing infrastructure" preference.
-4. **When the user sets a native `/goal`,** claude-dispatch's hook should defer (allow stop / no-op) and let the native loop own continuation, to avoid double-blocking. The two gates are independent, so the dispatch hook only needs to gate when its own status file says `active:true`.
+   - Auto Stop hook logic: if no status file or `active:false` → allow stop (exit 0). If `active:true && done:false` → block (exit 2) and surface `reason` to the agent. If `done:true` → allow stop. This mirrors the native shape (`met`/`reason`/`iterations`) so behavior is familiar, but the verdict is **deterministic and engine-owned** rather than model-judged — consistent with Shawn's "deterministic over probabilistic for load-bearing infrastructure" preference.
+4. **When the user sets a native `/goal`,** auto's hook should defer (allow stop / no-op) and let the native loop own continuation, to avoid double-blocking. The two gates are independent, so the auto hook only needs to gate when its own status file says `active:true`.
 
 ## Confidence & limits
 

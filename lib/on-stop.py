@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""claude-dispatch U7: decision logic behind .claude/hooks/on-stop.sh.
+"""auto U7: decision logic behind .claude/hooks/on-stop.sh.
 
 The engine's OWN deliberate-stop guard (U9 spike: native `/goal` has no external
-predicate seam — claude-dispatch ships this). Reads every ledger under
-<repo>/.claude/dispatch/ LOCK-FREE (atomic-rename => consistent snapshot) and
+predicate seam — auto ships this). Reads every ledger under
+<repo>/.claude/auto/ LOCK-FREE (atomic-rename => consistent snapshot) and
 decides whether to BLOCK the stop.
 
 BLOCK MECHANISM (U9 §4 + ralph-loop/hooks/stop-hook.sh:179-188):
@@ -97,7 +97,7 @@ def _blocking_runs(repo_root: str, now=None):
     # The hatch forces the OLD behaviour (no freshness check) so the deliberate-
     # fail test can prove a stale chain WOULD block without the gate.
     skip_staleness = (
-        os.environ.get("CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK") == "1"
+        os.environ.get("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK") == "1"
     )
     stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
     import datetime
@@ -105,7 +105,7 @@ def _blocking_runs(repo_root: str, now=None):
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
 
-    dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     blocking = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
         try:
@@ -160,9 +160,9 @@ def _reason_for(blocking) -> str:
         detail = " / ".join(parts) if parts else "loop not complete"
         chunks.append(f"{run_id} ({detail})")
     return (
-        "claude-dispatch: loop exit condition not met — "
+        "auto: loop exit condition not met — "
         + "; ".join(chunks)
-        + ". Continue the loop (or /dispatch-resume abort to stop early)."
+        + ". Continue the loop (or /auto-resume abort to stop early)."
     )
 
 
@@ -176,8 +176,8 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         # loop. Surface a one-line note (no `decision` => stop proceeds).
         return {
             "systemMessage": (
-                "claude-dispatch: Stop re-fired (stop_hook_active) — allowing "
-                "stop. Loop state is durable on disk; /dispatch-resume continues it."
+                "auto: Stop re-fired (stop_hook_active) — allowing "
+                "stop. Loop state is durable on disk; /auto-resume continues it."
             )
         }
 
@@ -189,7 +189,7 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         "decision": "block",
         "reason": _reason_for(blocking),
         "systemMessage": (
-            "claude-dispatch held the stop: "
+            "auto held the stop: "
             f"{len(blocking)} run(s) have unmet loop exit conditions."
         ),
     }

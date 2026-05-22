@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U10 unit test: lib/orchestrator.py — the agent-driven fan-out
+# auto U10 unit test: lib/orchestrator.py — the agent-driven fan-out
 # layer. It exposes THREE operations against the ledger schema contract:
 #
 #   * ready_units(repo, run)                 -> dispatchable-now unit ids (READER)
@@ -10,7 +10,7 @@
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
 # and HOME isolation inline, mirroring tests/unit/ledger.test.sh and
 # tests/unit/tick.test.sh. It does NOT source claude-modes' test-helpers
-# (cross-plugin coupling forbidden) nor claude-dispatch shared helpers (U2's,
+# (cross-plugin coupling forbidden) nor auto shared helpers (U2's,
 # not yet present). When U2 lands, this file may migrate to them.
 #
 # Scenarios (mapped to the U10 plan, tested against orchestrator.py's ACTUAL
@@ -36,11 +36,11 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-ORCH_PY="${DISPATCH_ROOT}/lib/orchestrator.py"
-ORCH_SH="${DISPATCH_ROOT}/lib/orchestrator.sh"
-LEDGER_PY="${DISPATCH_ROOT}/lib/ledger.py"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+ORCH_PY="${AUTO_ROOT}/lib/orchestrator.py"
+ORCH_SH="${AUTO_ROOT}/lib/orchestrator.sh"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
 PASS=0
@@ -59,12 +59,12 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t claude-dispatch-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */claude-dispatch-test.*) rm -rf "$SANDBOX" ;;
+    */auto-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
@@ -533,12 +533,12 @@ fi
 # engine entry points the brief names: ready_units, converge, advance_work_loop.
 #
 # The whole point is to prove the CLASS is closed, not one instance: the
-# deliberate-fail control (Scenario 11) sets CLAUDE_DISPATCH_TEST_FORCE_THREETIER_
+# deliberate-fail control (Scenario 11) sets CLAUDE_AUTO_TEST_FORCE_THREETIER_
 # GATING=1, which makes the SINGLE central helper ledger.gating_severities ignore
 # scale at EVERY site at once, and asserts the SAME scenario livelocks. Because all
 # six+ gating consumers route through that one helper, one hatch reverts them all —
 # a green Scenario 10 + a red Scenario 11 means no site bypasses the scale.
-TICK_PY="${DISPATCH_ROOT}/lib/tick.py"
+TICK_PY="${AUTO_ROOT}/lib/tick.py"
 
 it "CLASS-1 (blocker-only): a major-only unit is TERMINAL + its dependent UNBLOCKS + advance_work_loop does NOT churn -> run reaches met=True (no livelock)"
 bo="$("$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
@@ -613,7 +613,7 @@ it "CLASS-1 deliberate-fail: FORCE_THREETIER_GATING reverts ALL sites at once ->
 # no-op for that site; because ALL sites route through the helper, the hatch makes
 # the whole run behave three-tier -> the major now gates at every site. RED proves
 # the helper is load-bearing (the class is closed via the single chokepoint).
-bofail="$(CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+bofail="$(CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
 def load(n,p):

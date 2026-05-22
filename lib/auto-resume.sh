@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U7: the /dispatch-resume manual floor (F4).
+# auto U7: the /auto-resume manual floor (F4).
 #
 # A self-paced ScheduleWakeup tick chain does NOT survive a full session exit.
 # No work is lost (durable ledger; agents self-write verdicts atomically); resume
@@ -20,7 +20,7 @@
 # sentinel file): this script ADDS NO NEW FLOCK. State transitions route through
 # ledger.py (set_loop / transition), which holds the per-run RMW flock for the
 # whole read-modify-write. The "arm a tick" path emits a re-arm INTENT (JSON)
-# that the MODEL acts on by firing /dispatch-tick; the tick then acquires its
+# that the MODEL acts on by firing /auto-tick; the tick then acquires its
 # OWN non-blocking _tick_lock (lib/tick.py::_tick_lock — process-held, released
 # on exit) which is the actual double-drive guard. Adding a third flock here
 # would deadlock against the tick. So: transitions inherit the RMW lock;
@@ -28,23 +28,23 @@
 # released on clean exit — there is NO file sentinel to go stale.
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
-# CLAUDE_DISPATCH_PYTHON3) — never bare `python3` (rationale parity:
+# CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
 # claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/tick.sh).
 #
 # $ARGUMENTS-safe: the command .md body's only $-bearing line is
-#   bash "${CLAUDE_PLUGIN_ROOT}/lib/resume.sh" "$ARGUMENTS"
+#   bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "$ARGUMENTS"
 # ALL $-logic lives HERE; resume.py parses argv positionally and never
 # string-interpolates into a shell.
 
 set -uo pipefail
 
-CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
-# claude_dispatch::resume "<packed $ARGUMENTS string>" | <split args...>
+# auto::resume "<packed $ARGUMENTS string>" | <split args...>
 #   Splits a single packed "$ARGUMENTS" string into argv (the slash-command
 #   shape), then routes to resume.py. The --repo is resolved by resume.py
-#   (defaults to $CLAUDE_DISPATCH_REPO or a walk-up from cwd).
-claude_dispatch::resume() {
+#   (defaults to $CLAUDE_AUTO_REPO or a walk-up from cwd).
+auto::resume() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -55,10 +55,10 @@ claude_dispatch::resume() {
     set -- $1
   fi
 
-  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/resume.py" "$@"
+  "$CLAUDE_AUTO_PYTHON3" "${script_dir}/auto-resume.py" "$@"
 }
 
 # Allow direct invocation for testing / scripting.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  claude_dispatch::resume "$@"
+  auto::resume "$@"
 fi

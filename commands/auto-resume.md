@@ -3,7 +3,7 @@ argument-hint: "[continue|abort|retry|skip] [<run>] [<unit>]"
 allowed-tools: Bash
 ---
 
-Manually resume a dispatch run — the F4 floor.
+Manually resume an auto run — the F4 floor.
 
 A self-paced `ScheduleWakeup` tick chain does NOT survive a full session
 exit (in-session only; durable cron is denied by cmux). No work is lost —
@@ -14,7 +14,7 @@ continuation path (a long run's end-state is a context-exhaust that
 surfaces as a normal resume), not just the crash path.
 
 Subcommands (Claude Code does not dispatch space-separated subcommands, so
-the subcommand is parsed from the argument string inside `lib/resume.sh`,
+the subcommand is parsed from the argument string inside `lib/auto-resume.sh`,
 not here):
 
 - **`[<run>]`** — default `continue`: re-acquire the run cleanly off the
@@ -27,9 +27,9 @@ not here):
 - **`skip <run> <unit>`** — mark a `stalled` unit `terminal-skip` (counts
   as terminal); skip it and its transitive dependents.
 
-Empty args -> `lib/resume.sh` resolves the resumable run and defaults to
+Empty args -> `lib/auto-resume.sh` resolves the resumable run and defaults to
 `continue`, or prints usage and exits cleanly if none is resumable.
 
 To dispatch, run:
 
-`bash "${CLAUDE_PLUGIN_ROOT}/lib/resume.sh" "$ARGUMENTS"`
+`bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "$ARGUMENTS"`

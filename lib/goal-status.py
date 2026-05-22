@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch U7: deterministic loop-status, the data behind goal-status.sh.
+"""auto U7: deterministic loop-status, the data behind goal-status.sh.
 
 Consumer: the engine's OWN Stop hook (.claude/hooks/on-stop.sh). NOT native
 `/goal` (U9 spike: `/goal` is a closed model-judged loop with no external

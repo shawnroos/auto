@@ -1,7 +1,7 @@
 # Adapter Contract (LOCKED)
 
 > **Status: LOCKED day-zero contract.** This file is the source-of-truth
-> specification for the claude-dispatch **adapter interface**. U5 (the dispatch
+> specification for the auto **adapter interface**. U5 (the dispatch
 > driver) and U6b (the native + CE adapter implementations) build against THIS
 > document. It is locked **before** either begins so they can build in parallel.
 > Do not change the op set, the signatures, the caller assignments, the return
@@ -24,7 +24,7 @@
 
 ## 1. What an adapter is
 
-The claude-dispatch engine is **workflow-blind**. It runs two loops — a
+The auto engine is **workflow-blind**. It runs two loops — a
 **plan-loop** and a **work-loop** — but it does not know how to plan, deepen,
 review, or do work. It delegates every workflow-bearing action to an **adapter**:
 a thin shim that maps one concrete workflow (e.g. native Claude editing, or
@@ -243,7 +243,7 @@ Do NOT write the ledger from any op. Return data; the engine records it.
 - Ledger contract (authoritative on shared facts): `ledger-schema.md`
   — §4 (terminal definition + findings semantics), §5 (I-1/I-2/I-3 invariants),
   §6 (`SEVERITIES` and other module constants), §3 (state grammar / who-writes-what).
-- Plan: `docs/plans/2026-05-21-001-feat-claude-dispatch-loop-engine-plan.md`
+- Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md`
   — U6a (this contract), U6b (the two adapter implementations), U5 (the driver),
   U4 (the tick that calls the plan-loop ops), U10 (the orchestrator that calls `do_unit`).
-- Companion authoring guide: `skills/dispatch-adapter/SKILL.md`.
+- Companion authoring guide: `skills/auto-adapter/SKILL.md`.

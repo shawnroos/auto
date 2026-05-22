@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# claude-dispatch U5 integration test: the dispatch DRIVER chain.
+# auto U5 integration test: the dispatch DRIVER chain.
 #
 # This exercises the REAL tick (lib/tick.py) + orchestrator (lib/orchestrator.py)
-# + ledger (lib/ledger.py) wired together exactly as skills/dispatch/SKILL.md
+# + ledger (lib/ledger.py) wired together exactly as skills/auto/SKILL.md
 # instructs the driving agent to wire them. The ONLY injected seams are the
 # documented ones:
 #   * the ADAPTER (a Python object exposing next_plan_step/plan/deepen/
@@ -11,7 +11,7 @@
 #     dispatch_batch's `launch_fn`, which calls the REAL ledger.record_verdict
 #     synchronously (the documented "agent writes its own verdict atomically"
 #     boundary, exercising the real I-1 write chokepoint).
-# The tick, the orchestrator's ready/dispatch/converge, and every ledger write
+# The tick, the orchestrator's ready/auto/converge, and every ledger write
 # are the real code — NOT mocks. ScheduleWakeup is a model tool with no CLI, so
 # the "re-arm" is modelled by the driver loop re-invoking dispatch_tick when the
 # tick returns action=="rearm" (the literal intent the SKILL says to act on).
@@ -38,12 +38,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TICK_PY="${DISPATCH_ROOT}/lib/tick.py"
-ORCH_PY="${DISPATCH_ROOT}/lib/orchestrator.py"
-LEDGER_PY="${DISPATCH_ROOT}/lib/ledger.py"
-SKILL_MD="${DISPATCH_ROOT}/skills/dispatch/SKILL.md"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+TICK_PY="${AUTO_ROOT}/lib/tick.py"
+ORCH_PY="${AUTO_ROOT}/lib/orchestrator.py"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+SKILL_MD="${AUTO_ROOT}/skills/auto/SKILL.md"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
 PASS=0
@@ -62,12 +62,12 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t claude-dispatch-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */claude-dispatch-test.*) rm -rf "$SANDBOX" ;;
+    */auto-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
@@ -84,7 +84,7 @@ echo "dispatch-chain.test.sh"
 # ─── Scenario 1: full chain exits on work predicate, emits minors report ──────
 # A work-loop run that reaches exit: one unit verdict-returned with ONLY a minor
 # finding (minors do not gate; the unit is therefore terminal). The driver runs
-# the work-loop: ready/dispatch is a no-op (no pending units), and the REAL tick
+# the work-loop: ready/auto is a no-op (no pending units), and the REAL tick
 # reads exit_predicate_result.met==true off the ledger, flips to done, and emits
 # a report whose minor_findings carry the minor for operator promotion (R6).
 #
@@ -248,14 +248,14 @@ assert_eq "False" "$exited2b"
 # load-bearing edge (distinct from 2b, which proves re-review-via-redispatch).
 # This re-runs Scenario 2's FULL setup — WITH launch_fn re-dispatch ready to fire
 # — but disables the tick's fixed->pending re-enqueue via the test-only hatch
-# CLAUDE_DISPATCH_TEST_NO_REENQUEUE=1 (schema §7). With the re-enqueue gone the
+# CLAUDE_AUTO_TEST_NO_REENQUEUE=1 (schema §7). With the re-enqueue gone the
 # unit fixes once (verdict-returned -> fixed) and is NEVER re-enqueued, so it is
 # never re-dispatched, the stale blocker holds, and the loop livelocks at `fixed`.
 # If the re-enqueue is removed from advance_work_loop, this whole closure goes RED
 # in Scenario 2 — this control proves the positive scenario's exit comes from the
 # engine's re-enqueue, not from any other path.
 it "deliberate-fail: WITH NO_REENQUEUE the engine never re-enqueues -> livelock at fixed (re-enqueue is load-bearing)"
-out2c="$(CLAUDE_DISPATCH_TEST_NO_REENQUEUE=1 "$PY" - "$REPO" "$LEDGER_PY" "$TICK_PY" "$ORCH_PY" <<'PYEOF'
+out2c="$(CLAUDE_AUTO_TEST_NO_REENQUEUE=1 "$PY" - "$REPO" "$LEDGER_PY" "$TICK_PY" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, ledger_py, tick_py, orch_py = sys.argv[1:5]
 def load(n,p):

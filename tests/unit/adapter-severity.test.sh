@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U6b unit test: the native + CE adapters' pure surface.
+# auto U6b unit test: the native + CE adapters' pure surface.
 #
 # WHAT IS TESTED (and what is NOT):
 #   The adapters' live-Claude ops (plan / do_unit / native review / /ce-*
@@ -30,14 +30,14 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-. "${DISPATCH_ROOT}/tests/helpers/test-helpers.sh"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+. "${AUTO_ROOT}/tests/helpers/test-helpers.sh"
 
-CE="${DISPATCH_ROOT}/lib/adapter-ce.sh"
-NATIVE="${DISPATCH_ROOT}/lib/adapter-native.sh"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CE="${AUTO_ROOT}/lib/adapter-ce.sh"
+NATIVE="${AUTO_ROOT}/lib/adapter-native.sh"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
-claude_dispatch_test::setup
+auto_test::setup
 
 # ── shared helpers ─────────────────────────────────────────────────────────
 
@@ -96,24 +96,24 @@ RUBRIC_PROBE='[
   {"severity":"minor","note":"comment typo"}
 ]'
 
-claude_dispatch_test::it "rubric probe: all 5 findings are on the shared scale"
+auto_test::it "rubric probe: all 5 findings are on the shared scale"
 PROBE_VALID=$(bash "$NATIVE" validate-findings "$RUBRIC_PROBE")
-claude_dispatch_test::assert_eq "2" "$(count_severity "$PROBE_VALID" blocker)"
+auto_test::assert_eq "2" "$(count_severity "$PROBE_VALID" blocker)"
 
-claude_dispatch_test::it "rubric probe: blocker tier is reliable (2 unambiguous blockers)"
-claude_dispatch_test::assert_eq "1" "$(count_severity "$PROBE_VALID" major)"
+auto_test::it "rubric probe: blocker tier is reliable (2 unambiguous blockers)"
+auto_test::assert_eq "1" "$(count_severity "$PROBE_VALID" major)"
 
-claude_dispatch_test::it "rubric probe: minor tier present (the fuzzy major/minor boundary)"
-claude_dispatch_test::assert_eq "2" "$(count_severity "$PROBE_VALID" minor)"
+auto_test::it "rubric probe: minor tier present (the fuzzy major/minor boundary)"
+auto_test::assert_eq "2" "$(count_severity "$PROBE_VALID" minor)"
 
-claude_dispatch_test::it "rubric probe OUTCOME: native declares adapter_scale=blocker-only (partial)"
+auto_test::it "rubric probe OUTCOME: native declares adapter_scale=blocker-only (partial)"
 # DELIBERATE-FAIL NOTE (memory feedback_new_tests_need_deliberate_fail_smoke_check):
-# flip CLAUDE_DISPATCH_NATIVE_ADAPTER_SCALE in adapter-native.sh to "three-tier"
+# flip CLAUDE_AUTO_NATIVE_ADAPTER_SCALE in adapter-native.sh to "three-tier"
 # and this assertion goes RED — verified during authoring.
-claude_dispatch_test::assert_eq "blocker-only" "$(bash "$NATIVE" adapter-scale)"
+auto_test::assert_eq "blocker-only" "$(bash "$NATIVE" adapter-scale)"
 
-claude_dispatch_test::it "CE declares adapter_scale=three-tier (command-driven, P-levels map cleanly)"
-claude_dispatch_test::assert_eq "three-tier" "$(bash "$CE" adapter-scale)"
+auto_test::it "CE declares adapter_scale=three-tier (command-driven, P-levels map cleanly)"
+auto_test::assert_eq "three-tier" "$(bash "$CE" adapter-scale)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 2. CE HAPPY PATH — {1 P0, 2 P2, 3 P3} -> {1 blocker, 2 major, 3 minor}.
@@ -129,23 +129,23 @@ CE_FINDINGS='[
 ]'
 CE_MAPPED=$(bash "$CE" map-findings "$CE_FINDINGS")
 
-claude_dispatch_test::it "CE: 1 P0 -> 1 blocker"
-claude_dispatch_test::assert_eq "1" "$(count_severity "$CE_MAPPED" blocker)"
+auto_test::it "CE: 1 P0 -> 1 blocker"
+auto_test::assert_eq "1" "$(count_severity "$CE_MAPPED" blocker)"
 
-claude_dispatch_test::it "CE: 2 P2 -> 2 major"
-claude_dispatch_test::assert_eq "2" "$(count_severity "$CE_MAPPED" major)"
+auto_test::it "CE: 2 P2 -> 2 major"
+auto_test::assert_eq "2" "$(count_severity "$CE_MAPPED" major)"
 
-claude_dispatch_test::it "CE: 3 P3 -> 3 minor"
-claude_dispatch_test::assert_eq "3" "$(count_severity "$CE_MAPPED" minor)"
+auto_test::it "CE: 3 P3 -> 3 minor"
+auto_test::assert_eq "3" "$(count_severity "$CE_MAPPED" minor)"
 
-claude_dispatch_test::it "CE: P1 -> major (single-level table check)"
-claude_dispatch_test::assert_eq "major" "$(bash "$CE" map-level P1)"
+auto_test::it "CE: P1 -> major (single-level table check)"
+auto_test::assert_eq "major" "$(bash "$CE" map-level P1)"
 
-claude_dispatch_test::it "CE happy path: blocker present -> work predicate FALSE"
-claude_dispatch_test::assert_eq "false" "$(work_predicate_met "$CE_MAPPED")"
+auto_test::it "CE happy path: blocker present -> work predicate FALSE"
+auto_test::assert_eq "false" "$(work_predicate_met "$CE_MAPPED")"
 
-claude_dispatch_test::it "CE: unknown level is rejected (off-scale guard)"
-claude_dispatch_test::assert_false "bash '$CE' map-findings '[{\"level\":\"P9\",\"note\":\"x\"}]'"
+auto_test::it "CE: unknown level is rejected (off-scale guard)"
+auto_test::assert_false "bash '$CE' map-findings '[{\"level\":\"P9\",\"note\":\"x\"}]'"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 3. NATIVE HAPPY PATH — reviewer output tagged on the rubric -> same scale,
@@ -159,78 +159,78 @@ NATIVE_FINDINGS='[
 ]'
 NATIVE_MAPPED=$(bash "$NATIVE" validate-findings "$NATIVE_FINDINGS")
 
-claude_dispatch_test::it "native: validated findings preserve the blocker tag"
-claude_dispatch_test::assert_eq "1" "$(count_severity "$NATIVE_MAPPED" blocker)"
+auto_test::it "native: validated findings preserve the blocker tag"
+auto_test::assert_eq "1" "$(count_severity "$NATIVE_MAPPED" blocker)"
 
-claude_dispatch_test::it "native happy path: blocker present -> work predicate FALSE (same engine path as CE)"
-claude_dispatch_test::assert_eq "false" "$(work_predicate_met "$NATIVE_MAPPED")"
+auto_test::it "native happy path: blocker present -> work predicate FALSE (same engine path as CE)"
+auto_test::assert_eq "false" "$(work_predicate_met "$NATIVE_MAPPED")"
 
-claude_dispatch_test::it "native: off-scale severity (P0 vocabulary) is rejected"
-claude_dispatch_test::assert_false "bash '$NATIVE' validate-findings '[{\"severity\":\"P0\",\"note\":\"x\"}]'"
+auto_test::it "native: off-scale severity (P0 vocabulary) is rejected"
+auto_test::assert_false "bash '$NATIVE' validate-findings '[{\"severity\":\"P0\",\"note\":\"x\"}]'"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 4. EDGE — zero findings -> work predicate TRUE.
 # ════════════════════════════════════════════════════════════════════════════
 
-claude_dispatch_test::it "edge: zero CE findings -> work predicate TRUE"
+auto_test::it "edge: zero CE findings -> work predicate TRUE"
 EMPTY_CE=$(bash "$CE" map-findings '[]')
-claude_dispatch_test::assert_eq "true" "$(work_predicate_met "$EMPTY_CE")"
+auto_test::assert_eq "true" "$(work_predicate_met "$EMPTY_CE")"
 
-claude_dispatch_test::it "edge: zero native findings -> work predicate TRUE"
+auto_test::it "edge: zero native findings -> work predicate TRUE"
 EMPTY_NATIVE=$(bash "$NATIVE" validate-findings '[]')
-claude_dispatch_test::assert_eq "true" "$(work_predicate_met "$EMPTY_NATIVE")"
+auto_test::assert_eq "true" "$(work_predicate_met "$EMPTY_NATIVE")"
 
-claude_dispatch_test::it "edge: only minors -> work predicate TRUE (minors never gate)"
+auto_test::it "edge: only minors -> work predicate TRUE (minors never gate)"
 ONLY_MINOR=$(bash "$CE" map-findings '[{"level":"P3","note":"a"},{"level":"P3","note":"b"}]')
-claude_dispatch_test::assert_eq "true" "$(work_predicate_met "$ONLY_MINOR")"
+auto_test::assert_eq "true" "$(work_predicate_met "$ONLY_MINOR")"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 5. PLAN ADAPTER — gap-set non-empty -> plan predicate FALSE; empty -> TRUE.
 # ════════════════════════════════════════════════════════════════════════════
 
-claude_dispatch_test::it "plan: non-empty gap-set -> plan predicate FALSE"
-claude_dispatch_test::assert_eq "false" "$(plan_predicate_met '[{"gap":"missing rollback"}]')"
+auto_test::it "plan: non-empty gap-set -> plan predicate FALSE"
+auto_test::assert_eq "false" "$(plan_predicate_met '[{"gap":"missing rollback"}]')"
 
-claude_dispatch_test::it "plan: empty gap-set -> plan predicate TRUE"
-claude_dispatch_test::assert_eq "true" "$(plan_predicate_met '[]')"
+auto_test::it "plan: empty gap-set -> plan predicate TRUE"
+auto_test::assert_eq "true" "$(plan_predicate_met '[]')"
 
 # ── next_plan_step state machines (CE: plan->deepen->review_plan->done) ──
 
-claude_dispatch_test::it "CE next_plan_step: fresh ledger -> plan"
-claude_dispatch_test::assert_eq "plan" "$(bash "$CE" next-plan-step "$(ledger_fixture null 0)")"
+auto_test::it "CE next_plan_step: fresh ledger -> plan"
+auto_test::assert_eq "plan" "$(bash "$CE" next-plan-step "$(ledger_fixture null 0)")"
 
-claude_dispatch_test::it "CE next_plan_step: after plan -> deepen"
-claude_dispatch_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture plan 0)")"
+auto_test::it "CE next_plan_step: after plan -> deepen"
+auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture plan 0)")"
 
-claude_dispatch_test::it "CE next_plan_step: after deepen -> review_plan"
-claude_dispatch_test::assert_eq "review_plan" "$(bash "$CE" next-plan-step "$(ledger_fixture deepen 0)")"
+auto_test::it "CE next_plan_step: after deepen -> review_plan"
+auto_test::assert_eq "review_plan" "$(bash "$CE" next-plan-step "$(ledger_fixture deepen 0)")"
 
-claude_dispatch_test::it "CE next_plan_step: review_plan with gaps open -> deepen (loop)"
-claude_dispatch_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 3)")"
+auto_test::it "CE next_plan_step: review_plan with gaps open -> deepen (loop)"
+auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 3)")"
 
 # ── native next_plan_step (plan->review_plan->done, NEVER deepen) ──
 
-claude_dispatch_test::it "native next_plan_step: fresh ledger -> plan"
-claude_dispatch_test::assert_eq "plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture null 0)")"
+auto_test::it "native next_plan_step: fresh ledger -> plan"
+auto_test::assert_eq "plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture null 0)")"
 
-claude_dispatch_test::it "native next_plan_step: after plan -> review_plan (no deepen)"
-claude_dispatch_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture plan 0)")"
+auto_test::it "native next_plan_step: after plan -> review_plan (no deepen)"
+auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture plan 0)")"
 
-claude_dispatch_test::it "native next_plan_step: review_plan with gaps open -> review_plan (loop, never deepen)"
-claude_dispatch_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 2)")"
+auto_test::it "native next_plan_step: review_plan with gaps open -> review_plan (loop, never deepen)"
+auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 2)")"
 
-claude_dispatch_test::it "native deepen is a no-op (returns plan unchanged)"
-claude_dispatch_test::assert_eq "PLAN-X" "$(bash "$NATIVE" deepen "PLAN-X")"
+auto_test::it "native deepen is a no-op (returns plan unchanged)"
+auto_test::assert_eq "PLAN-X" "$(bash "$NATIVE" deepen "PLAN-X")"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 6. §4.1 COHERENCE GUARD — gaps_open==0 after a review_plan -> "done".
 # ════════════════════════════════════════════════════════════════════════════
 
-claude_dispatch_test::it "coherence: CE gaps_open==0 after review_plan -> done (no livelock)"
-claude_dispatch_test::assert_eq "done" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 0)")"
+auto_test::it "coherence: CE gaps_open==0 after review_plan -> done (no livelock)"
+auto_test::assert_eq "done" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 0)")"
 
-claude_dispatch_test::it "coherence: native gaps_open==0 after review_plan -> done (no livelock)"
-claude_dispatch_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 0)")"
+auto_test::it "coherence: native gaps_open==0 after review_plan -> done (no livelock)"
+auto_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 0)")"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 7. PYTHON ADAPTER SURFACE — the modules tick.py (U4) actually imports.
@@ -244,7 +244,7 @@ claude_dispatch_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(ledge
 # eval an expression against `a` (the instance) + `json`, print the result.
 py_adapter() {
   local fname="$1" expr="$2"
-  "$PY" - "${DISPATCH_ROOT}/lib/adapter-${fname}.py" "$expr" <<'PYEOF'
+  "$PY" - "${AUTO_ROOT}/lib/adapter-${fname}.py" "$expr" <<'PYEOF'
 import json, sys, importlib.util
 path, expr = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("adapter_under_test", path)
@@ -255,41 +255,41 @@ sys.stdout.write(val if isinstance(val, str) else json.dumps(val))
 PYEOF
 }
 
-claude_dispatch_test::it "py CE: exposes an Adapter factory with adapter_scale=three-tier"
-claude_dispatch_test::assert_eq "three-tier" "$(py_adapter ce 'a.adapter_scale')"
+auto_test::it "py CE: exposes an Adapter factory with adapter_scale=three-tier"
+auto_test::assert_eq "three-tier" "$(py_adapter ce 'a.adapter_scale')"
 
-claude_dispatch_test::it "py native: exposes an Adapter factory with adapter_scale=blocker-only"
-claude_dispatch_test::assert_eq "blocker-only" "$(py_adapter native 'a.adapter_scale')"
+auto_test::it "py native: exposes an Adapter factory with adapter_scale=blocker-only"
+auto_test::assert_eq "blocker-only" "$(py_adapter native 'a.adapter_scale')"
 
-claude_dispatch_test::it "py CE map_findings: {1 P0, 2 P2, 3 P3} -> 1 blocker (matches bash sibling)"
+auto_test::it "py CE map_findings: {1 P0, 2 P2, 3 P3} -> 1 blocker (matches bash sibling)"
 PY_CE_MAPPED=$(py_adapter ce 'a.review({"ce_findings":[{"level":"P0","note":"x"},{"level":"P2","note":"y"},{"level":"P2","note":"z"},{"level":"P3","note":"a"},{"level":"P3","note":"b"},{"level":"P3","note":"c"}]})')
-claude_dispatch_test::assert_eq "1" "$(count_severity "$PY_CE_MAPPED" blocker)"
+auto_test::assert_eq "1" "$(count_severity "$PY_CE_MAPPED" blocker)"
 
-claude_dispatch_test::it "py CE map_findings: -> 2 major, 3 minor"
-claude_dispatch_test::assert_eq "2" "$(count_severity "$PY_CE_MAPPED" major)"
+auto_test::it "py CE map_findings: -> 2 major, 3 minor"
+auto_test::assert_eq "2" "$(count_severity "$PY_CE_MAPPED" major)"
 
-claude_dispatch_test::it "py native validate: off-scale severity raises"
-claude_dispatch_test::assert_false "py_adapter native 'a.review({\"findings\":[{\"severity\":\"P0\",\"note\":\"x\"}]})'"
+auto_test::it "py native validate: off-scale severity raises"
+auto_test::assert_false "py_adapter native 'a.review({\"findings\":[{\"severity\":\"P0\",\"note\":\"x\"}]})'"
 
 # next_plan_step called exactly as tick.py:337 does — getattr(adapter, op) shape.
-claude_dispatch_test::it "py CE next_plan_step: fresh ledger -> plan (tick.py import shape)"
-claude_dispatch_test::assert_eq "plan" "$(py_adapter ce 'a.next_plan_step({"plan_step":None,"exit_predicate_result":{"gaps_open":0}})')"
+auto_test::it "py CE next_plan_step: fresh ledger -> plan (tick.py import shape)"
+auto_test::assert_eq "plan" "$(py_adapter ce 'a.next_plan_step({"plan_step":None,"exit_predicate_result":{"gaps_open":0}})')"
 
-claude_dispatch_test::it "py CE next_plan_step: plan->deepen, then deepen->review_plan"
-claude_dispatch_test::assert_eq "review_plan" "$(py_adapter ce 'a.next_plan_step({"plan_step":"deepen","exit_predicate_result":{"gaps_open":0}})')"
+auto_test::it "py CE next_plan_step: plan->deepen, then deepen->review_plan"
+auto_test::assert_eq "review_plan" "$(py_adapter ce 'a.next_plan_step({"plan_step":"deepen","exit_predicate_result":{"gaps_open":0}})')"
 
-claude_dispatch_test::it "py CE coherence: gaps_open==0 after review_plan -> done"
-claude_dispatch_test::assert_eq "done" "$(py_adapter ce 'a.next_plan_step({"plan_step":"review_plan","exit_predicate_result":{"gaps_open":0}})')"
+auto_test::it "py CE coherence: gaps_open==0 after review_plan -> done"
+auto_test::assert_eq "done" "$(py_adapter ce 'a.next_plan_step({"plan_step":"review_plan","exit_predicate_result":{"gaps_open":0}})')"
 
-claude_dispatch_test::it "py native next_plan_step: plan -> review_plan (no deepen)"
-claude_dispatch_test::assert_eq "review_plan" "$(py_adapter native 'a.next_plan_step({"plan_step":"plan","exit_predicate_result":{"gaps_open":0}})')"
+auto_test::it "py native next_plan_step: plan -> review_plan (no deepen)"
+auto_test::assert_eq "review_plan" "$(py_adapter native 'a.next_plan_step({"plan_step":"plan","exit_predicate_result":{"gaps_open":0}})')"
 
-claude_dispatch_test::it "py native coherence: gaps_open==0 after review_plan -> done"
-claude_dispatch_test::assert_eq "done" "$(py_adapter native 'a.next_plan_step({"plan_step":"review_plan","exit_predicate_result":{"gaps_open":0}})')"
+auto_test::it "py native coherence: gaps_open==0 after review_plan -> done"
+auto_test::assert_eq "done" "$(py_adapter native 'a.next_plan_step({"plan_step":"review_plan","exit_predicate_result":{"gaps_open":0}})')"
 
-claude_dispatch_test::it "py native deepen is a no-op (returns plan unchanged)"
-claude_dispatch_test::assert_eq "PLAN-Y" "$(py_adapter native 'a.deepen("PLAN-Y")')"
+auto_test::it "py native deepen is a no-op (returns plan unchanged)"
+auto_test::assert_eq "PLAN-Y" "$(py_adapter native 'a.deepen("PLAN-Y")')"
 
 # ── done ────────────────────────────────────────────────────────────────────
-claude_dispatch_test::teardown
-claude_dispatch_test::summary
+auto_test::teardown
+auto_test::summary

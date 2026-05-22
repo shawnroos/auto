@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U4 unit test: lib/tick.py — one ScheduleWakeup-paced advance
+# auto U4 unit test: lib/tick.py — one ScheduleWakeup-paced advance
 # of the ledger. The tick reads ALL loop state from the disk ledger, does ONE
 # smallest-useful advance inside a try/except, persists atomically via
 # ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
@@ -7,7 +7,7 @@
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
 # and HOME isolation inline, mirroring tests/unit/ledger.test.sh. It does NOT
-# source claude-modes' test-helpers nor claude-dispatch shared helpers (those
+# source claude-modes' test-helpers nor auto shared helpers (those
 # are U2's, not yet present). When U2 lands, this file may migrate to them.
 #
 # Scenarios (mapped to the U4 plan, tested against tick.py's ACTUAL surface):
@@ -33,11 +33,11 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TICK_PY="${DISPATCH_ROOT}/lib/tick.py"
-TICK_SH="${DISPATCH_ROOT}/lib/tick.sh"
-LEDGER_PY="${DISPATCH_ROOT}/lib/ledger.py"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+TICK_PY="${AUTO_ROOT}/lib/tick.py"
+TICK_SH="${AUTO_ROOT}/lib/tick.sh"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
 PASS=0
@@ -56,12 +56,12 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t claude-dispatch-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */claude-dispatch-test.*) rm -rf "$SANDBOX" ;;
+    */auto-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
@@ -135,7 +135,7 @@ delay="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['delay'])" "$re
 prompt="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['prompt'])" "$res1")"
 advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res1")"
 st1="$(ledger_field "rearm-run" 'L["units"][0]["state"]')"
-if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/dispatch-tick rearm-run" ] \
+if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto-tick rearm-run" ] \
    && [ "$advanced" = "fix-applied" ] && [ "$st1" = "fixed" ]; then
   pass
 else
@@ -246,7 +246,7 @@ st4="$(ledger_field "raise-run" 'L["units"][0]["state"]')"
 err_call="$(ledger_field "raise-run" 'L["units"][0]["last_error"]["call"]')"
 err_msg_has="$(ledger_field "raise-run" '"RuntimeError" in (L["units"][0]["last_error"]["message"] or "")')"
 # Ledger must still parse cleanly; no stray tempfile (atomic write held).
-tmp_left4="$(find "$REPO/.claude/dispatch" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
+tmp_left4="$(find "$REPO/.claude/auto" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
 adv4="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res4")"
 if [ "$rc4" -eq 0 ] && [ "$st4" = "stalled" ] && [ "$err_call" = "plan" ] \
    && [ "$err_msg_has" = "True" ] && [ "$adv4" = "error" ] && [ "$tmp_left4" = "0" ]; then
@@ -312,11 +312,11 @@ ledger_init "stateless-run" \
   '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"a"}]},{"id":"U2","state":"verdict-returned","findings":[{"severity":"blocker","note":"b"}]}]' \
   >/dev/null 2>&1
 # First fresh process.
-CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
 st1_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
 st1_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
 # Second fresh process — must observe the first's mutation and advance the next.
-CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
 st2_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
 st2_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
 # After tick 1: one of U1/U2 fixed, the other still verdict-returned.
@@ -344,11 +344,11 @@ fi
 it "anti-livelock: 3 fresh-process plan ticks walk plan -> deepen -> review_plan (step persisted, no re-plan)"
 ledger_init "antilivelock-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
 step0="$(ledger_field "antilivelock-run" 'L.get("plan_step")')"
-CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
 step1="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
-CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
 step2="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
-CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
 step3="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
 # init -> null; tick1 ran "plan"; tick2 ran "deepen"; tick3 ran "review_plan".
 # The walk MONOTONICALLY ADVANCES — it never gets stuck re-running "plan".

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# claude-dispatch: the /dispatch-status read-only reporter.
+# auto: the /auto-status read-only reporter.
 #
-# /dispatch-status [<run>] reads the durable ledger(s) at
-# <repo>/.claude/dispatch/<run-slug>.json and prints a human-readable status:
+# /auto-status [<run>] reads the durable ledger(s) at
+# <repo>/.claude/auto/<run-slug>.json and prints a human-readable status:
 # loop_phase (+ plan_step), the CACHED exit_predicate_result (blockers / majors
 # / minors / gaps_open / met), per-unit states, the driver, last_beat_at +
 # liveness vs the orphan GRACE, and any stalled units with their last_error
@@ -19,23 +19,23 @@
 #   <run>       report that specific run.
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
-# CLAUDE_DISPATCH_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/resume.sh).
+# CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/auto-resume.sh).
 #
 # $ARGUMENTS-safe: the command .md body's only $-bearing line is
-#   bash "${CLAUDE_PLUGIN_ROOT}/lib/status.sh" "$ARGUMENTS"
+#   bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "$ARGUMENTS"
 # ALL $-logic lives HERE; status.py parses argv positionally and never
 # string-interpolates into a shell.
 
 set -uo pipefail
 
-CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
-# claude_dispatch::status "<packed $ARGUMENTS string>" | <split args...>
+# auto::status "<packed $ARGUMENTS string>" | <split args...>
 #   Splits a single packed "$ARGUMENTS" string into argv (the slash-command
 #   shape), then routes to status.py. The --repo is resolved by status.py
-#   (defaults to $CLAUDE_DISPATCH_REPO or a walk-up from cwd).
-claude_dispatch::status() {
+#   (defaults to $CLAUDE_AUTO_REPO or a walk-up from cwd).
+auto::status() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -46,10 +46,10 @@ claude_dispatch::status() {
     set -- $1
   fi
 
-  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/status.py" "$@"
+  "$CLAUDE_AUTO_PYTHON3" "${script_dir}/auto-status.py" "$@"
 }
 
 # Allow direct invocation for testing / scripting.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  claude_dispatch::status "$@"
+  auto::status "$@"
 fi

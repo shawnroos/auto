@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""claude-dispatch U7: resurrection / seam surfacing behind on-session-start.sh.
+"""auto U7: resurrection / seam surfacing behind on-session-start.sh.
 
-Scans every ledger under <repo>/.claude/dispatch/ and prints a one-line resume
+Scans every ledger under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
 Classification (schema §5 I-3), in order:
@@ -34,7 +34,7 @@ from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.pa
 def surfacing_lines(repo_root: str):
     """Return the list of resume-hint lines for the repo's ledgers."""
     ledger = load_ledger()
-    dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     lines = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
         try:
@@ -56,7 +56,7 @@ def surfacing_lines(repo_root: str):
         if phase == "seam" and led.get("seam_paused"):
             lines.append(
                 f"loop {run_id} paused at seam (plan complete; awaiting "
-                f"work-loop confirmation) — /dispatch-resume continue {run_id} | "
+                f"work-loop confirmation) — /auto-resume continue {run_id} | "
                 f"abort {run_id}"
             )
             continue
@@ -68,7 +68,7 @@ def surfacing_lines(repo_root: str):
             orphaned = False
         if orphaned:
             lines.append(
-                f"loop {run_id} can be resumed: /dispatch-resume {run_id}"
+                f"loop {run_id} can be resumed: /auto-resume {run_id}"
             )
     return lines
 

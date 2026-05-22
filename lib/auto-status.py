@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch: /dispatch-status logic behind status.sh.
+"""auto: /auto-status logic behind status.sh.
 
 READ-ONLY. Parses an optional run-id, reads the durable ledger(s) via ledger.py,
 and prints a human-readable status: loop_phase (+ plan_step), the cached
@@ -36,13 +36,13 @@ from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.pa
 
 
 def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_DISPATCH_REPO, else walk up from cwd for .claude/dispatch."""
-    env = os.environ.get("CLAUDE_DISPATCH_REPO")
+    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto."""
+    env = os.environ.get("CLAUDE_AUTO_REPO")
     if env:
         return env
     dir_ = os.getcwd()
     while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "dispatch")):
+        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
             return dir_
         dir_ = os.path.dirname(dir_)
     return os.getcwd()
@@ -50,7 +50,7 @@ def _resolve_repo() -> str:
 
 def _all_runs(repo_root: str):
     """(run_id, ledger_dict) for every parseable ledger in the repo, sorted."""
-    dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     out = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
         try:
@@ -169,7 +169,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
                 cause = "(timeout — no last_error)"
             sys.stdout.write(
                 f"    - {u.get('id', '?')}: {cause}    "
-                f"(/dispatch-resume retry {run_id} {u.get('id', '?')} | "
+                f"(/auto-resume retry {run_id} {u.get('id', '?')} | "
                 f"skip {run_id} {u.get('id', '?')})\n"
             )
 
@@ -206,7 +206,7 @@ def run(argv) -> int:
     if not active:
         all_runs = _all_runs(repo_root)
         if not all_runs:
-            sys.stdout.write("status: no dispatch run found in this repo.\n")
+            sys.stdout.write("status: no auto run found in this repo.\n")
             return 0
         # All runs are done — show the most recent one (last by sorted slug).
         run_id, led = all_runs[-1]
@@ -222,7 +222,7 @@ def run(argv) -> int:
     sys.stdout.write("status: multiple active runs — specify one:\n")
     for run_id, led in active:
         sys.stdout.write(
-            f"  /dispatch-status {run_id}    "
+            f"  /auto-status {run_id}    "
             f"(loop_phase={led.get('loop_phase')}, "
             f"met={(led.get('exit_predicate_result') or {}).get('met')})\n"
         )

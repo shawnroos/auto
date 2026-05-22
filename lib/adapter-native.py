@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch U6b: the native Claude adapter — Python surface.
+"""auto U6b: the native Claude adapter — Python surface.
 
 This is the module tick.py (U4) imports. `resolve_adapter` (tick.py:170-197)
 loads `lib/adapter-native.py`, prefers a module-level ``Adapter`` factory, and

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U6b: the Compound Engineering (CE) adapter.
+# auto U6b: the Compound Engineering (CE) adapter.
 #
 # Implements the LOCKED adapter contract (docs/contracts/adapter-contract.md):
 # the six ops `plan / deepen / review_plan / next_plan_step / do_unit / review`,
@@ -40,7 +40,7 @@
 
 set -uo pipefail
 
-CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ──────────────────────────────────────────────────────────────────────────
 # DELEGATION (no inline logic). The severity table + next_plan_step state
@@ -57,13 +57,13 @@ CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
 #   prepare-plan <scope> | prepare-deepen <plan> | prepare-review-plan <plan>
 #   prepare-do-unit <unit-id>
 
-claude_dispatch::adapter_ce() {
+auto::adapter_ce() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/adapter-ce.py" "$@"
+  "$CLAUDE_AUTO_PYTHON3" "${script_dir}/adapter-ce.py" "$@"
 }
 
 # Direct invocation for testing / scripting (positional, quoted).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  claude_dispatch::adapter_ce "$@"
+  auto::adapter_ce "$@"
 fi

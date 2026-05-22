@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# claude-dispatch U4: thin bash shim around tick.py — the `/dispatch-tick <run>`
+# auto U4: thin bash shim around tick.py — the `/auto-tick <run>`
 # entry, fired by a ScheduleWakeup-armed prompt.
 #
 # THE RE-ARM BOUNDARY (read before wiring this into a command):
 #   tick.py CANNOT call ScheduleWakeup — that is a MODEL tool, not a CLI. This
 #   shim runs the tick (one advance + atomic ledger write) and prints the
 #   re-arm INTENT as JSON on stdout:
-#       {"action":"rearm","delay":60,"prompt":"/dispatch-tick <run>", ...}
+#       {"action":"rearm","delay":60,"prompt":"/auto-tick <run>", ...}
 #       {"action":"stop", ...}    {"action":"noop", ...}
 #   The MODEL driving the tick reads that JSON and, when action=="rearm",
 #   issues the actual `ScheduleWakeup(delay, prompt)` tool call. Do NOT add a
 #   ScheduleWakeup invocation here — there is no binary to call.
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
-# CLAUDE_DISPATCH_PYTHON3) — never bare `python3` (rationale parity:
+# CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
 # claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh).
 #
 # $ARGUMENTS-safe: a command `.md` body's only $-bearing line is
@@ -23,13 +23,13 @@
 
 set -uo pipefail
 
-CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
-# claude_dispatch::tick "<run> [--auto] [--delay N] [--repo PATH]"
-#   The /dispatch-tick command passes the raw "$ARGUMENTS" string as $1; we
+# auto::tick "<run> [--auto] [--delay N] [--repo PATH]"
+#   The /auto-tick command passes the raw "$ARGUMENTS" string as $1; we
 #   re-split it into argv with `set --` so flags and the run-id are parsed by
 #   tick.py's argparse. Empty args -> usage (exit 2).
-claude_dispatch::tick() {
+auto::tick() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -46,10 +46,10 @@ claude_dispatch::tick() {
     return 2
   fi
 
-  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/tick.py" "$@"
+  "$CLAUDE_AUTO_PYTHON3" "${script_dir}/tick.py" "$@"
 }
 
 # Allow direct invocation for testing / scripting.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  claude_dispatch::tick "$@"
+  auto::tick "$@"
 fi

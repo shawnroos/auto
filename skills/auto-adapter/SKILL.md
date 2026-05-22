@@ -1,23 +1,23 @@
 ---
-name: dispatch-adapter
+name: auto-adapter
 description: >
-  Author a claude-dispatch adapter — the thin shim that maps one concrete
+  Author an auto adapter — the thin shim that maps one concrete
   workflow (native Claude, Compound Engineering, slate-devs, plain /plan, etc.)
   onto the engine's six fixed operations. Use when adding a new adapter to
-  claude-dispatch, when implementing the native or CE adapter (U6b), or when
-  asked how an adapter plugs into the dispatch loop engine. The locked
+  auto, when implementing the native or CE adapter (U6b), or when
+  asked how an adapter plugs into the auto loop engine. The locked
   interface lives at docs/contracts/adapter-contract.md; this skill is the
   how-to-build guide for it.
 ---
 
-# dispatch-adapter skill
+# auto-adapter skill
 
-You are guiding the authoring of a **claude-dispatch adapter**. The engine runs
+You are guiding the authoring of a **auto adapter**. The engine runs
 two loops — a plan-loop and a work-loop — but is workflow-blind. An adapter
 teaches it one workflow by implementing **six operations**. This skill walks the
 author through building a conforming adapter.
 
-**Source of truth:** `claude-dispatch/docs/contracts/adapter-contract.md` is the
+**Source of truth:** `auto/docs/contracts/adapter-contract.md` is the
 locked interface spec. This skill explains *how* to satisfy it; that file is
 *what* must be satisfied. If they disagree, the contract wins, and the underlying
 `ledger-schema.md` wins over both on shared persistence facts.
@@ -150,7 +150,7 @@ verdicts.
 
 ## References
 
-- Locked interface: `claude-dispatch/docs/contracts/adapter-contract.md`
-- Ledger contract (authoritative on shared facts): `claude-dispatch/docs/contracts/ledger-schema.md`
+- Locked interface: `auto/docs/contracts/adapter-contract.md`
+- Ledger contract (authoritative on shared facts): `auto/docs/contracts/ledger-schema.md`
 - The two V1 adapters this skill helps build (U6b): `lib/adapter-native.*`, `lib/adapter-ce.*`
-- Plan: `docs/plans/2026-05-21-001-feat-claude-dispatch-loop-engine-plan.md` (U6a / U6b)
+- Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md` (U6a / U6b)

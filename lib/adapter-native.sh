@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U6b: the native Claude adapter.
+# auto U6b: the native Claude adapter.
 #
 # Implements the LOCKED adapter contract (docs/contracts/adapter-contract.md):
 # the six ops `plan / deepen / review_plan / next_plan_step / do_unit / review`,
@@ -66,7 +66,7 @@
 
 set -uo pipefail
 
-CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ──────────────────────────────────────────────────────────────────────────
 # DELEGATION (no inline logic). The rubric + validate_findings + next_plan_step
@@ -83,13 +83,13 @@ CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
 #   deepen <plan> | prepare-plan <scope> | prepare-review-plan <plan>
 #   prepare-do-unit <unit-id>
 
-claude_dispatch::adapter_native() {
+auto::adapter_native() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/adapter-native.py" "$@"
+  "$CLAUDE_AUTO_PYTHON3" "${script_dir}/adapter-native.py" "$@"
 }
 
 # Direct invocation for testing / scripting (positional, quoted).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  claude_dispatch::adapter_native "$@"
+  auto::adapter_native "$@"
 fi

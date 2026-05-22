@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch U7 integration test: the hooks + resume + goal-status surface.
+# auto U7 integration test: the hooks + resume + goal-status surface.
 #
 # Exercises the REAL ledger.py + the U7 scripts wired exactly as the plugin
 # manifest / command body wire them. The ONLY injected seam is the repo path
@@ -8,7 +8,7 @@
 # atomic chokepoint; every classification goes through the real hook scripts.
 #
 # Per U9 spike (docs/research/native-goal-mechanism-spike.md): native /goal is a
-# closed model-judged loop with no external predicate seam, so claude-dispatch
+# closed model-judged loop with no external predicate seam, so auto
 # ships its OWN Stop hook. These tests assert THAT hook's deterministic verdict.
 #
 # SELF-CONTAINED harness (inline it/pass/fail) mirroring tests/unit/tick.test.sh
@@ -39,14 +39,14 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${DISPATCH_ROOT}/lib/ledger.py"
-GOAL_STATUS_SH="${DISPATCH_ROOT}/lib/goal-status.sh"
-RESUME_SH="${DISPATCH_ROOT}/lib/resume.sh"
-ON_STOP_SH="${DISPATCH_ROOT}/.claude/hooks/on-stop.sh"
-ON_STOP_PY="${DISPATCH_ROOT}/lib/on-stop.py"
-ON_SESSION_PY="${DISPATCH_ROOT}/lib/on-session-start.py"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+GOAL_STATUS_SH="${AUTO_ROOT}/lib/goal-status.sh"
+RESUME_SH="${AUTO_ROOT}/lib/auto-resume.sh"
+ON_STOP_SH="${AUTO_ROOT}/.claude/hooks/on-stop.sh"
+ON_STOP_PY="${AUTO_ROOT}/lib/on-stop.py"
+ON_SESSION_PY="${AUTO_ROOT}/lib/on-session-start.py"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
 PASS=0
@@ -68,21 +68,21 @@ assert_nonempty() { [ -n "$1" ] && pass || fail "expected non-empty, got empty";
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t claude-dispatch-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */claude-dispatch-test.*) rm -rf "$SANDBOX" ;;
+    */auto-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-# Make a fresh sandbox repo with .claude/dispatch present, echo its path.
+# Make a fresh sandbox repo with .claude/auto present, echo its path.
 mkrepo() {
   local repo="${SANDBOX}/repo-${1}"
-  mkdir -p "${repo}/.claude/dispatch"
+  mkdir -p "${repo}/.claude/auto"
   printf '%s' "$repo"
 }
 
@@ -114,7 +114,7 @@ L.init_ledger(repo,"orphanrun",adapter="ce",loop_phase="work",units=[{"id":"U1",
 L.set_loop(repo,"orphanrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
-assert_contains "$out" "loop orphanrun can be resumed: /dispatch-resume orphanrun"
+assert_contains "$out" "loop orphanrun can be resumed: /auto-resume orphanrun"
 
 # ─── on-session-start: orphaned (last_beat_at > GRACE) -> resume hint ──────────
 it "on-session-start: orphaned run (last_beat_at older than GRACE) surfaces a hint"
@@ -150,7 +150,7 @@ PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
 assert_contains "$out" "paused at seam"
 it "on-session-start: seam hint offers BOTH continue and abort"
-assert_contains "$out" "/dispatch-resume continue seamrun"
+assert_contains "$out" "/auto-resume continue seamrun"
 
 # ─── on-session-start: done -> skipped (no line) ──────────────────────────────
 it "on-session-start: a done run is skipped (no surfacing line)"
@@ -174,7 +174,7 @@ assert_empty "$out"
 # ─── on-session-start: malformed ledger -> never non-zero ─────────────────────
 it "on-session-start: malformed ledger never exits non-zero (rel-001)"
 REPO="$(mkrepo malformed)"
-printf '{ this is not valid json' > "${REPO}/.claude/dispatch/broken.json"
+printf '{ this is not valid json' > "${REPO}/.claude/auto/broken.json"
 "$PY" "$ON_SESSION_PY" "$REPO" >/dev/null 2>&1
 assert_eq "0" "$?"
 
@@ -313,13 +313,13 @@ led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
 with open(p,"w") as f: json.dump(led,f)
 PYEOF
-out="$(printf '{}' | CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
+out="$(printf '{}' | CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
 
 # ─── on-stop: the .sh shim never exits non-zero on a malformed ledger ─────────
 it "on-stop.sh shim: malformed ledger -> exit 0 (rel-001)"
 REPO="$(mkrepo stop-malformed)"
-printf 'not json' > "${REPO}/.claude/dispatch/x.json"
+printf 'not json' > "${REPO}/.claude/auto/x.json"
 ( cd "$REPO" && printf '{}' | bash "$ON_STOP_SH" >/dev/null 2>&1 )
 assert_eq "0" "$?"
 
@@ -364,10 +364,10 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"contrun",adapter="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"contrun",driver="manual")
 PYEOF
-out="$(CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH" continue contrun)"
+out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" continue contrun)"
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['loop_phase'])")"
 assert_eq "work" "$phase"
-it "resume continue: emits an arm-tick intent for the model to fire /dispatch-tick"
+it "resume continue: emits an arm-tick intent for the model to fire /auto-tick"
 assert_eq "arm-tick" "$(jget "$out" action)"
 it "resume continue: clears seam_paused on the seam->work flip"
 sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['seam_paused'])")"
@@ -382,7 +382,7 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"abortrun",adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
 PYEOF
-CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH" abort abortrun >/dev/null
+CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" abort abortrun >/dev/null
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','abortrun')['loop_phase'])")"
 assert_eq "done" "$phase"
 
@@ -396,7 +396,7 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"retryrun",adapter="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"retryrun","U1","stalled",last_error={"call":"plan","message":"boom","at":"2026-01-01T00:00:00Z"})
 PYEOF
-CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH" retry retryrun U1 >/dev/null
+CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" retry retryrun U1 >/dev/null
 state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['units'][0]['state'])")"
 assert_eq "pending" "$state"
 it "resume retry: clears last_error on the stalled -> pending edge"
@@ -413,7 +413,7 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"skiprun",adapter="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"skiprun","U1","stalled")
 PYEOF
-CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH" skip skiprun U1 >/dev/null
+CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" skip skiprun U1 >/dev/null
 state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','skiprun')['units'][0]['state'])")"
 assert_eq "terminal-skip" "$state"
 
@@ -428,7 +428,7 @@ for r in ("alpha","beta"):
     L.init_ledger(repo,r,adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
     L.set_loop(repo,r,driver="manual")  # both resumable (orphaned).
 PYEOF
-out="$(CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH")"
+out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH")"
 assert_contains "$out" "multiple resumable runs"
 it "resume disambiguation: lists each resumable run by id"
 case "$out" in *alpha*beta*|*beta*alpha*) pass ;; *) fail "expected both alpha and beta listed, got '$out'" ;; esac
@@ -443,7 +443,7 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"solo",adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"solo",driver="manual")
 PYEOF
-out="$(CLAUDE_DISPATCH_REPO="$REPO" bash "$RESUME_SH")"
+out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH")"
 assert_eq "solo" "$(jget "$out" run)"
 
 # ════════════════════════════════════════════════════════════════════════════

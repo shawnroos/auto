@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch U10: agent-managed batch fan-out for the work-loop.
+"""auto U10: agent-managed batch fan-out for the work-loop.
 
 The orchestration layer is *agent-driven* and deliberately separate from the
 mechanical tick (U4). The DRIVING AGENT (U5) owns the policy — it reads which
@@ -60,7 +60,7 @@ leave the unit committed as ``dispatched`` with no agent running (a phantom unit
 recoverable only via the stall timeout) AND propagate out of the loop, abandoning
 every remaining unit in the wave. The burnt attempt is naturally recorded in the
 unit's ``attempt`` counter (incremented at dispatch); the operator can
-``/dispatch-resume retry`` the stalled unit.
+``/auto-resume retry`` the stalled unit.
 
 ATTEMPT-IDENTITY (Bug #6)
 ─────────────────────────
@@ -379,7 +379,7 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
         # unit a phantom `dispatched` with no agent, NOR abandon the rest of the
         # wave. Mark the unit stalled (dispatched -> stalled, reusing the existing
         # grammar edge) with a launch-failure last_error, record the failure, and
-        # CONTINUE. The operator can /dispatch-resume retry it; the burnt attempt
+        # CONTINUE. The operator can /auto-resume retry it; the burnt attempt
         # is already recorded in the attempt counter.
         try:
             _invoke_launch(launch_fn, uid, next_attempt)

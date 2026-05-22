@@ -1,7 +1,7 @@
 # Ledger Schema Contract (LOCKED)
 
 > **Status: LOCKED day-zero contract.** This file is the source-of-truth
-> specification for the claude-dispatch per-unit ledger. U4 (tick), U6a/U6b
+> specification for the auto per-unit ledger. U4 (tick), U6a/U6b
 > (adapters), U7 (hooks), and U10 (orchestrator) build against THIS document.
 > `lib/ledger.py` is the canonical implementation; this spec is authoritative
 > if the two ever disagree. Do not change the JSON shape, the invariants, the
@@ -18,8 +18,8 @@
 The ledger is a JSON file on disk, one file per run:
 
 ```
-<repo>/.claude/dispatch/<run-slug>.json    # the ledger
-<repo>/.claude/dispatch/<run-slug>.lock    # the flock file (read-modify-write guard)
+<repo>/.claude/auto/<run-slug>.json    # the ledger
+<repo>/.claude/auto/<run-slug>.lock    # the flock file (read-modify-write guard)
 ```
 
 - `<repo>` is the git repository root (the run's home directory).
@@ -28,14 +28,14 @@ The ledger is a JSON file on disk, one file per run:
   rendering: characters outside `[A-Za-z0-9_-]` become `-`, runs of `-` collapse,
   leading/trailing `-` are stripped; empty / `.` / `..` / `..`-containing slugs are
   rejected.
-- It lives under `.claude/dispatch/`, **NOT** `.claude/modes/` (modes-owned).
+- It lives under `.claude/auto/`, **NOT** `.claude/modes/` (modes-owned).
 - Directory and files are created with mode `0700` (dir) / `0600` (files).
 
 `lib/ledger.py` exposes the path helpers so consumers never hardcode the layout:
 
 ```
-ledger_path(repo_root, run_id)  -> "<repo>/.claude/dispatch/<run-slug>.json"
-lock_path(repo_root, run_id)    -> "<repo>/.claude/dispatch/<run-slug>.lock"
+ledger_path(repo_root, run_id)  -> "<repo>/.claude/auto/<run-slug>.json"
+lock_path(repo_root, run_id)    -> "<repo>/.claude/auto/<run-slug>.lock"
 ```
 
 Both take the raw `run_id` and slugify internally — pass the run_id, not a slug.
@@ -134,7 +134,7 @@ recompute it.
 
 | field | type | meaning |
 |-------|------|---------|
-| `driver` | enum | `"self"` = a tick chain is self-pacing via `ScheduleWakeup`; `"manual"` = paused / awaiting `/dispatch-resume` |
+| `driver` | enum | `"self"` = a tick chain is self-pacing via `ScheduleWakeup`; `"manual"` = paused / awaiting `/auto-resume` |
 | `last_beat_at` | `<iso>` | updated each tick; powers orphan detection (§5). There is **no** `next_beat` field — each tick re-arms its own successor, so liveness is inferred from `last_beat_at` + `driver`, not a stored next-fire time |
 
 ---
@@ -151,8 +151,8 @@ dispatched       → stalled             (past stall_threshold_seconds with no v
 verdict-returned → fixed               (a TICK applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
 verdict-returned → pending             (no fix needed / next round: re-dispatch this unit)
 fixed            → pending             (a TICK that applied fixes re-enqueues for re-review — this is the closure loop)
-stalled          → pending             (OPERATOR: /dispatch-resume retry <unit>; clears last_error)
-stalled          → terminal-skip       (OPERATOR: /dispatch-resume skip <unit>; counts as terminal for I-2)
+stalled          → pending             (OPERATOR: /auto-resume retry <unit>; clears last_error)
+stalled          → terminal-skip       (OPERATOR: /auto-resume skip <unit>; counts as terminal for I-2)
 stalled          → verdict-returned     (RECOVERY, record_verdict-ONLY — Bug #7; see below)
 ```
 
@@ -187,7 +187,7 @@ exactly what the "use `record_verdict()` to write findings" guard blocks.
 - **Orchestrator** (U10) owns `pending → dispatched`.
 - **Background agent** (U10) owns `dispatched → verdict-returned` (self-write; survives the driving session's death) and is the **only writer of `findings[]`**.
 - **Tick** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
-- **Operator** (U7, via `/dispatch-resume`) owns the `stalled →` recoveries.
+- **Operator** (U7, via `/auto-resume`) owns the `stalled →` recoveries.
 
 ### 3.1 Plan-step sub-grammar (`plan_step` — the anti-livelock field)
 
@@ -372,7 +372,7 @@ not hardcode copies — hardcoding causes drift.
   across the rename would permit a lost update (two writers each read the old
   snapshot, both mutate, the second clobbers the first). This is the lost-update
   guard and is the critical correctness property of the lock.
-- **Python pin:** `/usr/bin/python3`, overridable via `CLAUDE_DISPATCH_PYTHON3`
+- **Python pin:** `/usr/bin/python3`, overridable via `CLAUDE_AUTO_PYTHON3`
   (default `/usr/bin/python3`). Never bare `python3` — on macOS PATH may resolve a
   Homebrew Python lacking modules. Rationale parity: `claude-modes/lib/mode-yaml.sh:24-32`.
 - **Slugify:** a vendored copy of `claude_modes::slugify_branch` lives inside
@@ -387,12 +387,12 @@ asserts no production file enables them.
 
 | env var | effect | proves |
 |---------|--------|--------|
-| `CLAUDE_DISPATCH_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
-| `CLAUDE_DISPATCH_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
-| `CLAUDE_DISPATCH_TEST_NO_REENQUEUE` | `=1` makes the tick's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/tick.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
-| `CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK` | `=1` makes `record_verdict` SKIP the Bug #6 attempt-identity rejection | the stall+retry clobber test goes RED (a stale verdict from a superseded attempt overwrites the fresh one) without the attempt check |
-| `CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY` | `=1` makes `record_verdict` reject a verdict from a `stalled` unit (the pre-fix behaviour) | the late-verdict recovery test goes RED (a genuine slow verdict is lost to `InvalidTransition`) without the recovery edge |
-| `CLAUDE_DISPATCH_TEST_NO_STALENESS_CHECK` | `=1` makes `lib/on-stop.py::_blocking_runs` SKIP the Bug #9 dead-self-chain freshness gate | the stale-block test goes RED (a dead `driver=="self"` chain keeps blocking stop) without the gate |
+| `CLAUDE_AUTO_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
+| `CLAUDE_AUTO_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
+| `CLAUDE_AUTO_TEST_NO_REENQUEUE` | `=1` makes the tick's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/tick.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
+| `CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK` | `=1` makes `record_verdict` SKIP the Bug #6 attempt-identity rejection | the stall+retry clobber test goes RED (a stale verdict from a superseded attempt overwrites the fresh one) without the attempt check |
+| `CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY` | `=1` makes `record_verdict` reject a verdict from a `stalled` unit (the pre-fix behaviour) | the late-verdict recovery test goes RED (a genuine slow verdict is lost to `InvalidTransition`) without the recovery edge |
+| `CLAUDE_AUTO_TEST_NO_STALENESS_CHECK` | `=1` makes `lib/on-stop.py::_blocking_runs` SKIP the Bug #9 dead-self-chain freshness gate | the stale-block test goes RED (a dead `driver=="self"` chain keeps blocking stop) without the gate |
 
 ---
 
@@ -419,7 +419,7 @@ CLI entry (for `lib/ledger.sh` and ad-hoc scripting): `python3 ledger.py <subcom
 
 ## 9. Cross-references
 
-- Plan: `docs/plans/2026-05-21-001-feat-claude-dispatch-loop-engine-plan.md` (U3 section).
+- Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md` (U3 section).
 - Atomic write precedent: `claude-modes/scripts/on-session-start.sh:162-175`.
 - Lock precedent: `claude-modes/lib/cascade-engine.sh::with_flock_run`.
 - Slugify source: `claude-modes/lib/validate-mode-name.sh:104-136`.

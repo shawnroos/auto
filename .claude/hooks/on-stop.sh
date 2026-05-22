@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# claude-dispatch U7 Stop hook: the engine's OWN deliberate-stop guard.
+# auto U7 Stop hook: the engine's OWN deliberate-stop guard.
 #
 # WHY THIS EXISTS (U9 spike — docs/research/native-goal-mechanism-spike.md):
 #   Native `/goal` is a CLOSED, model-judged continuation loop with NO external
 #   predicate seam — the engine CANNOT feed it the ledger result. So
-#   claude-dispatch ships its OWN thin Stop hook. This is NOT optional. Its
+#   auto ships its OWN thin Stop hook. This is NOT optional. Its
 #   verdict is DETERMINISTIC and engine-owned (read from the ledger's I-1-fresh
 #   `exit_predicate_result`), consistent with Shawn's
 #   `feedback_deterministic_over_probabilistic_v1` preference.
@@ -25,7 +25,7 @@
 #   via systemMessage. The deterministic gate fires ONCE per stop attempt.
 #
 # ACTIVE-RUN POLICY:
-#   There may be N ledgers under <repo>/.claude/dispatch/. We BLOCK if ANY has
+#   There may be N ledgers under <repo>/.claude/auto/. We BLOCK if ANY has
 #   `loop_phase != "done" AND exit_predicate_result.met == false`. The reason
 #   names the offending run(s). This matches goal-status.sh's per-run verdict.
 #   The all_units_terminal gate is honored implicitly: `met` already requires
@@ -41,16 +41,16 @@
 
 set -uo pipefail
 
-# ─── Presence gate (walk up from cwd for a <repo>/.claude/dispatch dir) ──────
-# claude-dispatch is REPO-scoped (not user-global like claude-modes). The hook
+# ─── Presence gate (walk up from cwd for a <repo>/.claude/auto dir) ──────
+# auto is REPO-scoped (not user-global like claude-modes). The hook
 # fires with a cwd we don't fully control; git is NOT an engine dependency, so
-# we walk up the directory tree looking for .claude/dispatch/ rather than
+# we walk up the directory tree looking for .claude/auto/ rather than
 # shelling to git rev-parse (which would hard-fail on a non-git checkout —
 # a rel-001 violation). The moment the walk fails, fast no-op exit 0.
 __cd_find_repo() {
   local dir="${PWD}"
   while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-    if [ -d "${dir}/.claude/dispatch" ]; then
+    if [ -d "${dir}/.claude/auto" ]; then
       printf '%s' "$dir"
       return 0
     fi
@@ -60,9 +60,9 @@ __cd_find_repo() {
 }
 
 __cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/dispatch" ] || exit 0
+[ -d "${__cd_repo}/.claude/auto" ] || exit 0
 
-PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # CLAUDE_PLUGIN_ROOT is set by the harness at hook-invocation time. Defensive
 # fallback: derive from this script's location (.claude/hooks/ -> plugin root).

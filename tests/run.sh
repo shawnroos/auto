@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-dispatch test runner.
+# auto test runner.
 #
 # Usage:
 #   bash tests/run.sh [unit|integration|smoke|all] [--verbose]
@@ -23,7 +23,7 @@
 #   A mismatch means a test escaped isolation. The suite fails loudly on
 #   mismatch regardless of individual test outcomes.
 #
-#   Note: claude-dispatch's ledger lives at <repo>/.claude/dispatch/, NOT in
+#   Note: auto's ledger lives at <repo>/.claude/auto/, NOT in
 #   $HOME — so dispatch's $HOME surface is small. We hash the ~/.claude/
 #   paths a misbehaving test could plausibly touch (the plugin's hooks could
 #   one day write user-level state). Absent paths hash to "ABSENT" (not an
@@ -81,10 +81,10 @@ _hash_path() {
 }
 
 # Paths we hash before+after the suite to detect isolation leaks.
-# Dispatch keeps its ledger in <repo>/.claude/dispatch/, so the only
+# Dispatch keeps its ledger in <repo>/.claude/auto/, so the only
 # $HOME surface a test could plausibly hit is the user's ~/.claude/ tree.
 ISOLATION_PATHS=(
-  "${HOME}/.claude/dispatch"
+  "${HOME}/.claude/auto"
   "${HOME}/.claude/settings.json"
 )
 
@@ -106,7 +106,7 @@ _run_test_file() {
   TOTAL_FILES=$((TOTAL_FILES + 1))
 
   local tmpout
-  tmpout=$(mktemp -t claude-dispatch-run.XXXXXX)
+  tmpout=$(mktemp -t auto-run.XXXXXX)
   trap 'rm -f "$tmpout"' RETURN
 
   # Run the test, capturing combined stdout+stderr.
@@ -182,7 +182,7 @@ done
 # Run selected tests.
 
 echo ""
-echo "claude-dispatch test suite"
+echo "auto test suite"
 echo "=========================="
 
 if [ "$SUBCOMMAND" = "smoke" ] || [ "$SUBCOMMAND" = "all" ]; then

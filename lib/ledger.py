@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch ledger: persistence, transitions, concurrency.
+"""auto ledger: persistence, transitions, concurrency.
 
 Canonical implementation of docs/contracts/ledger-schema.md. That document
 is the authoritative spec; this module implements it. If they ever disagree,
@@ -28,7 +28,7 @@ Design notes (the load-bearing correctness rules):
   * Locking via fcntl.flock (NOT flock(1) — macOS lacks it), mirroring
     claude-modes/lib/cascade-engine.sh::with_flock_run.
 
-  * Python pinned /usr/bin/python3 via CLAUDE_DISPATCH_PYTHON3 (the .sh shim
+  * Python pinned /usr/bin/python3 via CLAUDE_AUTO_PYTHON3 (the .sh shim
     pins the interpreter; this file documents the contract).
 
   * slugify_branch is VENDORED here (``_slugify_branch``) — not cross-imported
@@ -154,7 +154,7 @@ def _slugify_branch(branch: str) -> str:
 
 
 def _dispatch_dir(repo_root: str) -> str:
-    return os.path.join(repo_root, ".claude", "dispatch")
+    return os.path.join(repo_root, ".claude", "auto")
 
 
 def ledger_path(repo_root: str, run_id: str) -> str:
@@ -216,7 +216,7 @@ def gating_severities(scale: str = "three-tier") -> tuple:
     The corresponding ``ledger`` field is ``adapter_scale``; read it once per call
     site (e.g. ``ledger.get("adapter_scale", "three-tier")``) and pass it in.
 
-    Test-only deliberate-fail hatch ``CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING``:
+    Test-only deliberate-fail hatch ``CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING``:
     when set to ``"1"`` this helper IGNORES ``scale`` and always returns the
     hardcoded three-tier ``GATING_SEVERITIES``. That simulates a regression where a
     call site bypasses the scale-aware decision (the Bug #3 class). The class-1
@@ -226,7 +226,7 @@ def gating_severities(scale: str = "three-tier") -> tuple:
     hatch reverts ALL sites at once, so the test proves the CLASS is closed (no
     site bypasses scale), not merely one instance.
     """
-    if os.environ.get("CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING") == "1":
+    if os.environ.get("CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING") == "1":
         return GATING_SEVERITIES
     return ("blocker",) if scale == "blocker-only" else GATING_SEVERITIES
 
@@ -390,13 +390,13 @@ def _atomic_write(path: str, ledger: dict) -> None:
 
     This is the ONLY serialization path. It ALWAYS recomputes
     ``exit_predicate_result`` immediately before writing (I-1), unless the
-    test-only ``CLAUDE_DISPATCH_TEST_NO_RECOMPUTE`` hatch is set (which exists
+    test-only ``CLAUDE_AUTO_TEST_NO_RECOMPUTE`` hatch is set (which exists
     purely to prove the I-1 test goes RED without the recompute).
 
     Atomic = mkstemp + fchmod(0o600) + os.rename. A crash mid-write leaves the
     prior file intact and a stray tmp (no half-written ledger).
     """
-    if os.environ.get("CLAUDE_DISPATCH_TEST_NO_RECOMPUTE") != "1":
+    if os.environ.get("CLAUDE_AUTO_TEST_NO_RECOMPUTE") != "1":
         ledger["exit_predicate_result"] = recompute_predicate(ledger)
 
     target_dir = os.path.dirname(path) or "."
@@ -428,12 +428,12 @@ def _flock_run(lpath: str, body):
     flock through here so the flock boilerplate (ensure-lockfile-exists, acquire,
     release-in-finally) lives in exactly one place.
 
-    The test-only ``CLAUDE_DISPATCH_TEST_NO_LOCK`` hatch skips ONLY the flock
+    The test-only ``CLAUDE_AUTO_TEST_NO_LOCK`` hatch skips ONLY the flock
     acquisition (``body`` still runs) so the concurrency test can prove a lost
     update without serialization.
     """
     os.makedirs(os.path.dirname(lpath) or ".", mode=0o700, exist_ok=True)
-    no_lock = os.environ.get("CLAUDE_DISPATCH_TEST_NO_LOCK") == "1"
+    no_lock = os.environ.get("CLAUDE_AUTO_TEST_NO_LOCK") == "1"
 
     # Ensure the lock file exists (0600).
     if not os.path.exists(lpath):
@@ -461,7 +461,7 @@ def _with_locked_ledger(repo_root: str, run_id: str, mutate):
     """Acquire flock, read the ledger, run ``mutate(ledger)``, atomic-write, release.
 
     The lock spans the WHOLE read-modify-write (the lost-update guard). The
-    test-only ``CLAUDE_DISPATCH_TEST_NO_LOCK`` hatch skips ONLY the flock
+    test-only ``CLAUDE_AUTO_TEST_NO_LOCK`` hatch skips ONLY the flock
     acquisition (the read/mutate/write still run) so the concurrency test can
     prove a lost update without serialization.
 
@@ -716,10 +716,10 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
         norm.append({"severity": sev, "note": f.get("note", "")})
 
     skip_attempt = (
-        os.environ.get("CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK") == "1"
+        os.environ.get("CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK") == "1"
     )
     skip_recovery = (
-        os.environ.get("CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY") == "1"
+        os.environ.get("CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY") == "1"
     )
 
     def mutate(ledger):

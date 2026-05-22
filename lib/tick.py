@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-dispatch U4: one ScheduleWakeup-paced advance of the ledger.
+"""auto U4: one ScheduleWakeup-paced advance of the ledger.
 
 A *tick* is the unit of execution. Each tick does exactly ONE smallest-useful
 advance of the loop, then re-arms its own successor via `ScheduleWakeup`. The
@@ -13,7 +13,7 @@ THE RE-ARM BOUNDARY (read this — it is the load-bearing seam):
     Instead, tick.py COMPUTES the re-arm intent and emits it on stdout as a
     JSON object:
 
-        {"action": "rearm",  "delay": 60, "prompt": "/dispatch-tick <run>", ...}
+        {"action": "rearm",  "delay": 60, "prompt": "/auto-tick <run>", ...}
         {"action": "stop",   "reason": "predicate-met" | "seam-pause", ...}
         {"action": "noop",   "reason": "lock-held-by-live-tick"}
 
@@ -36,7 +36,7 @@ The tick only:
 Crash-safety: the atomic ledger write (ledger.py) and the re-arm output are
 ordered so that a crash after the write but before the re-arm leaves a
 *consistent* ledger whose missing successor is exactly what U7's orphan check
-catches (→ manual /dispatch-resume). We persist BEFORE we signal re-arm (R10).
+catches (→ manual /auto-resume). We persist BEFORE we signal re-arm (R10).
 """
 
 from __future__ import annotations
@@ -98,14 +98,14 @@ class _TickLockHeld(Exception):
 class _tick_lock:
     """Context manager: non-blocking exclusive flock for the duration of a tick.
 
-    Honors CLAUDE_DISPATCH_TEST_NO_TICK_LOCK=1 (test-only) to skip acquisition,
+    Honors CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 (test-only) to skip acquisition,
     so a deliberate-fail test can prove the double-drive guard is real.
     """
 
     def __init__(self, repo_root: str, run_id: str):
         self._path = _tick_lock_path(repo_root, run_id)
         self._fh = None
-        self._no_lock = os.environ.get("CLAUDE_DISPATCH_TEST_NO_TICK_LOCK") == "1"
+        self._no_lock = os.environ.get("CLAUDE_AUTO_TEST_NO_TICK_LOCK") == "1"
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self._path) or ".", mode=0o700, exist_ok=True)
@@ -358,14 +358,14 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     forever) — the closure loop is unreachable.
 
     The fixed→pending re-enqueue honors the test-only
-    ``CLAUDE_DISPATCH_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
+    ``CLAUDE_AUTO_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
     it set the work-loop closure test goes RED — livelocks at `fixed`).
     """
     fix_uid = _ready_fix_unit(ledger_dict, halted_ids)
     if fix_uid is not None:
         ledger.transition(repo_root, run_id, fix_uid, "fixed")
         return {"advanced": "fix-applied", "unit": fix_uid}
-    if os.environ.get("CLAUDE_DISPATCH_TEST_NO_REENQUEUE") != "1":
+    if os.environ.get("CLAUDE_AUTO_TEST_NO_REENQUEUE") != "1":
         reenq_uid = _ready_reenqueue_unit(ledger_dict, halted_ids)
         if reenq_uid is not None:
             ledger.transition(repo_root, run_id, reenq_uid, "pending")
@@ -489,7 +489,7 @@ def dispatch_tick(
 
 
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
-    rearm_prompt = f"/dispatch-tick {run_id}"
+    rearm_prompt = f"/auto-tick {run_id}"
     now = _now_dt()
     now_iso = ledger._now_iso()
 
@@ -718,8 +718,8 @@ def _cli(argv):
     parser.add_argument("run_id", help="the run id to advance")
     parser.add_argument(
         "--repo",
-        default=os.environ.get("CLAUDE_DISPATCH_REPO", os.getcwd()),
-        help="repo root (defaults to $CLAUDE_DISPATCH_REPO or cwd)",
+        default=os.environ.get("CLAUDE_AUTO_REPO", os.getcwd()),
+        help="repo root (defaults to $CLAUDE_AUTO_REPO or cwd)",
     )
     parser.add_argument("--auto", action="store_true", help="auto-skip the seam")
     parser.add_argument(

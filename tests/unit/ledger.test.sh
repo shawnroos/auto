@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# claude-dispatch U3 unit test: lib/ledger.py persistence, transitions,
+# auto U3 unit test: lib/ledger.py persistence, transitions,
 # concurrency, and the three hard invariants (I-1 / I-2 / I-3).
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
 # and HOME isolation inline. It does NOT source claude-modes' test-helpers
-# (cross-plugin coupling forbidden) nor claude-dispatch's own shared helpers
+# (cross-plugin coupling forbidden) nor auto's own shared helpers
 # (those are tests/helpers/test-helpers.sh, owned by U2 — not yet present).
 # When U2 lands shared helpers, this file may migrate to them.
 #
@@ -26,9 +26,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${DISPATCH_ROOT}/lib/ledger.py"
-PY="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
 PASS=0
@@ -47,12 +47,12 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t claude-dispatch-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */claude-dispatch-test.*) rm -rf "$SANDBOX" ;;
+    */auto-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
@@ -110,7 +110,7 @@ it "round-trip: write a ledger, read it back identical; dispatched -> verdict-re
 ledger_init "feat foo/2026" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 run="feat foo/2026"
 # slug should have collapsed the space + slash.
-LP="$(claude_dispatch_path() { "$PY" "$LEDGER_PY" path "$REPO" "$run"; }; claude_dispatch_path)"
+LP="$(auto_path() { "$PY" "$LEDGER_PY" path "$REPO" "$run"; }; auto_path)"
 if [ -f "$LP" ]; then
   # transition pending -> dispatched, then dispatched -> verdict-returned via record_verdict
   "$PY" - "$REPO" "$run" "$LEDGER_PY" <<'PYEOF'
@@ -130,7 +130,7 @@ fi
 # ─── Scenario 2: unknown run-id -> clean error, no partial file ──────────────
 it "unknown run-id: read raises LedgerNotFound, no partial file written"
 out="$("$PY" "$LEDGER_PY" read "$REPO" "does-not-exist" 2>&1)"; rc=$?
-missing_file="$REPO/.claude/dispatch/does-not-exist.json"
+missing_file="$REPO/.claude/auto/does-not-exist.json"
 if [ "$rc" -ne 0 ] && [ ! -f "$missing_file" ]; then
   pass
 else
@@ -156,7 +156,7 @@ PYEOF
 # Prior ledger must still be valid JSON, state unchanged (still pending), and
 # no leftover .ledger.* tempfile in the dispatch dir.
 st="$(ledger_field "atomic-run" 'L["units"][0]["state"]')"
-tmp_left="$(find "$REPO/.claude/dispatch" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
+tmp_left="$(find "$REPO/.claude/auto" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$st" = "pending" ] && [ "$tmp_left" = "0" ]; then
   pass
 else
@@ -168,7 +168,7 @@ fi
 # read-modify-write that increments a counter unit. Locked: final count == N.
 # NO_LOCK: lost updates -> final count < N at least once across iterations.
 race_writers() {
-  # race_writers <run> <n>   (honors CLAUDE_DISPATCH_TEST_NO_LOCK from env)
+  # race_writers <run> <n>   (honors CLAUDE_AUTO_TEST_NO_LOCK from env)
   local run="$1" n="$2" i pids=()
   for i in $(seq 1 "$n"); do
     "$PY" - "$REPO" "$run" "$LEDGER_PY" <<'PYEOF' &
@@ -198,9 +198,9 @@ assert_eq "6" "$cnt"
 it "deliberate-fail: NO_LOCK writers lose updates (count < 6 at least once / 12 iters)"
 saw_lost=0
 for iter in $(seq 1 12); do
-  rm -f "$REPO/.claude/dispatch/race-nolock.json" "$REPO/.claude/dispatch/race-nolock.lock"
+  rm -f "$REPO/.claude/auto/race-nolock.json" "$REPO/.claude/auto/race-nolock.lock"
   ledger_init "race-nolock" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
-  CLAUDE_DISPATCH_TEST_NO_LOCK=1 race_writers "race-nolock" 6
+  CLAUDE_AUTO_TEST_NO_LOCK=1 race_writers "race-nolock" 6
   c="$(ledger_field "race-nolock" 'len(L["units"][0]["findings"])')"
   [ "$c" -lt 6 ] && saw_lost=1 && break
 done
@@ -232,7 +232,7 @@ fi
 
 it "deliberate-fail: with NO_RECOMPUTE, a new blocker leaves stale met==true"
 ledger_init "i1-norecomp" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
-CLAUDE_DISPATCH_TEST_NO_RECOMPUTE=1 "$PY" - "$REPO" "i1-norecomp" "$LEDGER_PY" <<'PYEOF'
+CLAUDE_AUTO_TEST_NO_RECOMPUTE=1 "$PY" - "$REPO" "i1-norecomp" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
@@ -556,7 +556,7 @@ fi
 # NOT clobber B's findings. Without the check, A's stale findings would win
 # (latest-write-wins keyed only on unit_id).
 #
-# Verify-RED: set CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK=1 — record_verdict skips
+# Verify-RED: set CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK=1 — record_verdict skips
 # the attempt rejection, A's stale verdict overwrites B's, and the assertion that
 # B's findings survive flips RED (proven below + by the deliberate-fail control).
 it "Bug #6: a late verdict from a SUPERSEDED attempt is rejected (does not clobber the fresh attempt's verdict)"
@@ -610,7 +610,7 @@ fi
 it "Bug #6 deliberate-fail: WITHOUT the attempt check, A's stale verdict CLOBBERS B's clean one"
 # Same scenario, but NO_ATTEMPT_CHECK neuters the rejection: A's attempt-1 stale
 # blocker overwrites B's attempt-2 clean verdict (the clobber the fix prevents).
-clobbered="$(CLAUDE_DISPATCH_TEST_NO_ATTEMPT_CHECK=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+clobbered="$(CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, os
 repo, ledger_py = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
@@ -647,7 +647,7 @@ assert_eq "yes" "$clobbered"
 # real work) instead of silently discarding it via InvalidTransition. Coordinated
 # with Bug #6: a late verdict from a SUPERSEDED attempt is still REJECTED.
 #
-# Verify-RED: set CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY=1 — record_verdict
+# Verify-RED: set CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY=1 — record_verdict
 # reverts to the pre-fix check that rejects a stalled unit's verdict, so the
 # genuine late verdict is lost to InvalidTransition (proven by the control below).
 it "Bug #7: a genuine late verdict from a STALLED unit (current attempt) is RECOVERED to verdict-returned"
@@ -719,7 +719,7 @@ assert_eq "rejected-stale,dispatched" "$stale_recover"
 it "Bug #7 deliberate-fail: WITHOUT the recovery edge, a genuine late verdict from a stalled unit is LOST to InvalidTransition"
 # NO_STALLED_RECOVERY forces the pre-fix check: a stalled unit's verdict raises
 # InvalidTransition (the silent-discard bug), instead of being recovered.
-lost="$(CLAUDE_DISPATCH_TEST_NO_STALLED_RECOVERY=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+lost="$(CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, os
 repo, ledger_py = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
@@ -772,7 +772,7 @@ it "init_ledger: concurrent double-init -> EXACTLY one wins, the other gets Ledg
 # Two processes race to create the SAME fresh run. The shared flock primitive
 # must serialize the existence-check + write so exactly one creates the ledger
 # and the other observes it already exists.
-rm -f "$REPO/.claude/dispatch/init-race.json" "$REPO/.claude/dispatch/init-race.lock"
+rm -f "$REPO/.claude/auto/init-race.json" "$REPO/.claude/auto/init-race.lock"
 race_init() {
   "$PY" - "$REPO" "init-race" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
@@ -876,13 +876,13 @@ PYEOF
 assert_eq "rejected-stale,clean" "$self_stale"
 
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
-it "fence: no production file sets a CLAUDE_DISPATCH_TEST_* hatch to 1"
+it "fence: no production file sets a CLAUDE_AUTO_TEST_* hatch to 1"
 # Covers the TEST_NO_* deliberate-fail hatches AND the TEST_FORCE_THREETIER_GATING
 # hatch (the class-1 deliberate-fail control): a production file must never ENABLE
 # any of them. The helper only READS the env var (== "1"); SETTING it in lib/ would
 # wedge a deliberate-fail control on in production, so the fence forbids it.
-offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_(NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)|FORCE_THREETIER_GATING)[[:space:]]*=[[:space:]]*[\"']?1" \
-  "${DISPATCH_ROOT}/lib" 2>/dev/null || true)"
+offenders="$(grep -rlE "CLAUDE_AUTO_TEST_(NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)|FORCE_THREETIER_GATING)[[:space:]]*=[[:space:]]*[\"']?1" \
+  "${AUTO_ROOT}/lib" 2>/dev/null || true)"
 if [ -z "$offenders" ]; then
   pass
 else

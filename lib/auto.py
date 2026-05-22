@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""claude-dispatch: /dispatch run-creation logic behind dispatch.sh.
+"""auto: /auto run-creation logic behind dispatch.sh.
 
 This is the run-creation entry point the engine otherwise lacks: it parses the
-/dispatch argument string, creates a fresh ledger via ledger.py (so the
+/auto argument string, creates a fresh ledger via ledger.py (so the
 init-time RMW flock + I-1 predicate recompute are inherited — no new flock), and
 emits an arm-first-tick INTENT (the model fires the actual ScheduleWakeup +
 /goal). It mirrors resume.py's shape: parse argv positionally, route through
@@ -20,14 +20,14 @@ dispatch space-separated subcommands, per memory
                                   default is the loop's own exit predicate).
 
 A new run starts at loop_phase="plan" with an EMPTY units[] — the plan-loop
-(adapter-driven, via the tick) populates the work units later; /dispatch does
+(adapter-driven, via the tick) populates the work units later; /auto does
 NOT parse units from the plan. init_ledger's defaults are exactly this shape.
 
 The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
 no slot for any of them, and ledger.py is the locked contract). They ride in the
 EMITTED INTENT as payload the model consumes — the same intent-shape extension
 resume.py uses. The model issues `/goal <text>` and `ScheduleWakeup(60,
-"/dispatch-tick <run>[ --auto]")`.
+"/auto-tick <run>[ --auto]")`.
 
 DOUBLE-DRIVE: init_ledger holds the per-run init flock across the
 existence-check + write; the arm-first-tick path emits intent only — the tick's
@@ -55,25 +55,25 @@ _VALID_ADAPTERS = ("ce", "native")
 
 
 def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_DISPATCH_REPO, else walk up from cwd for .claude/dispatch.
+    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto.
 
-    Parity with resume.py::_resolve_repo. On a fresh run the .claude/dispatch
+    Parity with resume.py::_resolve_repo. On a fresh run the .claude/auto
     dir may not exist yet, so when no walk-up hit is found we fall back to cwd
     (init_ledger creates the dir).
     """
-    env = os.environ.get("CLAUDE_DISPATCH_REPO")
+    env = os.environ.get("CLAUDE_AUTO_REPO")
     if env:
         return env
     dir_ = os.getcwd()
     while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "dispatch")):
+        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
             return dir_
         dir_ = os.path.dirname(dir_)
     return os.getcwd()
 
 
 def _parse_args(argv):
-    """Split the /dispatch arg string into (plan, auto, adapter, goal).
+    """Split the /auto arg string into (plan, auto, adapter, goal).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
     positional keyword. Flags: --adapter <ce|native>, --goal <text>. Returns a
@@ -137,7 +137,7 @@ def _make_run_id(ledger, repo_root: str, plan: str) -> str:
 
 def _emit_arm(run_id: str, *, auto: bool, goal, adapter: str, plan: str) -> int:
     """Emit the arm-first-tick INTENT — the model fires /goal + ScheduleWakeup."""
-    prompt = f"/dispatch-tick {run_id}"
+    prompt = f"/auto-tick {run_id}"
     if auto:
         prompt += " --auto"
     intent = {
@@ -165,14 +165,14 @@ def run(argv) -> int:
     try:
         args = _parse_args(list(argv))
     except ValueError as exc:
-        sys.stderr.write(f"dispatch: {exc}\n")
+        sys.stderr.write(f"auto: {exc}\n")
         return 2
 
     plan = args["plan"]
     if not plan:
         # Empty args -> usage surface, exit cleanly (no run created).
         sys.stdout.write(
-            "dispatch: usage: /dispatch <plan-or-spec> [auto] "
+            "auto: usage: /auto <plan-or-spec> [auto] "
             "[--adapter ce|native] [--goal \"<text>\"]\n"
         )
         return 0
@@ -180,12 +180,12 @@ def run(argv) -> int:
     adapter = args["adapter"]
     if adapter not in _VALID_ADAPTERS:
         sys.stderr.write(
-            f"dispatch: invalid adapter {adapter!r} (expected ce|native)\n"
+            f"auto: invalid adapter {adapter!r} (expected ce|native)\n"
         )
         return 2
 
     if not os.path.isfile(plan):
-        sys.stderr.write(f"dispatch: plan/spec file not found: {plan}\n")
+        sys.stderr.write(f"auto: plan/spec file not found: {plan}\n")
         return 1
 
     run_id = _make_run_id(ledger, repo_root, plan)
@@ -199,10 +199,10 @@ def run(argv) -> int:
             loop_phase="plan",
         )
     except ledger.LedgerExists as exc:
-        sys.stderr.write(f"dispatch: {exc}\n")
+        sys.stderr.write(f"auto: {exc}\n")
         return 1
     except ledger.LedgerError as exc:
-        sys.stderr.write(f"dispatch: {exc}\n")
+        sys.stderr.write(f"auto: {exc}\n")
         return 1
 
     return _emit_arm(
