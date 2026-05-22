@@ -68,127 +68,28 @@ set -uo pipefail
 
 CLAUDE_DISPATCH_PYTHON3="${CLAUDE_DISPATCH_PYTHON3:-/usr/bin/python3}"
 
-CLAUDE_DISPATCH_NATIVE_ADAPTER_NAME="native"
-# Set by the rubric probe above (partial -> blocker-only).
-CLAUDE_DISPATCH_NATIVE_ADAPTER_SCALE="blocker-only"
-
 # ──────────────────────────────────────────────────────────────────────────
-# Pure helpers (unit-tested).
-
-# native_adapter_scale -> the declared adapter_scale token.
-native_adapter_scale() { printf '%s\n' "$CLAUDE_DISPATCH_NATIVE_ADAPTER_SCALE"; }
-
-# native_review_rubric -> the blocker/major/minor rubric injected into the
-#   native reviewer. This IS the native adapter's severity "mapping" — there is
-#   no foreign vocabulary; the reviewer tags directly on the shared scale.
-native_review_rubric() {
-  cat <<'RUBRIC'
-Tag each finding with exactly one severity:
-  blocker — security holes, data loss/corruption, crashes, or incorrect
-            results that ship to users. GATES the loop.
-  major   — real defects that should be fixed but do not lose data or ship
-            wrong results (e.g. bounded correctness bugs, missing tests on a
-            critical path). Best-effort under blocker-only scale.
-  minor   — style, naming, clarity, comments. Reported at exit; never gates.
-Emit findings as a JSON array: [{"severity":"blocker|major|minor","note":"..."}].
-RUBRIC
-}
-
-# native_validate_findings <findings-json> -> findings[] JSON (validated passthrough).
-#   PARSE half of `review`. The native reviewer tags findings against the rubric
-#   out of band (a model action). This validates the structured result is on the
-#   shared scale and passes it through unchanged. Off-scale severities are a
-#   contract violation -> fail loudly.
-native_validate_findings() {
-  local findings_json="$1"
-  "$CLAUDE_DISPATCH_PYTHON3" - "$findings_json" <<'PYEOF'
-import json, sys
-SEVERITIES = ("blocker", "major", "minor")
-findings = json.loads(sys.argv[1])
-out = []
-for f in findings:
-    sev = str(f.get("severity", ""))
-    if sev not in SEVERITIES:
-        sys.stderr.write("adapter-native: off-scale severity %r (expected blocker|major|minor)\n" % sev)
-        sys.exit(1)
-    out.append({"severity": sev, "note": f.get("note", "")})
-json.dump(out, sys.stdout)
-PYEOF
-}
-
-# native_next_plan_step <ledger-json> -> "plan" | "review_plan" | "done"
-#   The native plan-loop sequencer (contract §4). Native has NO deepen step, so
-#   it NEVER emits "deepen": plan -> review_plan -> (loop review while gaps
-#   remain) -> done.
+# DELEGATION (no inline logic). The rubric + validate_findings + next_plan_step
+# state machine + the PREPARE envelopes live ONCE, in adapter-native.py — the
+# module tick.py imports. This shim used to re-implement them in an inline Python
+# heredoc; that meant the contract-load-bearing logic existed in two places and
+# could drift. The shim now pins the interpreter and execs adapter-native.py's
+# CLI, which dispatches the same subcommands onto the SAME pure functions. All
+# $-bearing logic stays here, never in a command `.md` (memory
+# feedback_slash_command_arg_substitution).
 #
-#   Coherence rule (contract §4.1, REQUIRED): once a review_plan round writes
-#   gaps_open == 0, return "done". The gaps_open==0 short-circuit is FIRST.
-native_next_plan_step() {
-  local ledger_json="$1"
-  "$CLAUDE_DISPATCH_PYTHON3" - "$ledger_json" <<'PYEOF'
-import json, sys
-ledger = json.loads(sys.argv[1])
-epr = ledger.get("exit_predicate_result", {}) or {}
-plan_step = ledger.get("plan_step")
-# Coherence guard FIRST (contract §4.1): gaps closed after a review => done.
-if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
-    print("done"); sys.exit(0)
-if plan_step is None:
-    print("plan")
-elif plan_step == "plan":
-    print("review_plan")
-elif plan_step == "review_plan":
-    # gaps still open (else the guard fired) -> review again. Native never deepens.
-    print("review_plan")
-else:
-    print("done")
-PYEOF
+# Subcommands (forwarded verbatim to adapter-native.py):
+#   adapter-scale | review-rubric | validate-findings <json> | next-plan-step <json>
+#   deepen <plan> | prepare-plan <scope> | prepare-review-plan <plan>
+#   prepare-do-unit <unit-id>
+
+claude_dispatch::adapter_native() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  "$CLAUDE_DISPATCH_PYTHON3" "${script_dir}/adapter-native.py" "$@"
 }
 
-# native_deepen <plan> -> plan (UNCHANGED).
-#   Contract §6.2: native has no deepen concept; deepen is a no-op that returns
-#   the plan verbatim. next_plan_step never emits "deepen", so this is only ever
-#   reached if the engine calls it defensively; either way it must not mutate.
-native_deepen() { printf '%s' "$1"; }
-
-# ──────────────────────────────────────────────────────────────────────────
-# Live-invocation PREPARE halves (emit an envelope; the model performs the action).
-
-# native_prepare_plan <scope> -> prose-plan invocation envelope.
-native_prepare_plan() {
-  jq -nc --arg scope "$1" \
-    '{adapter:"native", op:"plan", invocation:"write-prose-plan", scope:$scope}'
-}
-
-# native_prepare_review_plan <plan> -> review+list-gaps invocation envelope.
-#   The model reviews the plan and returns a gap-set array; the engine reads
-#   only its length (contract §2.2).
-native_prepare_review_plan() {
-  jq -nc --arg plan "$1" \
-    '{adapter:"native", op:"review_plan", invocation:"review-and-list-gaps", plan:$plan}'
-}
-
-# native_prepare_do_unit <unit-id> -> dispatch_handle envelope (opaque to the engine).
-#   Native dispatch is a native edit / Task. The orchestrator (U10) correlates
-#   the in-flight agent via this handle; U10 defines the correlation contract.
-native_prepare_do_unit() {
-  jq -nc --arg unit "$1" \
-    '{adapter:"native", op:"do_unit", unit_id:$unit, invocation:("native-task " + $unit)}'
-}
-
-# ──────────────────────────────────────────────────────────────────────────
 # Direct invocation for testing / scripting (positional, quoted).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  sub="${1:-}"; shift || true
-  case "$sub" in
-    adapter-scale)        native_adapter_scale ;;
-    review-rubric)        native_review_rubric ;;
-    validate-findings)    native_validate_findings "$@" ;;
-    next-plan-step)       native_next_plan_step "$@" ;;
-    deepen)               native_deepen "$@" ;;
-    prepare-plan)         native_prepare_plan "$@" ;;
-    prepare-review-plan)  native_prepare_review_plan "$@" ;;
-    prepare-do-unit)      native_prepare_do_unit "$@" ;;
-    *) printf 'adapter-native: unknown subcommand %q\n' "$sub" >&2; exit 2 ;;
-  esac
+  claude_dispatch::adapter_native "$@"
 fi

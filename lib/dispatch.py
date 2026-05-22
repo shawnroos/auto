@@ -42,23 +42,16 @@ exits non-zero so the operator sees it.
 from __future__ import annotations
 
 import datetime
-import importlib.util
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 _DEFAULT_ADAPTER = "ce"
 _VALID_ADAPTERS = ("ce", "native")
-
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _resolve_repo() -> str:
@@ -166,7 +159,7 @@ def _emit_arm(run_id: str, *, auto: bool, goal, adapter: str, plan: str) -> int:
 
 
 def run(argv) -> int:
-    ledger = _load_ledger()
+    ledger = load_ledger()
     repo_root = _resolve_repo()
 
     try:

@@ -26,20 +26,13 @@ from __future__ import annotations
 
 import datetime
 import glob
-import importlib.util
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 
 def _resolve_repo() -> str:
@@ -187,7 +180,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
 
 
 def run(argv) -> int:
-    ledger = _load_ledger()
+    ledger = load_ledger()
     repo_root = _resolve_repo()
 
     rest = list(argv)

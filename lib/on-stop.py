@@ -65,20 +65,13 @@ STALE-CHAIN CARVE-OUT (Bug #9):
 from __future__ import annotations
 
 import glob
-import importlib.util
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 
 def _read_stop_hook_active(raw: str) -> bool:
@@ -98,7 +91,7 @@ def _blocking_runs(repo_root: str, now=None):
     invariant. A malformed/partial file is skipped silently (rel-001 — never let
     a bad ledger break the stop machinery).
     """
-    ledger = _load_ledger()
+    ledger = load_ledger()
     # Bug #9: the dead-self-chain freshness gate. A driver=="self" run whose last
     # beat is older than this is treated as a dead chain (it does NOT block stop).
     # The hatch forces the OLD behaviour (no freshness check) so the deliberate-

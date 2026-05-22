@@ -743,6 +743,138 @@ PYEOF
 )"
 assert_eq "lost-invalid-transition,stalled" "$lost"
 
+# ─── Scenario 16: init_ledger routes its lock through the shared _flock_run ───
+# Cleanup #P2: init_ledger no longer hand-rolls flock acquire/release; it shares
+# the _flock_run primitive with _with_locked_ledger (only the body inside the
+# lock differs — check-absent-then-write vs read-mutate-write). The OBSERVABLE
+# contract that must survive the refactor: init still rejects creating an
+# existing run, and two concurrent inits cannot both win (exactly one creates,
+# the other gets LedgerExists).
+it "init_ledger: a second init of the same run-id is rejected (LedgerExists), original untouched"
+ledger_init "init-once" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
+second="$("$PY" - "$REPO" "init-once" "$LEDGER_PY" <<'PYEOF' 2>&1
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    m.init_ledger(repo, run, adapter="native", units=[{"id":"X"}])
+    print("ACCEPTED-CLOBBER")
+except m.LedgerExists:
+    # Original must be untouched: still the ce adapter + the original unit.
+    led = m.read_ledger(repo, run)
+    print("rejected:%s:%s" % (led["adapter"], led["units"][0]["id"]))
+PYEOF
+)"
+assert_eq "rejected:ce:U1" "$second"
+
+it "init_ledger: concurrent double-init -> EXACTLY one wins, the other gets LedgerExists (flock holds across check+create)"
+# Two processes race to create the SAME fresh run. The shared flock primitive
+# must serialize the existence-check + write so exactly one creates the ledger
+# and the other observes it already exists.
+rm -f "$REPO/.claude/dispatch/init-race.json" "$REPO/.claude/dispatch/init-race.lock"
+race_init() {
+  "$PY" - "$REPO" "init-race" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    m.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}])
+    print("won")
+except m.LedgerExists:
+    print("exists")
+except Exception as e:
+    print("ERR:%s" % e)
+PYEOF
+}
+race_init >"$SANDBOX/init-a.out" 2>&1 &
+pa=$!
+race_init >"$SANDBOX/init-b.out" 2>&1 &
+pb=$!
+wait "$pa"; wait "$pb"
+outcomes="$(cat "$SANDBOX/init-a.out" "$SANDBOX/init-b.out" | sort | tr '\n' ',')"
+wins="$(cat "$SANDBOX/init-a.out" "$SANDBOX/init-b.out" | grep -c '^won$' || true)"
+exists="$(cat "$SANDBOX/init-a.out" "$SANDBOX/init-b.out" | grep -c '^exists$' || true)"
+# Exactly one "won" and one "exists" — never two wins (no torn double-create),
+# never an error. The flock across check+create is what makes this deterministic.
+if [ "$wins" = "1" ] && [ "$exists" = "1" ]; then
+  pass
+else
+  fail "wins=$wins exists=$exists outcomes=$outcomes (expected exactly one won + one exists)"
+fi
+
+# ─── Scenario 17: record_verdict self-edge (verdict-returned -> verdict-returned)
+# Cleanup #P2: confirm the verdict-returned -> verdict-returned self-edge is
+# INTENTIONAL (a re-review of the CURRENT attempt overwrites findings) and that
+# attempt-identity (Bug #6) is the real guard discriminating a legit re-review
+# from a stale clobber — NOT a coincidental latest-write-wins.
+it "record_verdict self-edge: a SAME-attempt re-verdict overwrites the current findings (intended re-review)"
+reverdict="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "reverdict-same-attempt"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+# First verdict (attempt 1): a blocker. Unit -> verdict-returned, met False.
+m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"first-pass"}], attempt=1)
+first = m.read_ledger(repo, run)["units"][0]
+# A re-review of the SAME attempt finds the blocker resolved -> clean verdict.
+# This is the verdict-returned -> verdict-returned self-edge; equal attempt is
+# ACCEPTED and the findings are OVERWRITTEN (latest-only, §4.2).
+m.record_verdict(repo, run, "U1", [], attempt=1)
+second = m.read_ledger(repo, run)
+u = second["units"][0]
+print("%s,%s,%s,%s" % (
+    first["state"],
+    "clean" if not u["findings"] else u["findings"][0]["severity"],
+    u["state"],
+    second["exit_predicate_result"]["met"],
+))
+PYEOF
+)"
+# first verdict-returned ; re-verdict findings now clean ; still verdict-returned ;
+# clean re-verdict -> met True (terminal, no gating findings).
+assert_eq "verdict-returned,clean,verdict-returned,True" "$reverdict"
+
+it "record_verdict self-edge: a re-verdict from an OLDER attempt is REJECTED (attempt-identity, not write-order, is the guard)"
+# The self-edge does NOT blindly accept any re-verdict: a verdict carrying an
+# attempt OLDER than the unit's current attempt is rejected even when the unit is
+# already verdict-returned. This proves attempt-identity guards the self-edge.
+self_stale="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "reverdict-stale-self"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id":"U1","state":"pending"}])
+# Bump the unit to attempt 2 and land a clean verdict for it (verdict-returned).
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
+m.record_verdict(repo, run, "U1", [], attempt=1)
+m.transition(repo, run, "U1", "pending")
+m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:20:00Z", attempt=2)
+m.record_verdict(repo, run, "U1", [], attempt=2)  # clean, verdict-returned, attempt 2.
+# A late verdict from attempt 1 tries the self-edge (verdict-returned -> ...)
+# with a STALE blocker. Must be rejected; the clean attempt-2 findings survive.
+outcome = "ACCEPTED"
+try:
+    m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-self"}], attempt=1)
+except m.StaleVerdict:
+    outcome = "rejected-stale"
+u = m.read_ledger(repo, run)["units"][0]
+print("%s,%s" % (outcome, "clean" if not u["findings"] else u["findings"][0]["severity"]))
+PYEOF
+)"
+assert_eq "rejected-stale,clean" "$self_stale"
+
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
 it "fence: no production file sets a CLAUDE_DISPATCH_TEST_NO_* hatch to 1"
 offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)[[:space:]]*=[[:space:]]*[\"']?1" \

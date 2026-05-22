@@ -22,25 +22,18 @@ A single bad ledger never aborts the scan of its siblings.
 from __future__ import annotations
 
 import glob
-import importlib.util
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 
 def surfacing_lines(repo_root: str):
     """Return the list of resume-hint lines for the repo's ledgers."""
-    ledger = _load_ledger()
+    ledger = load_ledger()
     dispatch_dir = os.path.join(repo_root, ".claude", "dispatch")
     lines = []
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):

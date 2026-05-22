@@ -42,6 +42,7 @@ catches (→ manual /dispatch-resume). We persist BEFORE we signal re-arm (R10).
 from __future__ import annotations
 
 import argparse
+import datetime
 import fcntl
 import importlib.util
 import json
@@ -54,17 +55,10 @@ import sys
 # I-1 (atomic predicate freshness) is inherited for free.
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-ledger = _load_ledger()
+ledger = load_ledger()
 
 # Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -437,9 +431,11 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
 # Seam handling.
 
 
-def _is_auto(ledger_dict, auto_flag) -> bool:
-    """Auto mode: explicit --auto flag, or a ledger marker (driver policy is the
-    driver's; the tick honors an explicit flag and falls back to False)."""
+def _is_auto(auto_flag) -> bool:
+    """Auto mode: the explicit --auto flag. The tick honors only the flag the
+    driver passes; there is no ledger-driven auto marker (the schema has no slot
+    for one, and the driver owns the policy). Kept as a named predicate so the
+    seam-routing call site reads intentionally."""
     return bool(auto_flag)
 
 
@@ -480,7 +476,7 @@ def dispatch_tick(
 
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     rearm_prompt = f"/dispatch-tick {run_id}"
-    now = ledger._datetime_now() if hasattr(ledger, "_datetime_now") else _now_dt()
+    now = _now_dt()
     now_iso = ledger._now_iso()
 
     led = ledger.read_ledger(repo_root, run_id)
@@ -642,7 +638,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     )
     if not pred.get("met") and not plan_done:
         return advance_result  # gaps still open; keep ticking the plan loop.
-    if _is_auto(led, auto):
+    if _is_auto(auto):
         ledger.set_loop(repo_root, run_id, loop_phase="work", driver="self", beat=True)
         out = dict(advance_result or {})
         out["seam"] = "auto-flip-to-work"
@@ -695,8 +691,6 @@ def _most_recently_dispatched(led):
 
 
 def _now_dt():
-    import datetime
-
     return datetime.datetime.now(datetime.timezone.utc)
 
 

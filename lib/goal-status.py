@@ -29,20 +29,13 @@ A missing or malformed ledger yields active:false (allow stop) and exit 0
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _load_ledger():
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 
 def _build_reason(predicate: dict, all_terminal: bool) -> str:
@@ -69,7 +62,7 @@ def status(repo_root: str, run_id: str) -> dict:
     Reads the ledger directly (lock-free). `done` is the I-1-fresh
     `exit_predicate_result.met` — never a separate cached value.
     """
-    ledger = _load_ledger()
+    ledger = load_ledger()
     try:
         led = ledger.read_ledger(repo_root, run_id)
     except Exception:

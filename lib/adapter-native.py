@@ -162,3 +162,60 @@ class Adapter:
         else:
             findings = unit
         return validate_findings(findings)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CLI (the .sh shim DELEGATES here — adapter-native.sh execs this module). This
+# is the SINGLE implementation of the rubric + validate_findings + next_plan_step
+# state machine; the .sh no longer re-implements them in an inline Python heredoc
+# (the pure logic lived in two places and could drift). Positional argv only; the
+# .sh pins the interpreter and word-splits "$ARGUMENTS" before exec'ing us.
+
+
+def _cli(argv):
+    import json
+    import sys
+
+    if not argv:
+        sys.stderr.write("usage: adapter-native.py <subcommand> [args...]\n")
+        return 2
+    sub, rest = argv[0], argv[1:]
+    a = Adapter()
+    try:
+        if sub == "adapter-scale":
+            sys.stdout.write(ADAPTER_SCALE + "\n")
+            return 0
+        if sub == "review-rubric":
+            sys.stdout.write(REVIEW_RUBRIC + "\n")
+            return 0
+        if sub == "validate-findings":
+            json.dump(validate_findings(json.loads(rest[0])), sys.stdout)
+            return 0
+        if sub == "next-plan-step":
+            sys.stdout.write(_next_plan_step(json.loads(rest[0])) + "\n")
+            return 0
+        if sub == "deepen":
+            # Native deepen is a verbatim no-op; emit the plan unchanged (no
+            # trailing newline — mirrors the bash printf '%s' it replaces).
+            sys.stdout.write(a.deepen(rest[0] if rest else ""))
+            return 0
+        if sub == "prepare-plan":
+            json.dump(a.plan(rest[0] if rest else None), sys.stdout)
+            return 0
+        if sub == "prepare-review-plan":
+            json.dump(a.review_plan(rest[0] if rest else None), sys.stdout)
+            return 0
+        if sub == "prepare-do-unit":
+            json.dump(a.do_unit(rest[0] if rest else None), sys.stdout)
+            return 0
+        sys.stderr.write("adapter-native: unknown subcommand %r\n" % sub)
+        return 2
+    except (ValueError, IndexError) as exc:
+        sys.stderr.write("adapter-native: %s\n" % exc)
+        return 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_cli(sys.argv[1:]))

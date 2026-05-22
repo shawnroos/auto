@@ -16,7 +16,11 @@ Design notes (the load-bearing correctness rules):
 
   * The flock spans the WHOLE read-modify-write, not just the rename. Holding
     only across the rename would permit a lost update. ``_with_locked_ledger``
-    is the only RMW primitive; every mutator goes through it.
+    is the only RMW primitive; every mutator goes through it. Lock ACQUISITION
+    itself lives in one place — ``_flock_run`` — which both ``_with_locked_ledger``
+    and ``init_ledger`` route through. (``init_ledger`` is a create, not an RMW:
+    it must succeed only when the ledger is ABSENT, the inverse of the RMW
+    primitive's read-existing-first shape, so it shares the lock but not the body.)
 
   * Atomic write = mkstemp + os.fchmod(0o600) + os.rename, mirroring
     claude-modes/scripts/on-session-start.sh:162-175.
@@ -360,21 +364,18 @@ def _read_json(path: str) -> dict:
         return json.load(fh)
 
 
-def _with_locked_ledger(repo_root: str, run_id: str, mutate):
-    """Acquire flock, read the ledger, run ``mutate(ledger)``, atomic-write, release.
+def _flock_run(lpath: str, body):
+    """Hold the per-run exclusive flock for the duration of ``body()`` and return
+    its result. The SINGLE lock-acquisition primitive — both the RMW path
+    (``_with_locked_ledger``) and the create path (``init_ledger``) route their
+    flock through here so the flock boilerplate (ensure-lockfile-exists, acquire,
+    release-in-finally) lives in exactly one place.
 
-    The lock spans the WHOLE read-modify-write (the lost-update guard). The
-    test-only ``CLAUDE_DISPATCH_TEST_NO_LOCK`` hatch skips ONLY the flock
-    acquisition (the read/mutate/write still run) so the concurrency test can
-    prove a lost update without serialization.
-
-    ``mutate`` receives the freshly-read ledger dict, mutates it in place, and
-    may return a value, which this function returns.
+    The test-only ``CLAUDE_DISPATCH_TEST_NO_LOCK`` hatch skips ONLY the flock
+    acquisition (``body`` still runs) so the concurrency test can prove a lost
+    update without serialization.
     """
-    path = ledger_path(repo_root, run_id)
-    lpath = lock_path(repo_root, run_id)
     os.makedirs(os.path.dirname(lpath) or ".", mode=0o700, exist_ok=True)
-
     no_lock = os.environ.get("CLAUDE_DISPATCH_TEST_NO_LOCK") == "1"
 
     # Ensure the lock file exists (0600).
@@ -389,14 +390,7 @@ def _with_locked_ledger(repo_root: str, run_id: str, mutate):
     try:
         if not no_lock:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        if not os.path.exists(path):
-            raise LedgerNotFound(
-                f"no ledger for run-id {run_id!r} at {path}"
-            )
-        ledger = _read_json(path)
-        result = mutate(ledger)
-        _atomic_write(path, ledger)
-        return result
+        return body()
     finally:
         if not no_lock:
             try:
@@ -404,6 +398,31 @@ def _with_locked_ledger(repo_root: str, run_id: str, mutate):
             except OSError:
                 pass
         lock_file.close()
+
+
+def _with_locked_ledger(repo_root: str, run_id: str, mutate):
+    """Acquire flock, read the ledger, run ``mutate(ledger)``, atomic-write, release.
+
+    The lock spans the WHOLE read-modify-write (the lost-update guard). The
+    test-only ``CLAUDE_DISPATCH_TEST_NO_LOCK`` hatch skips ONLY the flock
+    acquisition (the read/mutate/write still run) so the concurrency test can
+    prove a lost update without serialization.
+
+    ``mutate`` receives the freshly-read ledger dict, mutates it in place, and
+    may return a value, which this function returns.
+    """
+    path = ledger_path(repo_root, run_id)
+    lpath = lock_path(repo_root, run_id)
+
+    def body():
+        if not os.path.exists(path):
+            raise LedgerNotFound(f"no ledger for run-id {run_id!r} at {path}")
+        ledger = _read_json(path)
+        result = mutate(ledger)
+        _atomic_write(path, ledger)
+        return result
+
+    return _flock_run(lpath, body)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -440,19 +459,15 @@ def init_ledger(
     lpath = lock_path(repo_root, run_id)
     os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
 
-    # Ensure the lock file exists, then hold it across the existence-check +
-    # write so two concurrent inits cannot both win.
-    if not os.path.exists(lpath):
-        old_umask = os.umask(0o077)
-        try:
-            open(lpath, "a").close()
-        finally:
-            os.umask(old_umask)
-
-    lock_file = open(lpath, "a+")
-    try:
-        if os.environ.get("CLAUDE_DISPATCH_TEST_NO_LOCK") != "1":
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    # Hold the per-run flock across the existence-check + write (via the shared
+    # _flock_run primitive) so two concurrent inits cannot both win. NOTE: init
+    # cannot route through _with_locked_ledger — that primitive's RMW shape
+    # REQUIRES the ledger to already exist (it reads it before calling mutate and
+    # raises LedgerNotFound otherwise). init is the inverse: it must succeed only
+    # when the file is ABSENT and create it. Both share the lock primitive
+    # (_flock_run); only the body inside the lock differs (check-absent-then-write
+    # here vs read-mutate-write there).
+    def body():
         if os.path.exists(path):
             raise LedgerExists(f"ledger already exists for run-id {run_id!r}")
 
@@ -475,13 +490,8 @@ def init_ledger(
         }
         _atomic_write(path, ledger)
         return ledger
-    finally:
-        if os.environ.get("CLAUDE_DISPATCH_TEST_NO_LOCK") != "1":
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-        lock_file.close()
+
+    return _flock_run(lpath, body)
 
 
 def _normalize_unit(u: dict) -> dict:
@@ -513,9 +523,12 @@ def _normalize_unit(u: dict) -> dict:
 def read_ledger(repo_root: str, run_id: str) -> dict:
     """Return the ledger dict. Raises LedgerNotFound on unknown run-id.
 
-    A read-only operation; takes a shared view via a brief lock to avoid
-    reading a torn snapshot (atomic-rename makes torn reads impossible anyway,
-    but the lock keeps semantics uniform).
+    A read-only operation; takes NO lock. The atomic-write chokepoint
+    (``_atomic_write`` = mkstemp + os.rename) makes a torn read impossible — a
+    reader either sees the whole prior file or the whole new one, never a
+    half-written one — so no lock is needed to read a consistent snapshot. This
+    is why the engine's hot read paths (the Stop hook, status, converge) read
+    lock-free: they cannot contend with a slow writer.
     """
     path = ledger_path(repo_root, run_id)
     if not os.path.exists(path):

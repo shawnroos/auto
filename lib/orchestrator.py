@@ -73,36 +73,38 @@ than the unit's current attempt (a stale verdict from a superseded retry).
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import os
 import sys
 
 # ──────────────────────────────────────────────────────────────────────────
-# Load the canonical ledger module by file path (matches the test harness
-# pattern; avoids depending on lib/ being on sys.path). We bind the public
-# names we use explicitly so the import surface of this module is legible.
+# Load the canonical ledger module via the ONE shared loader (lib/_bootstrap),
+# then bind the public names we use explicitly so the import surface of this
+# module is legible. We still EXTRACT individual names (rather than touching
+# `ledger.<x>` everywhere) so the deliberate reader/writer split below stays
+# visible — that split is the load-bearing discipline, not the binding name.
 
-_LEDGER_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ledger.py")
-_spec = importlib.util.spec_from_file_location("claude_dispatch_ledger", _LEDGER_PY)
-_ledger = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_ledger)
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+ledger = load_ledger()
 
 # The ledger names this module is permitted to use. NOTE the deliberate split:
 # the READER path (ready_units / converge) uses only read_ledger; the WRITER
 # path (dispatch_batch) additionally uses transition + InvalidTransition. There
 # is no path through converge that reaches a write function.
-read_ledger = _ledger.read_ledger
-_transition = _ledger.transition
-_unit_is_terminal = _ledger.unit_is_terminal
-InvalidTransition = _ledger.InvalidTransition
-LedgerError = _ledger.LedgerError
+read_ledger = ledger.read_ledger
+_transition = ledger.transition
+_unit_is_terminal = ledger.unit_is_terminal
+InvalidTransition = ledger.InvalidTransition
+LedgerError = ledger.LedgerError
 
 # Re-export _now_iso so dispatch_batch can stamp dispatched_at consistently with
 # every other ledger timestamp (same format ledger.py emits).
-_now_iso = _ledger._now_iso
+_now_iso = ledger._now_iso
 
-GATING_SEVERITIES = _ledger.GATING_SEVERITIES
+GATING_SEVERITIES = ledger.GATING_SEVERITIES
 
 
 # ──────────────────────────────────────────────────────────────────────────
