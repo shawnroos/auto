@@ -1,0 +1,345 @@
+# Ledger Schema Contract (LOCKED)
+
+> **Status: LOCKED day-zero contract.** This file is the source-of-truth
+> specification for the claude-dispatch per-unit ledger. U4 (tick), U6a/U6b
+> (adapters), U7 (hooks), and U10 (orchestrator) build against THIS document.
+> `lib/ledger.py` is the canonical implementation; this spec is authoritative
+> if the two ever disagree. Do not change the JSON shape, the invariants, the
+> state grammar, or the module constants without re-locking with all consumers.
+>
+> **Reading test:** a unit author should be able to implement their unit by
+> reading *only* this file — never `lib/ledger.py`. If something you need is
+> not specified here, that is a contract gap; raise it, don't guess.
+
+---
+
+## 1. Location & keying
+
+The ledger is a JSON file on disk, one file per run:
+
+```
+<repo>/.claude/dispatch/<run-slug>.json    # the ledger
+<repo>/.claude/dispatch/<run-slug>.lock    # the flock file (read-modify-write guard)
+```
+
+- `<repo>` is the git repository root (the run's home directory).
+- `<run-slug>` is the `run_id` passed through `slugify_branch` (vendored from
+  claude-modes `lib/validate-mode-name.sh`; see §7). The slug is a filesystem-safe
+  rendering: characters outside `[A-Za-z0-9_-]` become `-`, runs of `-` collapse,
+  leading/trailing `-` are stripped; empty / `.` / `..` / `..`-containing slugs are
+  rejected.
+- It lives under `.claude/dispatch/`, **NOT** `.claude/modes/` (modes-owned).
+- Directory and files are created with mode `0700` (dir) / `0600` (files).
+
+`lib/ledger.py` exposes the path helpers so consumers never hardcode the layout:
+
+```
+ledger_path(repo_root, run_id)  -> "<repo>/.claude/dispatch/<run-slug>.json"
+lock_path(repo_root, run_id)    -> "<repo>/.claude/dispatch/<run-slug>.lock"
+```
+
+Both take the raw `run_id` and slugify internally — pass the run_id, not a slug.
+
+---
+
+## 2. Concrete schema
+
+This is the exact on-disk JSON. Field order is not significant; presence and
+type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
+`2026-05-21T14:03:00Z`) or `null` when unset.
+
+```json
+{
+  "run_id": "feat-foo-2026-05-21",
+  "loop_phase": "plan",
+  "seam_paused": false,
+  "adapter": "ce",
+  "adapter_scale": "three-tier",
+  "exit_predicate_result": {
+    "met": false,
+    "blockers": 1,
+    "majors": 2,
+    "minors": 5,
+    "gaps_open": 0,
+    "all_units_terminal": false
+  },
+  "units": [
+    {
+      "id": "U1",
+      "state": "verdict-returned",
+      "depends_on": [],
+      "dispatched_at": "2026-05-21T14:00:00Z",
+      "verdict_at": "2026-05-21T14:02:00Z",
+      "stall_threshold_seconds": 600,
+      "last_error": null,
+      "findings": [
+        { "severity": "major", "note": "..." }
+      ]
+    }
+  ],
+  "loop": {
+    "driver": "self",
+    "last_beat_at": "2026-05-21T14:02:00Z"
+  }
+}
+```
+
+### 2.1 Top-level fields
+
+| field | type | values / meaning |
+|-------|------|------------------|
+| `run_id` | string | the human-supplied run identifier; slugified for the filename, stored raw here |
+| `loop_phase` | enum | `"plan"` \| `"seam"` \| `"work"` \| `"done"` |
+| `seam_paused` | bool | `true` ONLY while `loop_phase == "seam"`; the intentional-orphan flag (§5, I-3) |
+| `adapter` | enum | `"ce"` \| `"native"` — which workflow adapter drives the run |
+| `adapter_scale` | enum | `"three-tier"` \| `"blocker-only"` — set by U6b's rubric probe; tells the predicate evaluator which severity logic applies |
+| `exit_predicate_result` | object | the **cached** loop-done computation; see §2.2. NEVER re-derive downstream — read this field (memory `feedback_loop_monitor_terminal_state_field`) |
+| `units` | array | per-unit ledger entries; see §2.3 |
+| `loop` | object | liveness / driver metadata; see §2.4 |
+
+### 2.2 `exit_predicate_result` (the cached predicate — I-1)
+
+| field | type | meaning |
+|-------|------|---------|
+| `met` | bool | loop is done. `true` requires `blockers==0 AND majors==0 AND all_units_terminal==true` (I-2). Plan-loop additionally requires `gaps_open==0`. |
+| `blockers` | int | count of `blocker`-severity findings across all units' `findings[]` |
+| `majors` | int | count of `major`-severity findings across all units' `findings[]` |
+| `minors` | int | count of `minor`-severity findings (reported at exit, never gate — R5/R6) |
+| `gaps_open` | int | open plan-loop gaps (adapter-supplied); `0` outside plan-loop |
+| `all_units_terminal` | bool | `true` iff EVERY unit is terminal (see "terminal" definition, §4, I-2) |
+
+This whole object is **recomputed from the in-memory unit state on every write**
+(I-1) and persisted in the same atomic snapshot. It is a cache of a pure function
+of `units[]` (+ `gaps_open` / `loop_phase`); consumers read it, they do not
+recompute it.
+
+### 2.3 `units[]` entry
+
+| field | type | meaning |
+|-------|------|---------|
+| `id` | string | unit identifier, unique within the run (e.g. `"U1"`) |
+| `state` | enum | `"pending"` \| `"dispatched"` \| `"verdict-returned"` \| `"fixed"` \| `"stalled"` \| `"terminal-skip"` — see §3 grammar |
+| `depends_on` | string[] | unit ids this unit depends on (for fan-out gating; resolved by U10) |
+| `dispatched_at` | `<iso>`/null | when the orchestrator marked it `dispatched`; null until then |
+| `verdict_at` | `<iso>`/null | timestamp of the **latest** verdict self-write (overwrites on re-verdict — latest-only semantics; null until first verdict) |
+| `stall_threshold_seconds` | int | per-unit timeout; adapter-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
+| `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`). Cleared on `stalled → pending` (retry) |
+| `findings` | array | LATEST review verdict's findings; each `{ "severity": "blocker"\|"major"\|"minor", "note": str }`. See §4 findings semantics |
+
+### 2.4 `loop` object (liveness — I-3)
+
+| field | type | meaning |
+|-------|------|---------|
+| `driver` | enum | `"self"` = a tick chain is self-pacing via `ScheduleWakeup`; `"manual"` = paused / awaiting `/dispatch-resume` |
+| `last_beat_at` | `<iso>` | updated each tick; powers orphan detection (§5). There is **no** `next_beat` field — each tick re-arms its own successor, so liveness is inferred from `last_beat_at` + `driver`, not a stored next-fire time |
+
+---
+
+## 3. State grammar
+
+A unit's `state` may move ONLY along these edges. `lib/ledger.py::transition`
+rejects any transition not in this table (it raises; the ledger is not written).
+
+```
+pending          → dispatched          (ORCHESTRATOR via dispatch_batch — the ONLY entry transition; non-pending units are rejected)
+dispatched       → verdict-returned    (the BACKGROUND AGENT self-writes its verdict + findings atomically)
+dispatched       → stalled             (past stall_threshold_seconds with no verdict, OR an adapter raised mid-dispatch)
+verdict-returned → fixed               (a TICK applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
+verdict-returned → pending             (no fix needed / next round: re-dispatch this unit)
+fixed            → pending             (a TICK that applied fixes re-enqueues for re-review — this is the closure loop)
+stalled          → pending             (OPERATOR: /dispatch-resume retry <unit>; clears last_error)
+stalled          → terminal-skip       (OPERATOR: /dispatch-resume skip <unit>; counts as terminal for I-2)
+```
+
+Terminal sink: `terminal-skip` has no outgoing transition.
+
+**Explicitly rejected** (illustrative — anything not in the table above is rejected):
+`pending → fixed` (skips review), `pending → verdict-returned`, `pending → terminal-skip`,
+`verdict-returned → dispatched`, `terminal-skip → *`, any self-edge.
+
+**Who writes which transition** (no two writers contend for the same edge):
+- **Orchestrator** (U10) owns `pending → dispatched`.
+- **Background agent** (U10) owns `dispatched → verdict-returned` (self-write; survives the driving session's death) and is the **only writer of `findings[]`**.
+- **Tick** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
+- **Operator** (U7, via `/dispatch-resume`) owns the `stalled →` recoveries.
+
+---
+
+## 4. Terminal definition & findings semantics
+
+### 4.1 `terminal(unit)` (load-bearing for I-2)
+
+```
+terminal(u) = u.state == "terminal-skip"
+              OR ( u.state in {"verdict-returned", "fixed"}
+                   AND no finding in u.findings has severity in {"blocker","major"} )
+```
+
+A unit that is `pending`, `dispatched`, or `stalled` is NOT terminal. A `fixed`
+unit whose `findings[]` STILL carries an open `blocker` or `major` is **NOT
+terminal** — this is the findings-closure livelock guard: a unit cannot end the
+loop merely by being marked `fixed` while its last review still shows a defect.
+
+`lib/ledger.py` exposes this as a pure function `unit_is_terminal(unit) -> bool`
+so consumers (and the I-2 test) can call it directly.
+
+`all_units_terminal == true` iff `terminal(u)` holds for every `u in units`.
+
+### 4.2 Findings semantics (honors R8 — closure only via a verdict)
+
+- `findings[]` holds the **latest review verdict's** output. A new verdict
+  **OVERWRITES** the array (it does not append). It always reflects exactly the
+  most recent review's view of the unit.
+- `findings[]` is written **ONLY** by a background agent's review verdict
+  (the `dispatched → verdict-returned` transition). NOTHING else writes it.
+- A tick applying a fix (`verdict-returned → fixed`) does **NOT** clear or modify
+  `findings[]`. Asserting closure without a verdict is forbidden (R8). The fix is
+  recorded as a state change only; the stale findings remain until a fresh review
+  overwrites them.
+- Therefore the closure path is:
+  `verdict-returned →(fix)→ fixed →(re-enqueue)→ pending →(re-dispatch)→ dispatched →(fresh review)→ verdict-returned` with NEW findings (ideally empty).
+  The predicate clears only when a re-review returns no blockers/majors.
+
+---
+
+## 5. Hard invariants (enforced in code)
+
+### I-1 — Atomic predicate freshness (generalized to ALL writers)
+
+EVERY ledger write that mutates unit state or findings — whether by a tick (U4),
+a background agent's verdict self-write (U10), or the orchestrator's
+`dispatch_batch` (U10) — MUST recompute `exit_predicate_result` (including
+`all_units_terminal`) from the SAME in-memory state and persist both in ONE
+atomic `mkstemp + os.rename` under flock.
+
+This is enforced structurally: `lib/ledger.py` has exactly one serialization
+chokepoint (`_atomic_write`) that ALWAYS recomputes the predicate immediately
+before writing. There is no public path that writes the ledger without
+recomputing. Any writer that mutates state via the module API inherits I-1 by
+construction — that is what "generalized to ALL writers" means: U10's callers
+route their mutations through this module and get freshness for free.
+
+All consumers — the tick's stop-check, native `/goal` (via `goal-status.sh`),
+U7's hooks — read `exit_predicate_result` directly and NEVER re-derive it.
+
+### I-2 — Done requires terminal units
+
+`exit_predicate_result.met == true` requires:
+
+```
+blockers == 0  AND  majors == 0  AND  all_units_terminal == true
+```
+
+(Plan-loop additionally requires `gaps_open == 0`.)
+
+This closes two failure modes at once:
+- **stalled-dependency false-done:** a stalled unit with un-dispatched dependents
+  keeps `all_units_terminal == false`, so the loop cannot falsely report done even
+  if no findings exist yet.
+- **findings-closure livelock:** a `fixed` unit whose findings still show a blocker
+  is NOT terminal (§4.1), so the loop re-enqueues it for re-review rather than
+  exiting.
+
+### I-3 — Liveness / orphan detection
+
+`loop.last_beat_at` records the last tick time; `loop.driver` is `"self"` while a
+tick chain is self-pacing or `"manual"` when paused / awaiting resume.
+
+A run is **resumable (orphaned)** iff:
+
+```
+loop_phase != "done"
+AND ( loop.driver == "manual"
+      OR loop.last_beat_at is older than GRACE_SECONDS )
+```
+
+`GRACE_SECONDS = 4200` (70 min). It MUST exceed the maximum tick delay (3600s,
+the `ScheduleWakeup` clamp ceiling) plus tick-execution slack, so a healthy
+slow-paced tick chain (e.g. last beat 3500s ago, `driver == "self"`) is NEVER
+false-flagged as orphaned — a false flag could induce a double-drive.
+
+`seam_paused == true` is the *intentional* orphan: it is surfaced as a seam (a
+plan-complete pause awaiting confirmation), not a crash. The SessionStart hook
+(U7) checks `seam_paused` BEFORE the time-based orphan branch.
+
+`lib/ledger.py` exposes `is_orphaned(ledger, now=None) -> bool` implementing the
+predicate above (excluding the seam-paused special-casing, which is U7's
+surfacing concern).
+
+---
+
+## 6. Module constants (importable; do not re-declare in consumers)
+
+`lib/ledger.py` declares these at module scope. U4/U7/U10 MUST import/read them,
+not hardcode copies — hardcoding causes drift.
+
+| constant | value | meaning |
+|----------|-------|---------|
+| `GRACE_SECONDS` | `4200` | orphan-detection grace window (I-3) |
+| `DEFAULT_STALL_THRESHOLD_SECONDS` | `600` | per-unit stall timeout default |
+| `LOOP_PHASES` | `("plan","seam","work","done")` | valid `loop_phase` values |
+| `UNIT_STATES` | the six states | valid `state` values |
+| `SEVERITIES` | `("blocker","major","minor")` | valid finding severities (shared scale, R3) |
+
+---
+
+## 7. Concurrency, atomicity, Python pin (implementation contract)
+
+- **Atomic write:** `mkstemp` in the target dir → `os.fchmod(fd, 0o600)` → write →
+  `os.rename(tmp, dest)`. A crash mid-write leaves the old file intact and the tmp
+  orphaned (cleaned on the next write); never a half-written ledger. Mirrors
+  `claude-modes/scripts/on-session-start.sh:162-175`.
+- **Locking:** `fcntl.flock(LOCK_EX)` on the `.lock` file (NOT `flock(1)` — macOS
+  lacks it). **The lock spans the WHOLE read-modify-write** — acquire, read,
+  mutate, recompute, atomic-rename, release — NOT just the rename. Holding only
+  across the rename would permit a lost update (two writers each read the old
+  snapshot, both mutate, the second clobbers the first). This is the lost-update
+  guard and is the critical correctness property of the lock.
+- **Python pin:** `/usr/bin/python3`, overridable via `CLAUDE_DISPATCH_PYTHON3`
+  (default `/usr/bin/python3`). Never bare `python3` — on macOS PATH may resolve a
+  Homebrew Python lacking modules. Rationale parity: `claude-modes/lib/mode-yaml.sh:24-32`.
+- **Slugify:** a vendored copy of `claude_modes::slugify_branch` lives inside
+  `lib/ledger.py` (`_slugify_branch`). It is NOT cross-imported from claude-modes
+  (avoids cross-plugin coupling). Logic parity:
+  `claude-modes/lib/validate-mode-name.sh:104-136`.
+
+### Test-only escape hatches (deliberate-fail discipline)
+
+These are read ONLY by `lib/ledger.py` and ONLY honored under tests; a fence test
+asserts no production file enables them.
+
+| env var | effect | proves |
+|---------|--------|--------|
+| `CLAUDE_DISPATCH_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
+| `CLAUDE_DISPATCH_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
+
+---
+
+## 8. Public API surface (`lib/ledger.py`)
+
+Consumers use these; the schema above is what they read/write through them.
+
+| function | purpose |
+|----------|---------|
+| `ledger_path(repo_root, run_id)` / `lock_path(repo_root, run_id)` | path helpers (§1) |
+| `init_ledger(repo_root, run_id, *, adapter, adapter_scale, units, loop_phase=...)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write |
+| `read_ledger(repo_root, run_id)` | return the ledger dict; raises a clean error (no partial file) on unknown run-id |
+| `transition(repo_root, run_id, unit_id, new_state, **fields)` | grammar-checked state change under flock; recompute + atomic write |
+| `record_verdict(repo_root, run_id, unit_id, findings)` | `dispatched → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; recompute + atomic write (the verdict-self-write path, U10) |
+| `set_loop(repo_root, run_id, *, loop_phase=None, seam_paused=None, driver=None, beat=False)` | phase / liveness updates (U4); recompute + atomic write |
+| `unit_is_terminal(unit)` | pure `terminal(u)` predicate (§4.1) |
+| `is_orphaned(ledger, now=None)` | pure I-3 orphan predicate (§5) |
+| `recompute_predicate(ledger)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests |
+
+CLI entry (for `lib/ledger.sh` and ad-hoc scripting): `python3 ledger.py <subcommand> ...`.
+
+---
+
+## 9. Cross-references
+
+- Plan: `docs/plans/2026-05-21-001-feat-claude-dispatch-loop-engine-plan.md` (U3 section).
+- Atomic write precedent: `claude-modes/scripts/on-session-start.sh:162-175`.
+- Lock precedent: `claude-modes/lib/cascade-engine.sh::with_flock_run`.
+- Slugify source: `claude-modes/lib/validate-mode-name.sh:104-136`.
+- Deliberate-fail test precedent: `claude-modes/tests/integration/concurrent-mode-set.test.sh`.
+- Memory: `feedback_loop_monitor_terminal_state_field` (read the cached terminal-state field, never a proxy), `feedback_new_tests_need_deliberate_fail_smoke_check` (deliberate-fail hatches).
