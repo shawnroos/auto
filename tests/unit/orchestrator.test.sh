@@ -522,6 +522,137 @@ else
   fail "attempt before=$a0 after=$a1 (expected 0 then 1)"
 fi
 
+# ════════════════════════════════════════════════════════════════════════════
+# Scenario 10: CLASS-1 — scale-aware gating, end to end, blocker-only run.
+#
+# The Bug #3 livelock class: a `blocker-only` run with a MAJOR-only finding must
+# (a) treat the major-bearing unit as TERMINAL (converge), (b) NOT churn it
+# fix→re-enqueue forever (advance_work_loop), and (c) UNBLOCK its dependents
+# (ready_units), so the run reaches met=True. Majors are advisory under
+# blocker-only; only a blocker gates. We drive ONE ledger through all three
+# engine entry points the brief names: ready_units, converge, advance_work_loop.
+#
+# The whole point is to prove the CLASS is closed, not one instance: the
+# deliberate-fail control (Scenario 11) sets CLAUDE_DISPATCH_TEST_FORCE_THREETIER_
+# GATING=1, which makes the SINGLE central helper ledger.gating_severities ignore
+# scale at EVERY site at once, and asserts the SAME scenario livelocks. Because all
+# six+ gating consumers route through that one helper, one hatch reverts them all —
+# a green Scenario 10 + a red Scenario 11 means no site bypasses the scale.
+TICK_PY="${DISPATCH_ROOT}/lib/tick.py"
+
+it "CLASS-1 (blocker-only): a major-only unit is TERMINAL + its dependent UNBLOCKS + advance_work_loop does NOT churn -> run reaches met=True (no livelock)"
+bo="$("$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
+def load(n,p):
+    s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
+o=load("orchestrator",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+
+run="class1-bo"
+# blocker-only run: Ua (will carry a major), Ub depends on Ua.
+m.init_ledger(repo, run, adapter="native", adapter_scale="blocker-only",
+              loop_phase="work",
+              units=[{"id":"Ua","state":"pending"},
+                     {"id":"Ub","state":"pending","depends_on":["Ua"]}])
+# Drive Ua: pending -> dispatched -> verdict-returned WITH a MAJOR (advisory under
+# blocker-only, so it must NOT gate).
+m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z")
+m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"advisory"}])
+
+# (a) ready_units: Ua's major does NOT make it unsatisfied, so dependent Ub is READY.
+ready = o.ready_units(repo, run)
+
+# (b) converge: Ua (verdict-returned, major-only) is TERMINAL under blocker-only.
+conv = o.converge(repo, run)
+
+# (c) advance_work_loop: must NOT pick Ua as fix-due (a major is advisory under
+# blocker-only). Drive Ub to a clean verdict so all units terminal, then confirm
+# the loop does not churn and the predicate is met.
+led = m.read_ledger(repo, run)
+# advance over the current state: Ua has a major-only verdict -> no fix-due,
+# no re-enqueue-due (the livelock would re-enqueue Ua here under three-tier).
+adv_before = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+# Finish Ub cleanly so the whole run can be terminal.
+m.transition(repo, run, "Ub", "dispatched", dispatched_at="2026-05-21T14:05:00Z")
+m.record_verdict(repo, run, "Ub", [])
+# One more advance: still nothing to do (no gating findings anywhere).
+adv_after = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+final = m.read_ledger(repo, run)
+pred = final.get("exit_predicate_result") or {}
+print(json.dumps({
+    "ready": ready,
+    "ua_terminal": "Ua" in conv["terminal"],
+    "adv_before": adv_before.get("advanced"),
+    "adv_after": adv_after.get("advanced"),
+    "met": pred.get("met"),
+    "majors": pred.get("majors"),
+    "all_terminal": pred.get("all_units_terminal"),
+}))
+PYEOF
+)"
+bo_ready="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['ready']))" "$bo")"
+bo_uaterm="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['ua_terminal'])" "$bo")"
+bo_advb="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['adv_before'])" "$bo")"
+bo_adva="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['adv_after'])" "$bo")"
+bo_met="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['met'])" "$bo")"
+bo_majors="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['majors'])" "$bo")"
+bo_allterm="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['all_terminal'])" "$bo")"
+# Ub ready (Ua's major did not gate); Ua terminal; no churn (advance == none both
+# times); met True; the major is COUNTED (advisory, surfaced) but does NOT gate.
+if [ "$bo_ready" = "Ub" ] && [ "$bo_uaterm" = "True" ] \
+   && [ "$bo_advb" = "none" ] && [ "$bo_adva" = "none" ] \
+   && [ "$bo_met" = "True" ] && [ "$bo_majors" = "1" ] && [ "$bo_allterm" = "True" ]; then
+  pass
+else
+  fail "ready=[$bo_ready] ua_terminal=$bo_uaterm adv_before=$bo_advb adv_after=$bo_adva met=$bo_met majors=$bo_majors all_terminal=$bo_allterm (expected Ub/True/none/none/True/1/True)"
+fi
+
+it "CLASS-1 deliberate-fail: FORCE_THREETIER_GATING reverts ALL sites at once -> the SAME blocker-only run LIVELOCKS (major gates, dependent blocked, advance churns, met False)"
+# Set the hatch so the SINGLE central helper ignores scale everywhere. If the
+# class were NOT closed (a site hardcoding the tuple), this control would be a
+# no-op for that site; because ALL sites route through the helper, the hatch makes
+# the whole run behave three-tier -> the major now gates at every site. RED proves
+# the helper is load-bearing (the class is closed via the single chokepoint).
+bofail="$(CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
+def load(n,p):
+    s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
+o=load("orchestrator",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+
+run="class1-bo-fail"
+m.init_ledger(repo, run, adapter="native", adapter_scale="blocker-only",
+              loop_phase="work",
+              units=[{"id":"Ua","state":"pending"},
+                     {"id":"Ub","state":"pending","depends_on":["Ua"]}])
+m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z")
+m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"now-gates"}])
+ready = o.ready_units(repo, run)              # Ub should be BLOCKED now.
+conv = o.converge(repo, run)                  # Ua should NOT be terminal now.
+adv = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
+pred = (m.read_ledger(repo, run).get("exit_predicate_result") or {})
+print(json.dumps({
+    "ready": ready,
+    "ua_terminal": "Ua" in conv["terminal"],
+    "advanced": adv.get("advanced"),
+    "met": pred.get("met"),
+}))
+PYEOF
+)"
+bf_ready="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['ready']))" "$bofail")"
+bf_uaterm="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['ua_terminal'])" "$bofail")"
+bf_adv="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$bofail")"
+bf_met="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['met'])" "$bofail")"
+# Under the forced three-tier gate the major GATES: Ub blocked (ready empty), Ua
+# not terminal, advance picks a fix (the churn), met False. This is the livelock
+# the class-1 fix prevents — the control going RED proves the fix is real.
+if [ "$bf_ready" = "" ] && [ "$bf_uaterm" = "False" ] \
+   && [ "$bf_adv" = "fix-applied" ] && [ "$bf_met" = "False" ]; then
+  pass
+else
+  fail "ready=[$bf_ready] ua_terminal=$bf_uaterm advanced=$bf_adv met=$bf_met (expected empty/False/fix-applied/False — control did not go RED, class-1 not proven closed)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"

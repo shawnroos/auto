@@ -131,9 +131,14 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         sys.stdout.write("  units: (none yet — plan-loop has not populated work units)\n")
     else:
         sys.stdout.write(f"  units ({len(units)}):\n")
+        # Scale-aware terminality (Bug #3): the [terminal] marker must match the
+        # cached predicate's gating decision, so read this run's adapter_scale and
+        # pass it through — a blocker-only run's major-only unit shows [terminal],
+        # consistent with met. Scale-blind here would mislabel it [active].
+        scale = led.get("adapter_scale", "three-tier")
         for u in units:
             try:
-                terminal = ledger.unit_is_terminal(u)
+                terminal = ledger.unit_is_terminal(u, scale)
             except Exception:
                 terminal = False
             mark = "terminal" if terminal else "active"

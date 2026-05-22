@@ -876,8 +876,12 @@ PYEOF
 assert_eq "rejected-stale,clean" "$self_stale"
 
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
-it "fence: no production file sets a CLAUDE_DISPATCH_TEST_NO_* hatch to 1"
-offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)[[:space:]]*=[[:space:]]*[\"']?1" \
+it "fence: no production file sets a CLAUDE_DISPATCH_TEST_* hatch to 1"
+# Covers the TEST_NO_* deliberate-fail hatches AND the TEST_FORCE_THREETIER_GATING
+# hatch (the class-1 deliberate-fail control): a production file must never ENABLE
+# any of them. The helper only READS the env var (== "1"); SETTING it in lib/ would
+# wedge a deliberate-fail control on in production, so the fence forbids it.
+offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_(NO_(LOCK|RECOMPUTE|REENQUEUE|ATTEMPT_CHECK|STALLED_RECOVERY|STALENESS_CHECK)|FORCE_THREETIER_GATING)[[:space:]]*=[[:space:]]*[\"']?1" \
   "${DISPATCH_ROOT}/lib" 2>/dev/null || true)"
 if [ -z "$offenders" ]; then
   pass

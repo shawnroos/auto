@@ -353,13 +353,18 @@ ledger=load("ledger",ledger_py); tick=load("tick",tick_py)
 
 run="seam-auto"
 # A plan ledger forged into "a review_plan round just closed the gaps" state:
-# loop_phase="plan", plan_step="review_plan", gaps_open default 0. The phase-aware
-# predicate (schema §3.1) makes plan-met == (gaps_open==0 AND plan_step==
-# "review_plan") — so this honest "review complete, no gaps" state is met and
-# _maybe_seam(auto) fires. (A plan ledger before any review runs is NOT met.)
+# loop_phase="plan", plan_step="review_plan", and a REAL review reported zero gaps
+# (set_gaps_open(0)). The phase-aware predicate (schema §3.1) makes plan-met ==
+# (gaps_open is not None AND gaps_open==0 AND plan_step=="review_plan") — so this
+# honest "review complete, no gaps" state is met and _maybe_seam(auto) fires.
+# Bug #5: gaps_open is now NULLABLE — a forged review_plan WITHOUT set_gaps_open
+# leaves gaps_open null (no real review reported), and plan-met does NOT fire. We
+# must seed the zero-gap count explicitly to model a completed review. (A plan
+# ledger before any review runs is NOT met — that is the deepen-loop guard.)
 ledger.init_ledger(repo, run, adapter="native",
                    units=[{"id":"U1","state":"verdict-returned","findings":[]}],
                    loop_phase="plan", plan_step="review_plan")
+ledger.set_gaps_open(repo, run, 0)  # a real review ran and found zero gaps.
 L=ledger.read_ledger(repo, run)
 met_plan=L.get("exit_predicate_result",{}).get("met")
 # Exercise the auto seam branch directly (the engine function), as the tick would.

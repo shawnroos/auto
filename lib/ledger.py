@@ -195,6 +195,42 @@ def _parse_iso(value):
 # Pure predicate logic (I-2 / §4).
 
 
+def gating_severities(scale: str = "three-tier") -> tuple:
+    """The SINGLE source of truth for which severities GATE the loop, scale-aware.
+
+    This is the one place that maps ``adapter_scale`` -> the gating-severity tuple.
+    EVERY consumer that asks "does this finding block terminality / done /
+    dependency-satisfaction?" MUST route through here rather than hardcoding
+    ``GATING_SEVERITIES`` or a ``("blocker", "major")`` literal — that hardcoding
+    was the Bug #3 livelock class (a ``blocker-only`` run with a major finding
+    would gate forever at six different call sites). Centralizing the decision
+    means a new caller cannot reintroduce the bug at a seventh site: there is
+    nothing to copy.
+
+      * ``"three-tier"`` (CE; the default for any missing / unknown value) — both
+        ``blocker`` and ``major`` gate.
+      * ``"blocker-only"`` (native) — only ``blocker`` gates; majors are advisory
+        (surfaced at exit, never blocking). Unknown -> three-tier is the safe
+        default (gates more, never under-blocks).
+
+    The corresponding ``ledger`` field is ``adapter_scale``; read it once per call
+    site (e.g. ``ledger.get("adapter_scale", "three-tier")``) and pass it in.
+
+    Test-only deliberate-fail hatch ``CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING``:
+    when set to ``"1"`` this helper IGNORES ``scale`` and always returns the
+    hardcoded three-tier ``GATING_SEVERITIES``. That simulates a regression where a
+    call site bypasses the scale-aware decision (the Bug #3 class). The class-1
+    blocker-only test runs the same scenario with this hatch set and asserts the
+    run LIVELOCKS — proving the helper, not a hardcoded copy, is what unblocks the
+    run. Because EVERY gating consumer routes through this one function, the single
+    hatch reverts ALL sites at once, so the test proves the CLASS is closed (no
+    site bypasses scale), not merely one instance.
+    """
+    if os.environ.get("CLAUDE_DISPATCH_TEST_FORCE_THREETIER_GATING") == "1":
+        return GATING_SEVERITIES
+    return ("blocker",) if scale == "blocker-only" else GATING_SEVERITIES
+
+
 def unit_is_terminal(unit: dict, scale: str = "three-tier") -> bool:
     """terminal(u) per §4.1 of the contract.
 
@@ -202,13 +238,14 @@ def unit_is_terminal(unit: dict, scale: str = "three-tier") -> bool:
     / ``fixed`` AND carries no open *gating* finding. A ``fixed`` unit with a stale
     gating finding is NOT terminal (the findings-closure livelock guard).
 
-    SCALE-AWARE (Bug #3): which severities gate depends on ``adapter_scale``.
-    Under ``"three-tier"`` (CE / default) both ``blocker`` and ``major`` gate.
-    Under ``"blocker-only"`` (native) only ``blocker`` gates — majors are
-    advisory (surfaced at exit, never blocking terminality), matching the
-    work-loop ``met`` predicate so the two cannot disagree about done-ness.
+    SCALE-AWARE (Bug #3): which severities gate is decided by the SINGLE helper
+    ``gating_severities(scale)`` (the one source of truth). Under ``"three-tier"``
+    (CE / default) both ``blocker`` and ``major`` gate; under ``"blocker-only"``
+    (native) only ``blocker`` gates — majors are advisory (surfaced at exit, never
+    blocking terminality), matching the work-loop ``met`` predicate so the two
+    cannot disagree about done-ness.
     """
-    gating = ("blocker",) if scale == "blocker-only" else GATING_SEVERITIES
+    gating = gating_severities(scale)
     state = unit.get("state")
     if state == "terminal-skip":
         return True
@@ -259,9 +296,16 @@ def recompute_predicate(ledger: dict) -> dict:
                 minors += 1
 
     # gaps_open is adapter-supplied; preserve any existing value (the engine
-    # never invents it). Default 0 outside plan-loop / when unset.
+    # never invents it). It is genuinely NULLABLE (Bug #5): `null`/unknown means
+    # "no real review has reported its gap count yet" and is DISTINCT from `0`
+    # ("a review ran and found zero gaps"). Only `set_gaps_open` (driven by a real
+    # review_plan return) ever writes a non-null value. We do NOT coerce to 0 here
+    # — that coercion was the bug: a freshly-PREPARED-but-unfilled review envelope
+    # left gaps_open at the default and plan-met fired after one un-reviewed pass.
     prev = ledger.get("exit_predicate_result") or {}
-    gaps_open = int(prev.get("gaps_open", 0) or 0)
+    gaps_open = prev.get("gaps_open")
+    if gaps_open is not None:
+        gaps_open = int(gaps_open)
 
     scale = ledger.get("adapter_scale", "three-tier")
     all_units_terminal = all(
@@ -269,9 +313,20 @@ def recompute_predicate(ledger: dict) -> dict:
     )
 
     if ledger.get("loop_phase") == "plan":
-        # Plan-loop exit: gaps closed AND a review_plan actually ran (§3.1 — a
-        # default gaps_open==0 before any review must not short-circuit).
-        met = gaps_open == 0 and ledger.get("plan_step") == "review_plan"
+        # Plan-loop exit: a REAL review reported zero gaps AND a review_plan
+        # actually ran (§3.1). Bug #5: gaps_open must be NON-NULL — a null/unknown
+        # gap count means no review has filled it yet, so plan-met cannot fire. The
+        # live CE/native adapters return a PREPARE envelope WITHOUT a gap_set (the
+        # model fills gaps out-of-band), so set_gaps_open is not called and
+        # gaps_open stays null; without the `is not None` guard a default 0 would
+        # short-circuit plan-met after a SINGLE un-reviewed pass and the deepen-
+        # refinement loop would be unreachable. The plan_step conjunct is kept
+        # belt-and-braces; the load-bearing new conjunct is `gaps_open is not None`.
+        met = (
+            gaps_open is not None
+            and gaps_open == 0
+            and ledger.get("plan_step") == "review_plan"
+        )
     else:
         # Work-loop exit, SCALE-AWARE (Bug #3 — adapter_scale was stored but never
         # read). The native adapter declares adapter_scale="blocker-only": its
@@ -282,7 +337,9 @@ def recompute_predicate(ledger: dict) -> dict:
         # never under-blocks). I-2: all_units_terminal stays required either way.
         # `scale` is read once above and also drives unit_is_terminal so the
         # terminality check and the met predicate agree on whether majors gate.
-        no_majors = majors == 0 if scale != "blocker-only" else True
+        # Whether majors gate is decided by the SINGLE helper (the one source of
+        # truth) — never a hardcoded scale comparison here.
+        no_majors = "major" not in gating_severities(scale) or majors == 0
         # Bug #4 — vacuous work-phase exit. all_units_terminal = all([]) is
         # vacuously True, so an auto plan→work flip with ZERO units dispatched
         # would declare `met` before the orchestrator ever fanned out work. The
@@ -568,12 +625,38 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
         # stalled -> pending (retry) clears last_error per the contract.
         if current == "stalled" and new_state == "pending":
             unit["last_error"] = None
+        # Capture the dispatch-generation counter BEFORE the fields loop (which may
+        # itself carry an explicit attempt=) so the mechanical bump below reconciles
+        # against the PRE-transition value, not a value the loop just wrote.
+        prev_attempt = int(unit.get("attempt", 0) or 0)
         for key, value in fields.items():
             if key == "findings":
                 raise LedgerError(
                     "use record_verdict() to write findings, not transition()"
                 )
             unit[key] = value
+        # Bug #6 (attempt-identity), made MECHANICAL (P2): the dispatch generation
+        # counter MUST advance on every pending -> dispatched edge, in the SAME
+        # atomic snapshot as the state change. We bump it HERE — at the transition
+        # itself — rather than relying on the caller (dispatch_batch) to pass the
+        # right ``attempt=`` value by convention. That convention was a latent
+        # stale-verdict-clobber hole: any future re-dispatch path that forgot to
+        # bump would let a superseded attempt's verdict overwrite the live one. By
+        # enforcing the increment at the only edge that creates a new dispatch
+        # generation, no caller can re-open Bug #6. We reconcile against an explicit
+        # attempt= the caller may have passed: the counter becomes max(prev+1,
+        # passed) so the dispatch_batch path (which passes prev+1) stays exactly
+        # consistent, a caller that passes nothing still advances by one, and a
+        # stale/lower explicit value can never lower the counter. Crucially we use
+        # the PRE-loop ``prev_attempt`` — the fields loop above may have written the
+        # passed value into ``unit["attempt"]`` already, so reading it back would
+        # double-count.
+        if current == "pending" and new_state == "dispatched":
+            passed = fields.get("attempt")
+            unit["attempt"] = max(
+                prev_attempt + 1,
+                int(passed) if passed is not None else 0,
+            )
         return unit["state"]
 
     return _with_locked_ledger(repo_root, run_id, mutate)
@@ -737,7 +820,10 @@ def set_gaps_open(repo_root, run_id, gaps_open: int):
     atomic-write recompute reads it back, so the freshly-recomputed predicate
     reflects the new gap count in the SAME snapshot (I-1). ``recompute_predicate``
     preserves the prior cached ``gaps_open`` precisely so this mutator can seed
-    it; this is the only writer of the field.
+    it; this is the ONLY writer of a non-null value. Until it runs, gaps_open is
+    null (Bug #5 — null means "no real review reported gaps yet" and is distinct
+    from 0; plan-met requires a non-null zero, so a freshly-prepared-but-unfilled
+    review can never satisfy it).
     """
     n = int(gaps_open)
     if n < 0:

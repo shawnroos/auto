@@ -97,6 +97,7 @@ ledger = load_ledger()
 read_ledger = ledger.read_ledger
 _transition = ledger.transition
 _unit_is_terminal = ledger.unit_is_terminal
+_gating_severities = ledger.gating_severities
 InvalidTransition = ledger.InvalidTransition
 LedgerError = ledger.LedgerError
 
@@ -104,7 +105,11 @@ LedgerError = ledger.LedgerError
 # every other ledger timestamp (same format ledger.py emits).
 _now_iso = ledger._now_iso
 
-GATING_SEVERITIES = ledger.GATING_SEVERITIES
+# NOTE: we deliberately do NOT re-export GATING_SEVERITIES here. The gating
+# decision is scale-aware and lives in ONE place — ledger.gating_severities(scale)
+# (Bug #3). Re-exporting the raw constant would let a future caller shortcut around
+# the helper and reintroduce the hardcoded-major-gating livelock; there is nothing
+# to copy if the constant is not in reach.
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -123,28 +128,37 @@ def _units_by_id(ledger: dict) -> dict:
     return {u["id"]: u for u in ledger.get("units", [])}
 
 
-def _dependency_satisfied(dep_unit: dict) -> bool:
+def _dependency_satisfied(dep_unit: dict, scale: str = "three-tier") -> bool:
     """A SINGLE dependency is *satisfied* per the contract's precise definition.
 
     Satisfied iff the dependency is ``fixed``, ``terminal-skip``, OR
-    ``verdict-returned AND it contributes no open blockers/majors``. A merely
-    ``verdict-returned`` unit that STILL has an open blocker/major is NOT
+    ``verdict-returned AND it contributes no open GATING finding``. A merely
+    ``verdict-returned`` unit that STILL has an open gating finding is NOT
     satisfied — its dependents wait, because that unit is about to transition
     ``verdict-returned -> pending`` for re-dispatch and its output will change.
 
+    SCALE-AWARE (Bug #3): which severities count as gating is decided by the
+    SINGLE helper ``ledger.gating_severities(scale)`` — never a hardcoded
+    ``("blocker","major")``. Under ``"blocker-only"`` a dependency carrying only a
+    major finding IS satisfied (its dependents may dispatch), exactly as
+    ``unit_is_terminal`` treats it as terminal — the two agree because they share
+    the helper. Hardcoding majors here would livelock a blocker-only run: a major
+    finding on a predecessor would block its dependents forever even though that
+    finding never gates the loop's done-ness.
+
     Note ``fixed`` is treated as satisfied unconditionally here (per the
-    explicit list in the U10 approach: "fixed, terminal-skip, OR
-    verdict-returned AND no open blockers/majors"). The closure livelock is
-    guarded at the predicate level (a ``fixed`` unit with a stale blocker keeps
+    explicit list in the U10 approach). The closure livelock is guarded at the
+    predicate level (a ``fixed`` unit with a stale gating finding keeps
     ``all_units_terminal == false``), so a downstream unit dispatched against a
     ``fixed`` predecessor is correct — the predecessor will be re-reviewed.
     """
+    gating = _gating_severities(scale)
     state = dep_unit.get("state")
     if state in ("fixed", "terminal-skip"):
         return True
     if state == "verdict-returned":
         for finding in dep_unit.get("findings") or []:
-            if finding.get("severity") in GATING_SEVERITIES:
+            if finding.get("severity") in gating:
                 return False
         return True
     return False
@@ -172,7 +186,7 @@ def _ancestor_ids(unit_id: str, by_id: dict) -> set:
     return ancestors
 
 
-def _is_ready(unit: dict, by_id: dict) -> bool:
+def _is_ready(unit: dict, by_id: dict, scale: str = "three-tier") -> bool:
     """A unit is READY (dispatchable now) iff:
 
       * state == "pending", AND
@@ -180,7 +194,9 @@ def _is_ready(unit: dict, by_id: dict) -> bool:
       * NO transitive ancestor is in state "stalled".
 
     A dependency id that is absent from the ledger is treated as unsatisfied
-    (we never dispatch against an unknown predecessor).
+    (we never dispatch against an unknown predecessor). ``scale`` is threaded into
+    the satisfaction check so blocker-only runs treat a major-only predecessor as
+    satisfied (Bug #3 — same gating decision as terminality / met).
     """
     if unit.get("state") != "pending":
         return False
@@ -188,7 +204,7 @@ def _is_ready(unit: dict, by_id: dict) -> bool:
     # Direct-dependency satisfaction.
     for dep_id in unit.get("depends_on") or []:
         dep = by_id.get(dep_id)
-        if dep is None or not _dependency_satisfied(dep):
+        if dep is None or not _dependency_satisfied(dep, scale):
             return False
 
     # Transitive stalled-ancestor gate.
@@ -209,7 +225,8 @@ def ready_units(repo_root: str, run_id: str):
     """
     ledger = read_ledger(repo_root, run_id)
     by_id = _units_by_id(ledger)
-    return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id)]
+    scale = ledger.get("adapter_scale", "three-tier")
+    return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id, scale)]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -333,12 +350,17 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
             results.append((uid, "rejected:over-cap"))
             continue
 
-        # Transition FIRST (records dispatched_at + bumps the attempt counter
-        # atomically under flock + I-1), then launch. If the transition raises
-        # (e.g. a concurrent dispatch beat us to it), record the rejection and DO
-        # NOT launch. The attempt increment is part of the SAME atomic snapshot as
-        # the state change (Bug #6) — never a separate write, which would reopen a
-        # race between the bump and the dispatch.
+        # Transition FIRST (records dispatched_at; the attempt counter is bumped
+        # MECHANICALLY by transition() itself on the pending->dispatched edge — P2
+        # — so we no longer rely on this call site passing the right attempt by
+        # convention), then launch. If the transition raises (e.g. a concurrent
+        # dispatch beat us to it), record the rejection and DO NOT launch. The
+        # attempt increment is part of the SAME atomic snapshot as the state change
+        # (Bug #6) — never a separate write, which would reopen a race between the
+        # bump and the dispatch. We still compute next_attempt to pass to launch_fn
+        # (the agent carries it into its verdict); transition() reconciles it via
+        # max(current+1, passed) so the launched attempt and the stored counter
+        # agree even though the bump is now enforced engine-side.
         next_attempt = int(unit.get("attempt", 0) or 0) + 1
         try:
             _transition(
@@ -369,9 +391,14 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
             }
             try:
                 _transition(repo_root, run_id, uid, "stalled", last_error=err)
-            except (InvalidTransition, LedgerError):
-                # Best-effort: even if the rollback transition fails, do not
-                # propagate — record the launch failure and keep the wave going.
+            except Exception:  # noqa: BLE001 — P3: broadened from (InvalidTransition,
+                # LedgerError). The rescue transition does real I/O (flock + atomic
+                # write); a raw OSError from the rescue's own flock (e.g. the lock
+                # file vanished, a disk error) is NOT an InvalidTransition/LedgerError
+                # and would otherwise propagate, re-abandoning the entire wave —
+                # precisely the failure Bug #8's guard exists to prevent. The rescue
+                # is best-effort: even if it cannot mark the unit stalled, we record
+                # the launch failure and keep the wave going.
                 pass
             results.append(
                 (uid, f"launch-failed:{type(exc).__name__}:{exc}")
@@ -418,6 +445,12 @@ def converge(repo_root, run_id):
     up — converge holds no in-memory batch state across calls.
     """
     ledger = read_ledger(repo_root, run_id)
+    # Read the run's scale ONCE; the per-unit terminality classification below
+    # must use the SAME scale-aware gating decision as the cached predicate (Bug
+    # #3 — a scale-blind _unit_is_terminal(unit) here would mark a blocker-only
+    # run's major-only unit non-terminal, contradicting the met=True the predicate
+    # reports and confusing the driver about done-ness).
+    scale = ledger.get("adapter_scale", "three-tier")
 
     in_flight = []
     completed = []
@@ -431,7 +464,7 @@ def converge(repo_root, run_id):
             completed.append(unit["id"])
         elif state == "stalled":
             stalled.append(unit["id"])
-        if _unit_is_terminal(unit):
+        if _unit_is_terminal(unit, scale):
             terminal.append(unit["id"])
 
     pred = ledger.get("exit_predicate_result") or {}

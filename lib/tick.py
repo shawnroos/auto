@@ -291,37 +291,51 @@ def record_stall_error(repo_root, run_id, unit_id, call, message, now_iso):
 def _ready_fix_unit(ledger_dict, halted_ids):
     """Pick ONE unit whose latest verdict is converged and needs a fix applied.
 
-    A fix-due unit is `verdict-returned` with an open blocker/major finding and
-    is NOT in the halted set. The tick applies the fix as a state transition
-    only (verdict-returned → fixed); it does NOT touch findings (R8 — closure
-    only via a fresh verdict). Returns the unit id or None.
+    A fix-due unit is `verdict-returned` with an open GATING finding and is NOT
+    in the halted set. The tick applies the fix as a state transition only
+    (verdict-returned → fixed); it does NOT touch findings (R8 — closure only via
+    a fresh verdict). Returns the unit id or None.
+
+    SCALE-AWARE (Bug #3): which severities are fix-due is decided by the SINGLE
+    helper ``ledger.gating_severities(scale)``, read off this ledger's
+    ``adapter_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
+    blocker-only run: the tick would forever try to fix a major-only unit that
+    re-reviews to the same advisory major, fix→re-enqueue→re-review forever, while
+    the predicate already reports met. The fix-class and the terminality class
+    MUST share the gating decision so they agree on which units still need work.
     """
+    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
     for u in ledger_dict.get("units", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "verdict-returned":
             continue
         for f in u.get("findings") or []:
-            if f.get("severity") in ledger.GATING_SEVERITIES:
+            if f.get("severity") in gating:
                 return u.get("id")
     return None
 
 
 def _ready_reenqueue_unit(ledger_dict, halted_ids):
-    """Pick ONE `fixed` unit whose STALE verdict still shows a gating finding.
+    """Pick ONE `fixed` unit whose STALE verdict still shows a GATING finding.
 
     After a fix is applied (verdict-returned → fixed) the findings remain stale
     (R8 — only a fresh verdict clears them), so the unit is NOT yet terminal.
     The tick re-enqueues it (fixed → pending) so the orchestrator re-dispatches
     it for a fresh review. Skips halted units. Returns the unit id or None.
+
+    SCALE-AWARE (Bug #3): same single-helper gating decision as ``_ready_fix_unit``
+    and ``unit_is_terminal`` — a blocker-only run never re-enqueues a major-only
+    fixed unit (majors are advisory), so it cannot churn fix→re-enqueue forever.
     """
+    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
     for u in ledger_dict.get("units", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "fixed":
             continue
         for f in u.get("findings") or []:
-            if f.get("severity") in ledger.GATING_SEVERITIES:
+            if f.get("severity") in gating:
                 return u.get("id")
     return None
 
