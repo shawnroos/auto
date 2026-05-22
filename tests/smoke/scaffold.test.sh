@@ -72,6 +72,15 @@ check_command() {
   claude_dispatch_test::it "command resolves: $1"
   claude_dispatch_test::assert_file_exists "$cmd_file"
 
+  # P0 GUARD: the lib script the command DELEGATES TO must actually exist on
+  # disk. A command pointing at a missing lib/X.sh is a dead command (the bug
+  # this test class exists to catch). Without this, /dispatch and
+  # /dispatch-status shipped invoking lib/dispatch.sh / lib/status.sh that did
+  # not exist. Asserted for every command via the shared check_command loop, so
+  # any future command->missing-script regression goes RED at CI time.
+  claude_dispatch_test::it "$1 referenced lib script exists: lib/${lib_basename}"
+  claude_dispatch_test::assert_file_exists "$ROOT/lib/${lib_basename}"
+
   [ -f "$cmd_file" ] || return
 
   # The body must contain the canonical dispatch line for its lib script.
