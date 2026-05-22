@@ -313,18 +313,56 @@ def _ready_fix_unit(ledger_dict, halted_ids):
     return None
 
 
+def _ready_reenqueue_unit(ledger_dict, halted_ids):
+    """Pick ONE `fixed` unit whose STALE verdict still shows a gating finding.
+
+    After a fix is applied (verdict-returned → fixed) the findings remain stale
+    (R8 — only a fresh verdict clears them), so the unit is NOT yet terminal.
+    The tick re-enqueues it (fixed → pending) so the orchestrator re-dispatches
+    it for a fresh review. Skips halted units. Returns the unit id or None.
+    """
+    for u in ledger_dict.get("units", []):
+        if u.get("id") in halted_ids:
+            continue
+        if u.get("state") != "fixed":
+            continue
+        for f in u.get("findings") or []:
+            if f.get("severity") in ledger.GATING_SEVERITIES:
+                return u.get("id")
+    return None
+
+
 def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
-    """Work-loop advance: apply ONE fix from a converged verdict.
+    """Work-loop advance: apply ONE fix, OR re-enqueue ONE fixed-stale unit.
 
     Returns a dict describing what advanced (for the tick result). The tick
-    NEVER dispatches and NEVER writes verdicts here — applying a fix is the
-    `verdict-returned → fixed` transition, recorded via ledger.transition.
+    NEVER dispatches and NEVER writes verdicts here. The TWO smallest-useful
+    work-loop advances the tick owns (state grammar §3 / closure loop R8):
+
+      1. verdict-returned + gating finding  → fixed   (apply ONE fix)
+      2. fixed + STALE gating finding       → pending (re-enqueue for re-review)
+
+    Fix-due takes PRIORITY over re-enqueue-due so a single tick on a fresh
+    verdict-returned+blocker unit applies the fix (one step), and the NEXT tick
+    re-enqueues that fixed-with-stale-blocker unit. This MIRRORS the plan_step
+    advance: one persisted advance per fresh-process tick. Without step 2 the
+    loop livelocks at `fixed` (the stale blocker keeps all_units_terminal false
+    forever) — the closure loop is unreachable.
+
+    The fixed→pending re-enqueue honors the test-only
+    ``CLAUDE_DISPATCH_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
+    it set the work-loop closure test goes RED — livelocks at `fixed`).
     """
     fix_uid = _ready_fix_unit(ledger_dict, halted_ids)
-    if fix_uid is None:
-        return {"advanced": "none", "reason": "no-fix-due"}
-    ledger.transition(repo_root, run_id, fix_uid, "fixed")
-    return {"advanced": "fix-applied", "unit": fix_uid}
+    if fix_uid is not None:
+        ledger.transition(repo_root, run_id, fix_uid, "fixed")
+        return {"advanced": "fix-applied", "unit": fix_uid}
+    if os.environ.get("CLAUDE_DISPATCH_TEST_NO_REENQUEUE") != "1":
+        reenq_uid = _ready_reenqueue_unit(ledger_dict, halted_ids)
+        if reenq_uid is not None:
+            ledger.transition(repo_root, run_id, reenq_uid, "pending")
+            return {"advanced": "re-enqueued", "unit": reenq_uid}
+    return {"advanced": "none", "reason": "no-fix-due"}
 
 
 def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
@@ -342,6 +380,20 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
     thus only on success): a step that raised is recorded as a stall by the
     caller's try/except, never as a completed step.
+
+    PLAN→exit (schema §3.1 / adapter-contract §4.1, §5): when ``next_plan_step``
+    returns ``"done"`` the plan sequence is complete (gaps closed). The plan-loop
+    must NOT re-arm on ``plan``; the caller (``_maybe_seam``) routes the met plan
+    predicate to seam (manual) or work (auto). We surface ``{"advanced":
+    "plan-done"}`` so the caller knows the sequence finished this tick.
+
+    GAPS persist (gap-write, adapter-contract §2.2): when the executed step is
+    ``review_plan``, its return is the gap-set; the engine reads ONLY its length
+    and persists ``gaps_open = len(gap_set)`` via ``ledger.set_gaps_open`` (the
+    I-1 atomic write path). The live adapters PREPARE an envelope (a dict) that
+    the model fills out-of-band, so we persist length ONLY when the return is a
+    list — a dict envelope leaves ``gaps_open`` untouched (the model writes it
+    through the parse path).
     """
     step = adapter.next_plan_step(ledger_dict)
     if step == "done":
@@ -353,7 +405,12 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
         raise TickError(f"adapter missing op {step!r}")
     # The adapter step is the work-bearing call; the caller wraps this in the
     # try/except so a raise becomes a recorded last_error, not a crash.
-    op(ledger_dict)
+    result = op(ledger_dict)
+    # review_plan returns the gap-set; the engine reads ONLY its length and
+    # persists it (adapter-contract §2.2). Persist only for an actual array —
+    # a live PREPARE-envelope (dict) is filled by the model elsewhere.
+    if step == "review_plan" and isinstance(result, list):
+        ledger.set_gaps_open(repo_root, run_id, len(result))
     # Op succeeded — persist the step so the NEXT fresh-process tick advances
     # from it instead of re-reading null and re-planning (the livelock).
     ledger.set_loop(repo_root, run_id, plan_step=step)
@@ -413,14 +470,17 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     led = ledger.read_ledger(repo_root, run_id)
     phase = led.get("loop_phase")
 
-    # 1. Predicate met? Emit report; chain ends (no re-arm). I-3: keep liveness
-    #    honest by NOT stamping a beat (the chain is ending) but flipping driver
-    #    to manual so an orphan check never mistakes a finished run for a live
-    #    self-paced one. If the run is a seam (handled below) that is its own
-    #    branch; here we cover the work/plan terminal exit.
+    # 1. Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
+    #    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
+    #    the terminal `done` exit but flipping driver to manual so an orphan
+    #    check never mistakes a finished run for a live self-paced one.
+    #      * WORK-met (or seam) → done (terminal exit, emit report).
+    #      * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
+    #        it to seam (manual) or work (auto); `done` is NEVER a plan exit.
+    #    A seam-phase tick has its own branch below (re-affirm pause).
     pred = led.get("exit_predicate_result") or {}
-    if pred.get("met"):
-        # Mark the run done + manual; the loop is finished, not orphaned.
+    if pred.get("met") and phase != "plan" and phase != "seam":
+        # Work predicate met: mark the run done + manual; finished, not orphaned.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
@@ -512,10 +572,16 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
 
     # 5. Re-read to decide the stop-check from the freshly-cached predicate
     #    (memory feedback_loop_monitor_terminal_state_field — read the cached
-    #    field, never re-derive).
+    #    field, never re-derive). PHASE-AWARE (gap #4): only a WORK predicate
+    #    routes to `done`. A plan tick already routed through `_maybe_seam`
+    #    (seam/auto-flip); never let the post-advance met-check turn a met PLAN
+    #    predicate into `done` (that would skip the seam). After an auto-flip the
+    #    ledger phase is now "work", but this tick STARTED in plan, so we gate on
+    #    the start-of-tick `phase` to leave the just-flipped work loop to its own
+    #    first work tick.
     led = ledger.read_ledger(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
-    if pred.get("met"):
+    if pred.get("met") and phase == "work":
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
@@ -540,14 +606,25 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
 
 
 def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
-    """If the plan-loop predicate is met, handle the seam.
+    """If the plan-loop is complete, transition out of plan (gap #5).
+
+    The plan sequence is complete when EITHER the cached predicate is met
+    (plan-phase: gaps_open == 0) OR the adapter signalled the sequence finished
+    this tick (``next_plan_step`` returned "done" → advance "plan-done"). The two
+    MUST agree (adapter-contract §4.1 coherence guard); we trigger on either so a
+    `next_plan_step=="done"` always transitions loop_phase, never re-arming on
+    `plan`.
 
     Manual (not auto): write loop_phase="seam", seam_paused=true,
     loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
     Auto: flip plan → work directly and keep re-arming.
     """
     pred = led.get("exit_predicate_result") or {}
-    if not pred.get("met"):
+    plan_done = (
+        isinstance(advance_result, dict)
+        and advance_result.get("advanced") == "plan-done"
+    )
+    if not pred.get("met") and not plan_done:
         return advance_result  # gaps still open; keep ticking the plan loop.
     if _is_auto(led, auto):
         ledger.set_loop(repo_root, run_id, loop_phase="work", driver="self", beat=True)

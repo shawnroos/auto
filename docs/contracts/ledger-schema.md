@@ -91,7 +91,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 |-------|------|------------------|
 | `run_id` | string | the human-supplied run identifier; slugified for the filename, stored raw here |
 | `loop_phase` | enum | `"plan"` \| `"seam"` \| `"work"` \| `"done"` |
-| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the adapter reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — adapters read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Does NOT feed `exit_predicate_result`. Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
+| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the adapter reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — adapters read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Feeds `exit_predicate_result` ONLY in the plan phase: plan-met requires `plan_step == "review_plan"` (the §3.1 coherence guard — a default `gaps_open==0` before any review must not short-circuit). Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
 | `seam_paused` | bool | `true` ONLY while `loop_phase == "seam"`; the intentional-orphan flag (§5, I-3) |
 | `adapter` | enum | `"ce"` \| `"native"` — which workflow adapter drives the run |
 | `adapter_scale` | enum | `"three-tier"` \| `"blocker-only"` — set by U6b's rubric probe; tells the predicate evaluator which severity logic applies |
@@ -103,7 +103,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 
 | field | type | meaning |
 |-------|------|---------|
-| `met` | bool | loop is done. `true` requires `blockers==0 AND majors==0 AND all_units_terminal==true` (I-2). Plan-loop additionally requires `gaps_open==0`. |
+| `met` | bool | loop is done. **Phase-aware** (I-2): in `loop_phase == "work"` (and seam/done) `met` requires `blockers==0 AND majors==0 AND all_units_terminal==true`. In `loop_phase == "plan"` `met` requires `gaps_open==0 AND plan_step=="review_plan"` ONLY — there are no work units yet, so `all_units_terminal` is not required, and the `plan_step=="review_plan"` conjunct mirrors the adapter coherence guard (§3.1): a default `gaps_open==0` before any review has run does NOT short-circuit. |
 | `blockers` | int | count of `blocker`-severity findings across all units' `findings[]` |
 | `majors` | int | count of `major`-severity findings across all units' `findings[]` |
 | `minors` | int | count of `minor`-severity findings (reported at exit, never gate — R5/R6) |
@@ -265,15 +265,25 @@ U7's hooks — read `exit_predicate_result` directly and NEVER re-derive it.
 
 ### I-2 — Done requires terminal units
 
-`exit_predicate_result.met == true` requires:
+`exit_predicate_result.met == true` is **phase-aware**:
 
 ```
-blockers == 0  AND  majors == 0  AND  all_units_terminal == true
+work-loop  (loop_phase in {"work","seam","done"}):
+    blockers == 0  AND  majors == 0  AND  all_units_terminal == true
+
+plan-loop  (loop_phase == "plan"):
+    gaps_open == 0  AND  plan_step == "review_plan"
 ```
 
-(Plan-loop additionally requires `gaps_open == 0`.)
+The plan-loop predicate is gaps-only — there are no work units yet, so
+`all_units_terminal` is NOT a requirement (it would never hold while units are
+still pending). The `plan_step == "review_plan"` conjunct mirrors the adapter
+coherence guard (§3.1) one-to-one: a default `gaps_open == 0` BEFORE any review
+has run (at `plan` / `deepen` / `null`) must NOT short-circuit the plan loop to
+met. Both `next_plan_step`'s "done" guard and this predicate key on the same
+condition, so they agree (adapter-contract §4.1 / §5).
 
-This closes two failure modes at once:
+The work-loop predicate closes two failure modes at once:
 - **stalled-dependency false-done:** a stalled unit with un-dispatched dependents
   keeps `all_units_terminal == false`, so the loop cannot falsely report done even
   if no findings exist yet.
@@ -354,6 +364,7 @@ asserts no production file enables them.
 |---------|--------|--------|
 | `CLAUDE_DISPATCH_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
 | `CLAUDE_DISPATCH_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
+| `CLAUDE_DISPATCH_TEST_NO_REENQUEUE` | `=1` makes the tick's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/tick.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
 
 ---
 
@@ -369,6 +380,7 @@ Consumers use these; the schema above is what they read/write through them.
 | `transition(repo_root, run_id, unit_id, new_state, **fields)` | grammar-checked state change under flock; recompute + atomic write |
 | `record_verdict(repo_root, run_id, unit_id, findings)` | `dispatched → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; recompute + atomic write (the verdict-self-write path, U10) |
 | `set_loop(repo_root, run_id, *, loop_phase=None, seam_paused=None, driver=None, beat=False, plan_step=<unset>)` | phase / liveness / plan-step updates (U4); recompute + atomic write. `plan_step` uses an UNSET sentinel default (not `None`) because `null` is a valid stored value — pass `plan_step=None` to clear it, or a step name to set it |
+| `set_gaps_open(repo_root, run_id, gaps_open)` | persist the plan-loop open-gap count from `review_plan`'s return length (U4); writes `exit_predicate_result.gaps_open` then recompute + atomic write (I-1). The ONLY writer of `gaps_open` |
 | `unit_is_terminal(unit)` | pure `terminal(u)` predicate (§4.1) |
 | `is_orphaned(ledger, now=None)` | pure I-3 orphan predicate (§5) |
 | `recompute_predicate(ledger)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests |

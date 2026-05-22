@@ -195,9 +195,20 @@ def recompute_predicate(ledger: dict) -> dict:
     """Compute ``exit_predicate_result`` purely from the ledger's current state.
 
     Counts findings across all units, computes ``all_units_terminal``, and sets
-    ``met`` per I-2: met requires no blockers AND no majors AND all_units_terminal
-    (plan-loop additionally requires gaps_open == 0). Returns the new dict (does
-    NOT mutate ``ledger``; the caller assigns it).
+    ``met`` PHASE-AWARELY (I-2, contract §5):
+
+      * ``loop_phase == "plan"`` — plan-loop exit is ``gaps_open == 0 AND
+        plan_step == "review_plan"`` (adapter-contract §5 + schema §3.1). There
+        are no work units yet, so ``all_units_terminal`` is NOT a requirement in
+        the plan phase. The ``plan_step == "review_plan"`` conjunct mirrors the
+        adapter coherence guard one-to-one: a DEFAULT ``gaps_open == 0`` BEFORE
+        any review has run (at ``plan`` / ``deepen`` / ``null``) must NOT
+        short-circuit the loop to met (schema §3.1) — only a completed
+        ``review_plan`` whose gap-set is empty closes the plan loop.
+      * otherwise (``"work"`` / ``"seam"`` / ``"done"``) — the work-loop exit:
+        ``blockers == 0 AND majors == 0 AND all_units_terminal == true``.
+
+    Returns the new dict (does NOT mutate ``ledger``; the caller assigns it).
     """
     blockers = majors = minors = 0
     for unit in ledger.get("units", []):
@@ -219,9 +230,12 @@ def recompute_predicate(ledger: dict) -> dict:
         unit_is_terminal(u) for u in ledger.get("units", [])
     )
 
-    met = blockers == 0 and majors == 0 and all_units_terminal
     if ledger.get("loop_phase") == "plan":
-        met = met and gaps_open == 0
+        # Plan-loop exit: gaps closed AND a review_plan actually ran (§3.1 — a
+        # default gaps_open==0 before any review must not short-circuit).
+        met = gaps_open == 0 and ledger.get("plan_step") == "review_plan"
+    else:
+        met = blockers == 0 and majors == 0 and all_units_terminal
 
     return {
         "met": bool(met),
@@ -541,8 +555,10 @@ def set_loop(
     leave the field unchanged; pass ``plan_step=None`` to clear it, or a step
     name (``"plan"`` / ``"deepen"`` / ``"review_plan"``) to record it. The tick
     calls this with the step it just ran so the NEXT (fresh-process) tick is not
-    amnesiac — the anti-livelock persist (schema §3.1). ``plan_step`` does NOT
-    feed the predicate, so the recompute is unaffected.
+    amnesiac — the anti-livelock persist (schema §3.1). In the plan phase
+    ``plan_step`` feeds the predicate (plan-met requires ``plan_step ==
+    "review_plan"``), so persisting it can flip ``met`` — the recompute on this
+    write reflects that.
     """
     if loop_phase is not None and loop_phase not in LOOP_PHASES:
         raise LedgerError(f"invalid loop_phase: {loop_phase!r}")
@@ -564,6 +580,29 @@ def set_loop(
         if beat:
             loop["last_beat_at"] = _now_iso()
         return ledger["loop_phase"]
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_gaps_open(repo_root, run_id, gaps_open: int):
+    """Persist the plan-loop open-gap count from ``review_plan``'s return (U4's
+    tick uses this). The engine reads ONLY the gap-set length and writes it here
+    (adapter-contract §2.2 / §5).
+
+    The value is written into ``exit_predicate_result.gaps_open`` BEFORE the
+    atomic-write recompute reads it back, so the freshly-recomputed predicate
+    reflects the new gap count in the SAME snapshot (I-1). ``recompute_predicate``
+    preserves the prior cached ``gaps_open`` precisely so this mutator can seed
+    it; this is the only writer of the field.
+    """
+    n = int(gaps_open)
+    if n < 0:
+        raise LedgerError(f"gaps_open must be >= 0, got {n}")
+
+    def mutate(ledger):
+        epr = ledger.setdefault("exit_predicate_result", {})
+        epr["gaps_open"] = n
+        return n
 
     return _with_locked_ledger(repo_root, run_id, mutate)
 
