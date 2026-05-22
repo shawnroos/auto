@@ -49,6 +49,10 @@ GRACE_SECONDS = 4200  # I-3: > 3600s ScheduleWakeup clamp ceiling + slack.
 DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-unit stall timeout default.
 
 LOOP_PHASES = ("plan", "seam", "work", "done")
+# Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
+# adapter reads plan_step to compute the NEXT step; the tick persists the step it
+# ran. `null` (no step yet) is ALSO valid and is the initial value.
+PLAN_STEPS = ("plan", "deepen", "review_plan")
 UNIT_STATES = (
     "pending",
     "dispatched",
@@ -92,6 +96,12 @@ class InvalidTransition(LedgerError):
 
 class UnknownUnit(LedgerError):
     """Raised when a unit id is not present in the ledger."""
+
+
+# Sentinel for "argument not supplied" where ``None`` is itself a valid value
+# (e.g. ``set_loop(plan_step=...)`` — ``null`` is a legitimate stored plan_step,
+# so we cannot use ``None`` to mean "leave unchanged").
+_UNSET = object()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -342,12 +352,14 @@ def init_ledger(
     adapter_scale: str = "three-tier",
     units=None,
     loop_phase: str = "plan",
+    plan_step=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
     ``units`` is a list of partial unit dicts (at minimum ``id``); missing
     fields are filled with schema defaults. The predicate is recomputed and the
-    file is written atomically under flock.
+    file is written atomically under flock. ``plan_step`` defaults to ``None``
+    (no plan step run yet — schema §3.1).
     """
     if adapter not in ("ce", "native"):
         raise LedgerError(f"invalid adapter: {adapter!r}")
@@ -355,6 +367,8 @@ def init_ledger(
         raise LedgerError(f"invalid adapter_scale: {adapter_scale!r}")
     if loop_phase not in LOOP_PHASES:
         raise LedgerError(f"invalid loop_phase: {loop_phase!r}")
+    if plan_step is not None and plan_step not in PLAN_STEPS:
+        raise LedgerError(f"invalid plan_step: {plan_step!r}")
 
     path = ledger_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
@@ -385,6 +399,7 @@ def init_ledger(
         ledger = {
             "run_id": run_id,
             "loop_phase": loop_phase,
+            "plan_step": plan_step,
             "seam_paused": loop_phase == "seam",
             "adapter": adapter,
             "adapter_scale": adapter_scale,
@@ -514,22 +529,35 @@ def set_loop(
     seam_paused=None,
     driver=None,
     beat=False,
+    plan_step=_UNSET,
 ):
-    """Update loop-level phase / liveness fields (U4's tick uses this).
+    """Update loop-level phase / liveness / plan-step fields (U4's tick uses this).
 
     ``beat=True`` stamps ``loop.last_beat_at`` to now. Predicate recomputed +
     atomic (a phase change can flip ``met`` via the plan-loop gaps clause).
+
+    ``plan_step`` uses an UNSET sentinel default (NOT ``None``) because ``null``
+    is itself a valid stored plan_step (the initial "no step yet"). Omit it to
+    leave the field unchanged; pass ``plan_step=None`` to clear it, or a step
+    name (``"plan"`` / ``"deepen"`` / ``"review_plan"``) to record it. The tick
+    calls this with the step it just ran so the NEXT (fresh-process) tick is not
+    amnesiac — the anti-livelock persist (schema §3.1). ``plan_step`` does NOT
+    feed the predicate, so the recompute is unaffected.
     """
     if loop_phase is not None and loop_phase not in LOOP_PHASES:
         raise LedgerError(f"invalid loop_phase: {loop_phase!r}")
     if driver is not None and driver not in ("self", "manual"):
         raise LedgerError(f"invalid driver: {driver!r}")
+    if plan_step is not _UNSET and plan_step is not None and plan_step not in PLAN_STEPS:
+        raise LedgerError(f"invalid plan_step: {plan_step!r}")
 
     def mutate(ledger):
         if loop_phase is not None:
             ledger["loop_phase"] = loop_phase
         if seam_paused is not None:
             ledger["seam_paused"] = bool(seam_paused)
+        if plan_step is not _UNSET:
+            ledger["plan_step"] = plan_step
         loop = ledger.setdefault("loop", {})
         if driver is not None:
             loop["driver"] = driver

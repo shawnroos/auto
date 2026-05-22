@@ -24,6 +24,11 @@
 #      fixed) but makes NO dispatch call and writes NO finding
 #   6. non-stateless safety: invoke the tick twice from FRESH processes against
 #      the same ledger -> it advances purely from ledger state
+#   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
+#      ACROSS fresh-process ticks WITHOUT re-planning. The tick persists the
+#      executed plan_step (schema §3.1) so the next tick reads it instead of
+#      re-reading null and re-running "plan" forever. Includes a deliberate-fail
+#      control (env-gated no-persist) proving the test goes RED without the write.
 
 set -uo pipefail
 
@@ -322,6 +327,73 @@ if [ "$st1_u1" = "fixed" ] && [ "$st1_u2" = "verdict-returned" ] \
 else
   fail "after-tick1: U1=$st1_u1 U2=$st1_u2 ; after-tick2: U1=$st2_u1 U2=$st2_u2 (expected fixed/verdict-returned then fixed/fixed)"
 fi
+
+# ─── Scenario 7: anti-livelock — plan_step advances across fresh-process ticks ─
+# THE integration-blocking bug this fix closes: next_plan_step is pure over the
+# ledger and each tick is a fresh process. If the tick does not persist the
+# executed plan_step, every tick reads plan_step==null, the adapter returns
+# "plan", and the plan-loop re-plans forever. With the persist (ledger.set_loop
+# plan_step=...), three fresh-process ticks walk plan -> deepen -> review_plan.
+#
+# We use the REAL ce adapter (its plan/deepen/review_plan ops are pure
+# envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
+# so the predicate never short-circuits the plan-loop to done. gaps_open stays 0
+# (the no-op ops never set it), but the coherence guard keys on
+# plan_step=="review_plan" specifically, so it does NOT fire until AFTER a real
+# review_plan step has been persisted — exactly the walk we assert.
+it "anti-livelock: 3 fresh-process plan ticks walk plan -> deepen -> review_plan (step persisted, no re-plan)"
+ledger_init "antilivelock-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+step0="$(ledger_field "antilivelock-run" 'L.get("plan_step")')"
+CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step1="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step2="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+CLAUDE_DISPATCH_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step3="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+# init -> null; tick1 ran "plan"; tick2 ran "deepen"; tick3 ran "review_plan".
+# The walk MONOTONICALLY ADVANCES — it never gets stuck re-running "plan".
+if [ "$step0" = "None" ] && [ "$step1" = "plan" ] && [ "$step2" = "deepen" ] \
+   && [ "$step3" = "review_plan" ]; then
+  pass
+else
+  fail "plan_step walk: init=$step0 t1=$step1 t2=$step2 t3=$step3 (expected None/plan/deepen/review_plan)"
+fi
+
+it "deliberate-fail control: WITHOUT the persist, plan_step stays stuck at the first step -> livelock (proves the persist is load-bearing)"
+# Run the SAME plan-loop, but neuter the tick's persist by monkeypatching
+# ledger.set_loop to DROP the plan_step kwarg (simulating the pre-fix tick that
+# advanced the step but never wrote it back). Three ticks must then NEVER record
+# a step beyond null — the adapter would re-return "plan" every time (livelock).
+# This proves the prior test passes BECAUSE of the persist, not by accident.
+stuck="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, tick_py, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(spec); spec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+
+run = "antilivelock-nopersist"
+ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+
+# Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The tick's
+# beat write (set_loop(driver="self", beat=True)) still works; only the
+# plan_step persist is dropped — exactly the pre-fix behaviour.
+_real_set_loop = ledg.set_loop
+def _no_plan_step_set_loop(repo_root, run_id, **kw):
+    kw.pop("plan_step", None)
+    return _real_set_loop(repo_root, run_id, **kw)
+t.ledger.set_loop = _no_plan_step_set_loop
+
+steps = []
+for _ in range(3):
+    t.dispatch_tick(repo, run)
+    steps.append(ledg.read_ledger(repo, run).get("plan_step"))
+# Without the persist every read is None -> the plan-loop is livelocked.
+print("stuck" if all(s is None for s in steps) else "ADVANCED:%r" % steps)
+PYEOF
+)"
+assert_eq "stuck" "$stuck"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

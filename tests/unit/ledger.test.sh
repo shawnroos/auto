@@ -383,6 +383,42 @@ PYEOF
 )"
 assert_eq "blocked" "$guard"
 
+# ─── Scenario 9b: plan_step sub-state (anti-livelock field, schema §3.1) ─────
+it "plan_step: init defaults to null; set_loop(plan_step=) round-trips; null is distinct from unset"
+ledger_init "plan-step-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+ps_init="$(ledger_field "plan-step-run" 'repr(L["plan_step"])')"
+plan_step_walk="$("$PY" - "$REPO" "plan-step-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+seen = []
+# Set a step, then read it back; then clear it via plan_step=None; then prove an
+# OMITTED plan_step leaves the field unchanged (UNSET sentinel, not None).
+m.set_loop(repo, run, plan_step="plan")
+seen.append(m.read_ledger(repo, run)["plan_step"])
+m.set_loop(repo, run, plan_step="deepen")
+seen.append(m.read_ledger(repo, run)["plan_step"])
+m.set_loop(repo, run, beat=True)  # OMIT plan_step -> must NOT clobber "deepen".
+seen.append(m.read_ledger(repo, run)["plan_step"])
+m.set_loop(repo, run, plan_step=None)  # explicit clear -> null.
+seen.append(m.read_ledger(repo, run)["plan_step"])
+# An invalid step is rejected (does not write).
+try:
+    m.set_loop(repo, run, plan_step="bogus")
+    seen.append("ACCEPTED-BOGUS")
+except m.LedgerError:
+    seen.append("rejected-bogus")
+print(",".join(str(s) for s in seen))
+PYEOF
+)"
+# init=None ; set plan ; set deepen ; omit keeps deepen ; clear to None ; bogus rejected.
+if [ "$ps_init" = "None" ] && [ "$plan_step_walk" = "plan,deepen,deepen,None,rejected-bogus" ]; then
+  pass
+else
+  fail "ps_init=$ps_init walk=$plan_step_walk (expected None / plan,deepen,deepen,None,rejected-bogus)"
+fi
+
 # ─── Scenario 10: fence — no production file enables a test hatch ────────────
 it "fence: no production file sets CLAUDE_DISPATCH_TEST_NO_LOCK/NO_RECOMPUTE=1"
 offenders="$(grep -rlE "CLAUDE_DISPATCH_TEST_NO_(LOCK|RECOMPUTE)[[:space:]]*=[[:space:]]*[\"']?1" \

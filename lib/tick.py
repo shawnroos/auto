@@ -333,6 +333,15 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
 
     Returns (result_dict, raised_call_or_None). On an adapter raise the caller
     records the error; we surface which op raised so last_error.call is precise.
+
+    CRITICAL (anti-livelock — schema §3.1): after the adapter op returns
+    SUCCESSFULLY, we PERSIST the executed step to the ledger via
+    ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the ledger and
+    each tick is a fresh process reading ALL state from disk; without this write
+    the next tick reads ``plan_step == null``, the adapter returns ``"plan"``,
+    and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
+    thus only on success): a step that raised is recorded as a stall by the
+    caller's try/except, never as a completed step.
     """
     step = adapter.next_plan_step(ledger_dict)
     if step == "done":
@@ -345,6 +354,9 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     # The adapter step is the work-bearing call; the caller wraps this in the
     # try/except so a raise becomes a recorded last_error, not a crash.
     op(ledger_dict)
+    # Op succeeded — persist the step so the NEXT fresh-process tick advances
+    # from it instead of re-reading null and re-planning (the livelock).
+    ledger.set_loop(repo_root, run_id, plan_step=step)
     return {"advanced": "plan-step", "step": step}, None
 
 

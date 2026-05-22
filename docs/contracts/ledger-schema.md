@@ -52,6 +52,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 {
   "run_id": "feat-foo-2026-05-21",
   "loop_phase": "plan",
+  "plan_step": null,
   "seam_paused": false,
   "adapter": "ce",
   "adapter_scale": "three-tier",
@@ -90,6 +91,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 |-------|------|------------------|
 | `run_id` | string | the human-supplied run identifier; slugified for the filename, stored raw here |
 | `loop_phase` | enum | `"plan"` \| `"seam"` \| `"work"` \| `"done"` |
+| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the adapter reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — adapters read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Does NOT feed `exit_predicate_result`. Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
 | `seam_paused` | bool | `true` ONLY while `loop_phase == "seam"`; the intentional-orphan flag (§5, I-3) |
 | `adapter` | enum | `"ce"` \| `"native"` — which workflow adapter drives the run |
 | `adapter_scale` | enum | `"three-tier"` \| `"blocker-only"` — set by U6b's rubric probe; tells the predicate evaluator which severity logic applies |
@@ -162,6 +164,45 @@ Terminal sink: `terminal-skip` has no outgoing transition.
 - **Background agent** (U10) owns `dispatched → verdict-returned` (self-write; survives the driving session's death) and is the **only writer of `findings[]`**.
 - **Tick** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
 - **Operator** (U7, via `/dispatch-resume`) owns the `stalled →` recoveries.
+
+### 3.1 Plan-step sub-grammar (`plan_step` — the anti-livelock field)
+
+`plan_step` records the LAST plan step the tick completed. It is a sub-state of
+`loop_phase == "plan"` and is `null` (ignored) in every other phase. The
+**adapter** owns the sequencing — it reads `plan_step` (+ `gaps_open`) and
+returns the NEXT step; the **tick** persists the step it just ran. The two
+adapters differ only in whether a `deepen` step exists:
+
+```
+CE:      null → plan → deepen → review_plan
+                          ↑          │
+                          └──────────┘  (gaps_open > 0: another round → deepen)
+         review_plan AND gaps_open == 0  → done   (coherence guard, §4.1 of the adapter contract)
+
+native:  null → plan → review_plan
+                            ↑     │
+                            └─────┘  (gaps_open > 0: review again — native NEVER deepens)
+         review_plan AND gaps_open == 0  → done
+```
+
+**Round / reset rule.** A "round" is one pass through the sequence ending in a
+`review_plan`. After a `review_plan` whose gap-set is non-empty (`gaps_open > 0`)
+the adapter starts a fresh round by returning `deepen` (CE) / `review_plan`
+(native) — it does NOT reset to `plan` (re-planning from scratch would discard
+the existing plan; the loop refines it). The loop terminates the moment a
+`review_plan` round returns an empty gap-set (`gaps_open == 0`), at which point
+`next_plan_step` returns `"done"` — this is the coherence guard that prevents the
+livelock. Because the guard keys on `plan_step == "review_plan"` specifically, a
+default `gaps_open == 0` BEFORE any review has run (e.g. at `plan` / `deepen`)
+does NOT short-circuit.
+
+**Why it must be persisted.** `next_plan_step` is pure over the ledger. A tick is
+a fresh process that reads ALL state from disk. If the tick does not write back
+the step it ran, the next tick reads `plan_step == null`, the adapter returns
+`"plan"`, and the plan-loop re-plans forever (the plan-loop livelock). The tick
+therefore persists the executed step via `set_loop(plan_step=...)` AFTER the
+adapter op returns successfully (a step that raised is recorded as a stall, not
+as completed).
 
 ---
 
@@ -278,6 +319,7 @@ not hardcode copies — hardcoding causes drift.
 | `GRACE_SECONDS` | `4200` | orphan-detection grace window (I-3) |
 | `DEFAULT_STALL_THRESHOLD_SECONDS` | `600` | per-unit stall timeout default |
 | `LOOP_PHASES` | `("plan","seam","work","done")` | valid `loop_phase` values |
+| `PLAN_STEPS` | `("plan","deepen","review_plan")` | valid non-null `plan_step` values (`null` is also valid: no step yet) |
 | `UNIT_STATES` | the six states | valid `state` values |
 | `SEVERITIES` | `("blocker","major","minor")` | valid finding severities (shared scale, R3) |
 
@@ -322,11 +364,11 @@ Consumers use these; the schema above is what they read/write through them.
 | function | purpose |
 |----------|---------|
 | `ledger_path(repo_root, run_id)` / `lock_path(repo_root, run_id)` | path helpers (§1) |
-| `init_ledger(repo_root, run_id, *, adapter, adapter_scale, units, loop_phase=...)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write |
+| `init_ledger(repo_root, run_id, *, adapter, adapter_scale, units, loop_phase=..., plan_step=None)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write. `plan_step` defaults to `null` (no plan step yet) |
 | `read_ledger(repo_root, run_id)` | return the ledger dict; raises a clean error (no partial file) on unknown run-id |
 | `transition(repo_root, run_id, unit_id, new_state, **fields)` | grammar-checked state change under flock; recompute + atomic write |
 | `record_verdict(repo_root, run_id, unit_id, findings)` | `dispatched → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; recompute + atomic write (the verdict-self-write path, U10) |
-| `set_loop(repo_root, run_id, *, loop_phase=None, seam_paused=None, driver=None, beat=False)` | phase / liveness updates (U4); recompute + atomic write |
+| `set_loop(repo_root, run_id, *, loop_phase=None, seam_paused=None, driver=None, beat=False, plan_step=<unset>)` | phase / liveness / plan-step updates (U4); recompute + atomic write. `plan_step` uses an UNSET sentinel default (not `None`) because `null` is a valid stored value — pass `plan_step=None` to clear it, or a step name to set it |
 | `unit_is_terminal(unit)` | pure `terminal(u)` predicate (§4.1) |
 | `is_orphaned(ledger, now=None)` | pure I-3 orphan predicate (§5) |
 | `recompute_predicate(ledger)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests |
