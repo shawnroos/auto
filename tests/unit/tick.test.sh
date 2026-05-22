@@ -29,6 +29,19 @@
 #      executed plan_step (schema §3.1) so the next tick reads it instead of
 #      re-reading null and re-running "plan" forever. Includes a deliberate-fail
 #      control (env-gated no-persist) proving the test goes RED without the write.
+#   8. Bug #5 gap-write: advance_plan_loop persists gaps_open from a DICT
+#      review_plan return carrying `gap_set` (the live envelope shape), AND from
+#      an empty gap_set (real length 0 -> "done"), keeping the plan loop open
+#      until a real review reports.
+#   9. Bug #5 null-path: the LIVE PREPARE envelope has NO gap_set key (model fills
+#      it out-of-band); gaps_open must stay NULL (never default 0), so plan-met
+#      does NOT fire after one un-reviewed pass. Deliberate-fail control replicates
+#      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
+#      outcome (the discriminator).
+#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
+#      `dispatched` past its stall_threshold (the orchestrator rescue-swallow P3
+#      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
+#      stays dispatched.
 
 set -uo pipefail
 
@@ -337,10 +350,12 @@ fi
 #
 # We use the REAL ce adapter (its plan/deepen/review_plan ops are pure
 # envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
-# so the predicate never short-circuits the plan-loop to done. gaps_open stays 0
-# (the no-op ops never set it), but the coherence guard keys on
-# plan_step=="review_plan" specifically, so it does NOT fire until AFTER a real
-# review_plan step has been persisted — exactly the walk we assert.
+# so the predicate never short-circuits the plan-loop to done. gaps_open stays
+# NULL (Bug #5 fix: the live envelope carries no gap_set, so the engine never
+# defaults it to 0 — the never-reviewed value is null, not zero), but the
+# coherence guard keys on plan_step=="review_plan" specifically, so it does NOT
+# fire until AFTER a real review_plan step has been persisted — exactly the walk
+# we assert.
 it "anti-livelock: 3 fresh-process plan ticks walk plan -> deepen -> review_plan (step persisted, no re-plan)"
 ledger_init "antilivelock-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
 step0="$(ledger_field "antilivelock-run" 'L.get("plan_step")')"
@@ -502,6 +517,162 @@ if [ "$empty_out" = "0,review_plan,done" ]; then
 else
   fail "gaps,plan_step,next = $empty_out (expected 0,review_plan,done)"
 fi
+
+# ─── Scenario 9: Bug #5 null-path — LIVE PREPARE envelope (NO gap_set key) ────
+# The previous Bug #5 scenarios drive review_plan returns that CARRY a gap_set
+# (dict-with-key, bare list). This scenario covers the OTHER live shape that has
+# no dedicated test: the REAL ce/native adapters' review_plan returns a PREPARE
+# envelope WITHOUT a gap_set key — the model fills it out-of-band AFTER the engine
+# reads. The correct behaviour (the round-2 premature-plan-met fix) is that
+# gaps_open stays NULL (never a default 0), so plan-met does NOT fire after one
+# un-reviewed pass and the deepen-refinement loop stays open. A regression that
+# defaulted gap_set=[] for the keyless envelope would silently reopen the bug:
+# gaps_open=0 -> plan-met -> the loop exits before a real review reports gaps.
+#
+# We drive advance_plan_loop with the REAL ce adapter (review_plan returns the
+# live envelope shape, NO gap_set), then assert gaps_open is still null and plan
+# is NOT met after the review pass. The deliberate-fail control below replicates
+# the buggy default-zero extraction and proves it produces a DIFFERENT, plan-met
+# outcome — so this test genuinely distinguishes correct-from-broken.
+it "Bug #5 null-path: LIVE review_plan envelope (no gap_set key) -> gaps_open stays NULL, plan NOT met (deepen loop stays open)"
+ledger_init "gaps-null-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+# Seed plan_step="deepen" so the live sequencer's next step lands on review_plan.
+"$PY" - "$REPO" "gaps-null-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+null_out="$("$PY" - "$REPO" "gaps-null-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# REAL ce adapter: review_plan returns the live PREPARE envelope, which carries
+# NO gap_set key (the model fills it out-of-band after the engine reads).
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+adapter = ace.Adapter()
+# Guard: confirm the envelope really has NO gap_set key (the shape under test).
+env = adapter.review_plan(ledg.read_ledger(repo, run))
+assert isinstance(env, dict) and "gap_set" not in env, "envelope unexpectedly has gap_set: %r" % env
+
+led = ledg.read_ledger(repo, run)
+t.advance_plan_loop(repo, run, led, adapter)
+L2 = ledg.read_ledger(repo, run)
+go = L2["exit_predicate_result"]["gaps_open"]
+met = L2["exit_predicate_result"]["met"]
+phase = L2.get("loop_phase")
+step = L2.get("plan_step")
+# go is None (NOT 0); met False; loop stays in plan; step persisted as review_plan.
+print("%s,%s,%s,%s" % (go, met, phase, step))
+PYEOF
+)"
+# gaps_open stays None; plan NOT met; loop stays in plan phase; review_plan persisted.
+if [ "$null_out" = "None,False,plan,review_plan" ]; then
+  pass
+else
+  fail "gaps_open,met,phase,step = $null_out (expected None,False,plan,review_plan)"
+fi
+
+it "deliberate-fail control: the BUGGY gap_set=[] default for a keyless envelope writes gaps_open=0 and FIRES plan-met (proves the null-path test discriminates)"
+# Replicate the regression inline: extract with result.get("gap_set", []) — the
+# default-zero short-circuit the engine MUST NOT have — against the SAME live ce
+# envelope. This must produce a DIFFERENT outcome from the correct path above:
+# gaps_open=0, plan-met True, next step "done". If this control matched the
+# correct path, the prior test would prove nothing.
+buggy_out="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, tick_py, ledger_py = sys.argv[1:4]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+
+run = "gaps-null-buggy"
+ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.set_loop(repo, run, plan_step="deepen")
+adapter = ace.Adapter()
+result = adapter.review_plan(ledg.read_ledger(repo, run))  # live envelope, NO gap_set
+# THE BUG: default-zero extraction for a keyless envelope.
+buggy_gap_set = result.get("gap_set", [])
+ledg.set_gaps_open(repo, run, len(buggy_gap_set))
+ledg.set_loop(repo, run, plan_step="review_plan")
+L = ledg.read_ledger(repo, run)
+go = L["exit_predicate_result"]["gaps_open"]
+met = L["exit_predicate_result"]["met"]
+nxt = adapter.next_plan_step(L)
+print("%s,%s,%s" % (go, met, nxt))
+PYEOF
+)"
+# The buggy default produces gaps_open=0 (NOT None), plan-met True, next "done" —
+# materially different from the correct None/False path. Discriminator confirmed.
+if [ "$buggy_out" = "0,True,done" ]; then
+  pass
+else
+  fail "buggy default outcome = $buggy_out (expected 0,True,done — the regression this null-path guards)"
+fi
+
+# ─── Scenario 10: phantom-dispatch self-heal (orchestrator P3 bound) ──────────
+# orchestrator.dispatch_batch's launch guard (Bug #8) marks a unit stalled if
+# launch_fn raises. If the rescue transition (dispatched->stalled) ALSO raises,
+# the broadened `except Exception` swallows it and the unit stays `dispatched`
+# with no agent — a phantom. The CLAIM bounding that P3 is that the phantom
+# self-heals: detect_and_halt_stalled reclaims ANY dispatched-past-stall_threshold
+# unit on a later tick. This test proves that bound.
+#
+# We simulate the phantom directly (a unit stuck `dispatched` with dispatched_at
+# older than its stall_threshold, no verdict) and run detect_and_halt_stalled.
+# The reaper must transition it to `stalled` (reclaimed) with last_error null
+# (a plain timeout, not an adapter-raise). The deliberate-fail control is the
+# ABSENCE of the reaper call: without it, the phantom stays `dispatched` forever.
+it "phantom-dispatch self-heal: detect_and_halt_stalled reclaims a dispatched-past-threshold phantom -> stalled (last_error null)"
+PHANTOM_AT="$(now_minus 3600)"
+ledger_init "phantom-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
+  ce work >/dev/null 2>&1
+# Baseline: the phantom IS dispatched before the reaper runs (the swallowed-rescue
+# state the orchestrator P3 leaves behind).
+st_before="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+phantom_out="$("$PY" - "$REPO" "phantom-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+led = ledg.read_ledger(repo, run)
+now = datetime.datetime.now(datetime.timezone.utc)
+fresh, halted, newly = t.detect_and_halt_stalled(repo, run, led, now)
+after = ledg.read_ledger(repo, run)
+u = after["units"][0]
+print("%s,%s,%s" % (u["state"], (",".join(newly)) if newly else "-", u.get("last_error")))
+PYEOF
+)"
+st_after="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+# Before: dispatched (phantom). After the reaper: stalled, newly_stalled=[U1],
+# last_error null (plain timeout — NOT an adapter-raise error object).
+if [ "$st_before" = "dispatched" ] && [ "$phantom_out" = "stalled,U1,None" ] \
+   && [ "$st_after" = "stalled" ]; then
+  pass
+else
+  fail "before=$st_before reaper_out=$phantom_out after=$st_after (expected dispatched / stalled,U1,None / stalled)"
+fi
+
+it "deliberate-fail control: WITHOUT the reaper, the phantom stays dispatched forever (proves the reclaim is load-bearing)"
+# Same phantom, but we DO NOT call detect_and_halt_stalled. The unit must remain
+# `dispatched` — the absence of the reaper IS the control. If the phantom self-
+# healed without the reaper, the prior test would prove nothing.
+ledger_init "phantom-noreap-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
+  ce work >/dev/null 2>&1
+noreap_state="$(ledger_field "phantom-noreap-run" 'L["units"][0]["state"]')"
+assert_eq "dispatched" "$noreap_state"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
