@@ -1,11 +1,11 @@
 ---
-argument-hint: "[<run>]"
-allowed-tools: Bash
+argument-hint: "[<run> | freeform sentence]"
+allowed-tools: Bash, AskUserQuestion
 ---
 
 Show the ledger and health of an auto run.
 
-`/auto-status [<run>]` reads the durable ledger at
+`/auto-status` reads the durable ledger at
 `<repo>/.claude/auto/<run-slug>.json` and reports the loop phase, the
 cached exit-predicate result (blockers / majors / minors / gaps_open and
 whether it is met), per-unit states, the driver (`self` while a tick chain
@@ -16,14 +16,44 @@ promotion.
 
 It is read-only — it never mutates the ledger or arms a tick.
 
-Argument forms (parsed inside `lib/auto-status.sh`, not here):
+## Argument handling (orchestrator routes BEFORE invoking the script)
 
-- **No args**: report the most recent / only active run in this repo.
-- **Run id**: `/auto-status feat-foo-2026-05-21` — report that run.
+Inspect the argument string and route as follows:
 
-Empty args -> `lib/auto-status.sh` resolves the active run, or prints usage and
-exits cleanly if none exists.
+1. **Empty** — invoke the script with no args; it resolves the most recent
+   run in the repo, or prints usage if none exists. (Safe bare default.)
 
-To dispatch, run:
+2. **Looks like a run id** (kebab-case slug, no spaces, e.g.
+   `feat-foo-2026-05-21`) — invoke the script with the id verbatim.
+
+3. **Freeform sentence** (e.g. "how's the latest run going?", "show me the
+   auth one", "status of yesterday's run") — interpret intent:
+   - If clearly the most recent / active run → invoke with no args.
+   - If a specific run is named or implied AND only one ledger matches →
+     invoke with that resolved run id.
+   - If multiple ledgers could match (e.g. "the auth one" with two
+     matching runs) → `AskUserQuestion` listing the candidates with the
+     most-recent one as Recommended, then invoke with the chosen id.
+   - If intent is unparseable → `AskUserQuestion` offering the recent
+     runs (read `ls -t <repo>/.claude/auto/*.json` first).
+
+Status is read-only, so picking the wrong run is harmless — bias toward
+acting without asking when the recent-run interpretation is plausible.
+
+## Dispatch
+
+If the argument string is empty or a clean run-id pass-through, run the dispatch
+line below directly (the harness substitutes the argument string before bash
+runs):
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "$ARGUMENTS"`
+
+If you resolved a freeform sentence into a specific run id, call Bash
+explicitly with the resolved id rather than going through the
+substitution path:
+
+```
+bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "<resolved-run-id>"
+```
+(do NOT include this as a literal line in your response — invoke the Bash
+tool with the constructed command.)
