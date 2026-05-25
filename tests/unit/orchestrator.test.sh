@@ -613,7 +613,7 @@ it "CLASS-1 deliberate-fail: FORCE_THREETIER_GATING reverts ALL sites at once ->
 # no-op for that site; because ALL sites route through the helper, the hatch makes
 # the whole run behave three-tier -> the major now gates at every site. RED proves
 # the helper is load-bearing (the class is closed via the single chokepoint).
-bofail="$(CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+bofail="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
 def load(n,p):

@@ -334,7 +334,7 @@ led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
 with open(p,"w") as f: json.dump(led,f)
 PYEOF
-out="$(printf '{}' | CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
+out="$(printf '{}' | CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
 
 # ─── on-stop: the .sh shim never exits non-zero on a malformed ledger ─────────

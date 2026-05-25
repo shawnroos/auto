@@ -372,7 +372,7 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     The fixed→pending re-enqueue honors the test-only
     ``CLAUDE_AUTO_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
     it set the work-loop closure test goes RED — livelocks at `fixed`). The
-    hatch is FENCED via ``_test_hatch_enabled`` (task #31): only honored
+    hatch is FENCED via ``test_hatch_enabled`` (task #31): only honored
     when ``CLAUDE_AUTO_TEST_HARNESS=1`` is ALSO set, so a stray production
     export of NO_REENQUEUE alone has no effect.
     """

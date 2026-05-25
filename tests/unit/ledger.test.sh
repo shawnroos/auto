@@ -200,7 +200,7 @@ saw_lost=0
 for iter in $(seq 1 12); do
   rm -f "$REPO/.claude/auto/race-nolock.json" "$REPO/.claude/auto/race-nolock.lock"
   ledger_init "race-nolock" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
-  CLAUDE_AUTO_TEST_NO_LOCK=1 race_writers "race-nolock" 6
+  CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_LOCK=1 race_writers "race-nolock" 6
   c="$(ledger_field "race-nolock" 'len(L["units"][0]["findings"])')"
   [ "$c" -lt 6 ] && saw_lost=1 && break
 done
@@ -232,7 +232,7 @@ fi
 
 it "deliberate-fail: with NO_RECOMPUTE, a new blocker leaves stale met==true"
 ledger_init "i1-norecomp" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
-CLAUDE_AUTO_TEST_NO_RECOMPUTE=1 "$PY" - "$REPO" "i1-norecomp" "$LEDGER_PY" <<'PYEOF'
+CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_RECOMPUTE=1 "$PY" - "$REPO" "i1-norecomp" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
@@ -610,7 +610,7 @@ fi
 it "Bug #6 deliberate-fail: WITHOUT the attempt check, A's stale verdict CLOBBERS B's clean one"
 # Same scenario, but NO_ATTEMPT_CHECK neuters the rejection: A's attempt-1 stale
 # blocker overwrites B's attempt-2 clean verdict (the clobber the fix prevents).
-clobbered="$(CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+clobbered="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, os
 repo, ledger_py = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
@@ -719,7 +719,7 @@ assert_eq "rejected-stale,dispatched" "$stale_recover"
 it "Bug #7 deliberate-fail: WITHOUT the recovery edge, a genuine late verdict from a stalled unit is LOST to InvalidTransition"
 # NO_STALLED_RECOVERY forces the pre-fix check: a stalled unit's verdict raises
 # InvalidTransition (the silent-discard bug), instead of being recovered.
-lost="$(CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+lost="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY=1 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, os
 repo, ledger_py = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
