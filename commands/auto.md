@@ -37,8 +37,31 @@ Inspect the argument string and route:
      "no, just show me").
 
 2. **Looks like a flag-form invocation** (starts with a path, or contains
-   `--adapter` / `--goal` / the literal token `auto`) — pass the argument string
-   through to the script verbatim. This is the explicit power-user form.
+   `--adapter` / `--goal` / `--recipe` / the literal token `auto`) — pass the
+   argument string through to the script verbatim. This is the explicit
+   power-user form. **If it already contains `--recipe <name>`, skip the picker
+   (rule 2.5) entirely** — the user chose the recipe.
+
+2.5. **Recipe picker (v0.2.0, U8)** — when a plan is identified to START a run
+   (rule 2 with a plan but NO `--recipe`, or a freeform "run the X plan" from
+   rule 3) and the user did not name a recipe, pick one before dispatching:
+   - Enumerate recipes: `bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh"` —
+     each line is `<name>\t<tier>\t<description>`.
+   - Fire `AskUserQuestion` with one option per recipe: label = `<name>
+     (<tier>)`, description = the recipe's description. For the preview, use
+     `bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh" --render <name>` (the
+     ASCII topology card) IF the AskUserQuestion preview field renders multi-line
+     ASCII; otherwise omit the preview and rely on the label + description
+     (KTD-9 fallback — the picker still works, just without the visual card).
+   - The default/first option is `a1 (built-in)` — the classic stack — so a user
+     who just hits enter gets the v0.1.x-equivalent workflow.
+   - On selection, append `--recipe <chosen-name>` to the resolved flag-form and
+     invoke the Bash tool with that string directly (the explicit-invoke path
+     below) — do NOT route back through the bare argument-substitution dispatch
+     line.
+   - Tier badge matters: a `<name> (workspace)` option is a project-local recipe
+     that may shadow a built-in of the same name — the badge is the user's signal
+     (security: KTD-13 also logs the resolved tier to stderr at run start).
 
 3. **Freeform sentence** — interpret intent into a flag-form invocation:
    - "run the auth refactor plan" / "start the X plan" → resolve `X` to a

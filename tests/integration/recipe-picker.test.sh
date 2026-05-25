@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# auto U8 integration test: the picker's DATA LAYER (recipes-list.sh).
+#
+# The picker UX is orchestrator prose in commands/auto.md (AskUserQuestion) — not
+# directly unit-testable. But the picker only RENDERS what recipes-list.sh
+# returns, so AE1/AE2 are verified at that data boundary: the list the picker
+# shows, and the tier badges + shadowing it surfaces.
+#
+# AE1: fresh repo → picker shows exactly the 4 built-ins, each tagged built-in.
+# AE2: a workspace recipe shadows a same-named built-in (workspace wins, one row,
+#      tagged workspace) — the badge is the user's signal.
+# Plus: --render <name> produces the topology card (the picker's preview surface).
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+LIST_SH="${AUTO_ROOT}/lib/recipes-list.sh"
+
+PASS=0
+FAIL=0
+CURRENT="anonymous"
+it()   { CURRENT="${1:-anonymous}"; }
+pass() { PASS=$((PASS + 1)); printf "  \033[32m✓\033[0m %s\n" "$CURRENT"; }
+fail() {
+  FAIL=$((FAIL + 1))
+  printf "  \033[31m✗\033[0m %s\n" "$CURRENT"
+  [ -n "${1:-}" ] && printf "      %s\n" "$1"
+  return 0
+}
+assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
+
+# ─── AE1: fresh repo → 4 built-ins ──────────────────────────────────────────
+it "AE1: picker data lists exactly the 4 built-ins, all tier=built-in"
+fresh="$(mktemp -d)"; mkdir -p "$fresh/.claude/auto"
+rows="$(CLAUDE_AUTO_REPO="$fresh" bash "$LIST_SH" | awk -F'\t' '{print $1":"$2}' | paste -sd, -)"
+assert_eq "a1:built-in,a2:built-in,a4:built-in,w:built-in" "$rows"
+
+# ─── AE2: workspace shadows built-in ────────────────────────────────────────
+it "AE2: a workspace recipe named a1 shadows the built-in (workspace, one row)"
+ws="$(mktemp -d)"; mkdir -p "$ws/.claude/auto/recipes"
+cat > "$ws/.claude/auto/recipes/a1.json" <<'JSON'
+{"name":"a1","version":"1","phase_order":["plan","seam","work"],"terminal_phase":"work","units":[{"id":"plan","phase":"plan","invokes":{}}],"description":"WS override"}
+JSON
+a1row="$(CLAUDE_AUTO_REPO="$ws" bash "$LIST_SH" | awk -F'\t' '$1=="a1"{print $1":"$2; n++} END{print "count="n}')"
+# a1 appears once, tagged workspace.
+assert_eq "a1:workspace
+count=1" "$a1row"
+
+# ─── preview surface ────────────────────────────────────────────────────────
+it "picker preview: --render a4 produces a topology card naming the emitter"
+card="$(CLAUDE_AUTO_REPO="$(mktemp -d)" bash "$LIST_SH" --render a4)"
+case "$card" in
+  *"recipe: a4"*"plan_output_to_paired_builders"*) pass ;;
+  *) fail "card missing name or emitter: $(printf '%s' "$card" | head -3)" ;;
+esac
+
+# ── summary ─────────────────────────────────────────────────────────────────
+echo ""
+echo "recipe-picker.test.sh: ${PASS} passed, ${FAIL} failed"
+[ "$FAIL" -eq 0 ]
