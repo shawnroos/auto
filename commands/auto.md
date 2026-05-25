@@ -21,20 +21,37 @@ reports what's available.
 
 Inspect the argument string and route:
 
-1. **Empty (bare `/auto`)** — show help + state, do NOT start a run:
-   - List in-repo runs from `<repo>/.claude/auto/*.json` (most recent
-     first) with their phase + state (pull from each ledger's
-     `loop.phase` and `exit_predicate_result.met` — use
-     `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh"` per run if it has
-     a `--brief` form, else read the JSON directly).
-   - List candidate plans: `Glob` for `docs/plans/*.md`,
-     `plans/*.md`, or `*-plan.md` in the repo root.
-   - Print the usage forms below.
-   - Offer the obvious next moves: continue the latest run, start from
-     the newest plan, or "type `/auto <plan>` / `/auto-resume`".
-   - If exactly ONE candidate plan exists AND no active runs exist,
-     `AskUserQuestion` whether to start it (with "yes, start" /
-     "no, just show me").
+1. **Empty (bare `/auto`) — SMART ENTRY (v0.2.0, U12): gather context and
+   determine where to pick up.** Bare `/auto` orients itself instead of making
+   the user choose the right verb. Run the deterministic situation detector
+   first: `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"` — it prints ONE
+   verdict line. Branch on it:
+
+   - **`in-flight\t<run-id>`** — a run is mid-flight (its
+     `exit_predicate_result.met` is False). RESUME it: invoke the Bash tool with
+     `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"`.
+     Surface "resuming run `<run-id>`" so the choice is visible. This is the
+     `/auto-resume continue` path, auto-chosen — the user didn't have to know to
+     type it.
+   - **`ambiguous-runs\t<n>`** — more than one in-flight run. Do NOT guess:
+     `AskUserQuestion` listing the runs (use `bash
+     "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh"` to describe each), then resume
+     the chosen one via `auto-resume.sh "continue <run-id>"`.
+   - **`reviewed-plan\t<path>`** — no in-flight run, but a reviewed plan is
+     present. The user likely wants to BUILD it, not re-plan it. `AskUserQuestion`:
+     "Start the work-loop on `<path>` (work-only recipe — skip the plan-loop)?"
+     with options "yes, build it" / "no, pick a recipe" / "no, just show me". On
+     "yes" invoke `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path> --recipe w"`.
+     (Work-only is the green-plan path — the plan-loop would re-derive finished
+     work; see the prepare/execute contract note in the dispatch section.)
+   - **`ambiguous-plans\t<n>`** — no run, multiple plans. Fall through to the
+     recipe picker (rule 2.5) after the user picks which plan (`Glob` +
+     `AskUserQuestion`).
+   - **`raw`** — no run, no plan. Plan-production is UPSTREAM of `/auto`'s
+     work-loop: recommend `/ce-plan <issue>` (or `/ce-brainstorm` if the work is
+     ambiguous) to author + review a plan first, THEN `/auto <plan>`. Do NOT
+     start an empty run. Offer the A1 plan-loop only if the user explicitly wants
+     the engine to drive planning.
 
 2. **Looks like a flag-form invocation** (starts with a path, or contains
    `--adapter` / `--goal` / `--recipe` / the literal token `auto`) — pass the
@@ -95,13 +112,30 @@ the argument string before bash runs):
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "$ARGUMENTS"`
 
-For rule 1's bare path, do NOT execute the dispatch — list runs and plans
-in chat instead. The dispatch line only fires if the orchestrator decides
-to start a run.
+For rule 1's bare path, do NOT use this substitution dispatch line — smart
+entry routes per the detector (resume / work-only / picker / recommend
+`/ce-plan`) and invokes the relevant `lib/*.sh` via the Bash tool directly.
 
 If you resolved a freeform sentence into a different flag-form string,
 invoke the Bash tool explicitly with that resolved string rather than
 going through the substitution path.
+
+## Prepare/execute contract (state this whenever a run starts or resumes)
+
+`auto` is a **prepare/execute** engine, not a self-driving loop. Each tick
+PREPARES an INTENT (what to do next); the MODEL executes it (`/ce-plan`,
+`/ce-doc-review`, `do_unit`, etc.) and feeds results back via the next tick.
+When you start or resume a run, make this unmissable to the operator:
+
+- "Run the prepared invocation, then feed results back" — do NOT loop
+  `tick.sh` expecting units to appear; ticking alone only cycles the state
+  machine (units stay 0).
+- **Plan-loop livelock guard:** the plan-loop escapes to the work-loop only
+  when `plan_step == "review_plan"` AND `gaps_open == 0`. If you reach
+  `review_plan` and `gaps_open` is still null, you MUST run a real review and
+  feed back a gap count — otherwise the loop deepen↔review cycles forever.
+- For an ALREADY-REVIEWED plan, prefer `--recipe w` (work-only) so the engine
+  skips the plan-loop instead of re-deriving finished work.
 
 ## Explicit argument grammar (for reference)
 
