@@ -50,6 +50,27 @@ auto_test::assert_true "grep -qE '^##[[:space:]]+OUTPUT VOICE' '$CMD'"
 auto_test::it "commands/auto.md contains the 'decide silently' contract phrase"
 auto_test::assert_true "grep -qiF 'decide silently' '$CMD'"
 
+# ── $ARGUMENTS-uniqueness invariant (fix-pass I — round-2 P2 finding F3) ─────
+# Per feedback_slash_command_arg_substitution + feedback_slash_command_nl_routing_pattern,
+# a slash-command body must contain EXACTLY ONE $ARGUMENTS reference — the
+# canonical dispatch line the harness substitutes before bash runs. A stray
+# second $-arg line corrupts the substitution. commands/auto.md documents
+# the invariant in prose but it was untested at the smoke layer until now.
+auto_test::it "commands/auto.md has EXACTLY ONE \$ARGUMENTS reference (uniqueness invariant)"
+arg_count="$(grep -c '\$ARGUMENTS' "$CMD")"
+auto_test::assert_true "[ \"$arg_count\" = \"1\" ]"
+
+# Deliberate-fail control (per feedback_new_tests_need_deliberate_fail_smoke_check):
+# probe a synthetic scratch file shaped like a malformed auto.md (TWO $-arg
+# lines). The same predicate must detect the regression class — proves the
+# uniqueness check actually counts, not just trivially passes.
+auto_test::it "deliberate-fail control: a two-\$ARGUMENTS body produces count=2 (uniqueness check actually counts)"
+SCRATCH="$(mktemp)"
+printf '%s\n%s\n' 'bash "$ARGUMENTS"' 'echo "$ARGUMENTS"' > "$SCRATCH"
+scratch_count="$(grep -c '\$ARGUMENTS' "$SCRATCH")"
+rm -f "$SCRATCH"
+auto_test::assert_true "[ \"$scratch_count\" = \"2\" ]"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 auto_test::summary
 exit $?

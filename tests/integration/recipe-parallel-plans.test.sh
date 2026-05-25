@@ -11,36 +11,37 @@
 # post-judge state and asserts the emitter emitted the WINNER's enumerated set,
 # not some other plan's.
 #
-# CONTRACT DISAGREEMENT FOUND (route to fix-pass E):
-#   lib/emitters.py::judge_winner_to_work_units reads winner_unit_id from
-#   judge.findings[].winner_unit_id, BUT lib/ledger.py::record_verdict
-#   (lines 885-890) hard-strips ALL keys except {severity, note} when
-#   normalizing the findings list. So the canonical write path (a real judge
-#   adapter calling record_verdict) can NEVER deliver winner_unit_id to the
-#   emitter — the field is dropped on the way to disk. The unit test
-#   (emitters.test.sh:67) sidesteps this by constructing the ledger dict
-#   directly; this integration test does the same to assert the CURRENT
-#   contract on emitters.py, AND adds a dedicated scenario that asserts the
-#   record_verdict-strip behavior so the disagreement is loudly documented.
-#   See commit message + report for routing.
+# CONTRACT (round-2 P0 fix — fix-pass I, post-reconcile):
+#   The judge declares its winner via judge.dispatch_context.winner_unit_id,
+#   written by the new ledger.set_winner_unit_id mutator. The emitter reads
+#   from there. dispatch_context is the right home: same channel as
+#   enumerated_units, preserved by transition() and the verdict-write path
+#   with no normalize step. record_verdict's findings normalize ({severity,
+#   note} only) is left intact — narrow findings is the schema, dispatch_context
+#   carries the routing data. The round-1 design (winner on findings) was
+#   unreachable because record_verdict stripped the key before disk.
 #
 # STRUCTURE: init via auto.run with --recipe a2; the recipe declares 3 plan
-# units + a judge work unit. Prime each plan unit with stashed enumerated_units
-# (different ids per plan), set gaps_open=0 + plan_step=review_plan so plan-met
-# fires, inject judge findings ON DISK (sidestepping record_verdict — see
-# disagreement above), then dispatch_tick(auto=True). Auto-flip fires
+# units + a judge work unit. Prime each plan unit with stashed enumerated_units,
+# set gaps_open=0 + plan_step=review_plan so plan-met fires, dispatch the judge
+# and write its verdict via the PRODUCTION path (record_verdict + set_winner_unit_id —
+# no on-disk sidestep), then dispatch_tick(auto=True). Auto-flip fires
 # judge_winner_to_work_units which reads the winner's enumerated set + emits.
 #
 # Scenarios:
-#   1. green: winner_unit_id="plan-2" → emitter emits plan-2's enumerated units
-#   2. deliberate-fail (no winner): judge findings carry no winner_unit_id →
-#      emitter raises ValueError; tick catches it, ledger stays at loop_phase=plan
-#      with NO new work units (the wire is alive; the failure is the contract).
-#   3. malformed judge: winner_unit_id names a non-existent unit → emitter
-#      raises with the right message; same catch-and-stay-at-plan behavior.
-#   4. CONTRACT DISAGREEMENT (documents fix-pass E work): record_verdict strips
-#      winner_unit_id from the findings dict, so the canonical write path can
-#      never feed the emitter. Asserts the strip behavior on a fresh ledger.
+#   1. green: judge calls set_winner_unit_id("plan-2") → emitter emits plan-2's
+#      enumerated units (production path proof).
+#   2. deliberate-fail (no winner): judge records a verdict WITHOUT calling
+#      set_winner_unit_id → dispatch_context.winner_unit_id is absent →
+#      emitter raises RecipeError; tick catches it, ledger stays at loop_phase=plan
+#      with NO new work units.
+#   3. malformed message: a judge dict with no winner_unit_id on dispatch_context
+#      raises a clear message naming dispatch_context AND set_winner_unit_id so
+#      the operator knows exactly what to call.
+#   4. production-path proof: full record_verdict + set_winner_unit_id flow on
+#      a freshly-init ledger; the emitter sees the winner's enumerated set.
+#   5. write-boundary guard: set_winner_unit_id rejects an unknown winner id
+#      BEFORE writing, with the bad id in the message.
 
 set -uo pipefail
 
@@ -65,8 +66,10 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 #   $1 = scenario: "green" | "no-winner" | "bad-winner"
 # Returns CSV:
 #   loop_phase | work_unit_ids_in_phase_work (sorted, comma-joined)
-# The judge unit's id is `judge`; its findings are written ON DISK
-# (sidestepping record_verdict's strip — see contract disagreement at top).
+# Fix-pass I (round-2 P0): the judge writes its verdict via the PRODUCTION
+# write path — record_verdict for findings, set_winner_unit_id for the
+# winner pick (which lives on dispatch_context, immune to record_verdict's
+# findings normalize). No on-disk sidestep.
 drive_a2() {
   scenario="${1:-green}"
   "$PY" - "$AUTO_ROOT" "$scenario" <<'PYEOF'
@@ -114,28 +117,30 @@ ledger.set_enumerated_units(repo, run_id, "plan-3",
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
-# Step 3: inject the judge's findings directly on disk. This sidesteps
-# record_verdict, which strips winner_unit_id (the CONTRACT DISAGREEMENT
-# scenario at the bottom of this file asserts the strip independently).
-path = os.path.join(repo, ".claude", "auto", f"{run_id}.json")
-with open(path) as f:
-    led_raw = json.load(f)
-for u in led_raw["units"]:
-    if u["id"] == "judge":
-        if scenario == "green":
-            u["findings"] = [{"severity": "minor", "note": "winner=plan-2",
-                              "winner_unit_id": "plan-2"}]
-        elif scenario == "no-winner":
-            # deliberate-fail: the emitter raises if no winner is named.
-            u["findings"] = [{"severity": "minor", "note": "undecided"}]
-        elif scenario == "bad-winner":
-            # malformed: winner names a non-existent unit.
-            u["findings"] = [{"severity": "minor", "note": "winner=ghost",
-                              "winner_unit_id": "plan-999"}]
-        u["state"] = "verdict-returned"
-        u["verdict_at"] = "2026-01-01T00:00:00Z"
-with open(path, "w") as f:
-    json.dump(led_raw, f)
+# Step 3: drive the judge through the PRODUCTION write path — fix-pass I
+# (round-2 P0). v0.2.0 round-1 contract had judge.findings[].winner_unit_id;
+# record_verdict normalize stripped it, so production A2 was unrunnable.
+# Round-2 fix moves the winner onto judge.dispatch_context.winner_unit_id
+# via ledger.set_winner_unit_id, called alongside record_verdict. This test
+# now exercises that path end-to-end (no on-disk sidestep).
+ledger.transition(repo, run_id, "judge", "dispatched")
+if scenario == "green":
+    ledger.record_verdict(repo, run_id, "judge",
+        [{"severity": "minor", "note": "winner=plan-2"}])
+    ledger.set_winner_unit_id(repo, run_id, "judge", "plan-2")
+elif scenario == "no-winner":
+    # deliberate-fail: judge verdicted WITHOUT calling set_winner_unit_id.
+    # dispatch_context.winner_unit_id is absent → emitter raises.
+    ledger.record_verdict(repo, run_id, "judge",
+        [{"severity": "minor", "note": "undecided"}])
+elif scenario == "bad-winner":
+    # Defense-in-depth: set_winner_unit_id rejects an unknown id BEFORE
+    # the verdict is written. We assert that rejection in a dedicated
+    # message-check scenario below; here we still want the loop_phase=plan
+    # end-state assertion, so we record the verdict and skip the set —
+    # behaviorally equivalent to no-winner from the emitter's viewpoint.
+    ledger.record_verdict(repo, run_id, "judge",
+        [{"severity": "minor", "note": "winner=ghost (write rejected)"}])
 
 # Step 4: tick. auto=True so _maybe_seam takes the auto-flip branch and routes
 # advance_to_phase → transition_and_emit → judge_winner_to_work_units.
@@ -146,7 +151,7 @@ with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
         tick.dispatch_tick(repo, run_id, auto=True)
 
-led = json.load(open(path))
+led = ledger.read_ledger(repo, run_id)
 work_units = sorted(u["id"] for u in led["units"] if u.get("phase") == "work")
 # Filter out the pre-existing judge unit so the test asserts on the EMITTED set.
 emitted = sorted(uid for uid in work_units if uid != "judge")
@@ -189,81 +194,105 @@ case "$res_bad" in
   *) fail "expected 'plan|' (raise → no emission, phase unchanged), got '$res_bad'" ;;
 esac
 
-# Assert the raise message for the malformed case carries the bad winner id —
-# this protects the operator-facing diagnostic (a recipe bug pointing at the
-# wrong unit id should show that unit id in the error).
-it "fix-pass C T2 MALFORMED MESSAGE: emitter raise mentions the missing winner unit id"
+# Assert the raise message for the malformed case carries actionable diagnostic
+# language. Fix-pass I changed the emitter to read from dispatch_context, so
+# the "no winner_unit_id" raise now names dispatch_context + set_winner_unit_id
+# so the operator knows EXACTLY where to look and what to call.
+it "fix-pass I T2 MALFORMED MESSAGE: emitter raise names dispatch_context + set_winner_unit_id"
 msg="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, importlib.util
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-def load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return m
 # Use _bootstrap.load_lib_module so emitters and recipes share the SAME
 # sys.modules cache → emitters.judge_winner_to_work_units raises the SAME
-# RecipeError class that this test catches (fix-pass E item 7 introduced the
-# sys.modules cache for exactly this case; spec_from_file_location directly
-# would produce two distinct RecipeError classes and the except wouldn't match).
+# RecipeError class that this test catches.
 from _bootstrap import load_lib_module
 emitters = load_lib_module("emitters")
 recipes = load_lib_module("recipes")
+# Judge without dispatch_context.winner_unit_id → the emitter raises with a
+# message pointing the operator at the right fix.
 led = {"units": [
     {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": []}},
-    {"id": "judge", "phase": "work",
-     "findings": [{"severity": "minor", "note": "x", "winner_unit_id": "plan-999"}]},
+    {"id": "judge", "phase": "work", "dispatch_context": {}},
 ]}
-# Fix-pass E (item 7) widened the emitter raise from ValueError to RecipeError
-# so the class hierarchy reflects "this is a recipe-shape issue".
 try:
     emitters.judge_winner_to_work_units(led, "work"); print("NO-RAISE")
 except recipes.RecipeError as e:
-    print("plan-999" in str(e))
+    s = str(e)
+    print("dispatch_context.winner_unit_id" in s and "set_winner_unit_id" in s)
 PYEOF
 )"
 assert_eq "True" "$msg"
 
-# ─── Scenario 4: CONTRACT DISAGREEMENT (documents fix-pass E work) ──────────
-# record_verdict strips ALL keys except {severity, note} when normalizing
-# findings (ledger.py:885-890). emitters.py::judge_winner_to_work_units reads
-# winner_unit_id from those findings. The canonical write path therefore CANNOT
-# feed the emitter — winner_unit_id is dropped on the way to disk. This is the
-# integration-level proof of the disagreement (the unit + the contract see
-# different shapes); fix-pass E should reconcile, likely by moving winner_unit_id
-# to dispatch_context (which IS persisted intact by transition()) or by widening
-# record_verdict's normalize to preserve additional keys.
-it "fix-pass C T2 CONTRACT DISAGREEMENT: record_verdict strips winner_unit_id (route to fix-pass E)"
-strip_result="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+# ─── Scenario 4: production-path proof (fix-pass I — the strip is closed) ───
+# Before fix-pass I, the canonical write path (record_verdict) stripped
+# winner_unit_id from findings → production A2 was unrunnable. Fix-pass I
+# moved the field onto dispatch_context.winner_unit_id, written by a new
+# mutator set_winner_unit_id. This test proves the full production path now
+# works: dispatch judge, record_verdict (still strips findings — that's
+# correct/intended), set_winner_unit_id, then the emitter reads the winner
+# from dispatch_context and emits the winning plan's units.
+it "fix-pass I T2 PRODUCTION PATH: record_verdict + set_winner_unit_id → emitter wires the winner"
+prod_result="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, importlib.util, tempfile, contextlib, io
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-def load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return m
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+from _bootstrap import load_lib_module
+ledger = load_lib_module("ledger")
+emitters = load_lib_module("emitters")
 
-repo = tempfile.mkdtemp(); run = "strip-probe"
-ledger.init_ledger(repo, run, adapter="ce",
-    units=[{"id": "judge", "phase": "work", "state": "pending"}])
-# Realistic write path: dispatch then record_verdict with winner_unit_id set.
+repo = tempfile.mkdtemp(); run = "prod-path"
+ledger.init_ledger(repo, run, adapter="ce", units=[
+    {"id": "plan-1", "phase": "plan"},
+    {"id": "plan-2", "phase": "plan"},
+    {"id": "judge", "phase": "work", "state": "pending"},
+])
+# plan-2 is the winner; stash its enumerated_units (would normally come from
+# the plan adapter's enumerate_plan_units output).
+ledger.set_enumerated_units(repo, run, "plan-2",
+    [{"id": "wB-1", "invokes": {"adapter_op": "do_unit"}},
+     {"id": "wB-2", "invokes": {"adapter_op": "do_unit"}}])
+
+# THE PRODUCTION WRITE PATH (no on-disk sidestep):
 ledger.transition(repo, run, "judge", "dispatched")
 ledger.record_verdict(repo, run, "judge",
-    [{"severity": "minor", "note": "winner=plan-2",
-      "winner_unit_id": "plan-2"}])
+    [{"severity": "minor", "note": "winner=plan-2"}])
+ledger.set_winner_unit_id(repo, run, "judge", "plan-2")
+
+# Now read the ledger fresh and run the emitter — proving the winner
+# survives the canonical write path AND the emitter consumes it.
 led = ledger.read_ledger(repo, run)
-finding = led["units"][0]["findings"][0]
-# Assert the strip: the keys are exactly {severity, note} — winner_unit_id is gone.
-keys = sorted(finding.keys())
-print("STRIPPED" if keys == ["note", "severity"] and "winner_unit_id" not in finding else "PRESERVED")
+emitted = emitters.judge_winner_to_work_units(led, "work")
+print(",".join(sorted(u["id"] for u in emitted)))
 PYEOF
 )"
-# We ASSERT "STRIPPED" — proving the contract disagreement is on disk today.
-# When fix-pass E lands a fix this flips to "PRESERVED" and the test breaks
-# deliberately — that's the signal to update the test (or remove it) along
-# with the fix. The test name + commit message route the work.
-assert_eq "STRIPPED" "$strip_result"
+# The emitter sees plan-2's enumerated set on disk (wB-1, wB-2). If
+# winner_unit_id were stripped on the way to disk, this would emit [] and the
+# assertion would break — proving the production path is now closed.
+assert_eq "wB-1,wB-2" "$prod_result"
+
+# Defense-in-depth check: set_winner_unit_id rejects an unknown winner BEFORE
+# writing, with a clear message naming the bad id. This catches the malformed
+# case at the WRITE boundary rather than waiting for the emitter to raise.
+it "fix-pass I T2 WRITE-BOUNDARY GUARD: set_winner_unit_id rejects unknown winner with the bad id in the message"
+guard_msg="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+ledger = load_lib_module("ledger")
+repo = tempfile.mkdtemp(); run = "winner-guard"
+ledger.init_ledger(repo, run, adapter="ce", units=[
+    {"id": "judge", "phase": "work", "state": "pending"},
+])
+try:
+    ledger.set_winner_unit_id(repo, run, "judge", "plan-999")
+    print("NO-RAISE")
+except ledger.LedgerError as e:
+    print("plan-999" in str(e))
+PYEOF
+)"
+assert_eq "True" "$guard_msg"
 
 # ─── summary ────────────────────────────────────────────────────────────────
 echo ""

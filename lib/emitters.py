@@ -82,25 +82,35 @@ def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
 def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
     """A2: emit the WINNING plan's enumerated output as work units.
 
-    The judge unit's findings name the winner via `winner_unit_id`. We read that
-    winning plan unit's stashed `enumerated_units` (Gap A resolution — no per-unit
-    adapter op param needed; the winner's output was persisted at its plan-done).
-    Raises if the judge named no winner (a malformed judge verdict is a hard
-    error, not a silent empty emission).
+    The judge unit names the winner via ``dispatch_context.winner_unit_id``
+    (fix-pass I — v0.2.0 round-2 P0 fix). The previous design read it from
+    ``findings[].winner_unit_id``, but the canonical write path
+    ``ledger.record_verdict`` normalizes findings to ``{severity, note}``
+    only, hard-stripping every other key — so a real judge agent calling
+    record_verdict would have its winner_id silently dropped before the
+    emitter ever ran. Production A2 was unrunnable end-to-end.
+
+    dispatch_context is the right home: it's already where the engine
+    persists ``enumerated_units`` (the parallel routing channel), it survives
+    ``transition()`` and the verdict-write path with no normalize step, and
+    findings stay narrow ``{severity, note}`` (matching the schema doc).
+
+    The winner_id is written by ``ledger.set_winner_unit_id(judge_unit_id,
+    winner)`` — a tiny mutator that the judge agent (or its launcher) calls
+    alongside ``record_verdict``. Raises if no winner is named (malformed
+    judge verdict is a hard error, not silent empty emission).
     """
     judge = next(
         (u for u in ledger.get("units", []) if u.get("id") == "judge"), None
     )
     if judge is None:
         raise RecipeError("judge_winner_to_work_units: no 'judge' unit in ledger")
-    winner_id = None
-    for f in judge.get("findings", []):
-        if isinstance(f, dict) and f.get("winner_unit_id"):
-            winner_id = f["winner_unit_id"]
-            break
+    winner_id = (judge.get("dispatch_context") or {}).get("winner_unit_id")
     if not winner_id:
         raise RecipeError(
-            "judge_winner_to_work_units: judge findings name no winner_unit_id"
+            "judge_winner_to_work_units: judge dispatch_context.winner_unit_id "
+            "is missing — the judge must call ledger.set_winner_unit_id(...) "
+            "alongside record_verdict to declare the winning plan unit"
         )
     winner = next(
         (u for u in ledger.get("units", []) if u.get("id") == winner_id), None

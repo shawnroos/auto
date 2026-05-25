@@ -51,14 +51,21 @@ The five verdicts and the action per verdict:
   resume the chosen one via
   `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"`.
 - **`reviewed-plan\t<path>`** — no in-flight run, one reviewed plan
-  present. The user likely wants to BUILD it. Fire AskUserQuestion:
-  "Start the work-loop on `<path>` (work-only recipe — skip the
-  plan-loop)?" with options "yes, build it" / "no, pick a recipe" /
-  "no, just show me". On "yes" dispatch
-  `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path> --recipe w"`. On
-  "no, pick a recipe" fall through to the picker (section 3) for that
-  plan. (Work-only is the green-plan path — the plan-loop would
-  re-derive finished work; see the prepare/execute note at the bottom.)
+  present. The user likely wants to BUILD it. Fire AskUserQuestion with
+  the v0.2.0 limitation surfaced HONESTLY in the prompt body (round-2
+  P1 finding F2): "Start the work-loop on `<path>` using the v0.2.0
+  work-only stub recipe? IMPORTANT: v0.2.0's `w` recipe ships with a
+  single placeholder unit (`w-stub`) — it does NOT parse `<path>` and
+  enumerate real work units. Init-time enumeration ships in v0.2.1
+  (KTD-15). For v0.2.0, you'll get a stub run; for a real plan
+  build-out today, pick a different recipe via the picker." Options:
+  "yes, run the stub" / "no, pick a recipe" / "no, just show me". On
+  "yes" dispatch `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path>
+  --recipe w"`. On "no, pick a recipe" fall through to the picker
+  (section 3) for that plan. Until v0.2.1's enumeration lands, the
+  picker route is the operationally-useful one; the stub option exists
+  for tests and for users who want to exercise the work-loop infra
+  without a real plan.
 - **`ambiguous-plans\t<n>`** — no run, multiple plans. Pick the plan
   via AskUserQuestion first (enumerate with glob on `docs/plans/*.md`,
   `plans/*.md`, `*-plan.md`), then fall through to the picker (section

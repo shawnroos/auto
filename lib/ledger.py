@@ -1055,6 +1055,44 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
+def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
+    """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_unit_id``
+    (v0.2.0 round-2 P0 fix — fix-pass I).
+
+    A2's ``judge_winner_to_work_units`` emitter needs to know which plan unit won.
+    The original design read it from ``findings[].winner_unit_id``, but
+    ``record_verdict`` normalizes findings to ``{severity, note}`` only —
+    stripping the winner before the emitter ever runs. Production A2 was
+    unrunnable end-to-end. dispatch_context is the right home: same channel as
+    ``enumerated_units``, preserved by ``transition()`` and the verdict-write
+    path, and findings stay narrow.
+
+    The judge agent (or its launcher) calls THIS mutator alongside
+    ``record_verdict`` to declare the winner. ``winner_id`` must be a non-empty
+    string AND must reference an existing unit id in the ledger (defensive — a
+    typo'd winner would surface as a hard error here rather than a confusing
+    emitter raise later). Raises if the judge unit doesn't exist or the winner
+    is invalid. Atomic (predicate recompute is a no-op here — the judge's own
+    state is unchanged — but the write stays on the I-1 path).
+    """
+    if not isinstance(winner_id, str) or not winner_id:
+        raise LedgerError(f"winner_id must be a non-empty string, got {winner_id!r}")
+
+    def mutate(ledger):
+        judge = _find_unit(ledger, judge_unit_id)
+        existing_ids = {u.get("id") for u in ledger.get("units", [])}
+        if winner_id not in existing_ids:
+            raise LedgerError(
+                f"winner_id {winner_id!r} does not name an existing unit; "
+                f"known: {sorted(i for i in existing_ids if i)!r}"
+            )
+        dc = judge.setdefault("dispatch_context", {})
+        dc["winner_unit_id"] = winner_id
+        return winner_id
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.

@@ -65,10 +65,15 @@ elif op == "a1-empty":
     print(len(emitters.plan_output_to_work_units(led, "work")))
 
 elif op == "judge-winner":
+    # Fix-pass I (P0): winner_unit_id lives on judge.dispatch_context, NOT on
+    # findings — record_verdict's findings normalize strips every key except
+    # {severity, note}, so the prior findings-based contract was unreachable
+    # from any production write path. dispatch_context is preserved by
+    # transition() and the verdict-write path with no normalize.
     led = {"units": [
         {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": [{"id": "wA", "invokes": {}}]}},
         {"id": "plan-2", "phase": "plan", "dispatch_context": {"enumerated_units": [{"id": "wB", "invokes": {}}]}},
-        {"id": "judge", "phase": "work", "findings": [{"winner_unit_id": "plan-2"}]},
+        {"id": "judge", "phase": "work", "dispatch_context": {"winner_unit_id": "plan-2"}},
     ]}
     out = emitters.judge_winner_to_work_units(led, "work")
     print(",".join(u["id"] for u in out))
@@ -76,7 +81,9 @@ elif op == "judge-winner":
 elif op == "judge-no-winner":
     led = {"units": [
         {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": []}},
-        {"id": "judge", "phase": "work", "findings": [{"note": "undecided"}]},
+        # No winner_unit_id on dispatch_context, AND any leftover findings
+        # are ignored by the new contract (the emitter only reads dispatch_context).
+        {"id": "judge", "phase": "work", "dispatch_context": {}, "findings": [{"note": "undecided"}]},
     ]}
     # P2-7: emitter raises RecipeError (the recipe-shape error class) on a
     # malformed judge verdict — keeps the engine's "recipe-contract violation"
