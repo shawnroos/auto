@@ -37,6 +37,10 @@ from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
+# v0.2.0 fix-pass A.2: the manual seam→work resume routes through tick.py's
+# centralized advance helper so it fires the recipe's emitter the same way the
+# auto-flip does. tick.py uses a hyphenless name so plain import works.
+import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
 
 def _resolve_repo() -> str:
@@ -104,10 +108,14 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to resume.\n")
         return 0
     if phase == "seam":
-        # seam -> work: clear seam_paused, hand the driver back to self.
-        ledger.set_loop(
-            repo_root, run_id, loop_phase="work", seam_paused=False, driver="self"
-        )
+        # seam -> work: route through tick.advance_to_phase so the recipe's
+        # emitter fires the same way it does on the auto-flip path (P0 #1
+        # fix-pass A.2 — without this the manual resume would silently skip
+        # emission and the work-loop would start with empty units). Legacy
+        # ledgers (no recipe) fall through to set_loop inside the helper,
+        # preserving v0.1.x behavior. seam_paused=False is written by both
+        # paths inside the helper.
+        tick.advance_to_phase(repo_root, run_id, led, to_phase="work")
         return _emit_rearm(run_id, "seam -> work; arm a fresh tick chain")
     # Orphaned (or otherwise active): re-arm cleanly off the durable ledger.
     ledger.set_loop(repo_root, run_id, driver="self")

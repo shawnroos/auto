@@ -63,6 +63,11 @@ ledger = load_ledger()
 # AST lint forbids the raw "loop_phase" literal here so a divergent comparison
 # can't sneak back in.
 phase_grammar = load_lib_module("phase-grammar")
+# The emitter registry (U5b/v0.2.0): the seam-handler resolves a recipe's
+# declared emitter name through emitters.resolve() and hands the function to
+# ledger.transition_and_emit. No hyphen in the module name, so a plain import
+# works once _LIB_DIR is on sys.path.
+import emitters  # noqa: E402
 
 # Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -677,6 +682,55 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     }
 
 
+def advance_to_phase(repo_root, run_id, led, *, to_phase):
+    """Advance loop_phase to ``to_phase``, emitting that phase's units if the
+    recipe declares an emitter for arrival there.
+
+    v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
+    the recipe's {to: to_phase} emitter via phase_grammar.emitter_name_for_arrival
+    and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
+    no emitter is declared we still need to fall back to a raw set_loop:
+
+    * Legacy ledger (recipe is None, e.g. a v0.1.x run resumed under v0.2.0) —
+      no recipe means no phase_transitions; use set_loop to preserve byte-
+      identical R13 behavior.
+    * v0.2.0 ledger with no matching transition — the recipe declares no
+      emitter for arrival at to_phase; this is a RECIPE BUG (the validator
+      should have rejected it earlier, but defense in depth: raise here so a
+      misconfigured workspace recipe can't silently no-op).
+
+    `feedback_plan_documents_transition_code_doesnt_wire_it`: this helper IS
+    the wire — every phase advance that crosses a transition boundary goes
+    through here.
+    """
+    emitter_name = phase_grammar.emitter_name_for_arrival(led, to_phase)
+    legacy_ledger = led.get("recipe") is None
+    if emitter_name is None:
+        if not legacy_ledger:
+            raise ledger.LedgerError(
+                f"recipe {led.get('recipe',{}).get('name')!r} declares no emitter "
+                f"for arrival at {to_phase!r}; either add a phase_transitions entry "
+                f"or fix the recipe"
+            )
+        # legacy: no recipe declared, behave like v0.1.x — raw advance.
+        # transition_and_emit's v0.2.0 path writes seam_paused=(to_phase=="seam");
+        # we mirror that here so manual seam→work via auto-resume clears the
+        # pause flag on legacy ledgers too. The auto-flip path (called with
+        # to_phase="work") clears it; future helpers that arrive at "seam"
+        # would set it. Either way, both writes happen in one set_loop.
+        ledger.set_loop(
+            repo_root,
+            run_id,
+            loop_phase=to_phase,
+            seam_paused=(to_phase == "seam"),
+            driver="self",
+            beat=True,
+        )
+        return
+    emitter_fn = emitters.resolve(emitter_name)
+    ledger.transition_and_emit(repo_root, run_id, to_phase, emitter_fn)
+
+
 def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     """If the plan-loop is complete, transition out of plan (gap #5).
 
@@ -689,7 +743,16 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
 
     Manual (not auto): write loop_phase="seam", seam_paused=true,
     loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
-    Auto: flip plan → work directly and keep re-arming.
+    Auto: flip plan → work directly via the recipe's emitter (v0.2.0; P0 #1
+    fix-pass A.2 — the load-bearing rewire). Reads the recipe's
+    phase_transitions for the {to: work} emitter, resolves it, and calls
+    ledger.transition_and_emit atomically (advance + emit + recompute in ONE
+    locked snapshot — the G3/F2 invariant). Legacy ledgers (no recipe) fall
+    back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep
+    working. A v0.2.0 ledger missing the {to: work} declaration is a recipe
+    bug; we raise rather than silently no-op (per
+    feedback_plan_documents_transition_code_doesnt_wire_it — silent fallback
+    on configured recipes IS the build-bug class).
     """
     pred = led.get("exit_predicate_result") or {}
     plan_done = (
@@ -699,7 +762,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     if not pred.get("met") and not plan_done:
         return advance_result  # gaps still open; keep ticking the plan loop.
     if _is_auto(auto):
-        ledger.set_loop(repo_root, run_id, loop_phase="work", driver="self", beat=True)
+        advance_to_phase(repo_root, run_id, led, to_phase="work")
         out = dict(advance_result or {})
         out["seam"] = "auto-flip-to-work"
         return out

@@ -236,6 +236,7 @@ def run(argv) -> int:
             recipe={"name": recipe["name"], "source_tier": source_tier},
             phase_order=phase_order,
             terminal_phase=recipe.get("terminal_phase", "work"),
+            phase_transitions=recipe.get("phase_transitions", []),
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")

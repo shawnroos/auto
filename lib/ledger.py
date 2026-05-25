@@ -308,11 +308,28 @@ def recompute_predicate(ledger: dict) -> dict:
         gaps_open = int(gaps_open)
 
     scale = ledger.get("adapter_scale", "three-tier")
-    all_units_terminal = all(
+    # v0.2.0 fix-pass A.1 (correctness P0 #3 / api-contract AC-2): the work-loop
+    # exit predicate's terminal check is scoped to the units in the CURRENT phase,
+    # not the global unit set. Pre-v0.2.0 (units=[] in the plan phase, the seam
+    # synthesized work units), the global all() was equivalent. v0.2.0 declares
+    # plan units explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
+    # plan units stay `pending` after plan-done is reached (the plan-loop's
+    # advance is recorded in plan_step, not via a unit state transition). A global
+    # all_units_terminal would block work-met forever. Scoping by phase makes each
+    # phase have its own terminality. terminal_phase from the recipe gates which
+    # phase's units count for run-exit (AC-2 — the doc promised this but the code
+    # didn't honor it). Global all_units_terminal is retained for the
+    # exit_predicate_result reporting field (downstream consumers may want it).
+    current_phase = ledger.get("loop_phase") or "plan"
+    terminal_phase = ledger.get("terminal_phase") or "work"
+    all_units_terminal_global = all(
         unit_is_terminal(u, scale) for u in ledger.get("units", [])
     )
+    current_phase_units = [
+        u for u in ledger.get("units", []) if u.get("phase") == current_phase
+    ]
 
-    if ledger.get("loop_phase") == "plan":
+    if current_phase == "plan":
         # Plan-loop exit: a REAL review reported zero gaps AND a review_plan
         # actually ran (§3.1). Bug #5: gaps_open must be NON-NULL — a null/unknown
         # gap count means no review has filled it yet, so plan-met cannot fire. The
@@ -340,15 +357,42 @@ def recompute_predicate(ledger: dict) -> dict:
         # Whether majors gate is decided by the SINGLE helper (the one source of
         # truth) — never a hardcoded scale comparison here.
         no_majors = "major" not in gating_severities(scale) or majors == 0
-        # Bug #4 — vacuous work-phase exit. all_units_terminal = all([]) is
-        # vacuously True, so an auto plan→work flip with ZERO units dispatched
-        # would declare `met` before the orchestrator ever fanned out work. The
-        # work-loop is not met until at least one unit exists; an empty plan phase
-        # is fine (handled by the plan branch above). We do NOT redefine
-        # all_units_terminal globally — the pure all([])==True is correct and read
-        # elsewhere; the empty-units guard lives only in the work-loop met.
-        has_units = bool(ledger.get("units"))
-        met = blockers == 0 and no_majors and all_units_terminal and has_units
+        # Bug #4 — vacuous work-phase exit. all([]) is vacuously True, so a
+        # phase flip with ZERO units dispatched would declare met before the
+        # orchestrator fans out work. The phase-scoped check
+        # (all_terminal_in_eval_phase + has_units_in_phase) addresses both this AND
+        # the v0.2.0 fix-pass A.1 (plan units in declared recipes shouldn't gate
+        # the work-loop's terminal check).
+        # AC-2 fix: `met` requires loop_phase == terminal_phase (the run doesn't
+        # exit until the terminal phase is reached AND its own units are terminal).
+        # Post-terminal: "done" is the exit sentinel set BY a met-triggered tick
+        # (the LAST member of LOOP_PHASES, never a member of any recipe's
+        # phase_order). At "done", phase-scoped units would be empty (no unit
+        # declares phase=done), so we'd vacuously flip met→false on the recompute
+        # that fires when set_loop writes "done". Treat "done" as
+        # terminal-equivalent for predicate purposes: the run already exited at
+        # terminal_phase; "done" preserves that state. Any FUTURE post-terminal
+        # sentinel (aborted/error/…) added to LOOP_PHASES would need the same
+        # treatment here; today "done" is the only post-terminal value.
+        # For v0.2.0's recipes terminal_phase is always "work"; v0.2.1's A3 will
+        # have non-work terminal phases and this gate becomes load-bearing.
+        eval_phase = terminal_phase if current_phase == "done" else current_phase
+        eval_phase_units = (
+            current_phase_units
+            if current_phase != "done"
+            else [u for u in ledger.get("units", []) if u.get("phase") == terminal_phase]
+        )
+        all_terminal_in_eval_phase = all(
+            unit_is_terminal(u, scale) for u in eval_phase_units
+        )
+        has_units_in_phase = bool(eval_phase_units)
+        met = (
+            eval_phase == terminal_phase
+            and blockers == 0
+            and no_majors
+            and all_terminal_in_eval_phase
+            and has_units_in_phase
+        )
 
     return {
         "met": bool(met),
@@ -356,7 +400,7 @@ def recompute_predicate(ledger: dict) -> dict:
         "majors": majors,
         "minors": minors,
         "gaps_open": gaps_open,
-        "all_units_terminal": bool(all_units_terminal),
+        "all_units_terminal": bool(all_units_terminal_global),
     }
 
 
@@ -498,6 +542,7 @@ def init_ledger(
     recipe=None,
     phase_order=None,
     terminal_phase=None,
+    phase_transitions=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -515,6 +560,13 @@ def init_ledger(
                            ["plan", "seam", "work"] (the v0.1.x grammar).
       ``terminal_phase`` — optional str; the phase whose completion ends the run.
                            Defaults to "work". MUST be a member of phase_order.
+      ``phase_transitions`` — optional list of {from, to, emitter} dicts; the
+                           recipe's emitter declarations. Persisted on the ledger
+                           so seam-handlers can resolve the emitter for a given
+                           arrival phase without re-loading the recipe file
+                           (which could drift mid-run). Defaults to [] (no
+                           emitters declared — legacy v0.1.x behavior, the run
+                           emits nothing at phase boundaries).
     """
     if adapter not in ("ce", "native"):
         raise LedgerError(f"invalid adapter: {adapter!r}")
@@ -542,6 +594,15 @@ def init_ledger(
         )
     if plan_step is not None and plan_step not in PLAN_STEPS:
         raise LedgerError(f"invalid plan_step: {plan_step!r}")
+
+    # phase_transitions defaults to []; basic shape check (the recipe validator
+    # does the full check, but we don't trust that the caller already validated).
+    if phase_transitions is None:
+        phase_transitions = []
+    elif not isinstance(phase_transitions, list):
+        raise LedgerError(
+            f"phase_transitions must be a list: {phase_transitions!r}"
+        )
 
     path = ledger_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
@@ -578,6 +639,7 @@ def init_ledger(
             "recipe": recipe,
             "phase_order": phase_order,
             "terminal_phase": terminal_phase,
+            "phase_transitions": phase_transitions,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},
