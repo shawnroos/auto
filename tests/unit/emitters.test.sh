@@ -11,8 +11,12 @@
 #   4. judge_winner_to_work_units: emits the WINNER's enumerated_units
 #   5. judge_winner_to_work_units: no winner in findings → raises (hard error)
 #   6. plan_output_to_paired_builders: 2 biased builders + comparator depends_on both
-#   7. transition_and_emit: atomic — appends units AND advances phase in one write;
-#      predicate recomputed against POST-emission set (the G3/F2 property)
+#   7. transition_and_emit: emits + advances + recomputes atomically within ONE
+#      _with_locked_ledger body; a reader BETWEEN the emit and the advance sees
+#      a consistent (predicate-recomputed-post-emit) snapshot — there is no
+#      torn intermediate state (G3/F2 property). Narrower than "one write": no
+#      external observer can witness new-phase-without-new-units OR
+#      new-units-without-recomputed-predicate.
 #   8. emitters are pure: a registry emitter never calls a ledger mutator (smoke:
 #      transition_and_emit with a real emitter completes without deadlock)
 
@@ -92,8 +96,9 @@ elif op == "a4-pair":
     print("%s|%s|%s" % (",".join(ids), ",".join(biases), ",".join(comp["depends_on"])))
 
 elif op == "atomic-emit":
-    # transition_and_emit appends units AND advances phase in ONE write; the
-    # post-write predicate is computed against the post-emission unit set.
+    # transition_and_emit emits + advances + recomputes atomically within ONE
+    # _with_locked_ledger body; a reader between the emit and the advance sees
+    # a consistent (predicate-recomputed-post-emit) snapshot.
     repo = tempfile.mkdtemp(); run = "ae"
     ledger.init_ledger(repo, run, adapter="ce",
         recipe={"name": "a1", "source_tier": "built-in"},
