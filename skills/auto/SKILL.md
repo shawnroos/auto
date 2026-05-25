@@ -14,12 +14,45 @@ description: >
 
 # auto skill (the loop driver)
 
-You are the **driving agent** for a auto run. The engine is split into
-mechanical pieces (the tick, the ledger) and agent-driven pieces (the
-orchestrator, this skill). Your job is to chain the two loops —
-**plan-loop -> seam -> work-loop** — by arming the tick chain, driving the
-orchestrator's fan-out in the work-loop, and honoring the seam gate. You do the
-*policy*; the tick does the *mechanical advance + re-arm*.
+## 0. The prepare/execute contract — read this FIRST
+
+**Auto is a prepare/execute engine, not a self-driving loop.** This is the
+single most important thing to understand before doing anything else, and
+the most common operator trap (field bugs 2026-05-25, two separate agents).
+
+- **The tick PREPARES**: `lib/tick.py` advances the state machine ONE step,
+  writes the ledger, and prints a JSON INTENT envelope telling YOU what to
+  do next (e.g. `{"action": "rearm", "advance": {"step": "plan"}, ...}`).
+- **YOU EXECUTE**: when the INTENT names a `plan_step` (`plan`, `deepen`,
+  `review_plan`), YOU run the corresponding invocation (`/ce-plan`,
+  `/ce-doc-review`, …). When work-loop units exist, YOU drive
+  `orchestrator.dispatch_batch`. The tick does NOT dispatch agents. The
+  tick does NOT run `/ce-plan`. The tick does NOT write verdicts.
+
+**Re-ticking without running the prepared invocation is a no-op.**
+Ticking 5 times in a bash loop produces `units: []` — exactly what the
+second field agent saw. The ledger advances ONLY when you feed structured
+results back: `ledger.set_gaps_open(N)` after a `review_plan`,
+`ledger.record_verdict(...)` from each background unit-agent, etc.
+
+**Two specific traps:**
+
+1. **The bash-loop trap.** Calling `tick.sh` in a loop just cycles the state
+   machine; it never executes prepared invocations. Units stay 0.
+2. **The deepen↔review livelock.** Plan-met requires
+   `plan_step == "review_plan" AND gaps_open == 0`. If you never run a
+   real review and call `set_gaps_open`, `gaps_open` stays null and the
+   plan-loop cycles `plan → deepen → review_plan → deepen → …` forever.
+   The tick INTENT carries a `gaps_open_guard` field when you are in this
+   exact state — surface it.
+
+**You are the driver.** The engine is split into mechanical pieces (the
+tick, the ledger) and agent-driven pieces (the orchestrator, this skill).
+Your job is to chain the two loops — **plan-loop -> seam -> work-loop** —
+by arming the tick chain, driving the orchestrator's fan-out in the
+work-loop, and honoring the seam gate. You do the *policy* and the
+*execution* of prepared invocations; the tick does the *mechanical
+advance + re-arm*.
 
 **Source of truth is the disk ledger, never this conversation.** Every decision
 you make reads the ledger at `<repo>/.claude/auto/<run>.json` (via

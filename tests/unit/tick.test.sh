@@ -706,6 +706,90 @@ PYEOF
 # advanced plan-done, no raise, and the 2 enumerated units are persisted.
 assert_eq "plan-done,None,w1,w2" "$enum_res"
 
+# ─── Fix-pass H: prepare/execute contract is LOUD in rearm intent ────────────
+# Field bug (2026-05-25, second agent): ticked 5 times expecting units to
+# materialize; ledger stayed at units=[] because they never executed the
+# prepared invocation. The rearm intent now carries an operator_guidance
+# field naming the contract phase-by-phase, plus a gaps_open_guard when
+# plan_step==review_plan AND gaps_open is null (Trap 2 from the prepare/
+# execute memory). Three assertions cover both new fields and a deliberate-
+# fail control.
+
+it "fix-pass H: plan-loop rearm carries operator_guidance naming prepare/execute"
+ledger_init "guidance-plan-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+guidance_plan="$("$PY" - "$REPO" "guidance-plan-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+
+# Use the bundled CE adapter so a real plan-loop tick fires.
+intent = t.dispatch_tick(repo, run)
+g = intent.get("operator_guidance", "")
+print("ok" if ("prepare/execute contract" in g
+               and "YOU must run it" in g
+               and "NO-OP" in g) else f"BAD:{g[:120]}")
+PYEOF
+)"
+assert_eq "ok" "$guidance_plan"
+
+it "fix-pass H: gaps_open_guard fires when plan_step==review_plan AND gaps_open is null (Trap 2)"
+ledger_init "gap-guard-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+guard_msg="$("$PY" - "$REPO" "gap-guard-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+L = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(L)
+
+# Force the exact trap state: plan_step=review_plan, gaps_open=null (default).
+L.set_loop(repo, run, plan_step="review_plan")
+intent = t.dispatch_tick(repo, run)
+g = intent.get("gaps_open_guard", "")
+print("ok" if ("gaps_open is NULL" in g and "set_gaps_open" in g) else f"BAD:{g[:120]}")
+PYEOF
+)"
+assert_eq "ok" "$guard_msg"
+
+it "fix-pass H DELIBERATE-FAIL: gaps_open_guard is ABSENT when gaps_open is set (proves the guard discriminates)"
+ledger_init "gap-set-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+guard_absent="$("$PY" - "$REPO" "gap-set-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+L = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(L)
+
+# gaps_open populated to a real value → guard MUST NOT fire (it'd be noise).
+L.set_loop(repo, run, plan_step="review_plan")
+L.set_gaps_open(repo, run, 0)
+intent = t.dispatch_tick(repo, run)
+print("absent" if "gaps_open_guard" not in intent else f"PRESENT:{intent.get('gaps_open_guard')[:80]}")
+PYEOF
+)"
+assert_eq "absent" "$guard_absent"
+
+it "fix-pass H: work-loop rearm carries operator_guidance naming dispatch + yield (fix-pass G)"
+ledger_init "guidance-work-run" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}]' \
+  ce work >/dev/null 2>&1
+guidance_work="$("$PY" - "$REPO" "guidance-work-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+
+intent = t.dispatch_tick(repo, run)
+g = intent.get("operator_guidance", "")
+print("ok" if ("YOU drive the" in g
+               and "YIELD silently" in g
+               and "harness re-invokes" in g) else f"BAD:{g[:120]}")
+PYEOF
+)"
+assert_eq "ok" "$guidance_work"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"

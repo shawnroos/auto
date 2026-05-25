@@ -671,7 +671,15 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
         }
 
     # 6. Re-arm the successor. The driver issues ScheduleWakeup(delay, prompt).
-    return {
+    # v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
+    # reading the INTENT can't miss the prepare/execute contract. The plan-loop
+    # is the most common operator trap (field bug 2026-05-25, second report:
+    # agent ticked 5 times expecting units to materialize; ledger stayed at
+    # units=[] because they never ran the prepared /ce-plan invocation). The
+    # guidance is phase-aware: plan-loop names the invocation + the gaps_open
+    # guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
+    led_now = ledger.read_ledger(repo_root, run_id)
+    intent = {
         "action": "rearm",
         "run": run_id,
         "delay": int(delay),
@@ -679,7 +687,94 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
         "advance": advance_result,
         "stalled": newly_stalled,
         "halted": halted_ids,
+        "operator_guidance": _operator_guidance_for(phase, advance_result, led_now),
     }
+    gap_guard = _gaps_open_guard(phase, led_now)
+    if gap_guard is not None:
+        intent["gaps_open_guard"] = gap_guard
+    return intent
+
+
+def _operator_guidance_for(phase, advance_result, led):
+    """Build the prepare/execute reminder block that rides every rearm intent.
+
+    v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
+    field bug where an agent ticked 5 times expecting units to populate. Root
+    cause was invisible contract: the tick prepares invocations; the model
+    EXECUTES them; if the model doesn't, the ledger doesn't progress. The
+    rearm intent now carries this reminder explicitly. Phase-aware so plan-
+    loop and work-loop get the right framing.
+    """
+    if phase == "plan":
+        step = None
+        if isinstance(advance_result, dict):
+            step = advance_result.get("step")
+        invocation = _PLAN_STEP_INVOCATION.get(step, "(see adapter contract)")
+        return (
+            "prepare/execute contract: I PREPARED a plan-loop invocation; "
+            "YOU must run it. I do NOT dispatch the work — my role is to "
+            "advance the state machine AFTER you feed structured results back "
+            "(set_gaps_open for review_plan, etc.). Re-ticking without running "
+            f"the invocation is a NO-OP — units will stay []. Just-prepared "
+            f"step: {step!r}; expected invocation: {invocation}."
+        )
+    if phase == "work":
+        # In the work-loop, the trap is different: the driver dispatches background
+        # Agents via the orchestrator and then YIELDS for harness re-invocation
+        # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
+        return (
+            "prepare/execute contract: in the work-loop YOU drive the "
+            "orchestrator fan-out (orchestrator.ready_units + dispatch_batch); "
+            "after dispatching, YIELD silently — the harness re-invokes you "
+            "when a verdict lands (fix-pass G). Re-ticking without running "
+            "dispatch is a no-op."
+        )
+    return (
+        "prepare/execute contract: I prepare; YOU execute. Re-ticking without "
+        "running the prepared invocation does not advance the ledger."
+    )
+
+
+def _gaps_open_guard(phase, led):
+    """Warn the operator when they are in the deepen↔review livelock state.
+
+    This is Trap 2 from feedback_auto_prepare_execute_operator_traps: the
+    plan-loop cycles `plan → deepen → review_plan → deepen → review_plan → …`
+    forever unless the operator runs a real review and feeds back
+    ``set_gaps_open(N)``. Without that, gaps_open stays null, plan-met never
+    fires, and units never materialize.
+
+    The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
+    ``gaps_open is None``. We do NOT key only on review_plan because the tick
+    PERSISTS plan_step AFTER the step runs (anti-livelock §3.1 fix), so by the
+    time this guard reads the ledger the just-completed review_plan has been
+    succeeded by a deepen → plan_step="deepen", gaps_open still null. Both
+    states are diagnostically equivalent: the operator hasn't fed back gaps yet.
+    """
+    if phase != "plan":
+        return None
+    plan_step = led.get("plan_step") or ""
+    if plan_step not in ("deepen", "review_plan"):
+        return None
+    pred = led.get("exit_predicate_result") or {}
+    if pred.get("gaps_open") is not None:
+        return None
+    return (
+        "gaps_open is NULL — plan-met cannot fire until a real review_plan "
+        "step has run and you call ledger.set_gaps_open(<N>) with the gap "
+        "count from /ce-doc-review's output. Without this the plan-loop will "
+        "deepen↔review_plan forever and units will never materialize. "
+        "Feeding back gaps_open=0 closes the loop and starts the work-loop."
+    )
+
+
+# Map a plan_step name to the invocation an operator should run. Authoritative
+# source for the operator-guidance string; if a new plan-step ships, add it here.
+_PLAN_STEP_INVOCATION = {
+    "plan": "/ce-plan <issue>",
+    "deepen": "/ce-plan deepen",
+    "review_plan": "/ce-doc-review",
+}
 
 
 def advance_to_phase(repo_root, run_id, led, *, to_phase):
