@@ -236,6 +236,25 @@ def validate(recipe: dict) -> None:
                 f"one of {sorted(V1_EMITTER_NAMES)}"
             )
 
+    # Work-only init-time gap (P1 #6, fix-pass D). A recipe with
+    # phase_order: ["work"] and units: [] is UNRUNNABLE in v0.2.0 — at
+    # init_ledger time the engine creates a ledger with zero units, the
+    # work-loop predicate's has_units_in_phase guard is vacuous so met never
+    # fires, and the engine re-arms forever while the operator sees nothing.
+    # The intended runtime path (init-time enumeration via the adapter's
+    # enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
+    # (KTD-15). The recipe format also has no field to declare init-time
+    # enumeration, so an empty work-only units list IS the unrunnable case.
+    # Reject mechanically here rather than ship a recipe whose only failure
+    # mode is silent re-arming.
+    if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["units"]:
+        _bad(
+            "v0.2.0 work-only recipes require pre-declared units; init-time "
+            "enumeration ships in v0.2.1 (KTD-15). A recipe with "
+            "phase_order: ['work'] and units: [] would create a ledger with "
+            "zero units and the engine would re-arm forever without dispatching."
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # U3: three-tier registry — workspace → global → built-in, first-wins.

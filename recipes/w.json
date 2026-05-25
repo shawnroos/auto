@@ -1,9 +1,16 @@
 {
   "name": "w",
   "version": "1",
-  "description": "Work-only — I already have a reviewed plan; skip the plan-loop and run its units directly. Units come from enumerate_plan_units at init.",
+  "description": "Work-only — I already have a reviewed plan; skip the plan-loop and run its units directly. v0.2.0 stub — replace with real work units; init-time enumeration from a plan ships in v0.2.1 (KTD-15).",
   "default_adapter": "ce",
   "phase_order": ["work"],
   "terminal_phase": "work",
-  "units": []
+  "units": [
+    {
+      "id": "w-stub",
+      "phase": "work",
+      "depends_on": [],
+      "invokes": {"adapter_op": "do_unit"}
+    }
+  ]
 }

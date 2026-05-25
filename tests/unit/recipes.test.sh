@@ -98,8 +98,22 @@ assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[],"py
 it "non-default phase_order (A3 grammar) rejected in V1"
 assert_eq "rejected" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","units":[]}')"
 
-it "work-only phase_order [work] accepted (KTD-15)"
-assert_eq "valid" "$(rec validate-json '{"name":"w","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
+it "work-only phase_order [work] accepted when units are pre-declared (KTD-15)"
+assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[{"id":"u1","phase":"work","invokes":{}}]}')"
+
+# Fix-pass D (P1 #6): a work-only recipe with NO pre-declared units is
+# unrunnable in v0.2.0 — init-time enumeration ships in v0.2.1 (KTD-15).
+# validate() must hard-reject this shape so the engine never creates a
+# zero-unit ledger that re-arms forever without dispatching.
+it "fix-pass D: work-only phase_order [work] with empty units REJECTED (v0.2.1 reservation)"
+assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
+
+# Deliberate-fail proof: the new rule must NOT fire on the default phase_order
+# with empty units (still a vacuous run, but a different — and lint-warned —
+# shape, not the work-only init-time gap). Surfaces a false-positive if the
+# check ever broadens too far.
+it "fix-pass D: default phase_order with empty units NOT rejected by the work-only rule"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[]}')"
 
 it "unregistered emitter name rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"plan","phase":"plan","invokes":{}}],"phase_transitions":[{"from":"plan","to":"work","emitter":"nope"}]}')"

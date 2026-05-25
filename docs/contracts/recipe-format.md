@@ -33,7 +33,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 |-------|-----|------|---------|
 | `name` | yes | string | recipe id, non-empty. Matches the filename stem. |
 | `version` | yes | string | format version (currently `"1"`). |
-| `units` | yes | array | the declared units (§3). May be empty (work-only — units come from `enumerate_plan_units` at init). |
+| `units` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
 | `default_adapter` | no | `"ce"`\|`"native"` | the adapter to use when `--adapter` is not passed. |
 | `phase_order` | no | array | the run's phase sequence. **V1 accepts ONLY `["plan","seam","work"]` (default) or `["work"]` (work-only).** Any other non-default value is REJECTED until v0.2.1 (A3's multi-phase grammar). |
@@ -83,17 +83,23 @@ Each entry declares which **emitter** fires at a phase boundary:
   (`depends_on` all three); `judge_winner_to_work_units`.
 - **a4** — Adversarial Pair + Comparator. One plan unit;
   `plan_output_to_paired_builders`.
-- **w** — Work-only. `phase_order: ["work"]`, no units, no emitter; units come
-  from `enumerate_plan_units` at init. For an already-reviewed plan (skip the
-  plan-loop).
+- **w** — Work-only. `phase_order: ["work"]`, no emitter; units must be
+  pre-declared in v0.2.0 (the shipped `recipes/w.json` carries a single stub
+  unit). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
+  adds init-time enumeration so the adapter's `enumerate_plan_units` op can
+  load work units from an operator-supplied plan at `init_ledger` time; until
+  then, a work-only recipe with `units: []` is REJECTED by `validate()` (it
+  would create a zero-unit ledger that re-arms forever).
 
 ## 6. V1 acceptance boundary (deferred to v0.2.1)
 
 The validator REJECTS, in V1: non-default `phase_order` other than work-only
 (A3's `["work_sketch","review","plan","work_refine"]`); unregistered emitter
-names; a loaded `python_hook`. These ship in v0.2.1 with A3 and the recipe-
-declared-emitter feature. The rejection is mechanical (a tested code path), so no
-untested topology can ship.
+names; a loaded `python_hook`; AND a work-only recipe (`phase_order: ["work"]`)
+with an empty `units` list (the init-time enumeration path ships in v0.2.1 —
+KTD-15). These ship in v0.2.1 with A3, the recipe-declared-emitter feature, and
+W's init-time enumeration. The rejection is mechanical (a tested code path), so
+no untested topology can ship.
 
 ## 7. Cross-references
 
