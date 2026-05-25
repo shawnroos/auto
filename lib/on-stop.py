@@ -163,10 +163,27 @@ def _reason_for(blocking) -> str:
             parts.append("units not yet terminal")
         detail = " / ".join(parts) if parts else "loop not complete"
         chunks.append(f"{run_id} ({detail})")
+    # The block holds the session open; the reason message routes the driver's
+    # next move. v0.2.0 (fix-pass G): make the harness re-invocation model
+    # explicit so the driver does NOT read "continue the loop" as "act now."
+    # The two viable paths from a blocked stop:
+    #   1. Background `Agent` work is in flight → YIELD; the harness re-invokes
+    #      on completion (the natural signal — do not ScheduleWakeup-poll).
+    #   2. The loop is genuinely stalled outside its natural channel (rate-
+    #      limited, waiting on external event) → ScheduleWakeup with a LONG
+    #      delay calibrated to the wake event.
+    # The driver knows which case it is in (it knows what it just dispatched);
+    # the hook doesn't and shouldn't guess. Naming both cases explicitly lets
+    # the driver route correctly.
     return (
         "auto: loop exit condition not met — "
         + "; ".join(chunks)
-        + ". Continue the loop (or /auto-resume abort to stop early)."
+        + ". If you have background work in flight (Agent.run_in_background), "
+        + "YIELD silently — the harness re-invokes you when a verdict lands. "
+        + "Do NOT ScheduleWakeup-poll waiting for it. ScheduleWakeup is only "
+        + "for genuine waits outside the agentic loop (rate-limit reset, "
+        + "external deploy ETA) — long delays (1200s+), calibrated to the wake "
+        + "event. `/auto-resume abort <run>` to stop early."
     )
 
 
@@ -193,8 +210,9 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         "decision": "block",
         "reason": _reason_for(blocking),
         "systemMessage": (
-            "auto held the stop: "
-            f"{len(blocking)} run(s) have unmet loop exit conditions."
+            f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
+            "conditions. If you have background work in flight, the harness "
+            "will re-invoke you when a verdict lands — do not poll."
         ),
     }
 

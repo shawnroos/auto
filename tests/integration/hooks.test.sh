@@ -193,6 +193,27 @@ assert_eq "block" "$(jget "$out" decision)"
 it "on-stop: block reason names the offending run and the blocker count"
 assert_contains "$out" "unmet (1 blocker"
 
+# v0.2.0 fix-pass G: the block reason must name BOTH cases the driver can be in
+# (harness-re-invocation OR long-tail ScheduleWakeup) so the driver doesn't read
+# "continue the loop" as "act now" and abort a live run. The field bug report
+# (2026-05-25) was: agent saw the old message, presented 4 options including
+# "abort," and was about to destroy in-flight work.
+it "fix-pass G: block reason names harness re-invocation (not 'continue the loop')"
+# A driver with in-flight background work needs to YIELD; the message must say so.
+assert_contains "$out" "harness re-invokes you"
+it "fix-pass G: block reason names long-tail ScheduleWakeup for outside-loop waits"
+# For rate-limit / external-event waits, the message must name the right tool +
+# delay shape ("1200s+") so the driver doesn't reach for ScheduleWakeup(60s).
+assert_contains "$out" "1200s+"
+# Deliberate-fail control: the OLD message ("Continue the loop") MUST NOT appear
+# verbatim — that was the contradiction the field agent read as "act now."
+it "fix-pass G DELIBERATE-FAIL: the old 'Continue the loop' framing is gone"
+if printf "%s" "$out" | grep -qF "Continue the loop"; then
+  fail "old 'Continue the loop' message still present — the v0.2.0 reframe didn't land"
+else
+  pass
+fi
+
 # ─── on-stop: met -> allows stop (no decision) ────────────────────────────────
 it "on-stop: met predicate allows the stop (no decision JSON)"
 REPO="$(mkrepo stop-met)"
