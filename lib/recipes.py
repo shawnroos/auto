@@ -61,6 +61,28 @@ _KNOWN_TOPLEVEL = frozenset(
 _KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes"})
 
 
+# A1 (Classic CE Stack) as a Python constant — the canonical runtime fallback
+# (KTD-1). `recipes/a1.json` is the user-facing override target + conformance
+# fixture, but bare `/auto` resolves A1 from THIS constant when no a1.json
+# resolves at any tier — so a corrupted/missing built-in JSON can't break the
+# default workflow. A U7 test asserts this constant equals the resolved a1.json
+# topology (no drift) and that it passes validate().
+A1_BUILTIN = {
+    "name": "a1",
+    "version": "1",
+    "description": "Classic CE Stack — plan, build, review, fix to P3-only exit. The v0.1.x default workflow.",
+    "default_adapter": "ce",
+    "phase_order": ["plan", "seam", "work"],
+    "terminal_phase": "work",
+    "phase_transitions": [
+        {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+    ],
+    "units": [
+        {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
+    ],
+}
+
+
 class RecipeError(Exception):
     """A recipe failed validation. Message is operator-facing."""
 

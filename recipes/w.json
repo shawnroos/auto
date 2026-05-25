@@ -1,0 +1,9 @@
+{
+  "name": "w",
+  "version": "1",
+  "description": "Work-only — I already have a reviewed plan; skip the plan-loop and run its units directly. Units come from enumerate_plan_units at init.",
+  "default_adapter": "ce",
+  "phase_order": ["work"],
+  "terminal_phase": "work",
+  "units": []
+}
