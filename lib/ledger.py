@@ -1080,10 +1080,23 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
 
     def mutate(ledger):
         judge = _find_unit(ledger, judge_unit_id)
-        existing_ids = {u.get("id") for u in ledger.get("units", [])}
+        # The eligible-winner set is "every unit except the judge itself"
+        # (round-3 P3 promotion — fix-pass J). The previous check accepted
+        # the judge naming itself as winner, which would pass the guard, the
+        # emitter would call _enumerated_units(judge) which returns [] (judges
+        # don't carry enumerated_units), and the run would silently emit no
+        # work units — exactly the failure mode the design was trying to
+        # prevent ("malformed judge verdict is a hard error, not silent empty
+        # emission"). Excluding judge_unit_id from existing_ids tightens the
+        # contract to "winner must be SOME OTHER unit" and surfaces the
+        # malformed case as the LedgerError it deserves.
+        existing_ids = {
+            u.get("id") for u in ledger.get("units", [])
+        } - {judge_unit_id}
         if winner_id not in existing_ids:
             raise LedgerError(
-                f"winner_id {winner_id!r} does not name an existing unit; "
+                f"winner_id {winner_id!r} does not name an eligible unit "
+                f"(must differ from judge {judge_unit_id!r}); "
                 f"known: {sorted(i for i in existing_ids if i)!r}"
             )
         dc = judge.setdefault("dispatch_context", {})

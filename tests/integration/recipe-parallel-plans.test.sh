@@ -294,6 +294,37 @@ PYEOF
 )"
 assert_eq "True" "$guard_msg"
 
+# Round-3 P3 promotion (fix-pass J): set_winner_unit_id must REJECT a judge
+# naming itself as winner. The previous existence check was over the full
+# unit set, so judge could be its own winner — guard passed, but the emitter
+# would silently emit [] (judges don't carry enumerated_units). The fix
+# excludes judge_unit_id from the eligible set; the malformed case now
+# surfaces at the write boundary with a message naming the constraint.
+it "fix-pass J: set_winner_unit_id rejects judge naming itself as winner (P3 promotion)"
+self_msg="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+ledger = load_lib_module("ledger")
+repo = tempfile.mkdtemp(); run = "self-winner"
+# Realistic A2 shape: plan units + judge. The malformed verdict names the
+# judge itself, which used to slip past the guard.
+ledger.init_ledger(repo, run, adapter="ce", units=[
+    {"id": "plan-1", "phase": "plan"},
+    {"id": "judge",  "phase": "work", "state": "pending"},
+])
+try:
+    ledger.set_winner_unit_id(repo, run, "judge", "judge")
+    print("NO-RAISE")
+except ledger.LedgerError as e:
+    s = str(e)
+    # Reject AND name both the bad id and the constraint (judge must differ).
+    print("judge" in s and ("must differ" in s or "eligible" in s))
+PYEOF
+)"
+assert_eq "True" "$self_msg"
+
 # ─── summary ────────────────────────────────────────────────────────────────
 echo ""
 echo "$(basename "$0"): ${PASS} passed, ${FAIL} failed"
