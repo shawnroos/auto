@@ -68,6 +68,12 @@ The five verdicts and the action per verdict:
   work is ambiguous) and STOP. Do not start an empty run. Offer the A1
   plan-loop only if the user explicitly wants the engine to drive
   planning.
+- **anything else** — CLI-002 unknown-verdict guard (fix-pass E intent
+  preserved on top of F's auto-driver extraction). If `auto-detect.sh`
+  returns a verdict that is NOT one of the five above (an unexpected or
+  garbled line), treat it as the SAFEST action: recommend `/ce-plan
+  <issue>` (same surface as `raw`) and do NOT start a run. Surface the
+  unexpected verdict so the operator can file it.
 
 ## 2. NL routing (freeform sentences)
 
