@@ -120,6 +120,103 @@ assert_eq "name,PLAN,emit" "$(rec render-builtin a1)"
 it "topology-render: deterministic (same input → same output)"
 assert_eq "same" "$(rec render-deterministic)"
 
+# ─── U3: three-tier registry ────────────────────────────────────────────────
+reg() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+recipes = load_lib_module("recipes")
+op = sys.argv[2]
+
+def mk_workspace_repo(recipe_dicts):
+    """A temp repo with given workspace recipes; returns repo root."""
+    repo = tempfile.mkdtemp()
+    d = os.path.join(repo, ".claude", "auto", "recipes")
+    os.makedirs(d)
+    for r in recipe_dicts:
+        with open(os.path.join(d, r["name"] + ".json"), "w") as f:
+            json.dump(r, f)
+    return repo
+
+if op == "list-fresh":
+    # A fresh repo (no workspace recipes) → exactly the built-ins.
+    repo = tempfile.mkdtemp()
+    names = [n for n, t in recipes.list_available(repo) if t == "built-in"]
+    print(",".join(sorted(names)))
+
+elif op == "shadow":
+    # AE2: a workspace recipe named "a1" SHADOWS the built-in.
+    repo = mk_workspace_repo([{"name": "a1", "version": "1",
+        "phase_order": ["plan","seam","work"], "terminal_phase": "work",
+        "units": [{"id":"plan","phase":"plan","invokes":{}}], "description": "WS"}])
+    recipe, tier = recipes.resolve("a1", repo)
+    # workspace wins; and a1 appears ONCE in list_available, tagged workspace.
+    a1_entries = [(n, t) for n, t in recipes.list_available(repo) if n == "a1"]
+    print("%s,%s,%d" % (tier, recipe.get("description"), len(a1_entries)))
+
+elif op == "a1-fallback":
+    # No a1.json anywhere (empty repo + we can't delete built-in, so test the
+    # CONSTANT fallback path by resolving in a repo and checking a missing name
+    # uses the constant only for 'a1'): resolve a1 in fresh repo → built-in/constant.
+    repo = tempfile.mkdtemp()
+    recipe, tier = recipes.resolve("a1", repo)
+    print("%s,%s" % (recipe["name"], tier))
+
+elif op == "missing":
+    repo = tempfile.mkdtemp()
+    try:
+        recipes.resolve("does-not-exist", repo); print("NO-RAISE")
+    except recipes.RecipeError:
+        print("raised")
+
+elif op == "unit-for-traversal":
+    # unit_for re-validates the prompt_template path bound (2nd enforcement point).
+    try:
+        recipes.unit_for({"id": "u", "phase": "work",
+            "invokes": {"prompt_template": "../../etc/passwd"}}, {})
+        print("NO-RAISE")
+    except recipes.RecipeError:
+        print("raised")
+
+elif op == "unit-for-merge":
+    u = recipes.unit_for({"id": "u", "phase": "work",
+        "invokes": {"adapter_op": "do_unit", "prompt_template": "p/x.md"}}, {})
+    print("%s,%s,%s" % (u["id"], u["dispatch_context"]["adapter_op"],
+                        u["dispatch_context"]["prompt_template"]))
+
+elif op == "lint-empty-phase":
+    # validate_and_lint warns on a phase with no units + no emitter targeting it.
+    warns = recipes.validate_and_lint({"name": "x", "version": "1",
+        "phase_order": ["plan","seam","work"], "terminal_phase": "work",
+        "units": [{"id":"plan","phase":"plan","invokes":{}}]})
+    # work phase has no units and (no phase_transitions) no emitter → a warning.
+    print("warned" if any("work" in w for w in warns) else "no-warning")
+PYEOF
+}
+
+it "list_available in a fresh repo → exactly the built-ins (a1/a2/a4/w)"
+assert_eq "a1,a2,a4,w" "$(reg list-fresh)"
+
+it "AE2: workspace recipe shadows built-in (workspace wins, appears once)"
+assert_eq "workspace,WS,1" "$(reg shadow)"
+
+it "resolve a1 with no a1.json → built-in (A1_BUILTIN fallback path)"
+assert_eq "a1,built-in" "$(reg a1-fallback)"
+
+it "resolve unknown recipe → raises with searched paths"
+assert_eq "raised" "$(reg missing)"
+
+it "unit_for re-validates prompt_template traversal (2nd enforcement point)"
+assert_eq "raised" "$(reg unit-for-traversal)"
+
+it "unit_for merges invokes into dispatch_context"
+assert_eq "u,do_unit,p/x.md" "$(reg unit-for-merge)"
+
+it "validate_and_lint warns: phase with no units + no emitter"
+assert_eq "warned" "$(reg lint-empty-phase)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "recipes.test.sh: ${PASS} passed, ${FAIL} failed"

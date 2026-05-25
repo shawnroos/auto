@@ -22,6 +22,7 @@ This file is built across three units:
 
 from __future__ import annotations
 
+import json
 import os
 
 # The emitter NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
@@ -202,3 +203,138 @@ def validate(recipe: dict) -> None:
                 f"unknown emitter {pt['emitter']!r} — V1 recipes may only name "
                 f"one of {sorted(V1_EMITTER_NAMES)}"
             )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# U3: three-tier registry — workspace → global → built-in, first-wins.
+
+_BUILTIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "recipes")
+
+
+def _tier_dirs(repo_root: str):
+    """The three recipe directories in resolution order: (tier_name, dir)."""
+    return [
+        ("workspace", os.path.join(repo_root, ".claude", "auto", "recipes")),
+        ("global", os.path.join(os.path.expanduser("~"), ".claude", "auto", "recipes")),
+        ("built-in", _BUILTIN_DIR),
+    ]
+
+
+def resolve(name: str, repo_root: str):
+    """Resolve recipe ``name`` across the three tiers, first-wins.
+
+    Returns ``(recipe_dict, source_tier)``. For the built-in ``a1`` specifically,
+    falls back to the ``A1_BUILTIN`` Python constant if no ``a1.json`` resolves at
+    any tier (KTD-1 — a corrupt/missing built-in JSON can't break bare ``/auto``).
+    Raises ``RecipeError`` (FileNotFound-shaped message) if nothing resolves.
+    """
+    for tier, d in _tier_dirs(repo_root):
+        path = os.path.join(d, f"{name}.json")
+        if os.path.isfile(path):
+            try:
+                with open(path) as f:
+                    return json.load(f), tier
+            except (OSError, ValueError) as e:
+                _bad(f"recipe {name!r} at {path} failed to load: {e}")
+    if name == "a1":
+        return dict(A1_BUILTIN), "built-in"
+    searched = ", ".join(os.path.join(d, f"{name}.json") for _, d in _tier_dirs(repo_root))
+    _bad(f"recipe {name!r} not found; searched: {searched}")
+
+
+def list_available(repo_root: str):
+    """All resolvable recipes as ``[(name, source_tier), ...]``, deduped by name
+    (first-wins), workspace first then global then built-in. For the picker (U8).
+    """
+    seen = {}
+    order = []
+    for tier, d in _tier_dirs(repo_root):
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".json"):
+                continue
+            nm = fn[:-5]
+            if nm in seen:
+                continue  # first tier wins
+            seen[nm] = tier
+            order.append((nm, tier))
+    return order
+
+
+def load_and_validate(name: str, repo_root: str):
+    """``resolve`` + ``validate``. Returns ``(recipe_dict, source_tier)`` or
+    raises ``RecipeError``. The engine's entry point at run start."""
+    recipe, tier = resolve(name, repo_root)
+    validate(recipe)
+    return recipe, tier
+
+
+def unit_for(recipe_unit: dict, recipe: dict) -> dict:
+    """Project a RECIPE unit dict onto a LEDGER unit dict (the shape
+    ``ledger.init_ledger`` expects). Merges recipe-side ``invokes`` metadata
+    (``prompt_template`` etc.) into ``dispatch_context`` — RE-VALIDATING the
+    path bound (the second enforcement point; the first is ``validate``). The
+    ``adapter_op`` stays in ``dispatch_context`` so the adapter reads it via the
+    unit at dispatch.
+    """
+    inv = dict(recipe_unit.get("invokes") or {})
+    if "prompt_template" in inv:
+        _check_prompt_template(inv["prompt_template"], f"unit {recipe_unit.get('id')!r}")
+    return {
+        "id": recipe_unit["id"],
+        "phase": recipe_unit.get("phase", "work"),
+        "depends_on": list(recipe_unit.get("depends_on") or []),
+        "dispatch_context": inv,
+    }
+
+
+def validate_and_lint(recipe: dict):
+    """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
+    ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
+    strings (empty when clean). Call ``validate`` for the contract; this adds:
+      - a phase in phase_order with no unit assigned (and no emitter targeting it)
+      - depends_on creating an unreachable unit (no path from a root)
+      - terminal_phase with no units AND no emitter targeting it
+      - a workspace/global recipe whose description matches a built-in verbatim
+        (description-spoofing defense — security observation 1)
+    """
+    validate(recipe)  # hard errors first
+    warnings = []
+    phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
+    units = recipe.get("units", [])
+    emit_targets = {pt.get("to") for pt in recipe.get("phase_transitions", [])}
+    units_by_phase = {}
+    for u in units:
+        units_by_phase.setdefault(u.get("phase"), []).append(u)
+    for ph in phase_order:
+        if ph == "seam":
+            continue  # seam is a pass-through; never holds units
+        if not units_by_phase.get(ph) and ph not in emit_targets:
+            warnings.append(
+                f"phase {ph!r} has no units and no emitter targets it — it will "
+                f"do nothing"
+            )
+    terminal = recipe.get("terminal_phase", "work")
+    if not units_by_phase.get(terminal) and terminal not in emit_targets:
+        warnings.append(
+            f"terminal_phase {terminal!r} has no units and no emitter — the run "
+            f"would exit immediately with nothing done"
+        )
+    # description-spoofing: a non-built-in recipe copying a built-in's description.
+    desc = (recipe.get("description") or "").strip()
+    if desc:
+        for nm in ("a1", "a2", "a4", "w"):
+            path = os.path.join(_BUILTIN_DIR, f"{nm}.json")
+            if os.path.isfile(path):
+                try:
+                    with open(path) as f:
+                        bdesc = (json.load(f).get("description") or "").strip()
+                except (OSError, ValueError):
+                    continue
+                if desc == bdesc and recipe.get("name") != nm:
+                    warnings.append(
+                        f"description matches built-in {nm!r} verbatim — possible "
+                        f"spoofing; consider a distinct description"
+                    )
+    return warnings
