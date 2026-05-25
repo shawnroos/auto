@@ -48,7 +48,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 _DEFAULT_ADAPTER = "ce"
 _VALID_ADAPTERS = ("ce", "native")
@@ -73,16 +73,19 @@ def _resolve_repo() -> str:
 
 
 def _parse_args(argv):
-    """Split the /auto arg string into (plan, auto, adapter, goal).
+    """Split the /auto arg string into (plan, auto, adapter, goal, recipe).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
-    positional keyword. Flags: --adapter <ce|native>, --goal <text>. Returns a
-    dict; raises ValueError on a malformed flag.
+    positional keyword. Flags: --adapter <ce|native>, --goal <text>, --recipe
+    <name>. Returns a dict; raises ValueError on a malformed flag. ``recipe``
+    defaults to ``"a1"`` (the classic stack — v0.1.x-equivalent default, KTD-1)
+    when no --recipe is given, so bare `/auto <plan>` keeps working unchanged.
     """
     plan = None
     auto = False
     adapter = _DEFAULT_ADAPTER
     goal = None
+    recipe = None
 
     i = 0
     while i < len(argv):
@@ -99,6 +102,12 @@ def _parse_args(argv):
             goal = argv[i + 1]
             i += 2
             continue
+        if tok == "--recipe":
+            if i + 1 >= len(argv):
+                raise ValueError("--recipe requires a value (recipe name)")
+            recipe = argv[i + 1]
+            i += 2
+            continue
         if tok == "auto":
             auto = True
             i += 1
@@ -111,7 +120,10 @@ def _parse_args(argv):
         # Extra positionals are ignored (the .md hint is single-plan).
         i += 1
 
-    return {"plan": plan, "auto": auto, "adapter": adapter, "goal": goal}
+    # Default recipe is a1 (classic) — bare /auto <plan> is byte-identical to
+    # v0.1.x because a1 IS the encoding of the v0.1.x topology (KTD-1).
+    return {"plan": plan, "auto": auto, "adapter": adapter, "goal": goal,
+            "recipe": recipe or "a1"}
 
 
 def _make_run_id(ledger, repo_root: str, plan: str) -> str:
@@ -160,6 +172,7 @@ def _emit_arm(run_id: str, *, auto: bool, goal, adapter: str, plan: str) -> int:
 
 def run(argv) -> int:
     ledger = load_ledger()
+    recipes = load_lib_module("recipes")
     repo_root = _resolve_repo()
 
     try:
@@ -188,6 +201,29 @@ def run(argv) -> int:
         sys.stderr.write(f"auto: plan/spec file not found: {plan}\n")
         return 1
 
+    # Resolve the recipe (KTD-1: a1 falls back to the A1_BUILTIN constant if no
+    # a1.json resolves anywhere, so bare /auto can't be broken by a corrupt
+    # built-in). load_and_validate raises RecipeError on an unknown/invalid name.
+    try:
+        recipe, source_tier = recipes.load_and_validate(args["recipe"], repo_root)
+    except recipes.RecipeError as exc:
+        sys.stderr.write(f"auto: {exc}\n")
+        return 1
+    # Surface a non-built-in tier to stderr (KTD-13 — supply-chain visibility: a
+    # workspace recipe shadowing a built-in shouldn't load silently).
+    if source_tier != "built-in":
+        sys.stderr.write(
+            f"[auto] resolving recipe {recipe['name']!r} from {source_tier}\n"
+        )
+
+    # Build the initial ledger topology FROM the recipe (KTD-4). The recipe's
+    # declared units become the initial ledger units; phase_order / terminal_phase
+    # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan unit,
+    # default grammar — R13 regression). For work-only (W) the recipe declares no
+    # units and phase_order ["work"]; init-time enumeration is a v0.2.0 follow-on
+    # (KTD-15) — for now W starts in the work phase with whatever units it carries.
+    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("units", [])]
+    phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
     try:
@@ -195,8 +231,11 @@ def run(argv) -> int:
             repo_root,
             run_id,
             adapter=adapter,
-            units=[],
-            loop_phase="plan",
+            units=init_units,
+            loop_phase=phase_order[0],
+            recipe={"name": recipe["name"], "source_tier": source_tier},
+            phase_order=phase_order,
+            terminal_phase=recipe.get("terminal_phase", "work"),
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")
