@@ -201,15 +201,24 @@ def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-emitters = load("emitters", os.path.join(auto_root, "lib", "emitters.py"))
+# Use _bootstrap.load_lib_module so emitters and recipes share the SAME
+# sys.modules cache → emitters.judge_winner_to_work_units raises the SAME
+# RecipeError class that this test catches (fix-pass E item 7 introduced the
+# sys.modules cache for exactly this case; spec_from_file_location directly
+# would produce two distinct RecipeError classes and the except wouldn't match).
+from _bootstrap import load_lib_module
+emitters = load_lib_module("emitters")
+recipes = load_lib_module("recipes")
 led = {"units": [
     {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": []}},
     {"id": "judge", "phase": "work",
      "findings": [{"severity": "minor", "note": "x", "winner_unit_id": "plan-999"}]},
 ]}
+# Fix-pass E (item 7) widened the emitter raise from ValueError to RecipeError
+# so the class hierarchy reflects "this is a recipe-shape issue".
 try:
     emitters.judge_winner_to_work_units(led, "work"); print("NO-RAISE")
-except ValueError as e:
+except recipes.RecipeError as e:
     print("plan-999" in str(e))
 PYEOF
 )"
