@@ -32,7 +32,11 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+# The ONE phase-decision module (U5): all phase routing reads through it so the
+# AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
+phase_grammar = load_lib_module("phase-grammar")
 
 
 def _resolve_repo() -> str:
@@ -60,10 +64,10 @@ def _resumable_runs(ledger, repo_root: str):
                 led = json.load(fh)
         except Exception:
             continue
-        if not isinstance(led, dict) or led.get("loop_phase") == "done":
+        if not isinstance(led, dict) or phase_grammar.current_phase(led) == "done":
             continue
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
-        seam_paused = led.get("loop_phase") == "seam" and led.get("seam_paused")
+        seam_paused = phase_grammar.current_phase(led) == "seam" and led.get("seam_paused")
         try:
             orphaned = ledger.is_orphaned(led)
         except Exception:
@@ -95,7 +99,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     except ledger.LedgerNotFound as exc:
         sys.stderr.write(f"resume: {exc}\n")
         return 1
-    phase = led.get("loop_phase")
+    phase = phase_grammar.current_phase(led)
     if phase == "done":
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to resume.\n")
         return 0

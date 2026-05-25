@@ -27,14 +27,32 @@ import os
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_ledger():
-    """Load and return the canonical ledger module (lib/ledger.py) by file path.
+def load_lib_module(name: str):
+    """Load and return a sibling lib/ module by its filename stem, by file path.
 
-    No package install required — resolves ledger.py as a sibling of this file.
-    Each call creates a fresh module object; callers bind it once at import time.
+    The ONE load strategy for every lib/ module (the plugin is not pip-installed
+    and lib/ is not guaranteed on sys.path). ``name`` is the filename stem WITHOUT
+    the ``.py`` extension and MAY contain hyphens (e.g. ``"phase-grammar"`` for
+    ``lib/phase-grammar.py``) — hyphens are valid in a file path but not in a
+    Python module identifier, so the registered spec name sanitizes them to
+    underscores (``phase_grammar``). Callers bind the returned module once.
+
+    Added in v0.2.0 (U5) to load the hyphenated ``phase-grammar.py`` (and reusable
+    for ``topology-render.py``). Generalizes the former ``load_ledger`` idiom that
+    was previously the only loader here.
     """
-    path = os.path.join(_LIB_DIR, "ledger.py")
-    spec = importlib.util.spec_from_file_location("ledger", path)
+    path = os.path.join(_LIB_DIR, f"{name}.py")
+    spec_name = name.replace("-", "_")
+    spec = importlib.util.spec_from_file_location(spec_name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_ledger():
+    """Load and return the canonical ledger module (lib/ledger.py).
+
+    Thin wrapper over ``load_lib_module("ledger")`` — kept as a named entry point
+    because eight consumers already call it; the load strategy lives in one place.
+    """
+    return load_lib_module("ledger")

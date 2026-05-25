@@ -32,7 +32,11 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+# The ONE phase-decision module (U5): all phase routing reads through it so the
+# AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
+phase_grammar = load_lib_module("phase-grammar")
 
 
 def _resolve_repo() -> str:
@@ -67,7 +71,7 @@ def _all_runs(repo_root: str):
 
 def _active_runs(repo_root: str):
     """Runs whose loop_phase is not 'done'."""
-    return [(r, led) for (r, led) in _all_runs(repo_root) if led.get("loop_phase") != "done"]
+    return [(r, led) for (r, led) in _all_runs(repo_root) if phase_grammar.current_phase(led) != "done"]
 
 
 def _liveness(ledger, led: dict) -> str:
@@ -96,7 +100,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     units = led.get("units") or []
 
     sys.stdout.write(f"run: {run_id}\n")
-    phase = led.get("loop_phase", "?")
+    phase = phase_grammar.current_phase(led)
     line = f"  loop_phase: {phase}"
     if phase == "plan":
         line += f"  (plan_step={led.get('plan_step')})"
@@ -174,7 +178,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
             )
 
     # Exit-time minors report (minors never gate; surfaced for promotion).
-    if led.get("loop_phase") == "done" and (epr.get("minors") or 0) > 0:
+    if phase_grammar.current_phase(led) == "done" and (epr.get("minors") or 0) > 0:
         sys.stdout.write("  remaining minors (operator may promote):\n")
         for u in units:
             for f in u.get("findings") or []:
@@ -223,7 +227,7 @@ def run(argv) -> int:
     for run_id, led in active:
         sys.stdout.write(
             f"  /auto-status {run_id}    "
-            f"(loop_phase={led.get('loop_phase')}, "
+            f"(loop_phase={phase_grammar.current_phase(led)}, "
             f"met={(led.get('exit_predicate_result') or {}).get('met')})\n"
         )
     return 0

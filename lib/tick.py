@@ -56,9 +56,13 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 ledger = load_ledger()
+# The ONE phase-decision module (U5). All phase routing reads through it; the
+# AST lint forbids the raw "loop_phase" literal here so a divergent comparison
+# can't sneak back in.
+phase_grammar = load_lib_module("phase-grammar")
 
 # Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -494,7 +498,7 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     now_iso = ledger._now_iso()
 
     led = ledger.read_ledger(repo_root, run_id)
-    phase = led.get("loop_phase")
+    phase = phase_grammar.current_phase(led)
 
     # 1. Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
     #    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
@@ -680,7 +684,7 @@ def _build_report(led):
             if f.get("severity") == "minor":
                 minors.append({"unit": u.get("id"), "note": f.get("note", "")})
     return {
-        "loop_phase": led.get("loop_phase"),
+        phase_grammar.LOOP_PHASE_KEY: phase_grammar.current_phase(led),
         "blockers": pred.get("blockers", 0),
         "majors": pred.get("majors", 0),
         "minors": pred.get("minors", 0),

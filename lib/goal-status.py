@@ -35,7 +35,11 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+# The ONE phase-decision module (U5): all phase routing reads through it so the
+# AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
+phase_grammar = load_lib_module("phase-grammar")
 
 
 def _build_reason(predicate: dict, all_terminal: bool) -> str:
@@ -69,7 +73,7 @@ def status(repo_root: str, run_id: str) -> dict:
         # Missing / unreadable ledger => not active => allow stop.
         return {"active": False, "done": False, "reason": "no active run", "iterations": 0}
 
-    phase = led.get("loop_phase")
+    phase = phase_grammar.current_phase(led)
     predicate = led.get("exit_predicate_result") or {}
     # `done` IS the I-1-fresh predicate field — read directly, never re-derived.
     done = bool(predicate.get("met"))
