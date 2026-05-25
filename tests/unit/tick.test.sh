@@ -790,6 +790,78 @@ PYEOF
 )"
 assert_eq "ok" "$guidance_work"
 
+# ─── Task #31: NO_TICK_LOCK hatch — tested + fenced ─────────────────────────
+# Two parts to the close (fix-pass J atop the round-3 P3 promotion):
+#   (a) The double-drive guard works: a second tick raises _TickLockHeld while
+#       the first holds the run's tick lock (green path).
+#   (b) The hatch genuinely disables the guard (CLAUDE_AUTO_TEST_NO_TICK_LOCK=1
+#       + CLAUDE_AUTO_TEST_HARNESS=1 → no raise) — the deliberate-fail control
+#       per feedback_new_tests_need_deliberate_fail_smoke_check.
+#   (c) The hatch is FENCED against accidental production exposure: setting the
+#       hatch WITHOUT the harness sentinel does NOT disable the guard (the
+#       second tick still raises _TickLockHeld). This is the actual close on
+#       task #31's "unfenced" half.
+
+it "task #31 GREEN: double-drive guard fires — second tick raises _TickLockHeld while first holds lock"
+ledger_init "tick-lock-green" '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"x"}]}]' >/dev/null 2>&1
+green_result="$("$PY" - "$REPO" "tick-lock-green" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+# Outer lock acquires; inner attempt MUST raise _TickLockHeld.
+with t._tick_lock(repo, run):
+    try:
+        with t._tick_lock(repo, run):
+            print("NO-RAISE")
+    except t._TickLockHeld:
+        print("blocked")
+PYEOF
+)"
+assert_eq "blocked" "$green_result"
+
+it "task #31 DELIBERATE-FAIL: with the hatch fully enabled (sentinel + var) the inner lock acquires (proves the guard is real and the hatch is reachable)"
+ledger_init "tick-lock-disabled" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
+disabled_result="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 "$PY" - "$REPO" "tick-lock-disabled" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+# Hatch ON + sentinel ON → both acquire successfully (no raise). This proves
+# the test hatch is wired AND the guard would actually catch concurrent ticks
+# in normal operation (otherwise this assertion would pass even without the
+# hatch, telling us nothing).
+with t._tick_lock(repo, run):
+    try:
+        with t._tick_lock(repo, run):
+            print("both-acquired")
+    except t._TickLockHeld:
+        print("BLOCKED-DESPITE-HATCH")
+PYEOF
+)"
+assert_eq "both-acquired" "$disabled_result"
+
+it "task #31 FENCE: hatch alone WITHOUT the harness sentinel does NOT disable the guard (production-safety)"
+ledger_init "tick-lock-fence" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
+# CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 is exported BUT CLAUDE_AUTO_TEST_HARNESS is
+# explicitly UNSET. The fence at lib/_bootstrap.py::test_hatch_enabled (and the
+# local copy in lib/ledger.py) requires BOTH; with only one, the hatch is
+# inert and the guard fires.
+fence_result="$(env -u CLAUDE_AUTO_TEST_HARNESS CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 "$PY" - "$REPO" "tick-lock-fence" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+with t._tick_lock(repo, run):
+    try:
+        with t._tick_lock(repo, run):
+            print("HATCH-LEAKED")  # would fire if the fence were broken
+    except t._TickLockHeld:
+        print("fenced")
+PYEOF
+)"
+assert_eq "fenced" "$fence_result"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"

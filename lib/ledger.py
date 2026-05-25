@@ -88,6 +88,30 @@ ALLOWED_TRANSITIONS = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────
+# Test-hatch fence (task #31).
+#
+# Five test-only hatches live in this module: FORCE_THREETIER_GATING,
+# NO_RECOMPUTE, NO_LOCK, NO_ATTEMPT_CHECK, NO_STALLED_RECOVERY. Each is named
+# CLAUDE_AUTO_TEST_* and documented test-only, but a stray production export
+# would silently disable a guard. The fence requires the test harness to ALSO
+# export CLAUDE_AUTO_TEST_HARNESS=1 (sentinel set by tests/run.sh) — a
+# production user who exports a specific hatch by accident won't have the
+# sentinel too, so the hatch stays inert. Local helper (not imported from
+# _bootstrap) to avoid a circular import: _bootstrap.load_ledger() loads
+# THIS module, so ledger.py importing _bootstrap would be a cycle. Same
+# semantic as _bootstrap.test_hatch_enabled; the duplication is one-line and
+# deliberate — composes with feedback_deterministic_over_probabilistic_v1
+# (mechanism is grep-checkable across both files).
+
+
+def _test_hatch_enabled(hatch_var: str) -> bool:
+    return (
+        os.environ.get("CLAUDE_AUTO_TEST_HARNESS") == "1"
+        and os.environ.get(hatch_var) == "1"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Errors.
 
 
@@ -227,7 +251,7 @@ def gating_severities(scale: str = "three-tier") -> tuple:
     hatch reverts ALL sites at once, so the test proves the CLASS is closed (no
     site bypasses scale), not merely one instance.
     """
-    if os.environ.get("CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING") == "1":
+    if _test_hatch_enabled("CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING"):
         return GATING_SEVERITIES
     return ("blocker",) if scale == "blocker-only" else GATING_SEVERITIES
 
@@ -458,7 +482,7 @@ def _atomic_write(path: str, ledger: dict) -> None:
     Atomic = mkstemp + fchmod(0o600) + os.rename. A crash mid-write leaves the
     prior file intact and a stray tmp (no half-written ledger).
     """
-    if os.environ.get("CLAUDE_AUTO_TEST_NO_RECOMPUTE") != "1":
+    if not _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_RECOMPUTE"):
         ledger["exit_predicate_result"] = recompute_predicate(ledger)
 
     target_dir = os.path.dirname(path) or "."
@@ -495,7 +519,7 @@ def _flock_run(lpath: str, body):
     update without serialization.
     """
     os.makedirs(os.path.dirname(lpath) or ".", mode=0o700, exist_ok=True)
-    no_lock = os.environ.get("CLAUDE_AUTO_TEST_NO_LOCK") == "1"
+    no_lock = _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_LOCK")
 
     # Ensure the lock file exists (0600).
     if not os.path.exists(lpath):
@@ -909,12 +933,8 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
             raise LedgerError(f"invalid finding severity: {sev!r}")
         norm.append({"severity": sev, "note": f.get("note", "")})
 
-    skip_attempt = (
-        os.environ.get("CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK") == "1"
-    )
-    skip_recovery = (
-        os.environ.get("CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY") == "1"
-    )
+    skip_attempt = _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK")
+    skip_recovery = _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY")
 
     def mutate(ledger):
         unit = _find_unit(ledger, unit_id)

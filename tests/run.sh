@@ -34,6 +34,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Test-harness sentinel (task #31). Every CLAUDE_AUTO_TEST_* hatch in lib/ is
+# fenced: it requires BOTH the specific hatch var AND this sentinel. Tests
+# inheriting this env get the hatches enabled; a production user who exports a
+# specific hatch by accident does NOT have the sentinel, so the hatch stays
+# inert. The fence is enforced in lib/_bootstrap.py::test_hatch_enabled AND
+# lib/ledger.py::_test_hatch_enabled (local copy avoids a circular import).
+export CLAUDE_AUTO_TEST_HARNESS=1
+
 # ──────────────────────────────────────────────────────────────────────────
 # Arg parsing.
 

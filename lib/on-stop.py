@@ -71,7 +71,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -100,9 +100,7 @@ def _blocking_runs(repo_root: str, now=None):
     # beat is older than this is treated as a dead chain (it does NOT block stop).
     # The hatch forces the OLD behaviour (no freshness check) so the deliberate-
     # fail test can prove a stale chain WOULD block without the gate.
-    skip_staleness = (
-        os.environ.get("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK") == "1"
-    )
+    skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
     stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
     import datetime
 

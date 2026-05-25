@@ -56,7 +56,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 ledger = load_ledger()
 # The ONE phase-decision module (U5). All phase routing reads through it; the
@@ -108,13 +108,16 @@ class _tick_lock:
     """Context manager: non-blocking exclusive flock for the duration of a tick.
 
     Honors CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 (test-only) to skip acquisition,
-    so a deliberate-fail test can prove the double-drive guard is real.
+    so a deliberate-fail test can prove the double-drive guard is real. The
+    hatch is FENCED: only honored when CLAUDE_AUTO_TEST_HARNESS=1 is ALSO set
+    (sentinel exported by tests/run.sh — task #31). A stray production export
+    of NO_TICK_LOCK alone has no effect.
     """
 
     def __init__(self, repo_root: str, run_id: str):
         self._path = _tick_lock_path(repo_root, run_id)
         self._fh = None
-        self._no_lock = os.environ.get("CLAUDE_AUTO_TEST_NO_TICK_LOCK") == "1"
+        self._no_lock = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_TICK_LOCK")
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self._path) or ".", mode=0o700, exist_ok=True)
@@ -368,13 +371,16 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
 
     The fixed→pending re-enqueue honors the test-only
     ``CLAUDE_AUTO_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
-    it set the work-loop closure test goes RED — livelocks at `fixed`).
+    it set the work-loop closure test goes RED — livelocks at `fixed`). The
+    hatch is FENCED via ``_test_hatch_enabled`` (task #31): only honored
+    when ``CLAUDE_AUTO_TEST_HARNESS=1`` is ALSO set, so a stray production
+    export of NO_REENQUEUE alone has no effect.
     """
     fix_uid = _ready_fix_unit(ledger_dict, halted_ids)
     if fix_uid is not None:
         ledger.transition(repo_root, run_id, fix_uid, "fixed")
         return {"advanced": "fix-applied", "unit": fix_uid}
-    if os.environ.get("CLAUDE_AUTO_TEST_NO_REENQUEUE") != "1":
+    if not test_hatch_enabled("CLAUDE_AUTO_TEST_NO_REENQUEUE"):
         reenq_uid = _ready_reenqueue_unit(ledger_dict, halted_ids)
         if reenq_uid is not None:
             ledger.transition(repo_root, run_id, reenq_uid, "pending")

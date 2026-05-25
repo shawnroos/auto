@@ -100,3 +100,23 @@ def load_ledger():
     because eight consumers already call it; the load strategy lives in one place.
     """
     return load_lib_module("ledger")
+
+
+def test_hatch_enabled(hatch_var: str) -> bool:
+    """Return True iff BOTH the test-harness sentinel AND ``hatch_var`` are set.
+
+    Task #31 (extended to the class per feedback_fix_the_class_not_the_cited_instance):
+    every CLAUDE_AUTO_TEST_* deliberate-fail hatch in the codebase routes through
+    this one helper. A production user who exports a specific hatch by accident
+    will NOT also have ``CLAUDE_AUTO_TEST_HARNESS=1`` exported, so the hatch
+    stays inert. tests/run.sh exports the sentinel once at the top of every test
+    invocation, so the eight existing hatches (NO_TICK_LOCK, NO_REENQUEUE,
+    NO_STALENESS_CHECK, FORCE_THREETIER_GATING, NO_RECOMPUTE, NO_LOCK,
+    NO_ATTEMPT_CHECK, NO_STALLED_RECOVERY) and any future hatches inherit the
+    fence for free. Deterministic, grep-checkable mechanism — composes with
+    feedback_deterministic_over_probabilistic_v1.
+    """
+    return (
+        os.environ.get("CLAUDE_AUTO_TEST_HARNESS") == "1"
+        and os.environ.get(hatch_var) == "1"
+    )
