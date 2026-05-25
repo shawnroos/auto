@@ -28,7 +28,8 @@ The auto engine is **workflow-blind**. It runs two loops — a
 **plan-loop** and a **work-loop** — but it does not know how to plan, deepen,
 review, or do work. It delegates every workflow-bearing action to an **adapter**:
 a thin shim that maps one concrete workflow (e.g. native Claude editing, or
-Compound Engineering's `/ce-*` commands) onto a fixed set of **six operations**.
+Compound Engineering's `/ce-*` commands) onto a fixed set of **seven operations**
+(six in v0.1.x; the seventh, `enumerate_plan_units`, added in the v0.2.0 re-lock).
 
 The engine drives the loops mechanically; the adapter supplies the *content* of
 each step. V1 ships exactly two adapters — `native` and `ce` — chosen as the
@@ -43,7 +44,7 @@ return data; the engine persists it.
 
 ---
 
-## 2. The six operations
+## 2. The operations (six in v0.1.x; seven since the v0.2.0 re-lock)
 
 Each op is a **distinct, single-step call**. There are no compound black-box
 steps: the engine invokes exactly one op per tick (for plan-loop ops) or one op
@@ -58,6 +59,16 @@ observable — every advance is one named op the ledger can record.
 | `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | tick (U4) | **the adapter owns plan-step sequencing** — the engine never picks the next plan step |
 | `do_unit(unit)` | → `dispatch_handle` | orchestrator (U10) | dispatch one work-loop unit for execution |
 | `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
+| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | tick (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe emitters read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition emitter (U5b) shapes it into ledger units. |
+
+> **v0.2.0 contract re-lock (KTD-4).** The op set grew from six to **seven** with
+> `enumerate_plan_units`. This was a deliberate re-lock, not a drift: v0.1.x had no
+> in-code work-unit producer (the seam paused for off-ledger manual creation), so
+> the recipe emitters had no source data (feasibility F4). Both `ce` and `native`
+> adapters implement the new op. `next_plan_step`'s signature is UNCHANGED — N>1
+> parallel plan-loops advance serialized (one per tick), so the adapter still sees
+> one logical advance-stream. A `unit_id` parameter on `next_plan_step` for
+> concurrent advance is the planned v0.3.0 re-lock, not V1.
 
 ### 2.1 Who calls each op (this is load-bearing for contract coherence)
 
