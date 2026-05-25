@@ -48,28 +48,15 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 _DEFAULT_ADAPTER = "ce"
 _VALID_ADAPTERS = ("ce", "native")
 
 
-def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto.
-
-    Parity with resume.py::_resolve_repo. On a fresh run the .claude/auto
-    dir may not exist yet, so when no walk-up hit is found we fall back to cwd
-    (init_ledger creates the dir).
-    """
-    env = os.environ.get("CLAUDE_AUTO_REPO")
-    if env:
-        return env
-    dir_ = os.getcwd()
-    while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
-            return dir_
-        dir_ = os.path.dirname(dir_)
-    return os.getcwd()
+# Repo root resolution is shared with auto-resume.py and auto-status.py; lives
+# in _bootstrap.resolve_repo (P2-8 — was three identical copies).
+_resolve_repo = resolve_repo
 
 
 def _parse_args(argv):
@@ -186,7 +173,8 @@ def run(argv) -> int:
         # Empty args -> usage surface, exit cleanly (no run created).
         sys.stdout.write(
             "auto: usage: /auto <plan-or-spec> [auto] "
-            "[--adapter ce|native] [--goal \"<text>\"]\n"
+            "[--adapter ce|native] [--goal \"<text>\"] "
+            "[--recipe <name>]\n"
         )
         return 0
 

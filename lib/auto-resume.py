@@ -32,7 +32,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -43,17 +43,9 @@ phase_grammar = load_lib_module("phase-grammar")
 import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
 
-def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto."""
-    env = os.environ.get("CLAUDE_AUTO_REPO")
-    if env:
-        return env
-    dir_ = os.getcwd()
-    while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
-            return dir_
-        dir_ = os.path.dirname(dir_)
-    return os.getcwd()
+# Repo root resolution is shared with auto.py and auto-status.py; lives in
+# _bootstrap.resolve_repo (P2-8 — was three identical copies).
+_resolve_repo = resolve_repo
 
 
 def _resumable_runs(ledger, repo_root: str):

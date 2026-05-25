@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import NoReturn
 
 # Recipe-name regex (v0.2.0 fix-pass B / P0 #4 — round-1 security+correctness+
 # adversarial all flagged the same path-traversal fingerprint). The recipe NAME
@@ -102,7 +103,7 @@ class RecipeError(Exception):
     """A recipe failed validation. Message is operator-facing."""
 
 
-def _bad(msg: str):
+def _bad(msg: str) -> NoReturn:
     raise RecipeError(msg)
 
 
@@ -346,7 +347,7 @@ def unit_for(recipe_unit: dict, recipe: dict) -> dict:
     }
 
 
-def validate_and_lint(recipe: dict):
+def validate_and_lint(recipe: dict, *, filename: str | None = None):
     """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
     ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
     strings (empty when clean). Call ``validate`` for the contract; this adds:
@@ -355,9 +356,31 @@ def validate_and_lint(recipe: dict):
       - terminal_phase with no units AND no emitter targeting it
       - a workspace/global recipe whose description matches a built-in verbatim
         (description-spoofing defense — security observation 1)
+      - (P2-15) when ``filename`` is supplied: the recipe's declared ``name``
+        does not match the file stem. The engine resolves recipes by filename,
+        so a name/stem mismatch means a user who runs ``--recipe <stem>`` would
+        load this file while a recipe author who reads the ``name:`` field
+        expects a different identifier — a UX trap, surfaced here as a warning.
+
+    ``filename`` is optional: the path or basename to compare against (file
+    extension stripped if present). When omitted (the engine's load path), the
+    name-stem check is skipped — only the skill needs it, since the skill is
+    the one choosing the write path.
     """
     validate(recipe)  # hard errors first
     warnings = []
+    # P2-15: name-stem mismatch warning (skill-only path; engine load doesn't
+    # supply filename).
+    if filename:
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        declared = recipe.get("name")
+        if stem and declared and stem != declared:
+            warnings.append(
+                f"recipe name {declared!r} does not match filename stem "
+                f"{stem!r} — the engine resolves recipes by filename, so "
+                f"--recipe {stem!r} would load this file but its declared "
+                f"name is {declared!r}; rename one to match the other"
+            )
     phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
     units = recipe.get("units", [])
     emit_targets = {pt.get("to") for pt in recipe.get("phase_transitions", [])}

@@ -52,6 +52,11 @@ Inspect the argument string and route:
      ambiguous) to author + review a plan first, THEN `/auto <plan>`. Do NOT
      start an empty run. Offer the A1 plan-loop only if the user explicitly wants
      the engine to drive planning.
+   - **anything else** — CLI-002 fallthrough guard. If `auto-detect.sh` returns a
+     verdict that is NOT one of the five above (an unexpected/garbled line),
+     treat it as the safest action: recommend `/ce-plan <issue>` (same surface as
+     `raw`) and do NOT start a run. Surface the unexpected verdict so the
+     operator can file it.
 
 2. **Looks like a flag-form invocation** (starts with a path, or contains
    `--adapter` / `--goal` / `--recipe` / the literal token `auto`) — pass the

@@ -45,6 +45,7 @@ import os
 import re
 import sys
 import tempfile
+from typing import Callable
 
 # ──────────────────────────────────────────────────────────────────────────
 # Module constants (importable; consumers MUST read these, not hardcode copies).
@@ -407,10 +408,27 @@ def recompute_predicate(ledger: dict) -> dict:
 def is_orphaned(ledger: dict, now=None) -> bool:
     """I-3 orphan predicate (§5), excluding seam-paused surfacing (U7's concern).
 
-    Resumable iff loop_phase != "done" AND (driver == "manual" OR last_beat_at
+    Resumable iff current phase != "done" AND (driver == "manual" OR last_beat_at
     older than GRACE_SECONDS).
+
+    P2-10: routes the current-phase read through ``phase_grammar.current_phase``
+    for consistency with the rest of the codebase (the AST lint allows the raw
+    literal in ledger.py, but the convention is to read the field through the
+    one phase-decision module). Lazy import to avoid module-load ordering
+    surprises (ledger.py is loaded from many sites, sometimes before sys.path
+    is set up for sibling modules).
     """
-    if ledger.get("loop_phase") == "done":
+    # Lazy import: phase-grammar.py is a sibling lib module; loading it at
+    # module import time would create a load-order dependency, so we defer.
+    import sys as _sys
+    import os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from _bootstrap import load_lib_module as _load
+    phase_grammar = _load("phase-grammar")
+
+    if phase_grammar.current_phase(ledger) == "done":
         return False
     loop = ledger.get("loop") or {}
     if loop.get("driver") == "manual":
@@ -785,7 +803,9 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
-def transition_and_emit(repo_root, run_id, to_phase, emitter):
+def transition_and_emit(
+    repo_root, run_id, to_phase, emitter: Callable[[dict, str], list]
+):
     """Advance ``loop_phase`` to ``to_phase`` AND emit that phase's units, in ONE
     atomic write (v0.2.0 U5b / KTD-6 — the G3/F2 fix).
 

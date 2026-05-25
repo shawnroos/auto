@@ -74,9 +74,12 @@ elif op == "judge-no-winner":
         {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": []}},
         {"id": "judge", "phase": "work", "findings": [{"note": "undecided"}]},
     ]}
+    # P2-7: emitter raises RecipeError (the recipe-shape error class) on a
+    # malformed judge verdict — keeps the engine's "recipe-contract violation"
+    # surface uniform whether validate() or an emitter raises.
     try:
         emitters.judge_winner_to_work_units(led, "work"); print("NO-RAISE")
-    except ValueError:
+    except recipes.RecipeError:
         print("raised")
 
 elif op == "a4-pair":

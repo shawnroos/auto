@@ -27,6 +27,23 @@ test asserts the two sets match so a recipe can't name an emitter that isn't her
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Import recipes via the standard bootstrap so emitter errors share the
+# RecipeError hierarchy: a judge that names no winner is a recipe-shape
+# violation (the recipe declared an A2 topology but the judge did not produce
+# the verdict the topology requires). Using the same exception class as the
+# validator lets callers `except recipes.RecipeError` once and catch the
+# whole "recipe-contract violation" class regardless of which side raised.
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
+recipes = load_lib_module("recipes")
+RecipeError = recipes.RecipeError
+
 
 def _enumerated_units(unit: dict) -> list:
     """The work units a plan unit produced, stashed by the engine at plan-done.
@@ -75,21 +92,21 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
         (u for u in ledger.get("units", []) if u.get("id") == "judge"), None
     )
     if judge is None:
-        raise ValueError("judge_winner_to_work_units: no 'judge' unit in ledger")
+        raise RecipeError("judge_winner_to_work_units: no 'judge' unit in ledger")
     winner_id = None
     for f in judge.get("findings", []):
         if isinstance(f, dict) and f.get("winner_unit_id"):
             winner_id = f["winner_unit_id"]
             break
     if not winner_id:
-        raise ValueError(
+        raise RecipeError(
             "judge_winner_to_work_units: judge findings name no winner_unit_id"
         )
     winner = next(
         (u for u in ledger.get("units", []) if u.get("id") == winner_id), None
     )
     if winner is None:
-        raise ValueError(
+        raise RecipeError(
             f"judge_winner_to_work_units: winner {winner_id!r} not in ledger"
         )
     items = _enumerated_units(winner)

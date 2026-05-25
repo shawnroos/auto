@@ -49,38 +49,58 @@ def _repo_root():
     return os.getcwd()
 
 
-repo = _repo_root()
+# CLI-004: on any unexpected error path, emit the safe `raw` verdict (the most
+# conservative — the prose recommends /ce-plan, does not start a run). An empty
+# stdout would leave the smart-entry prose with no branch to take; `raw` is the
+# fall-closed surface. rel-001: never break hook callers — always exit 0.
+try:
+    repo = _repo_root()
 
-# In-flight runs: ledgers whose exit_predicate_result.met is False.
-in_flight = []
-ledger_dir = os.path.join(repo, ".claude", "auto")
-for path in sorted(glob.glob(os.path.join(ledger_dir, "*.json")), key=os.path.getmtime, reverse=True):
-    try:
-        with open(path) as f:
-            led = json.load(f)
-    except (OSError, ValueError):
-        continue
-    if not isinstance(led, dict) or "exit_predicate_result" not in led:
-        continue
-    if not led["exit_predicate_result"].get("met", False):
-        in_flight.append(led.get("run_id") or os.path.splitext(os.path.basename(path))[0])
+    # In-flight runs: ledgers whose exit_predicate_result.met is False.
+    # P2-1: log a corrupted/malformed ledger to stderr so a silent skip becomes
+    # observable. The hook contract (rel-001) still demands exit 0; stderr is the
+    # operator-visible side channel.
+    in_flight = []
+    ledger_dir = os.path.join(repo, ".claude", "auto")
+    for path in sorted(glob.glob(os.path.join(ledger_dir, "*.json")), key=os.path.getmtime, reverse=True):
+        try:
+            with open(path) as f:
+                led = json.load(f)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(
+                "auto: skipping malformed ledger %s: %s\n" % (path, exc)
+            )
+            continue
+        if not isinstance(led, dict) or "exit_predicate_result" not in led:
+            continue
+        if not led["exit_predicate_result"].get("met", False):
+            in_flight.append(led.get("run_id") or os.path.splitext(os.path.basename(path))[0])
 
-if len(in_flight) == 1:
-    print("in-flight\t%s" % in_flight[0]); raise SystemExit(0)
-if len(in_flight) > 1:
-    print("ambiguous-runs\t%d" % len(in_flight)); raise SystemExit(0)
+    if len(in_flight) == 1:
+        print("in-flight\t%s" % in_flight[0]); raise SystemExit(0)
+    if len(in_flight) > 1:
+        print("ambiguous-runs\t%d" % len(in_flight)); raise SystemExit(0)
 
-# No in-flight run → look for reviewed plans.
-plans = []
-for pat in ("docs/plans/*.md", "plans/*.md", "*-plan.md"):
-    plans.extend(glob.glob(os.path.join(repo, pat)))
-plans = sorted(set(plans))
-if len(plans) == 1:
-    print("reviewed-plan\t%s" % os.path.relpath(plans[0], repo)); raise SystemExit(0)
-if len(plans) > 1:
-    print("ambiguous-plans\t%d" % len(plans)); raise SystemExit(0)
+    # No in-flight run → look for reviewed plans.
+    plans = []
+    for pat in ("docs/plans/*.md", "plans/*.md", "*-plan.md"):
+        plans.extend(glob.glob(os.path.join(repo, pat)))
+    plans = sorted(set(plans))
+    if len(plans) == 1:
+        print("reviewed-plan\t%s" % os.path.relpath(plans[0], repo)); raise SystemExit(0)
+    if len(plans) > 1:
+        print("ambiguous-plans\t%d" % len(plans)); raise SystemExit(0)
 
-print("raw")
+    print("raw")
+except SystemExit:
+    raise
+except BaseException as exc:
+    # CLI-004: emit the safe `raw` fallback on any unexpected error so the
+    # smart-entry prose has a verdict to branch on (rather than empty stdout
+    # which would silently no-op). Surface the cause on stderr for diagnosis.
+    sys.stderr.write("auto: detector hit unexpected error: %s\n" % exc)
+    print("raw")
+    raise SystemExit(0)
 PYEOF
 }
 
