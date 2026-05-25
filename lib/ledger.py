@@ -723,6 +723,57 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
+def transition_and_emit(repo_root, run_id, to_phase, emitter):
+    """Advance ``loop_phase`` to ``to_phase`` AND emit that phase's units, in ONE
+    atomic write (v0.2.0 U5b / KTD-6 — the G3/F2 fix).
+
+    This is the phase-transition primitive. The round-1 framing tried to do the
+    advance and the emission as SEPARATE locked writes (`set_loop` then an emit),
+    which left a torn-state window: a reader between the two writes would see the
+    new phase with zero emitted units, and `recompute_predicate` could fire
+    ``met`` prematurely (e.g. A2's judge terminal → all_units_terminal with no
+    work units yet). Doing both inside one ``_with_locked_ledger`` body closes
+    that window: the emitter's units are appended BEFORE ``_atomic_write``'s
+    mandatory predicate recompute, so ``met`` is always computed against the
+    post-emission unit set.
+
+    ``emitter`` is a PURE callable ``(ledger, to_phase) -> list[new_unit_dict]``.
+    It MUST NOT call any ledger mutator (`transition`, `record_verdict`,
+    `set_loop`, …): those re-acquire the flock on a fresh fd and would deadlock
+    inside this already-locked body (F3). The emitter only READS the passed
+    ledger dict and RETURNS new partial unit dicts; this primitive normalizes and
+    appends them. New unit ids must not collide with existing ones.
+
+    Returns the list of newly-appended unit ids.
+    """
+    def mutate(ledger):
+        new_units = emitter(ledger, to_phase) or []
+        existing_ids = {u["id"] for u in ledger.get("units", [])}
+        appended = []
+        for nu in new_units:
+            if "id" not in nu:
+                raise LedgerError("emitted unit missing 'id'")
+            if nu["id"] in existing_ids:
+                raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
+            # Emitted units default to the arriving phase unless they declare one.
+            nu = dict(nu)
+            nu.setdefault("phase", to_phase)
+            ledger.setdefault("units", []).append(
+                _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+            )
+            existing_ids.add(nu["id"])
+            appended.append(nu["id"])
+        # Advance the phase AFTER emission (the units belong to to_phase; setting
+        # loop_phase first or last is equivalent here since both happen in one
+        # snapshot, but advancing last keeps "emit produces units FOR to_phase"
+        # readable). seam_paused tracks the phase per the v0.1.x rule.
+        ledger["loop_phase"] = to_phase
+        ledger["seam_paused"] = to_phase == "seam"
+        return appended
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
 # States from which record_verdict may write a verdict. This is a record_verdict
 # -ONLY transition set, deliberately WIDER than ALLOWED_TRANSITIONS (which governs
 # the findings-free `transition()` path). It is NOT added to ALLOWED_TRANSITIONS

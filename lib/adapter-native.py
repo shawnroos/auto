@@ -120,6 +120,20 @@ class Adapter:
     def next_plan_step(self, ledger):
         return _next_plan_step(ledger)
 
+    def enumerate_plan_units(self, ledger):
+        """PREPARE the plan→work-units enumeration (v0.2.0 contract re-lock, KTD-4).
+
+        Native counterpart of the CE op. Prepare-only: the model reads the
+        reviewed prose plan and returns a list of unit dicts; the engine persists
+        them to the plan unit's dispatch_context.enumerated_units (U6) and the
+        emitters (U5b) shape them into ledger units. The producer the emitters
+        read — resolves the F4 gap."""
+        return {
+            "adapter": ADAPTER_NAME,
+            "op": "enumerate_plan_units",
+            "invocation": "enumerate-plan-work-units",
+        }
+
     def plan(self, ledger):
         """PREPARE a prose-plan invocation; the model writes the plan."""
         return {"adapter": ADAPTER_NAME, "op": "plan", "invocation": "write-prose-plan"}
