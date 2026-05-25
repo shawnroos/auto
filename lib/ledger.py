@@ -495,6 +495,9 @@ def init_ledger(
     units=None,
     loop_phase: str = "plan",
     plan_step=None,
+    recipe=None,
+    phase_order=None,
+    terminal_phase=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -502,13 +505,41 @@ def init_ledger(
     fields are filled with schema defaults. The predicate is recomputed and the
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
+
+    v0.2.0 recipe fields (all additive / backward-compatible — a v0.1.x ledger
+    with none of them reads identically; see _normalize_unit and §2 of the
+    ledger-schema contract):
+      ``recipe``         — optional dict {name, source_tier}; the recipe this run
+                           was built from. None on a recipe-blind (v0.1.x) ledger.
+      ``phase_order``    — optional list; the run's phase sequence. Defaults to
+                           ["plan", "seam", "work"] (the v0.1.x grammar).
+      ``terminal_phase`` — optional str; the phase whose completion ends the run.
+                           Defaults to "work". MUST be a member of phase_order.
     """
     if adapter not in ("ce", "native"):
         raise LedgerError(f"invalid adapter: {adapter!r}")
     if adapter_scale not in ("three-tier", "blocker-only"):
         raise LedgerError(f"invalid adapter_scale: {adapter_scale!r}")
-    if loop_phase not in LOOP_PHASES:
-        raise LedgerError(f"invalid loop_phase: {loop_phase!r}")
+
+    # phase_order / terminal_phase default to the v0.1.x grammar so a call with
+    # neither produces a ledger that behaves exactly as before.
+    if phase_order is None:
+        phase_order = ["plan", "seam", "work"]
+    elif not isinstance(phase_order, list) or not phase_order:
+        raise LedgerError(f"phase_order must be a non-empty list: {phase_order!r}")
+    if terminal_phase is None:
+        terminal_phase = "work"
+    if terminal_phase not in phase_order:
+        raise LedgerError(
+            f"terminal_phase {terminal_phase!r} not in phase_order {phase_order!r}"
+        )
+    # loop_phase must be a member of the run's phase_order (which, for the
+    # default grammar, is exactly the legacy LOOP_PHASES minus the terminal
+    # "done" sentinel — "done" is a post-terminal marker, never a start phase).
+    if loop_phase != "done" and loop_phase not in phase_order:
+        raise LedgerError(
+            f"invalid loop_phase {loop_phase!r} for phase_order {phase_order!r}"
+        )
     if plan_step is not None and plan_step not in PLAN_STEPS:
         raise LedgerError(f"invalid plan_step: {plan_step!r}")
 
@@ -532,7 +563,7 @@ def init_ledger(
         for u in units or []:
             if "id" not in u:
                 raise LedgerError("unit missing 'id'")
-            norm_units.append(_normalize_unit(u))
+            norm_units.append(_normalize_unit(u, loop_phase=loop_phase))
 
         ledger = {
             "run_id": run_id,
@@ -541,6 +572,12 @@ def init_ledger(
             "seam_paused": loop_phase == "seam",
             "adapter": adapter,
             "adapter_scale": adapter_scale,
+            # v0.2.0 recipe fields (additive). recipe is None on a recipe-blind
+            # v0.1.x ledger; phase_order/terminal_phase default to the legacy
+            # grammar so the predicate + phase routing behave identically.
+            "recipe": recipe,
+            "phase_order": phase_order,
+            "terminal_phase": terminal_phase,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},
@@ -551,13 +588,20 @@ def init_ledger(
     return _flock_run(lpath, body)
 
 
-def _normalize_unit(u: dict) -> dict:
+def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
     state = u.get("state", "pending")
     if state not in UNIT_STATES:
         raise LedgerError(f"invalid unit state: {state!r}")
+    # v0.2.0 per-unit `phase` (additive). A unit with no explicit phase inherits
+    # the run's start phase when that is a plan phase, else defaults to "work" —
+    # matching the v0.1.x reality where plan-phase runs have no work units yet and
+    # any pre-declared unit is a work unit. Recipes set `phase` explicitly.
+    default_phase = "plan" if loop_phase == "plan" else "work"
+    phase = u.get("phase", default_phase)
     return {
         "id": u["id"],
         "state": state,
+        "phase": phase,
         "depends_on": list(u.get("depends_on") or []),
         "dispatched_at": u.get("dispatched_at"),
         "verdict_at": u.get("verdict_at"),
@@ -574,6 +618,23 @@ def _normalize_unit(u: dict) -> dict:
         # when record_verdict is called without an explicit attempt.
         "attempt": int(u.get("attempt", 0) or 0),
         "findings": list(u.get("findings") or []),
+        # v0.2.0 per-unit additive fields (all backward-compatible — an old
+        # ledger with none of these reads as the documented defaults below and
+        # behaves identically; same discipline as `attempt` above):
+        #   plan_step       — per-unit plan-step for N>1 parallel plan-loops (R11);
+        #                     A1's single plan-loop keeps using the top-level
+        #                     scalar, so this stays None there. None = no step yet.
+        #   gaps_open       — per-unit open-gap count for N>1 plan-loops. None until
+        #                     a review feeds one back.
+        #   dispatch_context— recipe-side metadata merged from `invokes` (e.g.
+        #                     prompt_template, bias) + engine-written keys like
+        #                     enumerated_units. {} when absent.
+        #   last_advanced_at— round-robin tiebreaker for serialized N>1 plan
+        #                     advance (null sorts oldest → picked first).
+        "plan_step": u.get("plan_step"),
+        "gaps_open": u.get("gaps_open"),
+        "dispatch_context": dict(u.get("dispatch_context") or {}),
+        "last_advanced_at": u.get("last_advanced_at"),
     }
 
 

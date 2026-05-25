@@ -889,6 +889,103 @@ else
   fail "production files enable a test hatch: $offenders"
 fi
 
+# ─── Scenario 11 (U1, v0.2.0): additive recipe schema fields ────────────────
+# The recipe work adds top-level recipe/phase_order/terminal_phase and per-unit
+# phase/plan_step/gaps_open/dispatch_context/last_advanced_at. ALL must be
+# additive: a v0.1.x ledger with none of them reads + predicates identically
+# (the attempt-field precedent). New ledgers carrying them round-trip cleanly.
+
+it "U1: a v0.1.x on-disk ledger (no new keys) reads back + predicates unchanged"
+# The REAL backward-compat property: a ledger FILE written in the old shape
+# (no recipe/phase_order/terminal_phase keys, no per-unit phase/etc.) must load
+# via the additive defaults and predicate IDENTICALLY to v0.1.1. We write such a
+# file by hand (NOT via the new init_ledger, which adds the keys) and read it.
+v01x="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, json, os, tempfile
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+repo = tempfile.mkdtemp(); run = "v01x"
+# Hand-write a legacy-shaped ledger: exactly the v0.1.x keys, no v0.2.0 fields.
+legacy = {
+    "run_id": run, "loop_phase": "work", "plan_step": None,
+    "seam_paused": False, "adapter": "ce", "adapter_scale": "three-tier",
+    "exit_predicate_result": {}, "loop": {"driver": "self", "last_beat_at": "x"},
+    "units": [{"id": "U1", "state": "verdict-returned", "depends_on": [],
+               "dispatched_at": None, "verdict_at": None,
+               "stall_threshold_seconds": 600, "last_error": None,
+               "attempt": 0, "findings": [{"severity": "blocker"}]}],
+}
+path = m.ledger_path(repo, run)
+os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+with open(path, "w") as f:
+    json.dump(legacy, f)
+led = m.read_ledger(repo, run)
+pr = m.recompute_predicate(led)  # recompute against the legacy-shaped dict
+# Predicate must evaluate exactly as v0.1.1: a blocker means not-met.
+# The legacy file has NO new top-level keys (read returns it verbatim).
+has_new = any(k in led for k in ("recipe", "phase_order", "terminal_phase"))
+print("%s,%s,%s" % (pr["met"], pr["blockers"], has_new))
+PYEOF
+)"
+# met False (blocker present), blockers 1, AND the legacy file carries no new
+# keys — proving an old on-disk ledger reads + predicates identically.
+assert_eq "False,1,False" "$v01x"
+
+it "U1: per-unit additive fields default cleanly on a v0.1.x unit (no fields set)"
+defaults="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import tempfile
+repo = tempfile.mkdtemp(); run = "defs"
+m.init_ledger(repo, run, adapter="ce", units=[{"id": "U1"}])
+u = m.read_ledger(repo, run)["units"][0]
+# additive per-unit fields read as their documented defaults.
+print("%s,%s,%s,%s" % (
+    u.get("phase"), u.get("plan_step"), u.get("dispatch_context"),
+    u.get("last_advanced_at")))
+PYEOF
+)"
+# phase defaults to plan (a unit with no phase in a plan-default ledger),
+# plan_step None, dispatch_context {} , last_advanced_at None.
+assert_eq "plan,None,{},None" "$defaults"
+
+it "U1: new top-level recipe/phase_order/terminal_phase round-trip"
+toplevel="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import tempfile
+repo = tempfile.mkdtemp(); run = "rcp"
+m.init_ledger(repo, run, adapter="ce",
+              recipe={"name": "a1", "source_tier": "built-in"},
+              phase_order=["plan", "seam", "work"], terminal_phase="work",
+              units=[{"id": "U1"}])
+led = m.read_ledger(repo, run)
+print("%s,%s,%s" % (
+    led["recipe"]["name"], led["phase_order"][2], led["terminal_phase"]))
+PYEOF
+)"
+assert_eq "a1,work,work" "$toplevel"
+
+it "U1: terminal_phase not in phase_order -> init rejects"
+rej="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import tempfile
+repo = tempfile.mkdtemp(); run = "bad"
+try:
+    m.init_ledger(repo, run, adapter="ce",
+                  phase_order=["plan", "seam", "work"], terminal_phase="nope",
+                  units=[{"id": "U1"}])
+    print("accepted")
+except m.LedgerError:
+    print("rejected")
+PYEOF
+)"
+assert_eq "rejected" "$rej"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger.test.sh: ${PASS} passed, ${FAIL} failed"
