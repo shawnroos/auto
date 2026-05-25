@@ -171,6 +171,63 @@ elif op == "missing":
     except recipes.RecipeError:
         print("raised")
 
+elif op == "resolve-traversal":
+    # P0 #4 fix-pass B: layer 2 — resolve() must reject a CLI-supplied recipe
+    # name with traversal segments BEFORE touching the filesystem. We feed each
+    # malicious name and assert all raise; if ANY one returns without raising,
+    # the attack would succeed in production.
+    import os, tempfile
+    repo = tempfile.mkdtemp()
+    bad_names = [
+        "../../../etc/passwd",       # classic traversal
+        "..",                         # parent dir on its own
+        "/etc/passwd",                # absolute path
+        "a/b",                        # slash mid-name
+        "a\\b",                       # backslash (Windows-style)
+        ".hidden",                    # leading dot
+        "A1",                         # uppercase (not in the charset)
+        "",                           # empty
+        "x*",                         # glob meta
+    ]
+    raised = 0
+    for n in bad_names:
+        try:
+            recipes.resolve(n, repo)
+        except recipes.RecipeError:
+            raised += 1
+    print(f"{raised}/{len(bad_names)}")
+
+elif op == "resolve-valid-names":
+    # The regex must NOT reject legitimately-named recipes. Built-in names
+    # (a1, a2, a4, w) are the conformance corpus; resolve() should accept them
+    # (return either a built-in or raise "not found" — never a "name invalid"
+    # RecipeError). We surface the error MESSAGE for the not-found case so a
+    # false-positive name-rejection would be visible.
+    import tempfile
+    repo = tempfile.mkdtemp()
+    out = []
+    for n in ["a1", "a2", "my-recipe", "team_foo", "v2.1"]:
+        try:
+            _, tier = recipes.resolve(n, repo)
+            out.append(f"{n}:{tier}")
+        except recipes.RecipeError as e:
+            msg = str(e)
+            if "invalid recipe name" in msg:
+                out.append(f"{n}:NAME-REJECTED")
+            else:
+                out.append(f"{n}:not-found")
+    print(",".join(out))
+
+elif op == "validate-traversal-name":
+    # P0 #4 layer 1: validate() also rejects an unsafe `name:` field on a
+    # recipe-file dict. Defense in depth — a recipe with the right shape but a
+    # malicious name should fail validation.
+    try:
+        recipes.validate({"name": "../evil", "version": "1", "units": []})
+        print("NO-RAISE")
+    except recipes.RecipeError as e:
+        print("raised" if "invalid recipe name" in str(e) else "raised-wrong-message")
+
 elif op == "unit-for-traversal":
     # unit_for re-validates the prompt_template path bound (2nd enforcement point).
     try:
@@ -207,6 +264,21 @@ assert_eq "a1,built-in" "$(reg a1-fallback)"
 
 it "resolve unknown recipe → raises with searched paths"
 assert_eq "raised" "$(reg missing)"
+
+# P0 #4 fix-pass B: layer-2 path-traversal defense at the CLI entry to resolve().
+it "fix-pass B: resolve() rejects all path-traversal recipe names (9/9 raise)"
+assert_eq "9/9" "$(reg resolve-traversal)"
+
+# Deliberate-fail proof that the GREEN path isn't over-rejecting valid names.
+# A regex tightened too far would fail this case — surfaces a false-positive
+# that would block legitimate workspace/global recipes from resolving.
+it "fix-pass B: resolve() accepts legitimate recipe names (built-ins + dashes/dots)"
+assert_eq "a1:built-in,a2:built-in,my-recipe:not-found,team_foo:not-found,v2.1:not-found" \
+  "$(reg resolve-valid-names)"
+
+# P0 #4 layer 1: validate() also rejects an unsafe `name:` on the recipe dict.
+it "fix-pass B: validate() rejects an unsafe recipe.name field"
+assert_eq "raised" "$(reg validate-traversal-name)"
 
 it "unit_for re-validates prompt_template traversal (2nd enforcement point)"
 assert_eq "raised" "$(reg unit-for-traversal)"

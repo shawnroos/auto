@@ -24,6 +24,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
+
+# Recipe-name regex (v0.2.0 fix-pass B / P0 #4 — round-1 security+correctness+
+# adversarial all flagged the same path-traversal fingerprint). The recipe NAME
+# is interpolated into `os.path.join(<tier_dir>, f"{name}.json")` in resolve(),
+# so an unbounded name like "../../../../etc/passwd" would happily traverse out
+# of the recipes dir. Constrain to a conservative POSIX-filename shape:
+#   - first char must be lowercase letter or digit (rejects ".." and leading dot)
+#   - body: letters, digits, dot, underscore, dash (rejects "/", "\", "..")
+# Layered defense: validate() enforces it on the recipe's declared name (so the
+# file-on-disk's `name:` matches the filename it'd resolve under), AND resolve()
+# enforces it on the CLI-supplied --recipe argument (the actual attack surface).
+# The helper itself is defined below RecipeError (forward-ref guard).
+_RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 # The emitter NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
 # only reference these — the validator rejects any other name so a recipe can't
@@ -92,6 +106,20 @@ def _bad(msg: str):
     raise RecipeError(msg)
 
 
+def _validate_recipe_name(name, *, source: str) -> None:
+    """Reject an unsafe recipe name (see _RECIPE_NAME_RE above for rationale).
+
+    ``source`` names the caller in the error so a misconfigured workspace
+    recipe vs a malformed --recipe arg is distinguishable.
+    """
+    if not isinstance(name, str) or not _RECIPE_NAME_RE.match(name):
+        _bad(
+            f"invalid recipe name {name!r} ({source}); names must match "
+            f"{_RECIPE_NAME_RE.pattern} (lowercase alphanumeric, with "
+            f"'.', '_', '-' allowed inside)"
+        )
+
+
 def _check_prompt_template(value, where: str):
     """Path-bounding for `prompt_template` (security-lens Finding 1).
 
@@ -131,6 +159,10 @@ def validate(recipe: dict) -> None:
             _bad(f"missing required field: {req!r}")
     if not isinstance(recipe["name"], str) or not recipe["name"]:
         _bad("name must be a non-empty string")
+    # P0 #4 fix-pass B: layer 1 — the file's declared name must be a safe
+    # filename. validate_and_lint() additionally checks the name matches the
+    # filename stem; this regex is the security floor.
+    _validate_recipe_name(recipe["name"], source="recipe.name")
     if not isinstance(recipe["units"], list):
         _bad("units must be a list")
 
@@ -227,7 +259,13 @@ def resolve(name: str, repo_root: str):
     falls back to the ``A1_BUILTIN`` Python constant if no ``a1.json`` resolves at
     any tier (KTD-1 — a corrupt/missing built-in JSON can't break bare ``/auto``).
     Raises ``RecipeError`` (FileNotFound-shaped message) if nothing resolves.
+
+    P0 #4 fix-pass B: layer 2 — the CLI-supplied ``--recipe`` value lands here
+    unvalidated; without this check ``name="../../etc/passwd"`` would happily
+    traverse out of the recipes dir via os.path.join. The check is BEFORE any
+    path construction (fail closed before touching the filesystem).
     """
+    _validate_recipe_name(name, source="--recipe argument")
     for tier, d in _tier_dirs(repo_root):
         path = os.path.join(d, f"{name}.json")
         if os.path.isfile(path):
