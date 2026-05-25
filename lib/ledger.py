@@ -949,6 +949,30 @@ def set_gaps_open(repo_root, run_id, gaps_open: int):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
+def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
+    """Persist a plan unit's ``enumerate_plan_units`` output onto its
+    ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
+
+    Called at plan-done with the adapter's enumerated work-unit list. The
+    phase-transition emitter (U5b) reads it from here when emitting work units —
+    so this is the on-ledger bridge between "the plan finished" and "here are its
+    work units," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is
+    a list of partial unit dicts (each at least an ``id``). Raises if the named
+    unit doesn't exist. Atomic (predicate recompute is a no-op here — the plan
+    unit's own state is unchanged — but the write stays on the I-1 path).
+    """
+    if not isinstance(enumerated, list):
+        raise LedgerError("enumerated units must be a list")
+
+    def mutate(ledger):
+        unit = _find_unit(ledger, unit_id)
+        dc = unit.setdefault("dispatch_context", {})
+        dc["enumerated_units"] = list(enumerated)
+        return len(enumerated)
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.

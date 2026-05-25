@@ -653,6 +653,34 @@ else
   fail "ready=[$bf_ready] ua_terminal=$bf_uaterm advanced=$bf_adv met=$bf_met (expected empty/False/fix-applied/False — control did not go RED, class-1 not proven closed)"
 fi
 
+# ─── U6: round-robin plan-unit selector + stalled exclusion ─────────────────
+rr() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+orch = load_lib_module("orchestrator")
+ledger = json.loads(sys.argv[2])
+print(orch.pick_next_plan_unit_to_advance(ledger))
+PYEOF
+}
+
+it "round-robin: all never-advanced → first by declaration order"
+assert_eq "plan-1" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+
+it "round-robin: a never-advanced unit beats an already-advanced one"
+assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+
+it "round-robin: all advanced → oldest last_advanced_at wins"
+assert_eq "plan-3" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:02Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:01Z"},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"}]}')"
+
+it "round-robin: stalled plan unit excluded; next eligible wins (adversarial F3)"
+assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"stalled","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+
+it "round-robin: no eligible plan unit → None"
+assert_eq "None" "$(rr '{"units":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"

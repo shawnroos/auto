@@ -229,6 +229,37 @@ def ready_units(repo_root: str, run_id: str):
     return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id, scale)]
 
 
+def pick_next_plan_unit_to_advance(ledger: dict):
+    """Round-robin selector for serialized N>1 plan-loop advance (U6 / KTD-4).
+
+    With multiple plan-phase units (A2's competing plans), exactly ONE advances
+    per tick so the adapter's ``next_plan_step(ledger)`` sees a single logical
+    advance-stream and the contract stays unchanged. This picks which one: the
+    eligible plan unit with the OLDEST ``last_advanced_at`` (``null`` sorts oldest
+    → a never-advanced unit goes first), ties broken by ``units[]`` declaration
+    order. State lives in the ledger (``last_advanced_at`` per unit), so resume
+    continues the rotation correctly across ticks.
+
+    Eligible = phase ``plan`` AND state ``dispatched`` (NOT ``stalled`` — a
+    stalled plan unit is excluded from the rotation; adversarial F3). Returns the
+    unit id, or ``None`` when no plan unit is eligible (single-plan A1 never calls
+    this — it uses the scalar fast path). A READER: no mutation.
+    """
+    candidates = [
+        u for u in ledger.get("units", [])
+        if u.get("phase") == "plan" and u.get("state") == "dispatched"
+    ]
+    if not candidates:
+        return None
+    # Stable sort by (has_timestamp, timestamp): None sorts before any string, so
+    # never-advanced units (last_advanced_at=None) come first; declaration order
+    # is preserved among equals because sorted() is stable.
+    def keyfn(u):
+        ts = u.get("last_advanced_at")
+        return (ts is not None, ts or "")
+    return sorted(candidates, key=keyfn)[0]["id"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 

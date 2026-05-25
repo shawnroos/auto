@@ -377,6 +377,29 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     return {"advanced": "none", "reason": "no-fix-due"}
 
 
+def _persist_enumerated_units(repo_root, run_id, enumerated):
+    """Persist the plan's enumerated work units onto the plan unit (U6 producer).
+
+    Targets the plan-phase unit being advanced. For A1 (single plan unit) and the
+    per-tick serialized A2 advance, that is the lone plan unit currently at
+    plan-done; we resolve it from the fresh ledger (the unit whose phase is
+    'plan'). If there are multiple plan units (A2), the active one is the one the
+    round-robin advanced this tick — for the V1 testable slice we target the first
+    plan-phase unit lacking enumerated_units, which the serialized one-per-tick
+    advance makes unambiguous. Idempotent-safe: re-persist overwrites.
+    """
+    led = ledger.read_ledger(repo_root, run_id)
+    plan_units = [u for u in led.get("units", []) if u.get("phase") == "plan"]
+    if not plan_units:
+        return
+    target = next(
+        (u for u in plan_units
+         if not (u.get("dispatch_context") or {}).get("enumerated_units")),
+        plan_units[0],
+    )
+    ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
+
+
 def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """Plan-loop advance: ask the adapter for the next step and call that ONE
     step. The ADAPTER owns plan-step sequencing — the engine never picks it.
@@ -412,6 +435,25 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """
     step = adapter.next_plan_step(ledger_dict)
     if step == "done":
+        # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
+        # via the v0.2.0 adapter op and PERSIST them onto the plan unit's
+        # dispatch_context.enumerated_units, so the phase-transition emitter (U5b)
+        # can read them when it emits work units (resolves F4 — the producer).
+        # enumerate_plan_units is prepare-only: it may return a bare list (a
+        # synchronous/test adapter) OR a PREPARE envelope the model fills with the
+        # units under the canonical "units" key. We persist whichever concrete list
+        # is available; a freshly-prepared envelope with no "units" key leaves the
+        # field untouched (same no-premature-default discipline as gaps_open).
+        enum_op = getattr(adapter, "enumerate_plan_units", None)
+        if callable(enum_op):
+            enum_result = enum_op(ledger_dict)
+            enumerated = None
+            if isinstance(enum_result, list):
+                enumerated = enum_result
+            elif isinstance(enum_result, dict) and isinstance(enum_result.get("units"), list):
+                enumerated = enum_result["units"]
+            if enumerated is not None:
+                _persist_enumerated_units(repo_root, run_id, enumerated)
         return {"advanced": "plan-done"}, None
     if step not in _PLAN_STEP_OPS:
         raise TickError(f"adapter returned unknown plan step: {step!r}")
