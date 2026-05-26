@@ -50,6 +50,11 @@ V1_EMITTER_NAMES = frozenset(
         "plan_output_to_work_units",
         "judge_winner_to_work_units",
         "plan_output_to_paired_builders",
+        # v0.3.0 (U3): iterate_template materializes new units from a recipe-
+        # declared emit_templates entry when the gate unit verdicts "iterate".
+        # Added atomically with the REGISTRY entry in lib/emitters.py so the
+        # symmetry test stays green; U5 reserved this name but deferred the add.
+        "iterate_template",
     }
 )
 
