@@ -16,6 +16,41 @@ promotion.
 
 It is read-only — it never mutates the ledger or arms a tick.
 
+### Iteration section (v0.3.0)
+
+When the run is iteration-aware — the ledger declares an `iteration`
+block, or `iteration_attempts > 0`, or `active_wall_seconds > 0`, or any
+unit carries a `dispatch_context.bound_override` — `/auto-status` prints
+an additional `iteration:` block between the exit-predicate line and the
+units list. Fields:
+
+- `gate_unit` — the unit id whose `verdict.decision` drives the loop.
+- `attempts` — `iteration_attempts` / `iteration.bound.max_attempts`
+  (honored iterate decisions vs the configured cap).
+- `wall_time` — `active_wall_seconds` /
+  `iteration.bound.max_wall_seconds` (sum-of-deltas wall-time vs cap; the
+  denominator renders as `—` when no wall bound is configured).
+- `emit_count` — `iteration_emit_count`, the monotonic emit-id counter
+  (KTD §D / OQ4) — bumped per emitted unit so re-emitted ids never
+  collide.
+- `last_active` — `last_active_at`, the ISO timestamp of the most recent
+  `accumulate_active_time` call. Omitted when null.
+- `iteration_pending` — the cached
+  `exit_predicate_result.iteration_pending` bool (KTD §B / U2): true iff
+  the gate's effective decision is `iterate` and the bound is unbreached,
+  which short-circuits an otherwise-met predicate so the tick yields back
+  for another work pass.
+- `kill_switch` — rendered only when the fenced
+  `CLAUDE_AUTO_DISABLE_ITERATION` + `CLAUDE_AUTO_TEST_HARNESS` pair is
+  live (KTD §D / iteration kill-switch fence), printed as `DISABLED via
+  CLAUDE_AUTO_DISABLE_ITERATION`.
+
+Each unit's listing also gains a `bound_exit:` sub-bullet (alongside
+`finding:`) when `dispatch_context.bound_override` is present — it shows
+which bound was breached (`max_attempts` or `max_wall_seconds`), the
+`original_decision` the engine would have honored, and the ISO timestamp
+of the forced exit.
+
 ## Argument handling (orchestrator routes BEFORE invoking the script)
 
 Inspect the argument string and route as follows:
