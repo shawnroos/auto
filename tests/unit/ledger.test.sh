@@ -1337,6 +1337,36 @@ elif op == "atomic_iterate_step-bad-emitter-keeps-counter":
         "unit_count": len(after["units"]),
     }))
 
+elif op == "predicate-survives-corrupt-iteration-attempts":
+    # F3 / rel-2: _compute_iteration_pending is called from _atomic_write on
+    # EVERY write. A corrupt numeric ledger field (here: iteration_attempts
+    # forced to a non-numeric string by direct disk patch) MUST NOT raise
+    # from recompute — that would lock out every subsequent write, including
+    # the ones needed to overwrite the corruption itself.
+    led = fresh("u3-corrupt-attempts", max_attempts=5)
+    m.record_verdict(repo, "u3-corrupt-attempts", "judge", [])
+    m.set_verdict_decision(repo, "u3-corrupt-attempts", "judge", "iterate")
+    # Corrupt the on-disk ledger directly. The next _with_locked_ledger write
+    # will hit _atomic_write -> recompute_predicate -> _compute_iteration_pending
+    # which must degrade gracefully on the bad input.
+    p = m.ledger_path(repo, "u3-corrupt-attempts")
+    raw = json.load(open(p))
+    raw["iteration_attempts"] = "garbage-not-a-number"
+    open(p, "w").write(json.dumps(raw))
+    # Now drive ANY write. If recompute raises, this call propagates the raise
+    # and the ledger is unrecoverable. The brittleness fix makes it succeed.
+    raised = "no"
+    try:
+        m.accumulate_active_time(repo, "u3-corrupt-attempts", 1.0)
+    except Exception as e:
+        raised = f"raised:{type(e).__name__}"
+    after = m.read_ledger(repo, "u3-corrupt-attempts")
+    print(json.dumps({
+        "raised": raised,
+        "iteration_pending": after["exit_predicate_result"].get("iteration_pending"),
+        "active_wall_seconds_written": after.get("active_wall_seconds"),
+    }))
+
 else:
     sys.stderr.write(f"unknown op {op!r}\n")
     sys.exit(2)
@@ -1435,6 +1465,16 @@ it "U2: atomic_iterate_step with a bad emitter keeps iteration_attempts at 0 (al
 assert_eq \
   '{"raised": "yes", "iteration_attempts": 0, "iteration_emit_count": 0, "unit_count": 1}' \
   "$(iter_driver atomic_iterate_step-bad-emitter-keeps-counter)"
+
+# ─── F3 / rel-2: predicate recompute survives corrupt iteration_attempts ────
+# A corrupt numeric ledger field MUST NOT lock out every subsequent write at
+# the _atomic_write chokepoint. The recompute degrades gracefully: the bad
+# input collapses iteration_pending to false, and the write completes so the
+# next caller can overwrite the corruption.
+it "F3: corrupt iteration_attempts on disk → _atomic_write still completes (no raise)"
+assert_eq \
+  '{"raised": "no", "iteration_pending": false, "active_wall_seconds_written": 1.0}' \
+  "$(iter_driver predicate-survives-corrupt-iteration-attempts)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

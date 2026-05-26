@@ -115,6 +115,68 @@ elif op == "unknown-gate":
 elif op == "decisions-constant":
     print(",".join(iteration.DECISIONS))
 
+# ─── compute_pending_state ops (F3 / kieran-7) ──────────────────────────────
+# compute_pending_state is the centralized bound-check that
+# recompute_predicate calls (replacing the prior duplicate copy in ledger.py).
+# These ops exercise the same scenarios as evaluate_decision but on the
+# pending-bool surface compute_pending_state exposes.
+
+elif op == "pending-no-iteration-block":
+    print(iteration.compute_pending_state({"units": []}))
+
+elif op == "pending-no-gate-unit-named":
+    led = {"units": [], "iteration": {"bound": {}}}
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-gate-not-found":
+    led = {"units": [], "iteration": {"gate_unit": "ghost", "bound": {}}}
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-decision-not-iterate":
+    led = make_led("advance", attempts=0)
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-iterate-under":
+    led = make_led("iterate", attempts=2, max_attempts=5)
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-attempts-breached":
+    led = make_led("iterate", attempts=5, max_attempts=5)
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-wall-breached":
+    led = make_led("iterate", attempts=1, max_attempts=5,
+                   active_wall_seconds=1900, max_wall_seconds=1800)
+    print(iteration.compute_pending_state(led))
+
+# ─── rel-2: brittleness — coercion failure on a bound counter ───────────────
+# A corrupted numeric ledger field MUST NOT raise from compute_pending_state
+# — it is called from the _atomic_write chokepoint, so a raise here locks
+# out every subsequent ledger mutation including writes needed to recover.
+
+elif op == "pending-corrupt-iteration-attempts":
+    led = make_led("iterate", attempts=2, max_attempts=5)
+    led["iteration_attempts"] = "garbage"
+    # Must not raise; falls back to "iteration not pending" (safe default).
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-corrupt-max-attempts":
+    led = make_led("iterate", attempts=2, max_attempts=5)
+    led["iteration"]["bound"]["max_attempts"] = "garbage"
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-corrupt-active-wall":
+    led = make_led("iterate", attempts=1, max_attempts=5,
+                   active_wall_seconds=10, max_wall_seconds=1800)
+    led["active_wall_seconds"] = "not-a-number"
+    print(iteration.compute_pending_state(led))
+
+elif op == "pending-corrupt-max-wall":
+    led = make_led("iterate", attempts=1, max_attempts=5,
+                   active_wall_seconds=10, max_wall_seconds=1800)
+    led["iteration"]["bound"]["max_wall_seconds"] = "not-a-number"
+    print(iteration.compute_pending_state(led))
+
 PYEOF
 }
 
@@ -159,6 +221,45 @@ esac
 # ─── Scenario 7: DECISIONS constant ─────────────────────────────────────────
 it "DECISIONS constant exports the three allowed values"
 assert_eq "advance,iterate,exit" "$(run_iter decisions-constant)"
+
+# ─── F3 / kieran-7: compute_pending_state — central iteration_pending compute ─
+it "compute_pending_state: no iteration block → False"
+assert_eq "False" "$(run_iter pending-no-iteration-block)"
+
+it "compute_pending_state: no gate_unit named in iteration block → False"
+assert_eq "False" "$(run_iter pending-no-gate-unit-named)"
+
+it "compute_pending_state: gate unit id not present in units[] → False"
+assert_eq "False" "$(run_iter pending-gate-not-found)"
+
+it "compute_pending_state: gate decision != 'iterate' → False"
+assert_eq "False" "$(run_iter pending-decision-not-iterate)"
+
+it "compute_pending_state: iterate under bound → True"
+assert_eq "True" "$(run_iter pending-iterate-under)"
+
+it "compute_pending_state: attempts == max_attempts → False (engine forces exit)"
+assert_eq "False" "$(run_iter pending-attempts-breached)"
+
+it "compute_pending_state: active_wall_seconds > max_wall_seconds → False"
+assert_eq "False" "$(run_iter pending-wall-breached)"
+
+# ─── F3 / rel-2: graceful degradation on corrupt numeric fields ─────────────
+# A single corrupt numeric field MUST NOT raise from compute_pending_state;
+# every call site (notably _atomic_write -> recompute_predicate) requires the
+# function to return a bool no matter what shape the ledger has.
+
+it "compute_pending_state: corrupt iteration_attempts → False (no raise)"
+assert_eq "False" "$(run_iter pending-corrupt-iteration-attempts)"
+
+it "compute_pending_state: corrupt max_attempts → False (no raise)"
+assert_eq "False" "$(run_iter pending-corrupt-max-attempts)"
+
+it "compute_pending_state: corrupt active_wall_seconds → False (no raise)"
+assert_eq "False" "$(run_iter pending-corrupt-active-wall)"
+
+it "compute_pending_state: corrupt max_wall_seconds → False (no raise)"
+assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

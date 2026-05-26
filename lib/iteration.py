@@ -159,3 +159,112 @@ def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> di
         "bound_type": None,
         "attempts_made": attempts_made,
     }
+
+
+_COERCE_FAILED = object()  # sentinel: a coercion that couldn't parse its input.
+
+
+def _try_int(value):
+    """Return int(value), or ``_COERCE_FAILED`` on bad type/value.
+
+    Used by ``compute_pending_state`` — a coercion failure on any numeric
+    bound field is treated as "ledger numeric state is corrupt; cannot make
+    a safe iteration decision; collapse to not-pending so writes still go
+    through." Per [[feedback_recurring_class_close_a_dimension_not_a_sibling]]
+    (rel-2): the predicate-recompute chokepoint must degrade gracefully on
+    bad inputs.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return _COERCE_FAILED
+
+
+def _try_float(value):
+    """Float-typed sibling of ``_try_int`` — same graceful-degrade contract."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return _COERCE_FAILED
+
+
+def compute_pending_state(ledger: dict) -> bool:
+    """Return True iff the run has a live iteration in flight (KTD §B).
+
+    THE central iteration-bound logic — every caller (the
+    ``recompute_predicate`` -> ``_atomic_write`` chokepoint AND the engine's
+    tick.advance_iteration_loop) reads the SAME rule through this module.
+    Mirrors ``evaluate_decision``'s bound math without surfacing the
+    ``decision_effective``/``bound_type`` envelope ``recompute_predicate``
+    doesn't need.
+
+    True iff:
+        - The run declares an ``iteration`` block.
+        - The block names a ``gate_unit`` that exists in ``units[]``.
+        - The gate unit's ``dispatch_context.decision == "iterate"``.
+        - Neither bound is breached (``iteration_attempts < max_attempts``
+          AND ``active_wall_seconds < max_wall_seconds``).
+
+    Brittleness contract (rel-2): if any of ``iteration_attempts``,
+    ``active_wall_seconds``, ``max_attempts``, ``max_wall_seconds`` fails
+    to coerce to a number, the function returns ``False`` (the ledger's
+    numeric state is corrupt and the safest decision is "not pending" —
+    treats the in-flight iteration as advisorially-exited so the ledger
+    can continue accepting writes). A single corrupt numeric field MUST
+    NOT lock out every subsequent ledger mutation, including writes
+    needed to recover — this function is called from ``_atomic_write`` on
+    EVERY write.
+
+    Why this lives here and not in ``ledger.py``: the AST lint says
+    iteration.py is THE iteration-decision module; the bound-check
+    duplicated between ``evaluate_decision`` (lines 130-152 in this file)
+    and ``ledger._compute_iteration_pending`` was the NEXT dimension of
+    the recurring "rule the prose describes that the code enforces in
+    some sites but not its siblings" class
+    ([[feedback_recurring_class_close_a_dimension_not_a_sibling]]).
+    Centralizing it here closes the dimension.
+    """
+    iteration_block = ledger.get("iteration")
+    if not iteration_block:
+        return False
+    gate_unit_id = iteration_block.get("gate_unit")
+    if not gate_unit_id:
+        return False
+    gate_unit = None
+    for u in ledger.get("units", []):
+        if u.get("id") == gate_unit_id:
+            gate_unit = u
+            break
+    if gate_unit is None:
+        return False
+    if read_decision(gate_unit) != "iterate":
+        return False
+
+    bound = iteration_block.get("bound") or {}
+
+    # max_attempts bound: coerce defensively. ANY coercion failure on either
+    # the bound limit OR the counter degrades to "not pending" (rel-2).
+    max_attempts_raw = bound.get("max_attempts")
+    if max_attempts_raw is not None:
+        max_attempts = _try_int(max_attempts_raw)
+        if max_attempts is _COERCE_FAILED:
+            return False
+        attempts = _try_int(ledger.get("iteration_attempts", 0))
+        if attempts is _COERCE_FAILED:
+            return False
+        if attempts >= max_attempts:
+            return False
+
+    # max_wall_seconds bound: same graceful-degrade contract.
+    max_wall_raw = bound.get("max_wall_seconds")
+    if max_wall_raw is not None:
+        max_wall = _try_float(max_wall_raw)
+        if max_wall is _COERCE_FAILED:
+            return False
+        active = _try_float(ledger.get("active_wall_seconds", 0))
+        if active is _COERCE_FAILED:
+            return False
+        if active >= max_wall:
+            return False
+
+    return True
