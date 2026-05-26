@@ -99,12 +99,20 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
     winner)`` — a tiny mutator that the judge agent (or its launcher) calls
     alongside ``record_verdict``. Raises if no winner is named (malformed
     judge verdict is a hard error, not silent empty emission).
+
+    v0.3.0 generalization (KTD §D / U3): the gate unit id is read from
+    ``ledger.iteration.gate_unit`` (defaulting to literal ``"judge"`` so
+    v0.2.0 a2 ledgers without an iteration block keep working). This lets a
+    recipe rename the gate unit without forking the emitter.
     """
+    gate_unit_id = (ledger.get("iteration") or {}).get("gate_unit", "judge")
     judge = next(
-        (u for u in ledger.get("units", []) if u.get("id") == "judge"), None
+        (u for u in ledger.get("units", []) if u.get("id") == gate_unit_id), None
     )
     if judge is None:
-        raise RecipeError("judge_winner_to_work_units: no 'judge' unit in ledger")
+        raise RecipeError(
+            f"judge_winner_to_work_units: no {gate_unit_id!r} unit in ledger"
+        )
     winner_id = (judge.get("dispatch_context") or {}).get("winner_unit_id")
     if not winner_id:
         raise RecipeError(
@@ -159,6 +167,133 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
     return out
 
 
+def iterate_template(ledger: dict, to_phase: str) -> list:
+    """v0.3.0 / KTD §D: re-emit units from a recipe-declared emit_template.
+
+    Materializes ``emit_count`` new units off the recipe's named template at
+    iteration time. Drives the outcomes-gated loop: the gate unit verdicts
+    ``iterate`` with a payload, the engine calls this emitter through
+    ``emit_within_phase``, new sibling units land inside the gate's current
+    phase, and the gate unit resets to pending with extended ``depends_on``.
+
+    The id contract is monotonic — the Nth unit emitted across the WHOLE run
+    gets id ``id_prefix + (counter+N)`` where ``counter`` is the pre-emit
+    ``ledger["iteration_emit_count"]``. The emitter NEVER recounts existing
+    units (round-3 P0-R3-2): after a partial-emit crash the counter may
+    exceed the surviving unit count, and recount-based id assignment would
+    re-use ids that previously existed and got lost. The counter only ever
+    advances; ``_apply_emit`` (lib/ledger.py) bumps it under the flock once
+    PER emitted unit, after this function returns.
+
+    Reads (pure, no ledger mutation):
+      - ``ledger.iteration.gate_unit`` → gate unit id (required; the U5
+        validator enforces this on the recipe, but defense-in-depth: a
+        freshly-mutated ledger missing this field is a recipe-shape error).
+      - ``ledger.iteration.emit_template`` → template name.
+      - ``ledger.emit_templates[<name>]`` → ``{phase, invokes, id_prefix}``.
+      - Gate unit's ``dispatch_context.decision_payload.emit_count`` → N
+        (default 1). Must be int (booleans rejected — ``isinstance(True, int)``
+        is True in Python, and a True payload masquerading as 1 is a
+        misshapen payload, not a valid emit_count). 1 ≤ emit_count ≤ 10
+        (round-3 P1-R3-4: upper bound prevents a misbehaving gate agent from
+        DOS-emitting 1000 units in one tick).
+      - ``ledger.iteration_emit_count`` (default 0 on v0.2.x-shape ledgers)
+        → the monotonic id base.
+
+    Emits N partial unit dicts. Each carries ``phase`` + ``invokes`` from
+    the template, an explicit id (so ``_apply_emit``'s setdefault doesn't
+    override), an empty ``depends_on`` (the gate unit's depends_on is
+    extended by ``reset_for_iteration``, not the new units'), and an empty
+    ``dispatch_context`` (the gate's payload is per-iteration; the new
+    units are blanks for the next round of plan-work).
+
+    Raises ``RecipeError`` on any contract violation (no iteration block,
+    template name not found, emit_count out of range or wrong type, gate
+    unit missing from the ledger).
+    """
+    iteration = ledger.get("iteration")
+    if not iteration:
+        raise RecipeError(
+            "iterate_template: ledger has no 'iteration' block — recipe must "
+            "declare iteration.{gate_unit, emit_template} to use this emitter"
+        )
+
+    gate_unit_id = iteration.get("gate_unit")
+    if not gate_unit_id:
+        raise RecipeError(
+            "iterate_template: iteration.gate_unit is missing — the recipe "
+            "must name the gate unit (U5 validator should have rejected this)"
+        )
+
+    template_name = iteration.get("emit_template")
+    if not template_name:
+        raise RecipeError(
+            "iterate_template: iteration.emit_template is missing — the recipe "
+            "must name the emit_templates entry to re-emit from"
+        )
+
+    emit_templates = ledger.get("emit_templates") or {}
+    template = emit_templates.get(template_name)
+    if template is None:
+        raise RecipeError(
+            f"iterate_template: emit_templates[{template_name!r}] not in "
+            f"ledger; available: {sorted(emit_templates)!r}"
+        )
+
+    id_prefix = template.get("id_prefix")
+    if not id_prefix:
+        raise RecipeError(
+            f"iterate_template: emit_templates[{template_name!r}].id_prefix "
+            "is missing (U5 validator should have rejected this)"
+        )
+
+    # Find the gate unit to read its decision_payload.emit_count.
+    gate = next(
+        (u for u in ledger.get("units", []) if u.get("id") == gate_unit_id), None
+    )
+    if gate is None:
+        raise RecipeError(
+            f"iterate_template: gate unit {gate_unit_id!r} not in ledger.units"
+        )
+
+    decision_payload = (
+        (gate.get("dispatch_context") or {}).get("decision_payload") or {}
+    )
+    emit_count = decision_payload.get("emit_count", 1)
+
+    # Validate emit_count. Reject bool first — `isinstance(True, int)` is True
+    # in Python, and a True payload silently treated as 1 is a misshapen
+    # payload, not a valid emit_count.
+    if isinstance(emit_count, bool) or not isinstance(emit_count, int):
+        raise RecipeError(
+            f"iterate_template: emit_count must be int in [1, 10]; "
+            f"got {emit_count!r} (type {type(emit_count).__name__})"
+        )
+    if emit_count < 1 or emit_count > 10:
+        raise RecipeError(
+            f"iterate_template: emit_count must be int in [1, 10]; got {emit_count}"
+        )
+
+    # Read the monotonic counter — the pre-emit base. _apply_emit (ledger.py)
+    # bumps this PER appended unit, AFTER we return. So id math here is pure
+    # arithmetic on the pre-emit value; this emitter NEVER writes the counter.
+    base = int(ledger.get("iteration_emit_count", 0))
+
+    template_phase = template.get("phase", to_phase)
+    template_invokes = template.get("invokes") or {}
+
+    return [
+        {
+            "id": f"{id_prefix}{base + i + 1}",
+            "phase": template_phase,
+            "depends_on": [],
+            "invokes": dict(template_invokes),
+            "dispatch_context": {},
+        }
+        for i in range(emit_count)
+    ]
+
+
 # NAME → emitter function. `recipes.V1_EMITTER_NAMES` mirrors these keys; a U5b
 # test asserts the two sets are equal so a recipe can never name an emitter that
 # isn't registered here (and the registry can't drift from the validator).
@@ -166,6 +301,7 @@ REGISTRY = {
     "plan_output_to_work_units": plan_output_to_work_units,
     "judge_winner_to_work_units": judge_winner_to_work_units,
     "plan_output_to_paired_builders": plan_output_to_paired_builders,
+    "iterate_template": iterate_template,
 }
 
 
