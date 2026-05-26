@@ -40,10 +40,12 @@ units list. Fields:
   the gate's effective decision is `iterate` and the bound is unbreached,
   which short-circuits an otherwise-met predicate so the tick yields back
   for another work pass.
-- `kill_switch` — rendered only when the fenced
-  `CLAUDE_AUTO_DISABLE_ITERATION` + `CLAUDE_AUTO_TEST_HARNESS` pair is
-  live (KTD §D / iteration kill-switch fence), printed as `DISABLED via
-  CLAUDE_AUTO_DISABLE_ITERATION`.
+- `kill_switch` — rendered when the operator has set
+  `CLAUDE_AUTO_DISABLE_ITERATION=1` (post-F5 unfence; the test-harness
+  sentinel is no longer required). Printed as `DISABLED via
+  CLAUDE_AUTO_DISABLE_ITERATION`. Indicates the iteration check is
+  short-circuited at every tick — the recipe behaves as v0.2.x for the
+  duration the env var is set.
 
 Each unit's listing also gains a `bound_exit:` sub-bullet (alongside
 `finding:`) when `dispatch_context.bound_override` is present — it shows

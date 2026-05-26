@@ -33,6 +33,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    is_iteration_disabled,
     load_ledger,
     load_lib_module,
     resolve_repo,
@@ -112,7 +113,8 @@ def _render_iteration_section(led: dict) -> None:
       • last_active — last_active_at (only if non-null)
       • iteration_pending — exit_predicate_result.iteration_pending (if present)
       • kill_switch — "DISABLED via CLAUDE_AUTO_DISABLE_ITERATION" when the
-        fenced env pair is set, else omitted
+        operator env var is set (post-F5 unfence — no harness sentinel
+        required), else omitted
 
     Read-only. Reads CACHED iteration_pending from the predicate result, never
     recomputes (memory `feedback_loop_monitor_terminal_state_field`).
@@ -156,11 +158,10 @@ def _render_iteration_section(led: dict) -> None:
             f"    iteration_pending: {epr.get('iteration_pending')}\n"
         )
 
-    # Kill-switch: render ONLY when the fenced pair is live. Routed through
-    # the same `test_hatch_enabled` helper that lib/tick.py uses (KTD §D /
-    # Iteration kill-switch fence). F5 may unfence this; F1 mirrors the
-    # current bootstrap gate.
-    if test_hatch_enabled("CLAUDE_AUTO_DISABLE_ITERATION"):
+    # Kill-switch: render when the operator has set the env var. Routed
+    # through is_iteration_disabled (F5 unfence) — the SAME helper tick.py
+    # uses, so /auto-status and the actual iteration check can never disagree.
+    if is_iteration_disabled():
         sys.stdout.write(
             "    kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION\n"
         )

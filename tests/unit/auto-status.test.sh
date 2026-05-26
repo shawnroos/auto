@@ -265,20 +265,20 @@ case "$BO_OUT" in
 $BO_OUT" ;;
 esac
 
-# ─── Scenario 8: kill-switch fence honors BOTH env vars ────────────────────
+# ─── Scenario 8: kill-switch (F5 unfence — operator env var only) ───────────
 # Sub-case 8a: CLAUDE_AUTO_DISABLE_ITERATION=1 alone, NO test-harness sentinel.
-# Run.sh exports CLAUDE_AUTO_TEST_HARNESS=1 by default, so explicitly UNSET it
-# for this single invocation to prove the fence requires both.
+# Post-F5 the kill-switch is operator-only — is_iteration_disabled() reads
+# only CLAUDE_AUTO_DISABLE_ITERATION (not the test_hatch_enabled pair).
 KS_NO_HARNESS_OUT="$(CLAUDE_AUTO_DISABLE_ITERATION=1 env -u CLAUDE_AUTO_TEST_HARNESS CLAUDE_AUTO_REPO="$REPO" bash "$STATUS_SH" "$ITER_RUN" 2>&1)"
 
-it "kill_switch OMITTED when DISABLE_ITERATION=1 but TEST_HARNESS unset"
-assert_not_contains "$KS_NO_HARNESS_OUT" "kill_switch" "kill_switch no-harness"
+it "kill_switch RENDERED when DISABLE_ITERATION=1 alone (post-F5 unfence)"
+assert_contains "$KS_NO_HARNESS_OUT" "kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION" "kill_switch operator-only"
 
-# Sub-case 8b: both env vars set → kill_switch rendered.
-KS_BOTH_OUT="$(CLAUDE_AUTO_DISABLE_ITERATION=1 CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_REPO="$REPO" bash "$STATUS_SH" "$ITER_RUN" 2>&1)"
+# Sub-case 8b: env var unset → kill_switch line omitted.
+KS_UNSET_OUT="$(env -u CLAUDE_AUTO_DISABLE_ITERATION CLAUDE_AUTO_REPO="$REPO" bash "$STATUS_SH" "$ITER_RUN" 2>&1)"
 
-it "kill_switch rendered when BOTH TEST_HARNESS=1 AND DISABLE_ITERATION=1"
-assert_contains "$KS_BOTH_OUT" "kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION" "kill_switch both"
+it "kill_switch OMITTED when DISABLE_ITERATION unset"
+assert_not_contains "$KS_UNSET_OUT" "kill_switch" "kill_switch off"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
