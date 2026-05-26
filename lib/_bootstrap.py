@@ -110,11 +110,19 @@ def test_hatch_enabled(hatch_var: str) -> bool:
     this one helper. A production user who exports a specific hatch by accident
     will NOT also have ``CLAUDE_AUTO_TEST_HARNESS=1`` exported, so the hatch
     stays inert. tests/run.sh exports the sentinel once at the top of every test
-    invocation, so the eight existing hatches (NO_TICK_LOCK, NO_REENQUEUE,
+    invocation, so the existing hatches (NO_TICK_LOCK, NO_REENQUEUE,
     NO_STALENESS_CHECK, FORCE_THREETIER_GATING, NO_RECOMPUTE, NO_LOCK,
     NO_ATTEMPT_CHECK, NO_STALLED_RECOVERY) and any future hatches inherit the
     fence for free. Deterministic, grep-checkable mechanism — composes with
     feedback_deterministic_over_probabilistic_v1.
+
+    v0.3.0 U4 adds a non-test hatch fenced by the same sentinel:
+    ``CLAUDE_AUTO_DISABLE_ITERATION`` (read by ``tick.advance_iteration_loop``)
+    is the iteration kill-switch. It mirrors the task #31 fence shape so a
+    stray production export of the hatch alone has no effect; the
+    test-harness-fenced semantic is acceptable because the kill-switch is
+    primarily a debugging aid, not a runtime-tunable knob. (KTD §D /
+    Iteration kill-switch fence.)
     """
     return (
         os.environ.get("CLAUDE_AUTO_TEST_HARNESS") == "1"
