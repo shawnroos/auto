@@ -83,6 +83,16 @@ _KNOWN_TOPLEVEL = frozenset(
         # bound block, and the iteration↔emit_templates pairing rule.
         "iteration",
         "emit_templates",
+        # v0.3.0 fix-pass F4: ADV-2 + maint-4 (depends_on carve-out is too
+        # loose). Recipes that use a non-iterate emitter to produce concrete
+        # unit ids consumed by a structural unit's depends_on must DECLARE
+        # those ids here. The validator then accepts depends_on members that
+        # are EITHER in units[], OR in expected_emit_outputs, OR plausibly
+        # produced by iterate_template's id math (`{id_prefix}{N}` shape).
+        # Prior carve-out accepted any depends_on string starting with an
+        # emit_template id_prefix — `"build-typo"` would pass against
+        # id_prefix `"build-"` even though no emitter would ever produce it.
+        "expected_emit_outputs",
     }
 )
 _KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes"})
@@ -230,13 +240,25 @@ def validate(recipe: dict) -> None:
     # structurally-declared unit (e.g., A4's `compare` after U6) may name a
     # builder id like `build-clarity` in its `depends_on` even though no
     # `units[]` entry has that exact id yet — the matching builder is materialized
-    # at iteration time by `iterate_template` from an `emit_templates` entry
-    # whose `id_prefix` is `"build-"`. Without this carve-out the U5 validator
-    # would reject A4's structural `compare`, contradicting U6's "compare is
-    # structural, not emitter-synthesized" contract. Symmetric with the
-    # `gate_unit` carve-out below (~ line 318-328): both forward-reference
-    # emit_template id_prefixes via startswith semantics (depends_on values are
-    # concrete ids, not prefixes).
+    # at run time by an emitter. Two emit-shapes are legitimate:
+    #
+    #   (a) `iterate_template` materializes `{id_prefix}{N}` where N is a
+    #       positive int derived from `iteration_emit_count`. ANY id whose
+    #       suffix-after-prefix is a positive int is plausibly produced by
+    #       iterate; that's the exact id math from `lib/emitters.py:iterate_template`.
+    #
+    #   (b) A non-iterate emitter (e.g., `plan_output_to_paired_builders`)
+    #       produces explicitly-named ids (`build-clarity`, `build-perf`). The
+    #       prior carve-out matched these solely because the literal string
+    #       starts with `"build-"`, which would equally accept the non-producible
+    #       `"build-typo"` (F4: ADV-2 + maint-4). The fix requires the recipe to
+    #       DECLARE these ids via the top-level `expected_emit_outputs` list, so
+    #       the validator's acceptance is grounded in the author's stated
+    #       producer-output contract, not a literal-prefix coincidence.
+    #
+    # Symmetric with the `gate_unit` carve-out below: that one's looser
+    # semantics (gate_unit MAY equal an id_prefix) are documented in place and
+    # specific to gate-eligibility, not depends_on integrity.
     emit_templates_dict = recipe.get("emit_templates") or {}
     emit_prefixes_for_deps = set()
     if isinstance(emit_templates_dict, dict):
@@ -244,15 +266,47 @@ def validate(recipe: dict) -> None:
             if isinstance(_tmpl, dict) and isinstance(_tmpl.get("id_prefix"), str):
                 emit_prefixes_for_deps.add(_tmpl["id_prefix"])
 
+    # F4: validate expected_emit_outputs shape (list of non-empty strings).
+    expected_emit_outputs = recipe.get("expected_emit_outputs")
+    if expected_emit_outputs is not None:
+        if not isinstance(expected_emit_outputs, list):
+            _bad("expected_emit_outputs must be a list of strings")
+        for eeo in expected_emit_outputs:
+            if not isinstance(eeo, str) or not eeo:
+                _bad(
+                    f"expected_emit_outputs entries must be non-empty strings; "
+                    f"got {eeo!r}"
+                )
+    expected_emit_outputs_set = set(expected_emit_outputs or [])
+
+    def _matches_iterate_shape(dep_id: str) -> bool:
+        """Is ``dep_id`` plausibly an `iterate_template` output?
+
+        iterate_template emits ids of the form ``{id_prefix}{N}`` where N is a
+        positive int (see ``lib/emitters.py``: ``f"{id_prefix}{base + i + 1}"``,
+        with base >= 0 and i >= 0). For depends_on validation we accept any
+        prefix-match whose remainder parses as a positive int — string
+        ``"build-1"`` matches, ``"build-typo"`` does not.
+        """
+        for p in emit_prefixes_for_deps:
+            if not dep_id.startswith(p) or dep_id == p:
+                continue
+            suffix = dep_id[len(p):]
+            if suffix.isdigit() and int(suffix) >= 1:
+                return True
+        return False
+
     # depends_on integrity — a second pass once all ids are known.
     for u in recipe["units"]:
         for d in u.get("depends_on", []):
             if d in unit_ids:
                 continue
-            # Carve-out: depends_on may forward-reference units produced by an
-            # emit_template (matched via id_prefix). U6 structural-compare
-            # contract.
-            if any(d.startswith(p) for p in emit_prefixes_for_deps):
+            # F4 carve-out (tightened): depends_on may forward-reference EITHER
+            # (a) an iterate-shaped id (`{id_prefix}{positive_int}`) OR
+            # (b) a member of expected_emit_outputs declared by the recipe.
+            if _matches_iterate_shape(d):
+                continue
+            if d in expected_emit_outputs_set:
                 continue
             _bad(f"unit {u['id']!r}: depends_on references unknown unit {d!r}")
 

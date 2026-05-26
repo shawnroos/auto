@@ -12,6 +12,7 @@
     {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}},
     {"id": "compare", "phase": "work", "depends_on": ["build-clarity", "build-perf"], "invokes": {"adapter_op": "review", "prompt_template": "compare.md"}}
   ],
+  "expected_emit_outputs": ["build-clarity", "build-perf"],
   "iteration": {
     "gate_unit": "compare",
     "emit_template": "bias-builder",
