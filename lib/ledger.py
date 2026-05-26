@@ -758,6 +758,30 @@ def init_ledger(
                 raise LedgerError("unit missing 'id'")
             norm_units.append(_normalize_unit(u, loop_phase=loop_phase))
 
+        # v0.3.0 fix-pass F0: seed iteration_emit_count from max numeric
+        # suffix of unit ids that already match any emit_templates[*].id_prefix.
+        # iterate_template (lib/emitters.py) computes the next id as
+        # `f"{id_prefix}{seed + i + 1}"`. If a recipe declares both
+        # `units: [plan-1, plan-2, plan-3]` AND `emit_templates.<x>.id_prefix =
+        # "plan-"`, seeding to 0 makes the first iterate emit `plan-1` — which
+        # collides with the recipe-declared unit and livelocks the run until
+        # max_wall_seconds. Pre-seeding to max-existing-suffix produces
+        # `plan-4` on the first iterate, matching what the integration test
+        # always asserted. Cross-reviewer P0 (ADV-1 + testing + correctness).
+        seed_count = 0
+        if emit_templates:
+            for tmpl in emit_templates.values():
+                prefix = (tmpl or {}).get("id_prefix")
+                if not prefix:
+                    continue
+                for unit in norm_units:
+                    uid = unit.get("id", "")
+                    if not uid.startswith(prefix):
+                        continue
+                    suffix = uid[len(prefix):]
+                    if suffix.isdigit():
+                        seed_count = max(seed_count, int(suffix))
+
         ledger = {
             "run_id": run_id,
             "loop_phase": loop_phase,
@@ -798,7 +822,7 @@ def init_ledger(
             "active_wall_seconds": 0,
             "last_active_at": None,
             "iteration_attempts": 0,
-            "iteration_emit_count": 0,
+            "iteration_emit_count": seed_count,
             # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
             # ledger at init so the engine's iteration check (advance_iteration_loop)
             # and the iterate_template emitter find them at every tick. None on a

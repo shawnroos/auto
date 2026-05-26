@@ -98,7 +98,7 @@ led0 = ledger.read_ledger(repo, run_id)
 assert led0.get("iteration"), f"iteration block missing on ledger after init: {sorted(led0.keys())!r}"
 assert led0.get("emit_templates"), "emit_templates missing on ledger after init"
 assert led0["iteration"]["gate_unit"] == "judge", led0["iteration"]
-assert led0["iteration_emit_count"] == 0, f"iteration_emit_count={led0['iteration_emit_count']!r}"
+assert led0["iteration_emit_count"] == 3, f"iteration_emit_count={led0['iteration_emit_count']!r}"  # F0: init_ledger seeds from max numeric suffix matching id_prefix; a2 has plan-1/2/3 + id_prefix='plan-' → seed=3 (production-faithful — the test no longer rigs this)
 
 # Step 2: prime plan units' enumerated_units (needed for GREEN's downstream
 # emitter), set gaps_open=0 + plan_step=review_plan so predicate composition
@@ -121,14 +121,12 @@ def seed(L):
         L["iteration_attempts"] = 5
 ledger._with_locked_ledger(repo, run_id, seed)
 
-# Bump emit_count to 3 so the iterate_template's id math is "plan-4" (counter
-# is the monotonic emit-id; 3 initial plans = counter base 3 → next is plan-4).
-# Test note: this is contract-faithful — the 3 planks weren't materialized via
-# iterate_template (they're recipe-declared in units[]) so the counter would
-# otherwise be 0. We seed to 3 so the ITERATE assertion is testable.
-def seed_counter(L):
-    L["iteration_emit_count"] = 3
-ledger._with_locked_ledger(repo, run_id, seed_counter)
+# F0 fix-pass: NO MANUAL COUNTER SEEDING. init_ledger now seeds
+# iteration_emit_count from the max numeric suffix of unit ids matching any
+# emit_templates[*].id_prefix. For a2 (units=plan-1/2/3, id_prefix='plan-'),
+# the production seed is 3 — the first iterate naturally produces 'plan-4'.
+# Before this fix, the test masked a P0 emit-id collision by rigging the
+# counter; now the production path and the test path are the same path.
 
 # Step 3: dispatch the judge unit + write its verdict per scenario via the
 # PRODUCTION path (record_verdict + set_verdict_decision). dispatch must come
@@ -221,6 +219,79 @@ res="$(drive_a2 bound)"
 case "$res" in
   "done|5||verdict-returned|yes") pass ;;
   *) fail "expected 'done|5||verdict-returned|yes', got '$res'" ;;
+esac
+
+# ─── DF Scenario 4: counter-init-seed-prevents-emit-collision ───────────────
+# WHY: v0.3.0 review-round-1 surfaced a cross-reviewer P0 (ADV-1 + testing +
+# correctness). When init_ledger naively seeded `iteration_emit_count = 0`,
+# iterate_template's first emit produced `plan-1` — which collides with the
+# recipe-declared `plan-1` unit, raising LedgerError in _apply_emit. The
+# previous version of THIS test rigged the counter to 3 post-init, masking
+# the bug. F0 closes it: init_ledger now scans units[] for the max numeric
+# suffix matching any emit_templates[*].id_prefix and seeds to that.
+#
+# This DF probes BOTH directions of the contract:
+#   (a) GREEN: init_ledger of a "plan-1/2/3 + id_prefix='plan-'" recipe shape
+#       MUST seed iteration_emit_count=3 (proving the F0 fix is wired).
+#   (b) GREEN: init_ledger of a non-iteration shape (no emit_templates) MUST
+#       seed iteration_emit_count=0 (proving F0 doesn't over-fire).
+#   (c) GREEN: init_ledger of a "build-clarity/build-perf + id_prefix='build-'"
+#       shape (a4-like, word-suffixed) MUST seed iteration_emit_count=0
+#       (proving F0's isdigit() check correctly skips non-numeric suffixes).
+#
+# These three cases lock the F0 invariant against silent regression: if the
+# seed logic is reverted to 0, (a) fails; if the seed logic over-fires on
+# missing emit_templates, (b) fails; if it greedy-matches non-numeric
+# suffixes, (c) fails.
+it "F0 DF: init_ledger seeds iteration_emit_count from max numeric suffix matching id_prefix"
+res="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, importlib.util, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_ledger
+ledger = load_ledger()
+
+with tempfile.TemporaryDirectory() as repo:
+    # (a) a2-shape: plan-1/2/3 + id_prefix 'plan-' → expect seed=3
+    led_a = ledger.init_ledger(
+        repo, "df-a", adapter="ce",
+        units=[{"id":"plan-1","phase":"plan"},
+               {"id":"plan-2","phase":"plan"},
+               {"id":"plan-3","phase":"plan"},
+               {"id":"judge","phase":"work","depends_on":["plan-1","plan-2","plan-3"]}],
+        iteration={"gate_unit":"judge","emit_template":"pc",
+                   "bound":{"max_attempts":5}},
+        emit_templates={"pc":{"phase":"plan","invokes":{},"id_prefix":"plan-"}})
+    assert led_a["iteration_emit_count"] == 3, f"(a) expected 3, got {led_a['iteration_emit_count']}"
+
+    # (b) no emit_templates → expect seed=0 (F0 is a no-op when emit_templates is None)
+    led_b = ledger.init_ledger(
+        repo, "df-b", adapter="ce",
+        units=[{"id":"plan-1","phase":"plan"},{"id":"plan-2","phase":"plan"}])
+    assert led_b["iteration_emit_count"] == 0, f"(b) expected 0, got {led_b['iteration_emit_count']}"
+
+    # (c) a4-shape: word-suffixed units (build-clarity/build-perf) + id_prefix
+    # 'build-' → expect seed=0 (isdigit() filters non-numeric suffixes).
+    # NOTE: a4's actual production recipe has NO 'build-*' units in units[] —
+    # those are emitted by plan_output_to_paired_builders. This synthetic
+    # scenario probes the F0 isdigit guard directly.
+    led_c = ledger.init_ledger(
+        repo, "df-c", adapter="ce",
+        units=[{"id":"plan","phase":"plan"},
+               {"id":"build-clarity","phase":"work","depends_on":["plan"]},
+               {"id":"build-perf","phase":"work","depends_on":["plan"]},
+               {"id":"compare","phase":"work","depends_on":["build-clarity","build-perf"]}],
+        iteration={"gate_unit":"compare","emit_template":"bb",
+                   "bound":{"max_attempts":4}},
+        emit_templates={"bb":{"phase":"work","invokes":{},"id_prefix":"build-"}})
+    assert led_c["iteration_emit_count"] == 0, f"(c) expected 0, got {led_c['iteration_emit_count']}"
+
+print("OK")
+PYEOF
+)"
+case "$res" in
+  *OK*) pass ;;
+  *) fail "F0 DF assertions failed: $res" ;;
 esac
 
 # ─── summary ────────────────────────────────────────────────────────────────
