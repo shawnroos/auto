@@ -303,6 +303,175 @@ assert_eq "u,do_unit,p/x.md" "$(reg unit-for-merge)"
 it "validate_and_lint warns: phase with no units + no emitter"
 assert_eq "warned" "$(reg lint-empty-phase)"
 
+# ─── U5 (v0.3.0): iteration + emit_templates validation ─────────────────────
+# Twelve scenarios covering R2, R3, R7 (a1/W backward compat), the pairing
+# rule per round-3 P2 #21 (iteration WITHOUT emit_templates is valid IFF
+# iteration.emit_template is also absent), and the editorial warnings.
+# Plus one DELIBERATE-FAIL probe (gate_unit ghost) — Edit removes the check,
+# the test goes RED, Edit restores.
+itr() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+recipes = load_lib_module("recipes")
+op = sys.argv[2]
+
+def vresult(d):
+    try:
+        recipes.validate(d); return "valid"
+    except recipes.RecipeError:
+        return "rejected"
+
+# Full v0.3.0 A2 recipe shape — the GREEN reference. Per the plan's
+# High-Level Technical Design block (lines 158-187). Every error-case test
+# below mutates a single field off this base.
+def a2_v030():
+    return {
+        "name": "a2", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan-1", "phase": "plan", "invokes": {}},
+            {"id": "plan-2", "phase": "plan", "invokes": {}},
+            {"id": "plan-3", "phase": "plan", "invokes": {}},
+            {"id": "judge", "phase": "work",
+             "depends_on": ["plan-1","plan-2","plan-3"], "invokes": {}},
+        ],
+        "phase_transitions": [
+            {"from": "plan", "to": "work", "emitter": "judge_winner_to_work_units"}
+        ],
+        "iteration": {
+            "gate_unit": "judge",
+            "emit_template": "plan-candidate",
+            "bound": {"max_attempts": 5, "max_wall_seconds": 1800},
+        },
+        "emit_templates": {
+            "plan-candidate": {
+                "phase": "plan",
+                "invokes": {"adapter_op": "next_plan_step"},
+                "id_prefix": "plan-",
+            }
+        },
+    }
+
+if op == "a2-v030-happy":
+    print(vresult(a2_v030()))
+
+elif op == "a1-still-valid":
+    # R7: v0.2.0 a1 shape (no iteration, no emit_templates) still validates.
+    with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
+        print(vresult(json.load(f)))
+
+elif op == "w-still-valid":
+    # R7: W recipe (no iteration, no emit_templates) still validates.
+    with open(os.path.join(auto_root, "recipes", "w.json")) as f:
+        print(vresult(json.load(f)))
+
+elif op == "gate-unit-ghost":
+    r = a2_v030()
+    r["iteration"]["gate_unit"] = "ghost"
+    print(vresult(r))
+
+elif op == "emit-template-missing":
+    r = a2_v030()
+    r["iteration"]["emit_template"] = "does-not-exist"
+    print(vresult(r))
+
+elif op == "bound-negative":
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = -1
+    print(vresult(r))
+
+elif op == "bound-string":
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = "5"
+    print(vresult(r))
+
+elif op == "emit-template-phase-bad":
+    r = a2_v030()
+    r["emit_templates"]["plan-candidate"]["phase"] = "nonexistent"
+    print(vresult(r))
+
+elif op == "pairing-template-without-templates":
+    # iteration.emit_template named but emit_templates ABSENT → must reject.
+    # The round-3 P2 #21 relaxation only applies when iteration.emit_template
+    # is ALSO absent (bare iteration: re-engage gate, no new siblings).
+    r = a2_v030()
+    del r["emit_templates"]
+    # iteration.emit_template is "plan-candidate" — points at a now-missing key
+    print(vresult(r))
+
+elif op == "pairing-bare-iteration-valid":
+    # Round-3 P2 #21 relaxation: iteration without emit_template is valid;
+    # emit_templates may be absent too. Supports A4's "re-compare without new
+    # candidates" use case.
+    r = a2_v030()
+    del r["emit_templates"]
+    del r["iteration"]["emit_template"]
+    print(vresult(r))
+
+elif op == "bound-missing-max-attempts":
+    r = a2_v030()
+    del r["iteration"]["bound"]["max_attempts"]
+    print(vresult(r))
+
+elif op == "lint-max-attempts-loud":
+    # Editorial — max_attempts = 15 > 10 → warning surface.
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = 15
+    warns = recipes.validate_and_lint(r)
+    print("warned" if any("max_attempts" in w for w in warns) else "no-warning")
+
+elif op == "lint-max-wall-short":
+    # Editorial — max_wall_seconds < 60 → warning surface.
+    r = a2_v030()
+    r["iteration"]["bound"]["max_wall_seconds"] = 30
+    warns = recipes.validate_and_lint(r)
+    print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
+PYEOF
+}
+
+it "U5 happy path: full A2 v0.3.0 recipe (iteration + emit_templates) validates"
+assert_eq "valid" "$(itr a2-v030-happy)"
+
+it "U5 R7: a1 (no iteration, no emit_templates) still validates"
+assert_eq "valid" "$(itr a1-still-valid)"
+
+it "U5 R7: W (no iteration, no emit_templates) still validates"
+assert_eq "valid" "$(itr w-still-valid)"
+
+it "U5 error: iteration.gate_unit references nonexistent unit ('ghost') → rejected"
+assert_eq "rejected" "$(itr gate-unit-ghost)"
+
+it "U5 error: iteration.emit_template references missing template key → rejected"
+assert_eq "rejected" "$(itr emit-template-missing)"
+
+it "U5 error: iteration.bound.max_attempts = -1 → rejected"
+assert_eq "rejected" "$(itr bound-negative)"
+
+it "U5 error: iteration.bound.max_attempts = '5' (string) → rejected"
+assert_eq "rejected" "$(itr bound-string)"
+
+it "U5 error: emit_templates.<x>.phase not in phase_order → rejected"
+assert_eq "rejected" "$(itr emit-template-phase-bad)"
+
+it "U5 error: iteration.emit_template present but emit_templates absent → rejected (pairing)"
+assert_eq "rejected" "$(itr pairing-template-without-templates)"
+
+it "U5 relaxed pairing: bare iteration (no emit_template, no emit_templates) → valid"
+assert_eq "valid" "$(itr pairing-bare-iteration-valid)"
+
+it "U5 error: iteration.bound missing max_attempts (required) → rejected"
+assert_eq "rejected" "$(itr bound-missing-max-attempts)"
+
+it "U5 editorial: validate_and_lint warns on max_attempts > 10"
+assert_eq "warned" "$(itr lint-max-attempts-loud)"
+
+it "U5 editorial: validate_and_lint warns on max_wall_seconds < 60"
+assert_eq "warned" "$(itr lint-max-wall-short)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "recipes.test.sh: ${PASS} passed, ${FAIL} failed"

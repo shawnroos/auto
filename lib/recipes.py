@@ -72,9 +72,21 @@ _KNOWN_TOPLEVEL = frozenset(
         "terminal_phase",
         "phase_transitions",
         "units",
+        # v0.3.0 (U5): outcomes-gated iteration. Both fields are ADDITIVE — a
+        # v0.2.x recipe that declares neither still validates (R7). The
+        # validator block below cross-checks shape, gate_unit references, the
+        # bound block, and the iteration↔emit_templates pairing rule.
+        "iteration",
+        "emit_templates",
     }
 )
 _KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes"})
+# v0.3.0 (U5): the field set an emit_templates ENTRY may carry. Same depth as
+# `_KNOWN_UNIT_KEYS` for `units[]` — mechanical reject of unknown inner keys so
+# a typo in a template ("invoke" vs "invokes") doesn't silently no-op at emit.
+_KNOWN_EMIT_TEMPLATE_KEYS = frozenset({"phase", "invokes", "id_prefix"})
+_KNOWN_ITERATION_KEYS = frozenset({"gate_unit", "emit_template", "bound"})
+_KNOWN_ITERATION_BOUND_KEYS = frozenset({"max_attempts", "max_wall_seconds"})
 
 
 # A1 (Classic CE Stack) as a Python constant — the canonical runtime fallback
@@ -236,6 +248,133 @@ def validate(recipe: dict) -> None:
                 f"unknown emitter {pt['emitter']!r} — V1 recipes may only name "
                 f"one of {sorted(V1_EMITTER_NAMES)}"
             )
+
+    # ────────────────────────────────────────────────────────────────────
+    # v0.3.0 (U5): iteration + emit_templates validation. Both fields are
+    # OPTIONAL — a v0.2.x recipe declares neither and validates as before
+    # (R7 backward compat). When either is present, validate shape, the
+    # cross-references between them, and the pairing rule below.
+    iteration = recipe.get("iteration")
+    emit_templates = recipe.get("emit_templates")
+
+    if emit_templates is not None:
+        if not isinstance(emit_templates, dict):
+            _bad("emit_templates must be a JSON object")
+        for tmpl_name, tmpl in emit_templates.items():
+            if not isinstance(tmpl, dict):
+                _bad(f"emit_templates[{tmpl_name!r}] must be a JSON object")
+            for tk in tmpl:
+                if tk not in _KNOWN_EMIT_TEMPLATE_KEYS:
+                    _bad(
+                        f"emit_templates[{tmpl_name!r}]: unknown field {tk!r}; "
+                        f"known: {sorted(_KNOWN_EMIT_TEMPLATE_KEYS)}"
+                    )
+            for req_k in ("phase", "invokes", "id_prefix"):
+                if req_k not in tmpl:
+                    _bad(f"emit_templates[{tmpl_name!r}]: missing required field {req_k!r}")
+            tphase = tmpl["phase"]
+            if tphase not in phase_order:
+                _bad(
+                    f"emit_templates[{tmpl_name!r}]: phase {tphase!r} not in "
+                    f"phase_order {phase_order!r}"
+                )
+            tinv = tmpl["invokes"]
+            # Mirror existing `units[].invokes` validation depth (line 206-210):
+            # invokes must be a dict; prompt_template path-bounded if present.
+            # We don't constrain inner keys (no whitelist) — `_KNOWN_UNIT_KEYS`
+            # doesn't constrain `invokes`'s inner keys either, so we don't add
+            # a stricter contract here. The adapter contract bounds those.
+            if not isinstance(tinv, dict):
+                _bad(f"emit_templates[{tmpl_name!r}]: invokes must be an object")
+            if "prompt_template" in tinv:
+                _check_prompt_template(tinv["prompt_template"], f"emit_templates[{tmpl_name!r}]")
+            tprefix = tmpl["id_prefix"]
+            if not isinstance(tprefix, str) or not tprefix:
+                _bad(f"emit_templates[{tmpl_name!r}]: id_prefix must be a non-empty string")
+
+    if iteration is not None:
+        if not isinstance(iteration, dict):
+            _bad("iteration must be a JSON object")
+        for ik in iteration:
+            if ik not in _KNOWN_ITERATION_KEYS:
+                _bad(
+                    f"iteration: unknown field {ik!r}; known: "
+                    f"{sorted(_KNOWN_ITERATION_KEYS)}"
+                )
+        # gate_unit is required and must reference a unit_id OR an
+        # emit_templates entry's id_prefix. The latter is a defensive carve-out
+        # per round-3 P2 #21 — A4's `compare` lands in `units[]` explicitly per
+        # U6, so the carve-out is forward-looking insurance for future recipes.
+        if "gate_unit" not in iteration:
+            _bad("iteration: missing required field 'gate_unit'")
+        gate = iteration["gate_unit"]
+        if not isinstance(gate, str) or not gate:
+            _bad("iteration.gate_unit must be a non-empty string")
+        emit_prefixes = set()
+        if isinstance(emit_templates, dict):
+            for tmpl in emit_templates.values():
+                if isinstance(tmpl, dict) and isinstance(tmpl.get("id_prefix"), str):
+                    emit_prefixes.add(tmpl["id_prefix"])
+        if gate not in unit_ids and gate not in emit_prefixes:
+            _bad(
+                f"iteration.gate_unit {gate!r} not in units[] (ids: "
+                f"{sorted(unit_ids)!r}) and not declared as an emit_templates "
+                f"id_prefix (prefixes: {sorted(emit_prefixes)!r})"
+            )
+
+        # bound is required (max_attempts inside is required; max_wall_seconds
+        # optional). Per [[feedback_deterministic_over_probabilistic_v1]], bounds
+        # are engine-enforced — they live in the recipe so the engine can't be
+        # fooled into running forever by a misbehaving gate agent.
+        if "bound" not in iteration:
+            _bad("iteration: missing required field 'bound'")
+        bound = iteration["bound"]
+        if not isinstance(bound, dict):
+            _bad("iteration.bound must be a JSON object")
+        for bk in bound:
+            if bk not in _KNOWN_ITERATION_BOUND_KEYS:
+                _bad(
+                    f"iteration.bound: unknown field {bk!r}; known: "
+                    f"{sorted(_KNOWN_ITERATION_BOUND_KEYS)}"
+                )
+        if "max_attempts" not in bound:
+            _bad("iteration.bound: missing required field 'max_attempts'")
+        ma = bound["max_attempts"]
+        # Reject bool first — `bool` is a subclass of `int` in Python, so a
+        # plain `isinstance(ma, int)` would accept True/False here.
+        if isinstance(ma, bool) or not isinstance(ma, int) or ma <= 0:
+            _bad(
+                f"iteration.bound.max_attempts must be a positive int; got "
+                f"{ma!r}"
+            )
+        if "max_wall_seconds" in bound:
+            mw = bound["max_wall_seconds"]
+            if isinstance(mw, bool) or not isinstance(mw, int) or mw <= 0:
+                _bad(
+                    f"iteration.bound.max_wall_seconds must be a positive int; "
+                    f"got {mw!r}"
+                )
+
+        # emit_template is OPTIONAL per round-3 P2 #21's relaxation — supports
+        # "re-engage the gate without spawning new siblings" (e.g., A4's
+        # comparator re-comparing the same builders after a clarifying signal).
+        # PAIRING RULE: if iteration.emit_template IS set, emit_templates MUST
+        # be defined AND contain that key. If emit_template is absent,
+        # emit_templates may be absent too.
+        if "emit_template" in iteration:
+            etn = iteration["emit_template"]
+            if not isinstance(etn, str) or not etn:
+                _bad("iteration.emit_template must be a non-empty string")
+            if emit_templates is None:
+                _bad(
+                    f"iteration.emit_template = {etn!r} requires an "
+                    f"'emit_templates' top-level field; none declared"
+                )
+            if etn not in emit_templates:
+                _bad(
+                    f"iteration.emit_template {etn!r} not in emit_templates "
+                    f"keys: {sorted(emit_templates)!r}"
+                )
 
     # Work-only init-time gap (P1 #6, fix-pass D). A recipe with
     # phase_order: ["work"] and units: [] is UNRUNNABLE in v0.2.0 — at
@@ -401,6 +540,29 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
             f"terminal_phase {terminal!r} has no units and no emitter — the run "
             f"would exit immediately with nothing done"
         )
+    # v0.3.0 (U5) editorial: iteration.bound editorial sanity checks. Neither is
+    # a hard error — operator-defined bounds; surface as advisory only. The
+    # validator above already rejects 0/negative max_attempts; this warns on
+    # values that pass the hard check but look suspicious.
+    if isinstance(recipe.get("iteration"), dict):
+        bound = recipe["iteration"].get("bound")
+        if isinstance(bound, dict):
+            ma = bound.get("max_attempts")
+            if isinstance(ma, int) and not isinstance(ma, bool) and ma > 10:
+                warnings.append(
+                    f"iteration.bound.max_attempts = {ma} — are you sure? "
+                    f"iterations are expensive (each spawns a new wave of "
+                    f"units + re-engages the gate); >10 is typically a sign "
+                    f"the gate's verdict-criterion is too strict"
+                )
+            mw = bound.get("max_wall_seconds")
+            if isinstance(mw, int) and not isinstance(mw, bool) and mw < 60:
+                warnings.append(
+                    f"iteration.bound.max_wall_seconds = {mw} — seems short; "
+                    f"a single wave can take longer than this, in which case "
+                    f"the bound will fire before any iteration completes"
+                )
+
     # description-spoofing: a non-built-in recipe copying a built-in's description.
     desc = (recipe.get("description") or "").strip()
     if desc:
