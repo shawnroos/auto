@@ -48,6 +48,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 
 # ──────────────────────────────────────────────────────────────────────────
 # Import the canonical ledger module by file path (no package install). We do
@@ -63,6 +64,11 @@ ledger = load_ledger()
 # AST lint forbids the raw "loop_phase" literal here so a divergent comparison
 # can't sneak back in.
 phase_grammar = load_lib_module("phase-grammar")
+# v0.3.0 U1: the ONE iteration-decision module. Every read of the gate unit's
+# verdict.decision field routes through `iteration.read_decision` /
+# `iteration.evaluate_decision`; the AST lint (tests/unit/iteration-ast-lint
+# .test.sh) forbids the raw "decision" string literal anywhere in this file.
+iteration = load_lib_module("iteration")
 # The emitter registry (U5b/v0.2.0): the seam-handler resolves a recipe's
 # declared emitter name through emitters.resolve() and hands the function to
 # ledger.transition_and_emit. No hyphen in the module name, so a plain import
@@ -545,13 +551,208 @@ def dispatch_tick(
         return {"action": "noop", "reason": "lock-held-by-live-tick", "run": run_id}
 
 
+def advance_iteration_loop(repo_root, run_id, led):
+    """v0.3.0 U4 / KTD §A+§C+§D: the engine-side iteration check.
+
+    Fires in `_tick_body` BEFORE the predicate-met short-circuit at lines
+    564-576. Reads the gate unit's effective decision via
+    `iteration.evaluate_decision` and routes:
+
+      * No iteration block / no gate_unit / kill-switch enabled → return None.
+        Standard flow continues; the predicate-met short-circuit evaluates
+        normally.
+      * No decision yet (gate hasn't verdicted, or its decision was cleared by
+        the most recent reset_for_iteration) → return None. Same path.
+      * "advance" → return {"action": "advance"}. The caller falls through; the
+        existing predicate-met short-circuit (now suppressed only by
+        iteration_pending=True) advances to the terminal "done" state via the
+        normal flow.
+      * "iterate" under bound → call `ledger.atomic_iterate_step` (one locked
+        body: increment + emit + reset). Return {"action": "iterate"}. The
+        caller emits a rearm intent so the next tick dispatches the new units.
+      * "exit" OR "iterate over bound" → write `bound_override` on the gate
+        unit's dispatch_context, then flip the loop to "done" / driver="manual"
+        DIRECTLY via set_loop (NOT through advance_to_phase, which would re-
+        invoke `judge_winner_to_work_units` and raise on missing winner_unit_id
+        — KTD §D / round-2 P0 fix). Return {"action": "stop", "reason":
+        "bound-exit", "report": ...}.
+
+    Two safety gates fire BEFORE the decision read (no ledger writes on either
+    early-return path — keeps a1/W ticks side-effect-clean):
+      1. a1/W early-return: `led.get("iteration")` missing OR `gate_unit` is
+         None → return None. No call to `evaluate_decision`.
+      2. Kill-switch fence: `_bootstrap.test_hatch_enabled(
+         "CLAUDE_AUTO_DISABLE_ITERATION")` True → return None. Mirrors the
+         task #31 fence shape (requires CLAUDE_AUTO_TEST_HARNESS=1 sentinel),
+         so a production export of the var alone has no effect.
+
+    The `new_depends_on` argument to `atomic_iterate_step` is passed as `None`:
+    the ledger mutator computes the union of `gate.depends_on + appended` ids
+    INSIDE the locked body (lib/ledger.py:1605-1607). Pre-computing here would
+    race with the in-locked-body `_apply_emit` counter bump.
+    """
+    # Gate 1: no iteration declared (a1, W, legacy ledgers). Side-effect-free.
+    iter_block = led.get("iteration") or {}
+    gate_unit_id = iter_block.get("gate_unit")
+    if not gate_unit_id:
+        return None
+    # Gate 2: kill-switch fence (task #31 pattern, fenced behind the harness
+    # sentinel). Operators can disable iteration without rolling back v0.3.0.
+    if test_hatch_enabled("CLAUDE_AUTO_DISABLE_ITERATION"):
+        return None
+
+    eval_result = iteration.evaluate_decision(
+        led, gate_unit_id, now_monotonic=time.monotonic()
+    )
+    effective = eval_result.get("decision_effective")
+
+    if effective is None:
+        # Gate hasn't verdicted (or decision was cleared by the most recent
+        # reset_for_iteration). Standard flow continues; short-circuit evaluates.
+        return None
+
+    if effective == "advance":
+        # Caller falls through to standard flow; the predicate-met short-
+        # circuit then fires (iteration_pending is now False — the gate said
+        # advance, not iterate — so the AND-NOT clause doesn't suppress).
+        return {"action": "advance"}
+
+    if effective == "iterate":
+        # Under-bound iterate. Drive ONE atomic step (increment + emit +
+        # reset) through the composite mutator. new_depends_on=None tells
+        # atomic_iterate_step to compute the union of gate.depends_on +
+        # appended ids inside its own locked body.
+        ledger.atomic_iterate_step(
+            repo_root,
+            run_id,
+            gate_unit_id,
+            emitter=emitters.iterate_template,
+            new_depends_on=None,
+        )
+        return {"action": "iterate"}
+
+    # effective in ("exit", "iterate"-over-bound). Both shapes: write the
+    # bound_override (carries bound_type + original_decision + at) and force
+    # the loop to "done" / driver="manual" via set_loop DIRECTLY.
+    # advance_to_phase would re-invoke `judge_winner_to_work_units` which
+    # raises on missing winner_unit_id (the gate said iterate, not advance, so
+    # no winner is set). Skipping advance_to_phase preserves the audit trail
+    # in the gate's dispatch_context.bound_override.
+    bound_type = eval_result.get("bound_type")
+    original = eval_result.get("original_decision") or "iterate"
+    if eval_result.get("bound_breached"):
+        ledger.set_bound_override(
+            repo_root, run_id, gate_unit_id,
+            bound_type=bound_type, original_decision=original,
+        )
+    ledger.set_loop(
+        repo_root, run_id, loop_phase="done", driver="manual", beat=True,
+    )
+    final_led = ledger.read_ledger(repo_root, run_id)
+    report = _build_bound_exit_report(final_led, gate_unit_id)
+    return {
+        "action": "stop",
+        "reason": "bound-exit",
+        "run": run_id,
+        "report": report,
+    }
+
+
+def _build_bound_exit_report(led, gate_unit_id):
+    """Build the bound-exit report from the gate unit's dispatch_context.
+
+    Mirrors `_build_report`'s shape but adds the bound_override block + best-
+    so-far state per OQ2. The best-so-far is the gate's last
+    decision_payload (the payload that accompanied either the last iterate or
+    the last advance) — surfaced for operator diagnostics so the
+    operator-guidance branch in R9 can name what we tried before bound trip.
+    """
+    base = _build_report(led)
+    gate = next(
+        (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
+    )
+    dc = (gate or {}).get("dispatch_context") or {}
+    base["bound_override"] = dc.get("bound_override")
+    base["best_so_far"] = dc.get("decision_payload")
+    return base
+
+
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     rearm_prompt = f"/auto-tick {run_id}"
     now = _now_dt()
     now_iso = ledger._now_iso()
+    # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of
+    # _tick_body so the `finally` clause below can accumulate the delta on
+    # EVERY return path INCLUDING the except path (crashed-tick deltas land in
+    # the ledger). The finally wraps the whole body; release happens inside
+    # the tick lock (dispatch_tick owns the lock, _tick_body runs inside).
+    t_start = time.monotonic()
+    try:
+        return _tick_body_inner(
+            repo_root, run_id, adapter=adapter, auto=auto, delay=delay,
+            rearm_prompt=rearm_prompt, now=now, now_iso=now_iso,
+        )
+    finally:
+        # accumulate_active_time is best-effort: an exception inside it must
+        # never bury the real exception/return value. (E.g. a torn ledger
+        # during a stalled-write recovery would otherwise mask the original.)
+        try:
+            ledger.accumulate_active_time(
+                repo_root, run_id, time.monotonic() - t_start
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
+
+def _tick_body_inner(
+    repo_root, run_id, *, adapter, auto, delay, rearm_prompt, now, now_iso
+):
     led = ledger.read_ledger(repo_root, run_id)
     phase = phase_grammar.current_phase(led)
+
+    # 0. v0.3.0 U4 / KTD §A: iteration check fires BEFORE the predicate-met
+    #    short-circuit below. Without this, A2's judge writing verdict-returned
+    #    makes the work-loop's all_units_terminal=True (with iteration_pending
+    #    not yet composed), and the short-circuit would exit as "done" before
+    #    any iteration logic runs. The check is side-effect-free on a1/W
+    #    ledgers (early-return at step 1). When iteration drives the run, this
+    #    helper writes its own ledger mutations (atomic_iterate_step on
+    #    iterate; set_bound_override + set_loop on bound-exit) which the next
+    #    block's `pred` re-reads via the recomputed exit_predicate_result.
+    iteration_result = advance_iteration_loop(repo_root, run_id, led)
+    if iteration_result is not None:
+        action = iteration_result.get("action")
+        if action == "stop":
+            # Bound-exit: the loop is "done" already; the finally still fires
+            # to accumulate the active-time delta for this tick.
+            return iteration_result
+        if action == "iterate":
+            # New units emitted + gate reset to pending; the next tick will
+            # see fresh pending units for the orchestrator to dispatch. Re-
+            # read the ledger to surface the iteration in the rearm intent
+            # (operator-diagnostics + so /auto-status sees the new units).
+            led = ledger.read_ledger(repo_root, run_id)
+            ledger.set_loop(repo_root, run_id, driver="self", beat=True)
+            led_now = ledger.read_ledger(repo_root, run_id)
+            return {
+                "action": "rearm",
+                "run": run_id,
+                "delay": int(delay),
+                "prompt": rearm_prompt,
+                "advance": {
+                    "advanced": "iterate-step",
+                    "gate": (led_now.get("iteration") or {}).get("gate_unit"),
+                },
+                "stalled": [],
+                "halted": [],
+                "operator_guidance": _operator_guidance_for(phase, None, led_now),
+            }
+        # action == "advance": fall through to the standard flow. The gate
+        # said "advance"; the existing predicate-met short-circuit (now
+        # suppressed only by iteration_pending=True) will fire normally
+        # because iteration_pending is False (decision != iterate).
+        # Re-read so subsequent code sees any predicate recompute.
+        led = ledger.read_ledger(repo_root, run_id)
 
     # 1. Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
     #    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
@@ -561,8 +762,25 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     #      * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
     #        it to seam (manual) or work (auto); `done` is NEVER a plan exit.
     #    A seam-phase tick has its own branch below (re-affirm pause).
+    #
+    # v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
+    # layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
+    # ledger.py:441-442) AND defensively re-checked here. The redundant guard
+    # is belt-and-braces: if U2's composition ever drifts (or a future caller
+    # bypasses recompute_predicate), this guard still protects the iteration
+    # loop from being short-circuited as "predicate-met" before
+    # advance_iteration_loop can write the bound-exit / iterate-step.
+    #
+    # The downstream short-circuit at the "predicate-met-after-advance" path
+    # below is untouched — by the time it fires, advance_iteration_loop has
+    # ALREADY run at the top of this body and either stopped (bound-exit),
+    # iterated (returned a rearm), or signalled "no iteration" (effective is
+    # None or "advance"). Guarding both would risk dropping a real terminal
+    # exit on the advance branch; deliberate-fail #2 proves this guard +
+    # the iteration check are jointly load-bearing.
     pred = led.get("exit_predicate_result") or {}
-    if pred.get("met") and phase != "plan" and phase != "seam":
+    if pred.get("met") and not pred.get("iteration_pending", False) \
+            and phase != "plan" and phase != "seam":
         # Work predicate met: mark the run done + manual; finished, not orphaned.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
@@ -710,13 +928,24 @@ def _operator_guidance_for(phase, advance_result, led):
     EXECUTES them; if the model doesn't, the ledger doesn't progress. The
     rearm intent now carries this reminder explicitly. Phase-aware so plan-
     loop and work-loop get the right framing.
+
+    v0.3.0 R9 (KTD §D operator-diagnostics):
+      * If the gate unit just had `bound_override` written on this tick →
+        prepend a notice naming which bound tripped + the best-so-far state
+        from the gate's last decision_payload (OQ2). Operators see WHY the
+        loop exited and WHAT we tried before bound.
+      * Else if iteration is active AND `iteration_attempts == max_attempts -
+        1` → prepend a "last attempt before bound" warning. Operators know
+        the NEXT iterate will trip the bound.
     """
+    iteration_prefix = _iteration_guidance_prefix(led)
+
     if phase == "plan":
         step = None
         if isinstance(advance_result, dict):
             step = advance_result.get("step")
         invocation = _PLAN_STEP_INVOCATION.get(step, "(see adapter contract)")
-        return (
+        body = (
             "prepare/execute contract: I PREPARED a plan-loop invocation; "
             "YOU must run it. I do NOT dispatch the work — my role is to "
             "advance the state machine AFTER you feed structured results back "
@@ -724,21 +953,81 @@ def _operator_guidance_for(phase, advance_result, led):
             f"the invocation is a NO-OP — units will stay []. Just-prepared "
             f"step: {step!r}; expected invocation: {invocation}."
         )
+        return iteration_prefix + body if iteration_prefix else body
     if phase == "work":
         # In the work-loop, the trap is different: the driver dispatches background
         # Agents via the orchestrator and then YIELDS for harness re-invocation
         # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
-        return (
+        body = (
             "prepare/execute contract: in the work-loop YOU drive the "
             "orchestrator fan-out (orchestrator.ready_units + dispatch_batch); "
             "after dispatching, YIELD silently — the harness re-invokes you "
             "when a verdict lands (fix-pass G). Re-ticking without running "
             "dispatch is a no-op."
         )
-    return (
+        return iteration_prefix + body if iteration_prefix else body
+    body = (
         "prepare/execute contract: I prepare; YOU execute. Re-ticking without "
         "running the prepared invocation does not advance the ledger."
     )
+    return iteration_prefix + body if iteration_prefix else body
+
+
+def _iteration_guidance_prefix(led):
+    """Build the iteration-aware operator-guidance prefix (R9 / KTD §D).
+
+    Returns an empty string when no iteration is declared, or when neither
+    R9 condition fires. Otherwise returns a one-sentence prefix that names
+    either the bound-override (operator sees WHY the loop exited) or the
+    last-attempt warning (operator sees that the NEXT iterate trips bound).
+
+    The bound-override read goes through `dispatch_context.bound_override` —
+    the field key (`"bound_override"`) is NOT the literal `"decision"` so
+    the AST lint allows it. The bound type is read from the same dict.
+
+    The "best-so-far" payload (OQ2) is the gate's `decision_payload` — the
+    payload that rode the LAST advance/iterate decision. On a bound-exit
+    tick, that payload was the iterate that the engine overrode to exit.
+    """
+    iter_block = led.get("iteration") or {}
+    gate_id = iter_block.get("gate_unit")
+    if not gate_id:
+        return ""
+    gate = next(
+        (u for u in led.get("units", []) if u.get("id") == gate_id), None
+    )
+    if gate is None:
+        return ""
+    dc = gate.get("dispatch_context") or {}
+
+    # Branch 1 (higher priority): bound_override was written. Surface bound
+    # type + best-so-far so the operator sees what we tried before bound.
+    override = dc.get("bound_override")
+    if override:
+        btype = override.get("bound") or "unknown"
+        payload = dc.get("decision_payload")
+        payload_repr = (
+            json.dumps(payload, sort_keys=True) if payload is not None else "null"
+        )
+        return (
+            f"iteration bound tripped: {btype}. "
+            f"Best-so-far (last gate payload): {payload_repr}. "
+            "The engine overrode the gate's iterate to exit; the run is done. "
+        )
+
+    # Branch 2: under bound, but the next iterate would be the last attempt
+    # the engine honors. Surface a warning so the operator knows.
+    bound = iter_block.get("bound") or {}
+    max_attempts = bound.get("max_attempts")
+    attempts = int(led.get("iteration_attempts", 0))
+    if max_attempts is not None and attempts == int(max_attempts) - 1:
+        return (
+            f"iteration: last attempt before bound (attempts={attempts}, "
+            f"max_attempts={max_attempts}). The next iterate decision will "
+            "trip the bound and force exit. "
+        )
+
+    return ""
 
 
 def _gaps_open_guard(phase, led):
