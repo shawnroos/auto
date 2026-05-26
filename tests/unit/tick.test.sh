@@ -1161,9 +1161,10 @@ elif op == "r9-bound-override-guidance":
     }))
 
 elif op == "kill-switch":
-    # Kill-switch: CLAUDE_AUTO_DISABLE_ITERATION=1 + CLAUDE_AUTO_TEST_HARNESS=1
-    # → advance_iteration_loop returns None at step 2. The iterate decision
-    # on disk is UNTOUCHED. Tick proceeds as if iteration didn't exist.
+    # Kill-switch: CLAUDE_AUTO_DISABLE_ITERATION=1 alone (v0.3.0 F5 unfenced
+    # this — no harness sentinel required) → advance_iteration_loop returns
+    # None at step 2. The iterate decision on disk is UNTOUCHED. Tick
+    # proceeds as if iteration didn't exist.
     init_a2("u4-killswitch", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
     led = m.read_ledger(repo, "u4-killswitch")
@@ -1626,8 +1627,8 @@ cat > "$DF_DIR/df3_no_fence.py" <<'PYEOF'
 import sys
 p = sys.argv[1]
 src = open(p).read()
-old = 'if test_hatch_enabled("CLAUDE_AUTO_DISABLE_ITERATION"):\n        return None'
-new = 'if False:  # DF#3 PATCH — fence removed\n        return None'
+old = 'if is_iteration_disabled():\n        return None'
+new = 'if False:  # DF#3 PATCH — kill-switch removed\n        return None'
 if old not in src:
     sys.exit("DF#3 anchor not found")
 open(p, "w").write(src.replace(old, new))
