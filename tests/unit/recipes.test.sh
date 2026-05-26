@@ -432,11 +432,14 @@ elif op == "lint-max-wall-short":
     print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
 
 elif op == "u6-depends-on-id-prefix-valid":
-    # v0.3.0 U6: a structural unit may forward-reference units produced by an
-    # emit_template via the template's id_prefix. A4's `compare` is the
-    # canonical example — its depends_on names "build-clarity" and "build-perf"
-    # which are materialized by the bias-builder emit_template (id_prefix
-    # "build-"). The validator MUST accept this.
+    # v0.3.0 U6 (F4-tightened): a structural unit may forward-reference units
+    # produced by an emit_template. With F4 SCHEMA TIGHTENING the recipe must
+    # DECLARE the emitter-produced ids via `expected_emit_outputs` — they are
+    # no longer accepted on prefix-match alone. A4's `compare` is the canonical
+    # example: its depends_on names "build-clarity" and "build-perf"
+    # (materialized by the bias-builder emit_template + the
+    # plan_output_to_paired_builders phase-transition emitter). The validator
+    # MUST accept this AFTER the recipe declares them in expected_emit_outputs.
     r = {
         "name": "u6-fwdref", "version": "1",
         "phase_order": ["plan", "seam", "work"],
@@ -447,6 +450,7 @@ elif op == "u6-depends-on-id-prefix-valid":
              "depends_on": ["build-clarity", "build-perf"],
              "invokes": {"adapter_op": "review"}}
         ],
+        "expected_emit_outputs": ["build-clarity", "build-perf"],
         "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
@@ -457,9 +461,10 @@ elif op == "u6-depends-on-id-prefix-valid":
 
 elif op == "u6-depends-on-unrelated-rejected":
     # The carve-out is NARROW: depends_on must either reference an existing
-    # unit id OR a member of an emit_template's id_prefix. An unrelated string
-    # ("totally-unrelated") still rejects — proving the carve-out is not a
-    # blanket "accept any forward reference."
+    # unit id, an iterate-shaped id ({id_prefix}{positive_int}), or a member
+    # of expected_emit_outputs. An unrelated string ("totally-unrelated")
+    # still rejects — proving the carve-out is not a blanket "accept any
+    # forward reference."
     r = {
         "name": "u6-bad", "version": "1",
         "phase_order": ["plan", "seam", "work"],
@@ -475,6 +480,88 @@ elif op == "u6-depends-on-unrelated-rejected":
         "emit_templates": {"bias-builder": {
             "phase": "work", "invokes": {"adapter_op": "do_unit"},
             "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-build-typo-rejected":
+    # F4 DF control (a): the prior carve-out accepted ANY depends_on string
+    # starting with an emit_template's id_prefix — `"build-typo"` would pass
+    # against id_prefix `"build-"` even though no emitter would ever produce
+    # `build-typo`. After F4 the validator requires either iterate-shape
+    # ({id_prefix}{positive_int}) OR declaration in expected_emit_outputs.
+    # `build-typo` matches NEITHER, so it must reject.
+    r = {
+        "name": "f4-typo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-typo"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-iterate-shape-accepted":
+    # F4 DF control (b): iterate-shape ids ({id_prefix}{positive_int}) are
+    # plausibly produced by `iterate_template` (see lib/emitters.py: the emit
+    # math is `f"{id_prefix}{base + i + 1}"`), so `build-1`, `build-7`, etc.
+    # must validate WITHOUT requiring expected_emit_outputs.
+    r = {
+        "name": "f4-iterate", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-1", "build-2"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-bare-prefix-rejected":
+    # F4 edge: the bare id_prefix string itself (`"build-"` with no suffix) is
+    # NOT a valid iterate output (iterate emits `{id_prefix}{N}`, N >= 1), so
+    # it must reject unless declared in expected_emit_outputs. Guards against
+    # off-by-one in the iterate-shape check.
+    r = {
+        "name": "f4-bare", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-eeo-rejects-non-list":
+    # F4 shape: expected_emit_outputs must be a list of non-empty strings.
+    r = {
+        "name": "f4-eeo-bad", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [{"id": "plan", "phase": "plan", "invokes": {}}],
+        "expected_emit_outputs": "build-clarity",  # str, not list
     }
     print(vresult(r))
 PYEOF
@@ -530,6 +617,28 @@ assert_eq "valid" "$(itr u6-depends-on-id-prefix-valid)"
 
 it "U6 carve-out is narrow: unrelated depends_on id still rejects"
 assert_eq "rejected" "$(itr u6-depends-on-unrelated-rejected)"
+
+# ── v0.3.0 F4: depends_on carve-out tightened (ADV-2 + maint-4) ─────────────
+# The prior carve-out accepted ANY depends_on string starting with an
+# emit_template id_prefix — `"build-typo"` would pass against id_prefix
+# `"build-"`. F4 narrows to: in units[], OR iterate-shape ({id_prefix}{N}),
+# OR explicitly declared in expected_emit_outputs.
+#
+# DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
+# we proved these tests are real by widening the validator (adding
+# `"build-typo"` to a4.json's expected_emit_outputs) and confirming RED, then
+# restoring. Without the DF the green here proves nothing.
+it "F4 (DF-a): build-typo in depends_on rejected — loose prefix-match closed"
+assert_eq "rejected" "$(itr f4-build-typo-rejected)"
+
+it "F4 (DF-b): build-1 iterate-shape id accepted without expected_emit_outputs"
+assert_eq "valid" "$(itr f4-iterate-shape-accepted)"
+
+it "F4 edge: bare id_prefix 'build-' (no suffix) rejects unless declared"
+assert_eq "rejected" "$(itr f4-bare-prefix-rejected)"
+
+it "F4 shape: expected_emit_outputs must be a list of non-empty strings"
+assert_eq "rejected" "$(itr f4-eeo-rejects-non-list)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
