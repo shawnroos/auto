@@ -78,6 +78,58 @@ The three pieces you integrate:
 
 ---
 
+## 0.5. Outcomes-gated emission (v0.3.0)
+
+**v0.3.0 closes the gap that v0.2.x's A2/A4 were round-gated, not outcomes-gated.**
+A recipe may now declare an `iteration` block that lets a designated **gate
+unit**'s `verdict.decision` drive the loop directly — the gate decides whether
+the run advances to the terminal phase, emits another round of work and
+re-engages, or stops with an audit trail. Auto's identity is **durability +
+outcomes-gating**; v0.3.0 is the second half landing.
+
+**How it routes** (`lib/tick.py::advance_iteration_loop`, fires BEFORE the
+predicate-met short-circuit at the top of `_tick_body`):
+
+- **No `iteration` block on the ledger → no-op.** A1, W, and every v0.2.x
+  recipe early-return through this path with zero side effects. Standard flow
+  continues; the predicate-met short-circuit evaluates exactly as before.
+- **Gate verdict `decision == "advance"`** → fall through to the standard
+  predicate-met flow; the loop advances to `done`.
+- **`decision == "iterate"` under bound** → engine calls
+  `ledger.atomic_iterate_step` in ONE locked body: increments
+  `iteration_attempts`, emits N new sibling units via `iterate_template`
+  (N from `decision_payload.emit_count`, default 1, capped at 10), resets the
+  gate unit (`verdict-returned → pending`, `depends_on` extended,
+  `dispatch_context.decision` cleared). The tick emits a rearm intent; the next
+  tick dispatches the new units.
+- **`decision == "exit"` OR `"iterate" over bound`** → engine writes
+  `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
+  on the gate unit and flips the loop directly to `done` / `driver = "manual"`.
+  The bound breach is a recorded decision, not an error — surface it from the
+  `bound_override` audit trail when reporting the run's exit.
+
+**Bounds are engine-enforced** (per
+[[feedback_deterministic_over_probabilistic_v1]]): `bound.max_attempts` caps the
+honored iterate count (pre-increment check, so the Nth attempt is blocked when
+`iteration_attempts == max_attempts` on entry); optional
+`bound.max_wall_seconds` caps cumulative ACTIVE wall-time
+(`active_wall_seconds`) — pauses don't burn budget, only `_tick_body`'s active
+duration. A misbehaving gate agent cannot loop forever.
+
+**Reading the decision.** Every consumer routes through
+`lib/iteration.py::read_decision` / `evaluate_decision`; the AST lint
+(`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"` literal
+anywhere in `lib/*.py` except `lib/iteration.py` + `lib/ledger.py` (the writer).
+NEVER reach into a unit's `dispatch_context["decision"]` from this skill or any
+operator path — the lint exists because that's exactly how
+[[feedback_plan_documents_transition_code_doesnt_wire_it]] keeps happening.
+
+See `docs/contracts/recipe-format.md` §6 + §7 for the recipe shape and
+`docs/contracts/ledger-schema.md` §2.1 + §2.3 for the ledger fields the engine
+reads/writes through this primitive.
+
+---
+
 ## 1. Goal binding (ALWAYS — there is no un-goaled run)
 
 Before arming anything, **set a deliberate-stop goal bound to the loop's exit.**

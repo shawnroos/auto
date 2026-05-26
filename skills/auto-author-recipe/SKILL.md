@@ -73,6 +73,39 @@ finished"):
    same topology you showed. Only THEN report "saved `<name>` to <tier>". If the
    read-back fails validation, delete the file and report "save failed".
 
+## Iteration-aware recipes (v0.3.0)
+
+A recipe may declare an optional `iteration` block to make the loop
+**outcomes-gated** — a designated gate unit's `verdict.decision` drives whether
+the run advances, iterates (emits another round of siblings), or exits with an
+audit trail. When the user describes a workflow that should "keep going until
+the judge says it's good" / "let the comparator re-spawn the pair if neither
+wins" / "stop after at most N rounds," reach for `iteration`.
+
+**What to elicit:**
+
+1. **Which unit is the gate?** Usually the judge / comparator / reviewer that
+   already exists in the topology — name its id under `iteration.gate_unit`.
+2. **Does iterating spawn siblings?** If yes, declare an `emit_templates[<name>]`
+   entry with `{phase, invokes, id_prefix}` and reference it via
+   `iteration.emit_template = "<name>"`. The new units land in the template's
+   `phase` at iteration time; the engine generates ids monotonically as
+   `id_prefix + N`. If no (just re-engage the gate after a clarifying signal),
+   omit `emit_template`.
+3. **What's the bound?** `iteration.bound.max_attempts` is required and caps
+   honored iterate decisions. Optional `max_wall_seconds` caps cumulative
+   ACTIVE wall-time. Pick conservatively — the bound is engine-enforced, so a
+   misbehaving gate cannot loop forever.
+
+**Validate as usual.** `validate_and_lint` covers the iteration shape: gate_unit
+must reference a real unit (or an `emit_templates` id_prefix); when
+`emit_template` is set, `emit_templates` must be defined and contain that key;
+`bound.max_attempts` must be a positive int (bool values are rejected, since
+`isinstance(True, int)` is True in Python).
+
+See `docs/contracts/recipe-format.md` §6 + §7 for the full field set and
+`skills/auto/SKILL.md` §0.5 for the engine's routing semantics.
+
 ## What this skill does NOT do
 
 - It does not write JSON the user hand-edits — the user describes; the skill

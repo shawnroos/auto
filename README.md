@@ -20,7 +20,7 @@ The engine is **workflow-blind**: it drives any workflow through a thin adapter
 - **`/auto-author-recipe`** — author a new recipe from a plain-language
   description (you never write JSON).
 
-## Recipes (v0.2.0)
+## Recipes (v0.3.0)
 
 A **recipe** is a named workflow topology. Fire `/auto <plan>` and a picker lets
 you choose; or `--recipe <name>` to pick directly. Four ship built-in:
@@ -34,6 +34,13 @@ you choose; or `--recipe <name>` to pick directly. Four ship built-in:
 
 *(A3 Build-First Feedback ships in v0.2.1 — it needs non-default phase ordering
 that's deferred so its engine path gets its own review.)*
+
+**v0.3.0 adds outcomes-gated emission.** A recipe can declare an optional
+`iteration` block so a designated gate unit's verdict (advance / iterate /
+exit) drives the loop directly — A2's judge can re-spawn another round of
+competing plans, A4's comparator can re-engage its builders, all under an
+engine-enforced `max_attempts` + `max_wall_seconds` bound. v0.2.x recipes
+validate unchanged. See `docs/contracts/recipe-format.md` §6.
 
 ### Your own recipes
 
@@ -55,10 +62,10 @@ finished work.
 
 ## Contracts
 
-- `docs/contracts/recipe-format.md` — the recipe JSON format (LOCKED v0.2.0).
+- `docs/contracts/recipe-format.md` — the recipe JSON format (LOCKED v0.3.0).
 - `docs/contracts/ledger-schema.md` — the per-unit ledger (the source of truth).
 - `docs/contracts/adapter-contract.md` — the seven adapter ops a workflow maps onto.
 
 ## Tests
 
-`bash tests/run.sh all` — pure stdlib + bash, no install. (248 passing at v0.2.0.)
+`bash tests/run.sh all` — pure stdlib + bash, no install. (353 passing at v0.3.0.)
