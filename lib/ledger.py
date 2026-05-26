@@ -307,6 +307,21 @@ def recompute_predicate(ledger: dict) -> dict:
         True`` would otherwise short-circuit it before any fan-out). A *plan*
         phase with no units is fine — it never reaches this branch.
 
+    v0.3.0 (U2 / KTD §B): the returned dict gains an ``iteration_pending: bool``
+    field, and the new met rule is ``met = (existing met conditions) AND NOT
+    iteration_pending``. ``iteration_pending`` is True iff the run declares an
+    ``iteration`` block AND the gate unit's verdict.decision is ``"iterate"``
+    AND the bound is unbreached (``iteration_attempts < max_attempts`` AND
+    ``active_wall_seconds < max_wall_seconds``). Without the AND-NOT clause, a
+    recipe that emits new plan-N units while ``loop_phase == "work"`` would see
+    work-met fire spuriously (the work-loop branch above scopes terminality to
+    current-phase units; pending plan-N units are phase=plan, invisible) — see
+    KTD §A. The gate-decision read routes through ``iteration.read_decision`` to
+    keep ledger.py off the AST-lint's allowlist for that semantic — the lint
+    permits the literal here (writer site) but the convention is to consume via
+    the centralized reader (mirrors how ``is_orphaned`` reads ``loop_phase`` via
+    ``phase_grammar.current_phase`` rather than raw subscript).
+
     Returns the new dict (does NOT mutate ``ledger``; the caller assigns it).
     """
     blockers = majors = minors = 0
@@ -419,6 +434,13 @@ def recompute_predicate(ledger: dict) -> dict:
             and has_units_in_phase
         )
 
+    # v0.3.0 KTD §B — iteration_pending composition. Compute BEFORE finalizing
+    # `met` so the AND-NOT clause can suppress a work-loop met that would
+    # otherwise short-circuit the iteration loop (see KTD §A: the tick's
+    # predicate-met short-circuit yields when iteration_pending is True).
+    iteration_pending = _compute_iteration_pending(ledger)
+    met = bool(met) and not iteration_pending
+
     return {
         "met": bool(met),
         "blockers": blockers,
@@ -426,7 +448,73 @@ def recompute_predicate(ledger: dict) -> dict:
         "minors": minors,
         "gaps_open": gaps_open,
         "all_units_terminal": bool(all_units_terminal_global),
+        "iteration_pending": iteration_pending,
     }
+
+
+def _compute_iteration_pending(ledger: dict) -> bool:
+    """Compute KTD §B's iteration_pending bool for ``recompute_predicate``.
+
+    True iff the run declares an iteration block AND the gate unit's
+    verdict.decision is ``"iterate"`` AND the bound is unbreached. Tied to the
+    same storage locations as ``lib/iteration.evaluate_decision`` — both read
+    the gate-decision via ``iteration.read_decision`` and the bound counters
+    off the TOP-LEVEL ledger fields (KTD §D / round-3 P1-R3-3):
+    ``iteration_attempts`` and ``active_wall_seconds``.
+
+    Returns False when:
+      - No ``iteration`` block declared (legacy/a1/W ledgers).
+      - No ``gate_unit`` named in iteration.
+      - Gate unit not found in ``units[]`` (recipe bug — silent here; the
+        engine surfaces it via ``iteration.evaluate_decision`` which raises).
+      - Gate unit's decision is not ``"iterate"`` (advance / exit / unset).
+      - Bound is breached on either counter (the engine would force exit).
+
+    Lazy import of ``iteration`` mirrors ``is_orphaned``'s ``phase_grammar``
+    lazy-import pattern (lib/ledger.py:447-453). It avoids a load-order
+    dependency: ledger.py is imported by many sites, some of which run before
+    sys.path is set up for sibling lib modules.
+    """
+    iteration_block = ledger.get("iteration")
+    if not iteration_block:
+        return False
+    gate_unit_id = iteration_block.get("gate_unit")
+    if not gate_unit_id:
+        return False
+    gate_unit = None
+    for u in ledger.get("units", []):
+        if u.get("id") == gate_unit_id:
+            gate_unit = u
+            break
+    if gate_unit is None:
+        return False
+
+    # Lazy import — same pattern as is_orphaned's phase_grammar load.
+    import sys as _sys
+    import os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from _bootstrap import load_lib_module as _load
+    iteration = _load("iteration")
+
+    decision = iteration.read_decision(gate_unit)
+    if decision != "iterate":
+        return False
+
+    bound = (iteration_block.get("bound") or {})
+    max_attempts = bound.get("max_attempts")
+    attempts = int(ledger.get("iteration_attempts", 0))
+    if max_attempts is not None and attempts >= int(max_attempts):
+        return False
+
+    max_wall = bound.get("max_wall_seconds")
+    if max_wall is not None:
+        active = float(ledger.get("active_wall_seconds", 0))
+        if active >= float(max_wall):
+            return False
+
+    return True
 
 
 def is_orphaned(ledger: dict, now=None) -> bool:
@@ -682,6 +770,33 @@ def init_ledger(
             "phase_order": phase_order,
             "terminal_phase": terminal_phase,
             "phase_transitions": phase_transitions,
+            # v0.3.0 iteration fields (additive — defaults preserve v0.2.x
+            # behavior). A legacy ledger missing any of them reads via
+            # `ledger.get(<field>, <default>)` at every consumer site (NEVER raw
+            # subscript). KTD §D: top-level counters/accumulators, not unit-
+            # scoped, so the bound check + predicate composition agree on a
+            # single storage location.
+            #   active_wall_seconds   — accumulator of monotonic-clock deltas
+            #                           per tick (the wall-time bound denominator).
+            #                           Round-3 P1-R3-3: counted from a finally
+            #                           clause in tick.py to cover crashed paths.
+            #   last_active_at        — ISO timestamp of the most recent
+            #                           accumulate_active_time call. Diagnostic
+            #                           only; the bound math reads
+            #                           active_wall_seconds.
+            #   iteration_attempts    — count of HONORED iterate decisions
+            #                           (incremented by atomic_iterate_step). The
+            #                           bound check fires PRE-increment via the
+            #                           value here.
+            #   iteration_emit_count  — monotonic emit-id counter (KTD §D / OQ4).
+            #                           Replaces "recount existing units" which
+            #                           would collide after a partial-emit crash.
+            #                           Incremented by emit_within_phase per
+            #                           emitted unit.
+            "active_wall_seconds": 0,
+            "last_active_at": None,
+            "iteration_attempts": 0,
+            "iteration_emit_count": 0,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},
@@ -1122,6 +1237,376 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
         dc = judge.setdefault("dispatch_context", {})
         dc["winner_unit_id"] = winner_id
         return winner_id
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# v0.3.0 (U2): iteration mutators.
+#
+# Six new write paths support outcomes-gated emission (KTD §A-D + U2 plan
+# section). All share the same atomicity contract as the v0.2.0 mutators:
+# each routes through ``_with_locked_ledger``, which recomputes the predicate
+# (now including ``iteration_pending``) in the SAME atomic snapshot as the
+# write (I-1).
+#
+# Why the surface is wider than round-1 priced: the round-2 doc-review pinned
+# three architectural locks (KTD §A control-flow placement, §B predicate
+# composition, §C gate-unit re-engagement) that require dedicated mutators
+# rather than letting the tick stitch raw writes — see plan U2 §Approach.
+#
+# DEADLOCK GUARD (the F3 trap from v0.2.0): `_with_locked_ledger` cannot be
+# nested. Any composite path (atomic_iterate_step) MUST inline its sub-step
+# bodies inside ONE outer locked body — calling a public mutator from inside a
+# locked mutate() would re-acquire the flock on a fresh fd and deadlock. The
+# pure helper ``_apply_emit`` below is shared between `emit_within_phase` (one
+# locked body) and `atomic_iterate_step` (one locked body) for this reason.
+
+
+def _apply_emit(ledger: dict, to_phase: str, emitter) -> list:
+    """Pure helper: run ``emitter(ledger, to_phase)``, validate + append units,
+    bump ``iteration_emit_count`` per emitted unit. NEVER acquires the flock —
+    the caller already holds it (the F3 deadlock guard).
+
+    Used by both ``emit_within_phase`` and ``atomic_iterate_step`` from within
+    their respective locked bodies. Returns the list of newly-appended unit
+    ids. Mirrors ``transition_and_emit``'s body shape exactly EXCEPT it does
+    NOT write ``loop_phase`` — emission stays within the gate unit's current
+    phase. Validation parity (missing id; collision) matches transition_and_emit.
+    """
+    new_units = emitter(ledger, to_phase) or []
+    existing_ids = {u["id"] for u in ledger.get("units", [])}
+    appended = []
+    for nu in new_units:
+        if "id" not in nu:
+            raise LedgerError("emitted unit missing 'id'")
+        if nu["id"] in existing_ids:
+            raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
+        nu = dict(nu)
+        nu.setdefault("phase", to_phase)
+        ledger.setdefault("units", []).append(
+            _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+        )
+        existing_ids.add(nu["id"])
+        appended.append(nu["id"])
+        # KTD §D / OQ4: bump the monotonic emit-id counter PER emitted unit.
+        # Drives `iterate_template` (U3)'s id assignment via
+        # `id_prefix + (counter+1)`; replaces "recount existing units" which
+        # would collide after a partial-emit crash deleted units.
+        ledger["iteration_emit_count"] = int(ledger.get("iteration_emit_count", 0)) + 1
+    return appended
+
+
+def emit_within_phase(repo_root, run_id, to_phase: str, emitter):
+    """Emit new units into ``to_phase`` WITHOUT advancing ``loop_phase``.
+
+    Sibling to ``transition_and_emit``: same atomicity contract (one
+    ``_with_locked_ledger`` body wraps emit+normalize+append+recompute), but
+    NO ``loop_phase`` write and NO ``seam_paused`` flip. Re-emission stays
+    within the gate unit's current phase per KTD §D — the iteration loop adds
+    siblings rather than transitioning the run.
+
+    ``emitter`` is a PURE callable ``(ledger, to_phase) -> list[new_unit_dict]``.
+    Same constraint as ``transition_and_emit``: it MUST NOT call any ledger
+    mutator (F3 deadlock — fresh-fd flock re-acquire on a held lock).
+
+    Per emitted unit, ``iteration_emit_count`` is incremented atomically
+    (closes round-3 P0-R3-2's "recount on resume after partial-emit crash"
+    failure mode). Returns the list of newly-appended unit ids.
+
+    Implementer's OQ-resolved shape (plan "Deferred to Implementation"): a
+    NEW PUBLIC FUNCTION rather than a ``transition_and_emit`` parameter
+    extension. The bodies share the emit-append-normalize sub-step (factored
+    into ``_apply_emit`` for ``atomic_iterate_step`` reuse) but diverge on
+    loop_phase/seam_paused/counter — a parameter would muddy both paths and
+    leak the counter into transition_and_emit.
+    """
+    def mutate(ledger):
+        return _apply_emit(ledger, to_phase, emitter)
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_verdict_decision(
+    repo_root, run_id, gate_unit_id, decision: str, payload=None
+):
+    """Persist the gate unit's verdict.decision onto its dispatch_context
+    (KTD §D / U2). Mirrors the ``set_winner_unit_id`` precedent (v0.2.0 round-2
+    P0 fix — fix-pass I): the decision lives on ``dispatch_context.decision``,
+    NOT on ``findings[]``, because ``record_verdict`` normalizes findings to
+    ``{severity, note}`` only and would strip the decision before any reader
+    sees it.
+
+    ``decision`` MUST be a member of ``iteration.DECISIONS`` —
+    ``("advance", "iterate", "exit")``. The validation is the contract the
+    engine relies on; a garbage decision is the dominant build-bug class this
+    centralization closes (per [[feedback_plan_documents_transition_code_doesnt_wire_it]]).
+    Optional ``payload`` (dict) is persisted alongside on
+    ``dispatch_context.decision_payload`` — used by ``iterate_template`` to
+    read e.g. ``emit_count`` (U3).
+
+    Raises ``LedgerError`` if the gate unit is missing OR the decision is not
+    in the enum.
+    """
+    # Lazy import (same load-order discipline as recompute_predicate above).
+    import sys as _sys
+    import os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from _bootstrap import load_lib_module as _load
+    iteration = _load("iteration")
+
+    if decision not in iteration.DECISIONS:
+        raise LedgerError(
+            f"decision must be one of {iteration.DECISIONS!r}; got {decision!r}"
+        )
+    if payload is not None and not isinstance(payload, dict):
+        raise LedgerError(
+            f"decision_payload must be a dict or None; got {type(payload).__name__}"
+        )
+
+    def mutate(ledger):
+        gate = _find_unit(ledger, gate_unit_id)
+        dc = gate.setdefault("dispatch_context", {})
+        dc["decision"] = decision
+        if payload is not None:
+            dc["decision_payload"] = dict(payload)
+        return decision
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_bound_override(
+    repo_root, run_id, gate_unit_id, bound_type: str, original_decision: str
+):
+    """Record that the engine overrode an ``iterate`` decision to ``exit``
+    because the iteration bound was breached (KTD §D / U2).
+
+    Writes ``dispatch_context.bound_override = {bound: <bound_type>,
+    original_decision: <original>, at: <iso>}`` on the gate unit. Mirrors the
+    ``winner_unit_id`` precedent — operator-diagnostic data lives on
+    ``dispatch_context``, not on findings or a top-level field. The operator
+    on ``/auto-status`` reads from here (R9 surface).
+
+    ``bound_type`` must be ``"max_attempts"`` or ``"max_wall_seconds"``;
+    ``original_decision`` must be a member of ``iteration.DECISIONS``. The
+    ``at`` timestamp is load-bearing for operator provenance (the deliberate-
+    fail #5 test asserts overrides without a timestamp are caught).
+    """
+    if bound_type not in ("max_attempts", "max_wall_seconds"):
+        raise LedgerError(
+            f"bound_type must be 'max_attempts' or 'max_wall_seconds'; "
+            f"got {bound_type!r}"
+        )
+
+    import sys as _sys
+    import os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from _bootstrap import load_lib_module as _load
+    iteration = _load("iteration")
+
+    if original_decision not in iteration.DECISIONS:
+        raise LedgerError(
+            f"original_decision must be one of {iteration.DECISIONS!r}; "
+            f"got {original_decision!r}"
+        )
+
+    def mutate(ledger):
+        gate = _find_unit(ledger, gate_unit_id)
+        dc = gate.setdefault("dispatch_context", {})
+        dc["bound_override"] = {
+            "bound": bound_type,
+            "original_decision": original_decision,
+            "at": _now_iso(),
+        }
+        return bound_type
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def accumulate_active_time(repo_root, run_id, delta_seconds: float):
+    """Add ``delta_seconds`` to ``active_wall_seconds`` and stamp
+    ``last_active_at`` (R5 / KTD §D).
+
+    The FIRST sum-of-deltas accumulator on the ledger — every prior time field
+    is overwrite-on-write. The contract is ADD, not OVERWRITE: each call adds
+    its delta to the existing total, so two ticks of 5.0 + 7.5 sum to 12.5.
+    The deliberate-fail #1 test asserts this is real addition, not the trap
+    where a future refactor accidentally writes ``= round(delta, 3)``.
+
+    Rounded to 3 decimal places to cap on-disk precision (a tick that runs for
+    0.0000001 s is not interesting; the bound check tolerates millisecond
+    granularity). Negative deltas are clamped to 0 — wall time only flows
+    forward; a clock anomaly should not subtract from the bound budget.
+
+    ``last_active_at`` is the ISO timestamp of THIS call, diagnostic only.
+    The bound math reads ``active_wall_seconds``.
+
+    Called from U4's ``finally``-clause around ``_tick_body`` (per round-2
+    doc-review P1) so the crashed-tick delta still lands.
+    """
+    delta = float(delta_seconds)
+    if delta < 0:
+        delta = 0.0
+    delta = round(delta, 3)
+
+    def mutate(ledger):
+        cur = float(ledger.get("active_wall_seconds", 0))
+        ledger["active_wall_seconds"] = round(cur + delta, 3)
+        ledger["last_active_at"] = _now_iso()
+        return ledger["active_wall_seconds"]
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def increment_iteration_attempts(repo_root, run_id, gate_unit_id):
+    """Atomic ``iteration_attempts += 1``. KTD §D / U2.
+
+    Called by U4's ``advance_iteration_loop`` when honoring an iterate decision
+    (NOT when the bound-override path forces exit — overrides do not count as
+    honored attempts). The pre-increment value drives the bound check in
+    ``iteration.evaluate_decision`` so the Nth attempt is checked BEFORE its
+    decision is honored: if a tick reads iteration_attempts==max, the override
+    fires; the counter only crosses max via this call when the prior tick
+    honored the (max-1)-th iterate.
+
+    Composite path (``atomic_iterate_step``) inlines this increment instead of
+    calling here — the F3 deadlock guard. The standalone mutator exists for
+    completeness (tests, future paths) and for the deliberate-fail #6 control.
+
+    ``gate_unit_id`` is required (and validated) so the increment can NEVER be
+    silently called against a missing/typo'd gate — defensive. The value is
+    the new count; the return is the new count for caller convenience.
+    """
+    def mutate(ledger):
+        # Validate the gate unit exists; raises UnknownUnit on typo.
+        _find_unit(ledger, gate_unit_id)
+        cur = int(ledger.get("iteration_attempts", 0))
+        ledger["iteration_attempts"] = cur + 1
+        return ledger["iteration_attempts"]
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -> dict:
+    """Pure helper: the atomic gate-unit reset combo (KTD §C). The caller
+    already holds the flock — this is the F3 deadlock guard, mirroring
+    ``_apply_emit``.
+
+    In ONE pass mutates the gate unit:
+      (a) state ``verdict-returned → pending`` (validates the EXISTING edge in
+          ``ALLOWED_TRANSITIONS[lib/ledger.py:84]`` — v0.3.0 does NOT add a
+          new edge; the contract is the atomic COMBO, not a new grammar move).
+      (b) ``depends_on`` is replaced with ``new_depends_on`` (the union of the
+          gate's prior deps + newly-emitted sibling ids — the caller computes
+          the union; this mutator just writes).
+      (c) ``dispatch_context.decision`` and ``dispatch_context.decision_payload``
+          CLEARED (closes round-3 P0-R3-1: without the clear, a subsequent
+          tick re-reads the stale ``iterate`` decision and re-fires the
+          iteration loop before the gate re-verdicts, double-incrementing
+          iteration_attempts until bound trip).
+      (d) ``verdict_at`` cleared.
+      (e) ``findings`` cleared.
+
+    Grammar-check is INLINE (not via ``transition()``) — same F3 reason. The
+    deliberate-fail #2 / #3 controls assert (e) and (c) respectively are
+    load-bearing.
+    """
+    gate = _find_unit(ledger, gate_unit_id)
+    current = gate.get("state")
+    # The verdict-returned → pending edge ALREADY exists in
+    # ALLOWED_TRANSITIONS at lib/ledger.py:84 — v0.3.0 does NOT add a new
+    # state edge. We replicate the check inline (cannot route through
+    # transition() inside a locked body; F3 deadlock).
+    if "pending" not in ALLOWED_TRANSITIONS.get(current, set()):
+        raise InvalidTransition(
+            f"{current!r} -> 'pending' not permitted for unit {gate_unit_id!r} "
+            f"(reset_for_iteration requires source state 'verdict-returned')"
+        )
+    gate["state"] = "pending"
+    gate["depends_on"] = list(new_depends_on or [])
+    dc = gate.setdefault("dispatch_context", {})
+    # Round-3 P0-R3-1: clearing the decision is load-bearing. A surviving
+    # `decision: "iterate"` would re-fire the iteration loop on the NEXT
+    # tick before the gate has re-verdicted, double-incrementing
+    # iteration_attempts until bound trip. Centralizing the clear here
+    # (single owner) is cleaner than a per-read-site guard.
+    dc.pop("decision", None)
+    dc.pop("decision_payload", None)
+    gate["verdict_at"] = None
+    gate["findings"] = []
+    return gate
+
+
+def reset_for_iteration(repo_root, run_id, gate_unit_id, new_depends_on):
+    """Atomic gate-unit reset combo per KTD §C. The engine-only caller for the
+    atomic re-engagement combination over the EXISTING
+    ``verdict-returned → pending`` edge in ``ALLOWED_TRANSITIONS``.
+
+    The full combo is implemented in ``_reset_gate_for_iteration`` (callable
+    from inside a held lock — ``atomic_iterate_step`` reuses it). This public
+    mutator wraps that helper in its own locked body for callers that just
+    need the reset standalone.
+    """
+    def mutate(ledger):
+        _reset_gate_for_iteration(ledger, gate_unit_id, new_depends_on)
+        return "pending"
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def atomic_iterate_step(
+    repo_root, run_id, gate_unit_id, emitter, new_depends_on
+):
+    """The composite mutator that runs ONE full iteration step atomically
+    (round-3 P1-R3-1 / KTD §C+D). Wraps THREE writes into ONE
+    ``_with_locked_ledger`` body:
+
+      1. ``iteration_attempts`` increments (KTD §D bound counter).
+      2. ``emitter`` runs; new units are validated, normalized, appended; per
+         unit ``iteration_emit_count`` increments (KTD §D monotonic id).
+      3. Gate unit reset (state ``verdict-returned → pending``, depends_on
+         replaced, dispatch_context.decision / decision_payload cleared,
+         verdict_at cleared, findings cleared — KTD §C).
+
+    All-or-nothing: if any sub-step raises (e.g. an emitter that returns a
+    colliding id, or the gate not in ``verdict-returned``), the ledger is NOT
+    written (``_with_locked_ledger`` only calls ``_atomic_write`` on
+    successful mutate). The deliberate-fail #8 control proves this by passing
+    a bad emitter — in the atomic version iteration_attempts stays at 0; in a
+    split version it would increment before the emit fails.
+
+    Engine-only caller (U4's ``advance_iteration_loop``).
+    """
+    # Capture the caller-supplied depends_on for closure use (avoids the
+    # UnboundLocalError trap where assigning new_depends_on inside mutate()
+    # makes Python rebind it as a local before its first read).
+    caller_depends_on = new_depends_on
+
+    def mutate(ledger):
+        # Validate gate exists up front so we don't half-increment then fail
+        # later (a typo'd gate_unit_id would otherwise let increment land
+        # before _reset_gate_for_iteration's lookup raised; lookup-first
+        # keeps the all-or-nothing contract intact).
+        _find_unit(ledger, gate_unit_id)
+        # Step 1: increment iteration_attempts (bound counter).
+        ledger["iteration_attempts"] = int(ledger.get("iteration_attempts", 0)) + 1
+        # Step 2: emit new units inline (gate unit's current phase).
+        gate = _find_unit(ledger, gate_unit_id)
+        to_phase = gate.get("phase") or ledger.get("loop_phase", "plan")
+        appended = _apply_emit(ledger, to_phase, emitter)
+        # Step 3: reset the gate unit atomically with the emit. The caller
+        # supplies the new depends_on (union of gate's prior deps + newly-
+        # emitted ids); we honor it verbatim. If the caller passed `None`
+        # we compute the union here as a defensive default.
+        deps = caller_depends_on
+        if deps is None:
+            deps = list(gate.get("depends_on") or []) + list(appended)
+        _reset_gate_for_iteration(ledger, gate_unit_id, deps)
+        return appended
 
     return _with_locked_ledger(repo_root, run_id, mutate)
 
