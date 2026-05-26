@@ -112,6 +112,44 @@ def _test_hatch_enabled(hatch_var: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Lazy-load helper (F3 / kieran-1 — dedup of 4 copy-paste sites).
+#
+# ledger.py defers loading sibling lib/ modules (iteration, phase-grammar) into
+# function bodies because ledger.py is imported from many sites, some before
+# sys.path is set up for sibling lib modules. The four prior sites each
+# repeated a 6-line bootstrap (sys.path prepend + `from _bootstrap import
+# load_lib_module`). That repetition is exactly the copy-paste the
+# ``_bootstrap.load_lib_module`` helper was meant to kill — but ledger.py
+# cannot import _bootstrap at module top because _bootstrap.load_ledger()
+# loads THIS module, creating a cycle. The dedup is one local helper that
+# does the deferred load — still no top-level import, but ONE function body
+# instead of four.
+
+
+def _lazy_load(name: str):
+    """Load a sibling lib/ module from within a function body.
+
+    Mirrors the sys.path-prepend + `_bootstrap.load_lib_module` idiom that the
+    four prior call sites each open-coded (RIP `_compute_iteration_pending`,
+    `is_orphaned`, `set_verdict_decision`, `set_bound_override`). Keeping the
+    load deferred — rather than promoting to a module-top import — preserves
+    the load-order discipline ledger.py needs (it is imported from many sites,
+    some before sys.path is set up for sibling lib modules). The dedup is
+    purely about killing the per-site boilerplate.
+
+    Cannot live in ``_bootstrap`` itself because ``_bootstrap.load_ledger()``
+    loads THIS module — importing ``_bootstrap`` at ledger.py module top would
+    be a cycle. The local-helper shape mirrors ``_test_hatch_enabled``'s same
+    cycle-avoidance pattern.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from _bootstrap import load_lib_module
+    return load_lib_module(name)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Errors.
 
 
@@ -455,66 +493,28 @@ def recompute_predicate(ledger: dict) -> dict:
 def _compute_iteration_pending(ledger: dict) -> bool:
     """Compute KTD §B's iteration_pending bool for ``recompute_predicate``.
 
-    True iff the run declares an iteration block AND the gate unit's
-    verdict.decision is ``"iterate"`` AND the bound is unbreached. Tied to the
-    same storage locations as ``lib/iteration.evaluate_decision`` — both read
-    the gate-decision via ``iteration.read_decision`` and the bound counters
-    off the TOP-LEVEL ledger fields (KTD §D / round-3 P1-R3-3):
-    ``iteration_attempts`` and ``active_wall_seconds``.
+    Thin delegating wrapper over ``iteration.compute_pending_state`` — the
+    bound-check logic itself lives in ``lib/iteration.py`` (the ONE
+    iteration-decision module per the AST lint). This file keeps the wrapper
+    purely so ``recompute_predicate`` has a single in-file callable and the
+    lazy-load idiom stays localized.
 
-    Returns False when:
-      - No ``iteration`` block declared (legacy/a1/W ledgers).
-      - No ``gate_unit`` named in iteration.
-      - Gate unit not found in ``units[]`` (recipe bug — silent here; the
-        engine surfaces it via ``iteration.evaluate_decision`` which raises).
-      - Gate unit's decision is not ``"iterate"`` (advance / exit / unset).
-      - Bound is breached on either counter (the engine would force exit).
+    Previously this function open-coded the bound check, byte-equivalent to
+    ``iteration.evaluate_decision``'s lines 130-152. That was the NEXT
+    dimension of the recurring "one rule lives in two places" class — the AST
+    lint catches the literal ``"decision"`` but not duplicated bound math
+    (per [[feedback_recurring_class_close_a_dimension_not_a_sibling]]).
+    Centralizing the math in ``iteration.compute_pending_state`` closes that
+    dimension.
 
-    Lazy import of ``iteration`` mirrors ``is_orphaned``'s ``phase_grammar``
-    lazy-import pattern (lib/ledger.py:447-453). It avoids a load-order
-    dependency: ledger.py is imported by many sites, some of which run before
-    sys.path is set up for sibling lib modules.
+    Brittleness contract (rel-2): ``compute_pending_state`` swallows
+    coercion errors on the numeric bound fields and returns ``False`` on
+    bad input — a corrupted ``iteration_attempts`` MUST NOT raise from
+    ``_atomic_write`` and lock every subsequent ledger write, including the
+    one needed to recover.
     """
-    iteration_block = ledger.get("iteration")
-    if not iteration_block:
-        return False
-    gate_unit_id = iteration_block.get("gate_unit")
-    if not gate_unit_id:
-        return False
-    gate_unit = None
-    for u in ledger.get("units", []):
-        if u.get("id") == gate_unit_id:
-            gate_unit = u
-            break
-    if gate_unit is None:
-        return False
-
-    # Lazy import — same pattern as is_orphaned's phase_grammar load.
-    import sys as _sys
-    import os as _os
-    _here = _os.path.dirname(_os.path.abspath(__file__))
-    if _here not in _sys.path:
-        _sys.path.insert(0, _here)
-    from _bootstrap import load_lib_module as _load
-    iteration = _load("iteration")
-
-    decision = iteration.read_decision(gate_unit)
-    if decision != "iterate":
-        return False
-
-    bound = (iteration_block.get("bound") or {})
-    max_attempts = bound.get("max_attempts")
-    attempts = int(ledger.get("iteration_attempts", 0))
-    if max_attempts is not None and attempts >= int(max_attempts):
-        return False
-
-    max_wall = bound.get("max_wall_seconds")
-    if max_wall is not None:
-        active = float(ledger.get("active_wall_seconds", 0))
-        if active >= float(max_wall):
-            return False
-
-    return True
+    iteration = _lazy_load("iteration")
+    return iteration.compute_pending_state(ledger)
 
 
 def is_orphaned(ledger: dict, now=None) -> bool:
@@ -530,15 +530,9 @@ def is_orphaned(ledger: dict, now=None) -> bool:
     surprises (ledger.py is loaded from many sites, sometimes before sys.path
     is set up for sibling modules).
     """
-    # Lazy import: phase-grammar.py is a sibling lib module; loading it at
+    # Lazy load: phase-grammar.py is a sibling lib module; loading it at
     # module import time would create a load-order dependency, so we defer.
-    import sys as _sys
-    import os as _os
-    _here = _os.path.dirname(_os.path.abspath(__file__))
-    if _here not in _sys.path:
-        _sys.path.insert(0, _here)
-    from _bootstrap import load_lib_module as _load
-    phase_grammar = _load("phase-grammar")
+    phase_grammar = _lazy_load("phase-grammar")
 
     if phase_grammar.current_phase(ledger) == "done":
         return False
@@ -977,6 +971,44 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
     return _with_locked_ledger(repo_root, run_id, mutate)
 
 
+def _emit_units_core(ledger: dict, to_phase: str, emitter) -> list:
+    """Pure shared helper: emit + validate + append units. NO flock acquire,
+    NO loop_phase write, NO counter bump — callers add those.
+
+    Factored out of ``transition_and_emit`` and ``_apply_emit`` (F3 / maint-1)
+    so the emit/validate/append loop lives in ONE place. The two callers
+    diverge ONLY in:
+      - ``transition_and_emit`` additionally advances ``loop_phase``.
+      - ``_apply_emit`` additionally bumps ``iteration_emit_count``.
+
+    Keeping that divergence at the call sites means the SHARED contract
+    (per-unit id-required, no collision; normalize via ``_normalize_unit``
+    with current ``loop_phase``; default to ``to_phase``) lives in one
+    place. The two prior copy-paste loops were byte-equivalent on the
+    emit-loop body and would have drifted on any future field added to a
+    new unit's normalization.
+
+    Returns the list of newly-appended unit ids.
+    """
+    new_units = emitter(ledger, to_phase) or []
+    existing_ids = {u["id"] for u in ledger.get("units", [])}
+    appended = []
+    for nu in new_units:
+        if "id" not in nu:
+            raise LedgerError("emitted unit missing 'id'")
+        if nu["id"] in existing_ids:
+            raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
+        # Emitted units default to the arriving phase unless they declare one.
+        nu = dict(nu)
+        nu.setdefault("phase", to_phase)
+        ledger.setdefault("units", []).append(
+            _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+        )
+        existing_ids.add(nu["id"])
+        appended.append(nu["id"])
+    return appended
+
+
 def transition_and_emit(
     repo_root, run_id, to_phase, emitter: Callable[[dict, str], list]
 ):
@@ -1001,24 +1033,13 @@ def transition_and_emit(
     appends them. New unit ids must not collide with existing ones.
 
     Returns the list of newly-appended unit ids.
+
+    F3 / maint-1: emit body delegates to ``_emit_units_core``; this path adds
+    the ``loop_phase``/``seam_paused`` advance that distinguishes a transition
+    from an in-phase emit.
     """
     def mutate(ledger):
-        new_units = emitter(ledger, to_phase) or []
-        existing_ids = {u["id"] for u in ledger.get("units", [])}
-        appended = []
-        for nu in new_units:
-            if "id" not in nu:
-                raise LedgerError("emitted unit missing 'id'")
-            if nu["id"] in existing_ids:
-                raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
-            # Emitted units default to the arriving phase unless they declare one.
-            nu = dict(nu)
-            nu.setdefault("phase", to_phase)
-            ledger.setdefault("units", []).append(
-                _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
-            )
-            existing_ids.add(nu["id"])
-            appended.append(nu["id"])
+        appended = _emit_units_core(ledger, to_phase, emitter)
         # Advance the phase AFTER emission (the units belong to to_phase; setting
         # loop_phase first or last is equivalent here since both happen in one
         # snapshot, but advancing last keeps "emit produces units FOR to_phase"
@@ -1308,27 +1329,20 @@ def _apply_emit(ledger: dict, to_phase: str, emitter) -> list:
     ids. Mirrors ``transition_and_emit``'s body shape exactly EXCEPT it does
     NOT write ``loop_phase`` — emission stays within the gate unit's current
     phase. Validation parity (missing id; collision) matches transition_and_emit.
+
+    F3 / maint-1: emit body delegates to ``_emit_units_core``; this path adds
+    the per-unit ``iteration_emit_count`` bump that distinguishes an iterating
+    emit from a phase-transition emit.
     """
-    new_units = emitter(ledger, to_phase) or []
-    existing_ids = {u["id"] for u in ledger.get("units", [])}
-    appended = []
-    for nu in new_units:
-        if "id" not in nu:
-            raise LedgerError("emitted unit missing 'id'")
-        if nu["id"] in existing_ids:
-            raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
-        nu = dict(nu)
-        nu.setdefault("phase", to_phase)
-        ledger.setdefault("units", []).append(
-            _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+    appended = _emit_units_core(ledger, to_phase, emitter)
+    # KTD §D / OQ4: bump the monotonic emit-id counter PER emitted unit.
+    # Drives `iterate_template` (U3)'s id assignment via
+    # `id_prefix + (counter+1)`; replaces "recount existing units" which
+    # would collide after a partial-emit crash deleted units.
+    if appended:
+        ledger["iteration_emit_count"] = (
+            int(ledger.get("iteration_emit_count", 0)) + len(appended)
         )
-        existing_ids.add(nu["id"])
-        appended.append(nu["id"])
-        # KTD §D / OQ4: bump the monotonic emit-id counter PER emitted unit.
-        # Drives `iterate_template` (U3)'s id assignment via
-        # `id_prefix + (counter+1)`; replaces "recount existing units" which
-        # would collide after a partial-emit crash deleted units.
-        ledger["iteration_emit_count"] = int(ledger.get("iteration_emit_count", 0)) + 1
     return appended
 
 
@@ -1383,14 +1397,8 @@ def set_verdict_decision(
     Raises ``LedgerError`` if the gate unit is missing OR the decision is not
     in the enum.
     """
-    # Lazy import (same load-order discipline as recompute_predicate above).
-    import sys as _sys
-    import os as _os
-    _here = _os.path.dirname(_os.path.abspath(__file__))
-    if _here not in _sys.path:
-        _sys.path.insert(0, _here)
-    from _bootstrap import load_lib_module as _load
-    iteration = _load("iteration")
+    # Lazy load (same load-order discipline as recompute_predicate above).
+    iteration = _lazy_load("iteration")
 
     if decision not in iteration.DECISIONS:
         raise LedgerError(
@@ -1435,13 +1443,7 @@ def set_bound_override(
             f"got {bound_type!r}"
         )
 
-    import sys as _sys
-    import os as _os
-    _here = _os.path.dirname(_os.path.abspath(__file__))
-    if _here not in _sys.path:
-        _sys.path.insert(0, _here)
-    from _bootstrap import load_lib_module as _load
-    iteration = _load("iteration")
+    iteration = _lazy_load("iteration")
 
     if original_decision not in iteration.DECISIONS:
         raise LedgerError(
