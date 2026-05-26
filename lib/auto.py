@@ -225,6 +225,11 @@ def run(argv) -> int:
             phase_order=phase_order,
             terminal_phase=recipe.get("terminal_phase", "work"),
             phase_transitions=recipe.get("phase_transitions", []),
+            # v0.3.0 U6: recipe-declared iteration / emit_templates flow to the
+            # ledger here. None on v0.2.x recipes; U5's validator has already
+            # checked shape if non-None.
+            iteration=recipe.get("iteration"),
+            emit_templates=recipe.get("emit_templates"),
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")

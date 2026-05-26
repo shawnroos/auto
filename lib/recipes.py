@@ -226,11 +226,35 @@ def validate(recipe: dict) -> None:
         if "prompt_template" in inv:
             _check_prompt_template(inv["prompt_template"], f"unit {u['id']!r}")
 
+    # v0.3.0 (U6): emit_template id_prefixes are forward-reference targets. A
+    # structurally-declared unit (e.g., A4's `compare` after U6) may name a
+    # builder id like `build-clarity` in its `depends_on` even though no
+    # `units[]` entry has that exact id yet — the matching builder is materialized
+    # at iteration time by `iterate_template` from an `emit_templates` entry
+    # whose `id_prefix` is `"build-"`. Without this carve-out the U5 validator
+    # would reject A4's structural `compare`, contradicting U6's "compare is
+    # structural, not emitter-synthesized" contract. Symmetric with the
+    # `gate_unit` carve-out below (~ line 318-328): both forward-reference
+    # emit_template id_prefixes via startswith semantics (depends_on values are
+    # concrete ids, not prefixes).
+    emit_templates_dict = recipe.get("emit_templates") or {}
+    emit_prefixes_for_deps = set()
+    if isinstance(emit_templates_dict, dict):
+        for _tmpl in emit_templates_dict.values():
+            if isinstance(_tmpl, dict) and isinstance(_tmpl.get("id_prefix"), str):
+                emit_prefixes_for_deps.add(_tmpl["id_prefix"])
+
     # depends_on integrity — a second pass once all ids are known.
     for u in recipe["units"]:
         for d in u.get("depends_on", []):
-            if d not in unit_ids:
-                _bad(f"unit {u['id']!r}: depends_on references unknown unit {d!r}")
+            if d in unit_ids:
+                continue
+            # Carve-out: depends_on may forward-reference units produced by an
+            # emit_template (matched via id_prefix). U6 structural-compare
+            # contract.
+            if any(d.startswith(p) for p in emit_prefixes_for_deps):
+                continue
+            _bad(f"unit {u['id']!r}: depends_on references unknown unit {d!r}")
 
     # phase_transitions: optional; each entry {from, to, emitter}; emitter must be
     # a registered V1 emitter name (Gap B disambiguation — A1 vs A4 at the shared

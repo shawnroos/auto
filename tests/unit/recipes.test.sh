@@ -430,6 +430,53 @@ elif op == "lint-max-wall-short":
     r["iteration"]["bound"]["max_wall_seconds"] = 30
     warns = recipes.validate_and_lint(r)
     print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
+
+elif op == "u6-depends-on-id-prefix-valid":
+    # v0.3.0 U6: a structural unit may forward-reference units produced by an
+    # emit_template via the template's id_prefix. A4's `compare` is the
+    # canonical example — its depends_on names "build-clarity" and "build-perf"
+    # which are materialized by the bias-builder emit_template (id_prefix
+    # "build-"). The validator MUST accept this.
+    r = {
+        "name": "u6-fwdref", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-clarity", "build-perf"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "u6-depends-on-unrelated-rejected":
+    # The carve-out is NARROW: depends_on must either reference an existing
+    # unit id OR a member of an emit_template's id_prefix. An unrelated string
+    # ("totally-unrelated") still rejects — proving the carve-out is not a
+    # blanket "accept any forward reference."
+    r = {
+        "name": "u6-bad", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["totally-unrelated"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
 PYEOF
 }
 
@@ -471,6 +518,18 @@ assert_eq "warned" "$(itr lint-max-attempts-loud)"
 
 it "U5 editorial: validate_and_lint warns on max_wall_seconds < 60"
 assert_eq "warned" "$(itr lint-max-wall-short)"
+
+# ── v0.3.0 U6: depends_on may forward-reference emit_template id_prefixes ──
+# This carve-out (mirror of the gate_unit carve-out) is mandated by U6's
+# "compare is structural" contract — A4's `compare` declares
+# depends_on: [build-clarity, build-perf] in units[], but those concrete ids
+# don't exist at validate-time; they're materialized by the bias-builder
+# emit_template (id_prefix "build-").
+it "U6 carve-out: depends_on forward-refs an emit_template id_prefix → valid"
+assert_eq "valid" "$(itr u6-depends-on-id-prefix-valid)"
+
+it "U6 carve-out is narrow: unrelated depends_on id still rejects"
+assert_eq "rejected" "$(itr u6-depends-on-unrelated-rejected)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

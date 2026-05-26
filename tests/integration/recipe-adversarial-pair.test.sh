@@ -140,21 +140,25 @@ case "$res" in
   *) fail "expected 'work|build-clarity,build-perf,compare|build-clarity,build-perf|clarity,perf', got '$res'" ;;
 esac
 
-# ─── Scenario 2: deliberate-fail — empty enumerated_units → no work units ───
-it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_units → emitter returns [], no work units"
+# ─── Scenario 2: deliberate-fail — empty enumerated_units → no builders ─────
+it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_units → emitter returns [], no builders (compare structural remains)"
 res_empty="$(drive_a4 1 0)"
-# Empty enumerated_units returns [] from the emitter (emitters.py:113-116).
-# transition_and_emit appends nothing then advances loop_phase to "work". So:
-#   loop_phase=work, work_ids="" (empty — no builders, no comparator),
-#   compare_deps="" (no comparator), biases="" (no builders).
+# v0.3.0 U6: compare is now STRUCTURAL (declared in a4.json's units[]) so it
+# is on the ledger from init regardless of emitter output. Empty enumerated_units
+# returns [] from the emitter; transition_and_emit appends no builders then
+# advances loop_phase to "work". So:
+#   loop_phase=work, work_ids="compare" (the structural unit; no builders),
+#   compare_deps="build-clarity,build-perf" (declared in the recipe),
+#   biases="" (no builders emitted).
 # This is the DELIBERATE-FAIL CONTROL per memory
-# feedback_new_tests_need_deliberate_fail_smoke_check: if the wire were broken
-# the green scenario above would also produce no units, so we'd see false
-# greens. The pair only makes sense together: green proves emission happens,
-# empty proves it's gated on real plan output (not always-emit).
+# feedback_new_tests_need_deliberate_fail_smoke_check: if the emitter wire were
+# broken, the green scenario above would also produce no builders. The pair
+# only makes sense together: green proves builder emission happens, empty
+# proves it's gated on real plan output (not always-emit). Compare is no longer
+# a discriminator — that's now the wire-alive scenario 3.
 case "$res_empty" in
-  "work|||") pass ;;
-  *) fail "expected 'work|||' (empty enumeration → empty work set), got '$res_empty'" ;;
+  "work|compare|build-clarity,build-perf|") pass ;;
+  *) fail "expected 'work|compare|build-clarity,build-perf|' (compare structural, no builders), got '$res_empty'" ;;
 esac
 
 # ─── Scenario 3: deliberate-fail (no-op patch) — engine routes through the

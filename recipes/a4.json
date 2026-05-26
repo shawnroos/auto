@@ -1,7 +1,7 @@
 {
   "name": "a4",
   "version": "1",
-  "description": "Adversarial Pair + Comparator — two builders work the same plan with different biases; a comparator picks or merges.",
+  "description": "Adversarial Pair + Comparator — two builders work the same plan with different biases; a comparator picks or merges. v0.3.0: compare is structural + the iteration gate; gate verdict.decision=iterate re-spawns bias-differentiated builders up to the bound.",
   "default_adapter": "ce",
   "phase_order": ["plan", "seam", "work"],
   "terminal_phase": "work",
@@ -9,6 +9,19 @@
     {"from": "plan", "to": "work", "emitter": "plan_output_to_paired_builders"}
   ],
   "units": [
-    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
-  ]
+    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}},
+    {"id": "compare", "phase": "work", "depends_on": ["build-clarity", "build-perf"], "invokes": {"adapter_op": "review", "prompt_template": "compare.md"}}
+  ],
+  "iteration": {
+    "gate_unit": "compare",
+    "emit_template": "bias-builder",
+    "bound": {"max_attempts": 4, "max_wall_seconds": 1200}
+  },
+  "emit_templates": {
+    "bias-builder": {
+      "phase": "work",
+      "invokes": {"adapter_op": "do_unit"},
+      "id_prefix": "build-"
+    }
+  }
 }

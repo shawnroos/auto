@@ -673,6 +673,8 @@ def init_ledger(
     phase_order=None,
     terminal_phase=None,
     phase_transitions=None,
+    iteration=None,
+    emit_templates=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -797,6 +799,15 @@ def init_ledger(
             "last_active_at": None,
             "iteration_attempts": 0,
             "iteration_emit_count": 0,
+            # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
+            # ledger at init so the engine's iteration check (advance_iteration_loop)
+            # and the iterate_template emitter find them at every tick. None on a
+            # legacy or non-iteration recipe (a1, W, v0.2.x a2/a4); the validators
+            # at U5 ensure shape is OK if non-None. Routed through here (not seeded
+            # post-init) so the recipe→ledger flow is the production path — the
+            # plumbing gap U1-U5 left for U6 to close.
+            "iteration": iteration,
+            "emit_templates": emit_templates,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},

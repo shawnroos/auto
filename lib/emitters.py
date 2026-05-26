@@ -137,11 +137,17 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
 
 
 def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
-    """A4: emit two bias-differentiated builders + a comparator gating on both.
+    """A4: emit two bias-differentiated builders. v0.3.0 U6: `compare` is now
+    declared structurally in `units[]` (with `depends_on: [build-clarity, build-perf]`
+    forward-referencing the bias-builder emit_template's id_prefix), so this
+    emitter only emits the two builders — the comparator is already on the
+    ledger from init.
 
     The plan's enumerated output is built TWICE — once clarity-biased, once
-    perf-biased — then a comparator (depends_on both) picks/merges. The two
-    builders carry their bias in `dispatch_context.bias`; the comparator reviews.
+    perf-biased. The two builders carry their bias in `dispatch_context.bias`;
+    the structurally-declared `compare` reviews. Removing `compare` from this
+    emitter's output is U6's "compare structural" contract — closes round-2 P0 #7
+    (the validator special case + the dual-source compare definition).
     """
     plan_units = _plan_units(ledger)
     if not plan_units:
@@ -150,20 +156,13 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
     if not items:
         return []
     out = []
-    builder_ids = []
     for bias in ("clarity", "perf"):
         bid = f"build-{bias}"
-        builder_ids.append(bid)
         out.append({
             "id": bid, "phase": to_phase, "depends_on": [],
             "invokes": {"adapter_op": "do_unit"},
             "dispatch_context": {"bias": bias, "plan_items": items},
         })
-    out.append({
-        "id": "compare", "phase": to_phase, "depends_on": builder_ids,
-        "invokes": {"adapter_op": "review", "prompt_template": "compare.md"},
-        "dispatch_context": {},
-    })
     return out
 
 

@@ -135,13 +135,16 @@ elif op == "judge-no-winner":
         print("raised")
 
 elif op == "a4-pair":
+    # v0.3.0 U6: compare is now structurally declared in a4's units[]; the
+    # emitter only produces the two bias-differentiated builders. The test
+    # asserts the emitter's NEW return shape (builders only, no compare).
     led = {"units": [{"id": "plan", "phase": "plan",
             "dispatch_context": {"enumerated_units": [{"id": "task", "invokes": {}}]}}]}
     out = emitters.plan_output_to_paired_builders(led, "work")
     ids = [u["id"] for u in out]
-    comp = next(u for u in out if u["id"] == "compare")
     biases = sorted((u["dispatch_context"].get("bias") for u in out if u["id"].startswith("build-")))
-    print("%s|%s|%s" % (",".join(ids), ",".join(biases), ",".join(comp["depends_on"])))
+    has_compare = any(u["id"] == "compare" for u in out)
+    print("%s|%s|%s" % (",".join(ids), ",".join(biases), "yes" if has_compare else "no"))
 
 elif op == "atomic-emit":
     # transition_and_emit emits + advances + recomputes atomically within ONE
@@ -382,9 +385,15 @@ assert_eq "wB" "$(em judge-winner)"
 it "judge_winner_to_work_units: no winner → raises (hard error)"
 assert_eq "raised" "$(em judge-no-winner)"
 
-# ─── Scenario 6: plan_output_to_paired_builders ─────────────────────────────
-it "plan_output_to_paired_builders: 2 biased builders + comparator depends_on both"
-assert_eq "build-clarity,build-perf,compare|clarity,perf|build-clarity,build-perf" "$(em a4-pair)"
+# ─── Scenario 6: plan_output_to_paired_builders (v0.3.0 U6 — compare structural) ──
+# Before v0.3.0 U6, this emitter synthesized 3 units (build-clarity, build-perf,
+# compare). U6 moved compare into a4.json's `units[]` (declared with
+# depends_on: [build-clarity, build-perf] — forward-referencing the bias-builder
+# emit_template id_prefix). The emitter now produces ONLY the two builders;
+# compare is on the ledger from init. This closes round-2 P0 #7 (compare's
+# dual-source definition).
+it "plan_output_to_paired_builders: 2 biased builders only; compare is structural (U6 — NOT in emitter output)"
+assert_eq "build-clarity,build-perf|clarity,perf|no" "$(em a4-pair)"
 
 # ─── Scenario 7: transition_and_emit atomic (G3/F2) ─────────────────────────
 it "transition_and_emit: appends units + advances phase + predicate sees post-emission set"
