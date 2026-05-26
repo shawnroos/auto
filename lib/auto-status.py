@@ -32,7 +32,12 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    load_ledger,
+    load_lib_module,
+    resolve_repo,
+    test_hatch_enabled,
+)
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -64,6 +69,101 @@ def _all_runs(repo_root: str):
 def _active_runs(repo_root: str):
     """Runs whose loop_phase is not 'done'."""
     return [(r, led) for (r, led) in _all_runs(repo_root) if phase_grammar.current_phase(led) != "done"]
+
+
+def _should_render_iteration(led: dict) -> bool:
+    """v0.3.0 F1 — render the Iteration section iff the ledger shows ANY
+    iteration signal.
+
+    Per F1 task: render WHEN any of:
+      • ``iteration`` block is non-null (recipe declared a gate),
+      • ``iteration_attempts`` > 0 (the loop has actually iterated),
+      • ``active_wall_seconds`` > 0 (the wall-time accumulator has ticked),
+      • any unit carries a ``dispatch_context.bound_override`` (a bound was
+        breached at exit).
+
+    Otherwise the section is OMITTED — non-iteration recipes (a1, W, legacy
+    v0.2.x a2/a4) stay quiet. ``init_ledger`` always sets ``iteration``=None
+    by default, so the check is ``bool(ledger.get("iteration"))``, NOT
+    ``"iteration" in ledger`` — the key is always present.
+    """
+    if led.get("iteration"):
+        return True
+    if int(led.get("iteration_attempts", 0) or 0) > 0:
+        return True
+    if float(led.get("active_wall_seconds", 0) or 0) > 0:
+        return True
+    for u in led.get("units") or []:
+        dc = u.get("dispatch_context") or {}
+        if dc.get("bound_override"):
+            return True
+    return False
+
+
+def _render_iteration_section(led: dict) -> None:
+    """Render the F1 Iteration section. Caller has already gated visibility
+    via ``_should_render_iteration``.
+
+    Fields (per F1 task):
+      • gate_unit — ledger["iteration"]["gate_unit"]
+      • attempts  — iteration_attempts / iteration["bound"]["max_attempts"]
+      • wall_time — active_wall_seconds / iteration["bound"].get("max_wall_seconds", "—")
+      • emit_count — iteration_emit_count (monotonic counter)
+      • last_active — last_active_at (only if non-null)
+      • iteration_pending — exit_predicate_result.iteration_pending (if present)
+      • kill_switch — "DISABLED via CLAUDE_AUTO_DISABLE_ITERATION" when the
+        fenced env pair is set, else omitted
+
+    Read-only. Reads CACHED iteration_pending from the predicate result, never
+    recomputes (memory `feedback_loop_monitor_terminal_state_field`).
+    """
+    iteration_block = led.get("iteration") or {}
+    bound = iteration_block.get("bound") or {}
+    epr = led.get("exit_predicate_result") or {}
+
+    sys.stdout.write("  iteration:\n")
+
+    gate_unit = iteration_block.get("gate_unit") or "—"
+    sys.stdout.write(f"    gate_unit: {gate_unit}\n")
+
+    attempts = led.get("iteration_attempts", 0)
+    max_attempts = bound.get("max_attempts", "—")
+    sys.stdout.write(f"    attempts: {attempts} / {max_attempts}\n")
+
+    active_wall = led.get("active_wall_seconds", 0)
+    max_wall = bound.get("max_wall_seconds", "—")
+    # Render integer seconds for compactness; the field is float on disk.
+    try:
+        active_wall_s = f"{int(active_wall)}s"
+    except (TypeError, ValueError):
+        active_wall_s = f"{active_wall}s"
+    if isinstance(max_wall, (int, float)):
+        max_wall_s = f"{int(max_wall)}s"
+    else:
+        max_wall_s = str(max_wall)
+    sys.stdout.write(f"    wall_time: {active_wall_s} / {max_wall_s}\n")
+
+    sys.stdout.write(
+        f"    emit_count: {led.get('iteration_emit_count', 0)}\n"
+    )
+
+    last_active = led.get("last_active_at")
+    if last_active:
+        sys.stdout.write(f"    last_active: {last_active}\n")
+
+    if "iteration_pending" in epr:
+        sys.stdout.write(
+            f"    iteration_pending: {epr.get('iteration_pending')}\n"
+        )
+
+    # Kill-switch: render ONLY when the fenced pair is live. Routed through
+    # the same `test_hatch_enabled` helper that lib/tick.py uses (KTD §D /
+    # Iteration kill-switch fence). F5 may unfence this; F1 mirrors the
+    # current bootstrap gate.
+    if test_hatch_enabled("CLAUDE_AUTO_DISABLE_ITERATION"):
+        sys.stdout.write(
+            "    kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION\n"
+        )
 
 
 def _liveness(ledger, led: dict) -> str:
@@ -122,6 +222,13 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         )
     )
 
+    # v0.3.0 F1: iteration-awareness. Rendered between the predicate line and
+    # the units block so iteration_pending sits next to its predicate-modifier
+    # context. Omitted entirely when the run has no iteration signal at all
+    # (legacy a1 / W / v0.2.x a2/a4) — keeps non-iteration recipes quiet.
+    if _should_render_iteration(led):
+        _render_iteration_section(led)
+
     # Per-unit states.
     if not units:
         sys.stdout.write("  units: (none yet — plan-loop has not populated work units)\n")
@@ -146,6 +253,20 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
             for f in u.get("findings") or []:
                 sys.stdout.write(
                     f"        finding: {f.get('severity')} — {f.get('note', '')}\n"
+                )
+            # v0.3.0 F1: bound_exit sub-bullet — surfaces a forced exit driven
+            # by an iteration-bound breach (KTD §D / ledger.set_bound_override
+            # writes `dispatch_context.bound_override = {bound, original_decision,
+            # at}`). Includes original_decision so the rendered surface matches
+            # the stored payload exactly (fix-the-class — no asymmetry between
+            # what we persist and what we show).
+            dc = u.get("dispatch_context") or {}
+            bo = dc.get("bound_override")
+            if isinstance(bo, dict):
+                sys.stdout.write(
+                    f"        bound_exit: bound={bo.get('bound', '?')} "
+                    f"original_decision={bo.get('original_decision', '?')} "
+                    f"at={bo.get('at', '?')}\n"
                 )
 
     # Stalled units with their last_error cause.
