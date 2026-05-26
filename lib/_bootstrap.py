@@ -115,16 +115,27 @@ def test_hatch_enabled(hatch_var: str) -> bool:
     NO_ATTEMPT_CHECK, NO_STALLED_RECOVERY) and any future hatches inherit the
     fence for free. Deterministic, grep-checkable mechanism — composes with
     feedback_deterministic_over_probabilistic_v1.
-
-    v0.3.0 U4 adds a non-test hatch fenced by the same sentinel:
-    ``CLAUDE_AUTO_DISABLE_ITERATION`` (read by ``tick.advance_iteration_loop``)
-    is the iteration kill-switch. It mirrors the task #31 fence shape so a
-    stray production export of the hatch alone has no effect; the
-    test-harness-fenced semantic is acceptable because the kill-switch is
-    primarily a debugging aid, not a runtime-tunable knob. (KTD §D /
-    Iteration kill-switch fence.)
     """
     return (
         os.environ.get("CLAUDE_AUTO_TEST_HARNESS") == "1"
         and os.environ.get(hatch_var) == "1"
     )
+
+
+def is_iteration_disabled() -> bool:
+    """Return True iff the operator has set ``CLAUDE_AUTO_DISABLE_ITERATION=1``.
+
+    The iteration kill-switch — a REAL operator escape hatch, not a test-only
+    hatch. When set, ``tick.advance_iteration_loop`` short-circuits and the
+    standard predicate-met flow takes over (the run exits as if no iteration
+    block existed on the ledger). Useful for emergency rollback of an
+    outcomes-gated recipe without redeploying.
+
+    Originally (v0.3.0 U4) this routed through ``test_hatch_enabled`` and
+    therefore ALSO required ``CLAUDE_AUTO_TEST_HARNESS=1`` — making it inert
+    in production. v0.3.0 F5 unfences it: the var is now a runtime-tunable
+    operator knob (CRIT-2 + rel-3). Composes with
+    feedback_deterministic_over_probabilistic_v1: env-var presence is a
+    deterministic, grep-checkable mechanism.
+    """
+    return os.environ.get("CLAUDE_AUTO_DISABLE_ITERATION") == "1"

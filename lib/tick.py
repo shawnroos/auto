@@ -57,7 +57,12 @@ import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    is_iteration_disabled,
+    load_ledger,
+    load_lib_module,
+    test_hatch_enabled,
+)
 
 ledger = load_ledger()
 # The ONE phase-decision module (U5). All phase routing reads through it; the
@@ -581,10 +586,12 @@ def advance_iteration_loop(repo_root, run_id, led):
     early-return path — keeps a1/W ticks side-effect-clean):
       1. a1/W early-return: `led.get("iteration")` missing OR `gate_unit` is
          None → return None. No call to `evaluate_decision`.
-      2. Kill-switch fence: `_bootstrap.test_hatch_enabled(
-         "CLAUDE_AUTO_DISABLE_ITERATION")` True → return None. Mirrors the
-         task #31 fence shape (requires CLAUDE_AUTO_TEST_HARNESS=1 sentinel),
-         so a production export of the var alone has no effect.
+      2. Kill-switch: `_bootstrap.is_iteration_disabled()` True
+         (CLAUDE_AUTO_DISABLE_ITERATION=1) → return None. A REAL operator
+         knob, not a test-only hatch: set the env var at runtime to skip the
+         iteration check without redeploying — useful for emergency rollback
+         of an outcomes-gated recipe. v0.3.0 F5 unfenced this (CRIT-2 + rel-3);
+         it used to require the CLAUDE_AUTO_TEST_HARNESS=1 sentinel as well.
 
     The `new_depends_on` argument to `atomic_iterate_step` is passed as `None`:
     the ledger mutator computes the union of `gate.depends_on + appended` ids
@@ -596,9 +603,11 @@ def advance_iteration_loop(repo_root, run_id, led):
     gate_unit_id = iter_block.get("gate_unit")
     if not gate_unit_id:
         return None
-    # Gate 2: kill-switch fence (task #31 pattern, fenced behind the harness
-    # sentinel). Operators can disable iteration without rolling back v0.3.0.
-    if test_hatch_enabled("CLAUDE_AUTO_DISABLE_ITERATION"):
+    # Gate 2: kill-switch. Operators can set CLAUDE_AUTO_DISABLE_ITERATION=1
+    # to skip the iteration check at runtime — useful for emergency rollback
+    # of an outcomes-gated recipe without redeploying. Unfenced in v0.3.0 F5;
+    # see _bootstrap.is_iteration_disabled.
+    if is_iteration_disabled():
         return None
 
     eval_result = iteration.evaluate_decision(

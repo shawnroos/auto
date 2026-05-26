@@ -34,3 +34,11 @@ Two branches. Decide silently which applies.
 That single dispatch line is the ONLY $-bearing line in this file
 (memory `feedback_slash_command_arg_substitution`). All other routing
 lives in the `auto-driver` skill.
+
+## Environment variables (operator levers)
+
+- `CLAUDE_AUTO_DISABLE_ITERATION=1` — kill-switch for outcomes-gated
+  iteration. When set, `advance_iteration_loop` short-circuits and runs
+  exit through the standard predicate-met path. Use for emergency
+  rollback of a misbehaving recipe without redeploying. Unset to resume
+  outcomes-gating on the next tick.

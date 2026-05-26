@@ -116,6 +116,16 @@ honored iterate count (pre-increment check, so the Nth attempt is blocked when
 (`active_wall_seconds`) — pauses don't burn budget, only `_tick_body`'s active
 duration. A misbehaving gate agent cannot loop forever.
 
+**Operator kill-switch.** Setting `CLAUDE_AUTO_DISABLE_ITERATION=1` in the
+environment makes `advance_iteration_loop` return None — every tick proceeds
+as if the recipe had no `iteration` block, so the run exits through the
+standard predicate-met path on the first terminal-state tick. This is a REAL
+operator knob (unfenced in v0.3.0 F5), useful for emergency rollback of an
+outcomes-gated recipe without redeploying or editing the recipe. The decision
+on disk is UNTOUCHED — unsetting the var resumes outcomes-gating on the next
+tick. As the skill driver you don't toggle this yourself, but you CAN tell an
+operator about it when they're stuck in a misbehaving iteration loop.
+
 **Reading the decision.** Every consumer routes through
 `lib/iteration.py::read_decision` / `evaluate_decision`; the AST lint
 (`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"` literal
