@@ -551,6 +551,20 @@ def dispatch_tick(
         return {"action": "noop", "reason": "lock-held-by-live-tick", "run": run_id}
 
 
+def _no_emit(ledger_dict, to_phase):
+    """v0.3.0 F2: no-op emitter for the iterate path on a recipe that omits
+    `iteration.emit_template`. Returns an empty list so `_apply_emit`'s
+    `emitter(ledger, to_phase) or []` line treats it as "no new units" —
+    `iteration_emit_count` stays unchanged (the counter bumps per emitted
+    unit) and `appended` is []. The default `caller_depends_on=None` path in
+    `atomic_iterate_step` then computes `gate.depends_on + [] = gate.depends_on`,
+    preserving the existing dependency graph; the gate is reset
+    (verdict-returned → pending, decision cleared) and `iteration_attempts`
+    increments, so the existing siblings re-engage on the next tick.
+    """
+    return []
+
+
 def advance_iteration_loop(repo_root, run_id, led):
     """v0.3.0 U4 / KTD §A+§C+§D: the engine-side iteration check.
 
@@ -622,11 +636,33 @@ def advance_iteration_loop(repo_root, run_id, led):
         # reset) through the composite mutator. new_depends_on=None tells
         # atomic_iterate_step to compute the union of gate.depends_on +
         # appended ids inside its own locked body.
+        #
+        # v0.3.0 F2 (correctness-emit-template): the recipe validator at
+        # lib/recipes.py:380-393 makes `iteration.emit_template` OPTIONAL
+        # ("re-engage the gate without spawning new siblings" — e.g. A4's
+        # comparator re-comparing the same builders after a clarifying
+        # signal). When the recipe omits emit_template, the iterate path
+        # must still advance the loop (increment iteration_attempts + reset
+        # the gate) WITHOUT emitting new units; the existing units re-
+        # engage. We honor that by passing a no-op emitter to
+        # atomic_iterate_step: `_apply_emit` calls `emitter(ledger,
+        # to_phase) or []`, so returning `[]` cleanly skips emission AND
+        # leaves iteration_emit_count unchanged (the counter bumps PER
+        # emitted unit). The deps default (`caller_depends_on=None` →
+        # `gate.depends_on + [] = gate.depends_on`) preserves the existing
+        # dependency graph. Going through atomic_iterate_step (one locked
+        # body) preserves the all-or-nothing contract — splitting into two
+        # writes (increment then reset) would open a window where a tick
+        # could read attempts++ but a still-verdict-returned gate.
+        if (led.get("iteration") or {}).get("emit_template"):
+            emitter = emitters.iterate_template
+        else:
+            emitter = _no_emit
         ledger.atomic_iterate_step(
             repo_root,
             run_id,
             gate_unit_id,
-            emitter=emitters.iterate_template,
+            emitter=emitter,
             new_depends_on=None,
         )
         return {"action": "iterate"}
@@ -719,7 +755,49 @@ def _tick_body_inner(
     #    helper writes its own ledger mutations (atomic_iterate_step on
     #    iterate; set_bound_override + set_loop on bound-exit) which the next
     #    block's `pred` re-reads via the recomputed exit_predicate_result.
-    iteration_result = advance_iteration_loop(repo_root, run_id, led)
+    #
+    # v0.3.0 F2 (rel-1): wrap the iteration check in try/except so a raise
+    # inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
+    # malformed gate decision, KeyError on a missing gate unit, RecipeError on
+    # a misshapen emit_template) DOES NOT propagate to _cli — which catches
+    # only (TickError, LedgerError) and exits with no JSON intent (the harness
+    # never sees a rearm and the run wedges). Instead, we mark the loop done +
+    # manual (so an orphan check never mistakes a wedged run for a live one)
+    # AND emit a stop intent carrying the diagnostic. LedgerError is re-raised
+    # so the existing handler still catches it (LedgerError indicates the
+    # ledger itself is in an inconsistent state — we should NOT mark such a
+    # run done with a clean signal). Per memory
+    # feedback_polling_inside_vs_outside_agentic_loop: the natural harness
+    # signal is the rearm/stop intent; the iteration-check crash path must
+    # produce one, not silently exit.
+    try:
+        iteration_result = advance_iteration_loop(repo_root, run_id, led)
+    except ledger.LedgerError:
+        # Ledger-level failures are NOT recoverable here — the inconsistent-
+        # ledger signal must propagate to _cli (which records the error and
+        # exits 1, leaving the run for /auto-resume).
+        raise
+    except Exception as exc:  # noqa: BLE001 — convert ANY non-Ledger raise.
+        # Mark the loop finished + manual so liveness checks don't treat the
+        # wedged run as orphaned, then surface the crash in a stop intent so
+        # the harness gets the natural signal (rather than _cli exiting with
+        # no JSON on stdout).
+        try:
+            ledger.set_loop(
+                repo_root, run_id, loop_phase="done", driver="manual", beat=True,
+            )
+        except Exception:  # noqa: BLE001 — never bury the original.
+            pass
+        return {
+            "action": "stop",
+            "reason": "iteration-check-failed",
+            "run": run_id,
+            "error": {
+                "call": "advance_iteration_loop",
+                "message": f"iteration check failed: {type(exc).__name__}: {exc}",
+                "at": now_iso,
+            },
+        }
     if iteration_result is not None:
         action = iteration_result.get("action")
         if action == "stop":
@@ -934,9 +1012,10 @@ def _operator_guidance_for(phase, advance_result, led):
         prepend a notice naming which bound tripped + the best-so-far state
         from the gate's last decision_payload (OQ2). Operators see WHY the
         loop exited and WHAT we tried before bound.
-      * Else if iteration is active AND `iteration_attempts == max_attempts -
-        1` → prepend a "last attempt before bound" warning. Operators know
-        the NEXT iterate will trip the bound.
+      * Else if iteration is active AND `iteration_attempts == max_attempts`
+        → prepend a "last attempt before bound" warning. Operators know the
+        NEXT iterate decision will trip the bound (the engine overrides
+        when `attempts_made >= max_attempts` per lib/iteration.py:136).
     """
     iteration_prefix = _iteration_guidance_prefix(led)
 
@@ -1015,12 +1094,24 @@ def _iteration_guidance_prefix(led):
             "The engine overrode the gate's iterate to exit; the run is done. "
         )
 
-    # Branch 2: under bound, but the next iterate would be the last attempt
-    # the engine honors. Surface a warning so the operator knows.
+    # Branch 2: under bound, but the next iterate decision the engine sees
+    # will trip the bound. Surface a warning so the operator knows.
+    #
+    # v0.3.0 F2 (ADV-3 off-by-one): the warning fires when the NEXT iterate
+    # decision will be overridden to exit by `iteration.evaluate_decision`.
+    # That override fires when `attempts_made >= max_attempts` (lib/iteration
+    # .py:136). `iteration_attempts` increments per HONORED iterate (in
+    # atomic_iterate_step, pre-check). So the next iterate trips bound EXACTLY
+    # when `attempts == max_attempts` — i.e., max_attempts iterates have been
+    # honored and the (max+1)-th would trip. The prior code compared `attempts
+    # == max - 1`, which fires ONE tick early (with max=3, that warns at
+    # attempts=2 even though attempts=2 still has TWO more iterates to honor
+    # before bound trip: the iterate at attempts=2 becomes attempts=3, and the
+    # iterate read at attempts=3 is the one that trips).
     bound = iter_block.get("bound") or {}
     max_attempts = bound.get("max_attempts")
     attempts = int(led.get("iteration_attempts", 0))
-    if max_attempts is not None and attempts == int(max_attempts) - 1:
+    if max_attempts is not None and attempts == int(max_attempts):
         return (
             f"iteration: last attempt before bound (attempts={attempts}, "
             f"max_attempts={max_attempts}). The next iterate decision will "

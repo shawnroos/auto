@@ -1113,12 +1113,18 @@ elif op == "w-early-return":
     print(json.dumps({"direct_is_none": direct is None}))
 
 elif op == "r9-last-attempt-guidance":
-    # R9: iteration_attempts == max_attempts - 1 → INTENT carries
-    # "last attempt before bound" guidance. We tick a non-iterating ledger
-    # (decision="advance" with attempts=4 < 5) so the rearm path fires.
-    # Actually we use a fix-applied path: a1 ledger with iteration block
-    # tacked on so the guidance branch fires and we get a rearm intent.
-    init_a2("u4-r9-last", decision=None, attempts=4, max_attempts=5)
+    # R9: iteration_attempts == max_attempts → INTENT carries "last attempt
+    # before bound" guidance. The NEXT iterate decision (read at
+    # attempts_made==max_attempts) will be overridden to exit by
+    # iteration.evaluate_decision (lib/iteration.py:136). We tick a non-
+    # iterating ledger (decision=None with attempts=5 == max=5) so the
+    # rearm path fires; the helper's branch 2 sees attempts==max and
+    # prepends the warning to the operator_guidance body.
+    # v0.3.0 F2 (ADV-3 off-by-one): pre-F2 this seeded attempts=4 (one
+    # tick too early — at attempts=4 with max=5, two more iterates would
+    # be honored before bound trip, so the "next iterate trips bound"
+    # text was a lie).
+    init_a2("u4-r9-last", decision=None, attempts=5, max_attempts=5)
     # Add a verdict-returned blocker unit so the tick produces a rearm.
     def seed(L):
         L["units"].append({
@@ -1367,7 +1373,7 @@ direct_is_none="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['direc
 assert_eq "True" "$direct_is_none"
 
 # ─── U4 Scenario 9: R9 last-attempt guidance ─────────────────────────────────
-it "U4 R9 last-attempt: tick at attempts == max-1 surfaces 'last attempt before bound' in operator_guidance"
+it "U4 R9 last-attempt: tick at attempts == max surfaces 'last attempt before bound' in operator_guidance"
 res="$(u4_driver r9-last-attempt-guidance)"
 has="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['guidance_has_last_attempt'])" "$res")"
 assert_eq "True" "$has"
@@ -1709,6 +1715,287 @@ if [ "$advanced" = "False" ]; then
   pass
 else
   fail "DF expected advanced=False (no accumulation in DF); got advanced=$advanced res=$res"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# F2 DELIBERATE-FAILS — three controls proving the three F2 fixes are load-
+# bearing. Each control reverts the F2 fix via the same Edit-the-tmp-copy
+# pattern as U4's DFs above.
+# ════════════════════════════════════════════════════════════════════════════
+
+# DF#5 patch: remove the try/except around advance_iteration_loop in
+# _tick_body_inner so an iteration-check raise propagates straight up. Without
+# the wrap, a malformed iterate ledger raises out of dispatch_tick → _cli
+# (which catches only TickError/LedgerError) → no JSON intent, wedge.
+cat > "$DF_DIR/df5_no_iteration_try.py" <<'PYEOF'
+"""DF#5: strip the try/except around advance_iteration_loop in
+_tick_body_inner so a non-Ledger raise propagates instead of being
+converted into a stop intent."""
+import sys
+p = sys.argv[1]
+src = open(p).read()
+old = (
+    "    try:\n"
+    "        iteration_result = advance_iteration_loop(repo_root, run_id, led)\n"
+    "    except ledger.LedgerError:\n"
+)
+if old not in src:
+    sys.exit("DF#5 anchor 1 not found")
+# Replace the try-line + the entire wrap with a bare call, dropping
+# everything from `    try:` through the closing `}` of the except handler.
+start = src.find(old)
+# Locate the end of the wrap: the closing `}` of the stop-intent dict
+# returned by the converter, then a blank line. The wrap ends just before
+# the line `    if iteration_result is not None:`.
+end_marker = "    if iteration_result is not None:"
+end_idx = src.find(end_marker, start)
+if end_idx < 0:
+    sys.exit("DF#5 anchor 2 not found")
+replacement = (
+    "    iteration_result = advance_iteration_loop(repo_root, run_id, led)\n"
+)
+open(p, "w").write(src[:start] + replacement + src[end_idx:])
+PYEOF
+
+# DF#6 patch: revert the emit_template-optional branch so the iterate path
+# ALWAYS calls iterate_template even when the recipe omits emit_template.
+# Under a recipe with iteration but no emit_template, iterate_template raises
+# RecipeError at lib/emitters.py:229.
+cat > "$DF_DIR/df6_no_optional_emit.py" <<'PYEOF'
+"""DF#6: revert the F2 emit_template-optional branch so the iterate path
+unconditionally hardcodes emitter=iterate_template. With a recipe that
+omits iteration.emit_template, iterate_template raises RecipeError."""
+import sys
+p = sys.argv[1]
+src = open(p).read()
+old = (
+    '        if (led.get("iteration") or {}).get("emit_template"):\n'
+    '            emitter = emitters.iterate_template\n'
+    '        else:\n'
+    '            emitter = _no_emit\n'
+    '        ledger.atomic_iterate_step(\n'
+    '            repo_root,\n'
+    '            run_id,\n'
+    '            gate_unit_id,\n'
+    '            emitter=emitter,\n'
+    '            new_depends_on=None,\n'
+    '        )'
+)
+new = (
+    '        ledger.atomic_iterate_step(\n'
+    '            repo_root,\n'
+    '            run_id,\n'
+    '            gate_unit_id,\n'
+    '            emitter=emitters.iterate_template,  # DF#6 PATCH\n'
+    '            new_depends_on=None,\n'
+    '        )'
+)
+if old not in src:
+    sys.exit("DF#6 anchor not found")
+open(p, "w").write(src.replace(old, new))
+PYEOF
+
+# DF#7 patch: revert the off-by-one fix in _iteration_guidance_prefix back
+# to `attempts == max_attempts - 1`. At attempts=max-1, the buggy version
+# fires the warning even though the next iterate (incrementing to attempts=
+# max) is still honored by evaluate_decision — TWO iterates remain before
+# bound trip, not one. The probe asserts the warning appears at attempts=
+# max-1 in the buggy DF; the FIXED version returns no warning at that
+# attempts count.
+cat > "$DF_DIR/df7_off_by_one.py" <<'PYEOF'
+"""DF#7: revert the off-by-one fix in _iteration_guidance_prefix so the
+"last attempt before bound" warning fires one tick too early."""
+import sys
+p = sys.argv[1]
+src = open(p).read()
+old = 'if max_attempts is not None and attempts == int(max_attempts):'
+new = 'if max_attempts is not None and attempts == int(max_attempts) - 1:  # DF#7 PATCH'
+if old not in src:
+    sys.exit("DF#7 anchor not found")
+open(p, "w").write(src.replace(old, new))
+PYEOF
+
+# Extend the u4_df_with_patched_tick probes with F2-specific ops. Rather than
+# editing the inline heredoc above (which would require restructuring the
+# helper), define a sibling driver for the F2 probes — same shape, F2-only ops.
+f2_df_with_patched_tick() {
+  local patch_script="$1" probe_op="$2"
+  local tmpdir; tmpdir="$(mktemp -d -t f2-df.XXXXXX)"
+  cp "$TICK_PY" "$tmpdir/tick.py"
+  "$PY" "$patch_script" "$tmpdir/tick.py"
+  local patch_rc=$?
+  if [ "$patch_rc" -ne 0 ]; then
+    rm -rf "$tmpdir"
+    fail "F2 DF patch script $patch_script failed with rc=$patch_rc"
+    return 0
+  fi
+  TICK_PY_OVERRIDE="$tmpdir/tick.py" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
+import json, sys, os, importlib.util
+auto_root, repo, op = sys.argv[1:4]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+m = load_lib_module("ledger")
+t_path = os.environ["TICK_PY_OVERRIDE"]
+t_spec = importlib.util.spec_from_file_location("tick_patched", t_path)
+t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
+
+def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
+    """Seed an A4-style ledger with iteration but NO emit_template — the
+    F2-correctness-emit-template shape. Used by both df-no-emit-raises (DF#6)
+    and the corresponding green-path test."""
+    p = m.ledger_path(repo, run)
+    if os.path.exists(p): os.unlink(p)
+    units = [
+        {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
+        {"id": "build-clarity", "state": "fixed", "phase": "work",
+         "depends_on": ["plan-1"], "findings": []},
+        {"id": "build-perf", "state": "fixed", "phase": "work",
+         "depends_on": ["plan-1"], "findings": []},
+        {"id": "compare", "state": "pending", "phase": "work",
+         "depends_on": ["build-clarity", "build-perf"]},
+    ]
+    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+                  phase_order=["plan","seam","work"], terminal_phase="work",
+                  units=units)
+    def seed(L):
+        # iteration WITHOUT emit_template (validator allows it; see
+        # lib/recipes.py:380-393). No emit_templates declared either.
+        L["iteration"] = {"gate_unit": "compare",
+                          "bound": {"max_attempts": max_attempts}}
+        L["iteration_attempts"] = attempts
+        for u in L["units"]:
+            if u["id"] == "compare":
+                u["state"] = "dispatched"
+    m._with_locked_ledger(repo, run, seed)
+    m.record_verdict(repo, run, "compare", [])
+    m.set_verdict_decision(repo, run, "compare", "iterate")
+
+def _init_iter_bad_decision(run):
+    """Seed an iteration ledger with a CORRUPTED gate decision so
+    iteration.evaluate_decision raises ValueError. Used by DF#5 probe to
+    prove the unwrapped path wedges."""
+    p = m.ledger_path(repo, run)
+    if os.path.exists(p): os.unlink(p)
+    units = [
+        {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
+        {"id": "judge", "state": "pending", "phase": "work",
+         "depends_on": ["plan-1"]},
+    ]
+    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+                  phase_order=["plan","seam","work"], terminal_phase="work",
+                  units=units)
+    def seed(L):
+        L["iteration"] = {"gate_unit": "judge", "emit_template":
+                          "plan-candidate", "bound": {"max_attempts": 5}}
+        L["emit_templates"] = {"plan-candidate": {
+            "phase":"plan","invokes":{"adapter_op":"next_plan_step"},
+            "id_prefix":"plan-"}}
+        L["iteration_attempts"] = 0
+        L["iteration_emit_count"] = 1
+        for u in L["units"]:
+            if u["id"] == "judge":
+                u["state"] = "dispatched"
+    m._with_locked_ledger(repo, run, seed)
+    m.record_verdict(repo, run, "judge", [])
+    # Write a BOGUS decision string directly via _with_locked_ledger so we
+    # bypass set_verdict_decision's validation. evaluate_decision will
+    # then raise ValueError ("must be one of {advance,iterate,exit}").
+    def corrupt(L):
+        for u in L["units"]:
+            if u["id"] == "judge":
+                dc = u.setdefault("dispatch_context", {})
+                dc["decision"] = "GARBAGE"
+    m._with_locked_ledger(repo, run, corrupt)
+
+if op == "df-iteration-raise-unwrapped":
+    # DF#5: tick.py has no try/except around advance_iteration_loop. A
+    # raise inside iteration.evaluate_decision propagates out of dispatch
+    # _tick — we observe it as a Python exception, NOT a stop-intent.
+    _init_iter_bad_decision("f2-df-raise")
+    try:
+        r = t.dispatch_tick(repo, "f2-df-raise")
+        # If no raise, the DF didn't trigger — buggy if dispatch returned a
+        # stop intent (the F2 fix would produce one; the DF should NOT).
+        print(json.dumps({"raised": False, "action": (r or {}).get("action"),
+                          "reason": (r or {}).get("reason")}))
+    except Exception as exc:
+        print(json.dumps({"raised": True, "exc_type": type(exc).__name__,
+                          "exc_msg": str(exc)}))
+
+elif op == "df-no-emit-raises":
+    # DF#6: iterate_template ALWAYS called; on a no-emit_template recipe
+    # this raises RecipeError. With the F2 fix, the iterate path uses the
+    # no-op emitter instead and the tick re-arms cleanly.
+    _init_iter_no_emit("f2-df-noemit", attempts=0, max_attempts=5)
+    try:
+        r = t.dispatch_tick(repo, "f2-df-noemit")
+        print(json.dumps({"raised": False, "action": (r or {}).get("action"),
+                          "reason": (r or {}).get("reason")}))
+    except Exception as exc:
+        print(json.dumps({"raised": True, "exc_type": type(exc).__name__,
+                          "exc_msg": str(exc)[:200]}))
+
+elif op == "df-off-by-one-warns-early":
+    # DF#7: the off-by-one is reverted, so the warning fires at
+    # attempts==max-1 even though TWO more iterates would be honored before
+    # bound trip. With the F2 fix, no warning fires at attempts==max-1.
+    # We seed an attempts=max-1 ledger and call the helper directly.
+    _init_iter_no_emit("f2-df-obo", attempts=4, max_attempts=5)
+    led = m.read_ledger(repo, "f2-df-obo")
+    prefix = t._iteration_guidance_prefix(led)
+    print(json.dumps({
+        "warns_early": "last attempt before bound" in prefix,
+        "attempts": led.get("iteration_attempts"),
+    }))
+
+else:
+    print(f"unknown op: {op}")
+    sys.exit(2)
+PYEOF
+  local rc=$?
+  rm -rf "$tmpdir"
+  return $rc
+}
+
+# DF#5 — Strip the try/except around advance_iteration_loop. A raise from
+# iteration.evaluate_decision (corrupted gate decision) propagates out of
+# dispatch_tick; the call site re-raises rather than emitting a stop intent.
+it "F2 DELIBERATE-FAIL #5 (rel-1): WITHOUT the iteration try/except → a malformed-decision raise propagates instead of converting to a stop intent"
+res="$(f2_df_with_patched_tick "$DF_DIR/df5_no_iteration_try.py" df-iteration-raise-unwrapped)"
+raised="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raised'])" "$res")"
+if [ "$raised" = "True" ]; then
+  pass
+else
+  fail "DF#5 expected raised=True (the iteration check raises out of dispatch_tick); got $res"
+fi
+
+# DF#6 — Revert the F2 emit_template-optional branch. With the iterate path
+# unconditionally calling iterate_template, a recipe that has iteration but
+# NO emit_template raises RecipeError inside atomic_iterate_step. DF#6 only
+# reverts the optional-emit branch — the F2 try/except (DF#5's target) is
+# left intact — so the visible effect is a stop intent with
+# reason="iteration-check-failed". We assert EXACTLY that observable.
+it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op emitter branch → an iterate path on a recipe missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
+res="$(f2_df_with_patched_tick "$DF_DIR/df6_no_optional_emit.py" df-no-emit-raises)"
+action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('action',''))" "$res")"
+reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('reason',''))" "$res")"
+if [ "$action" = "stop" ] && [ "$reason" = "iteration-check-failed" ]; then
+  pass
+else
+  fail "DF#6 expected action=stop reason=iteration-check-failed; got action=$action reason=$reason res=$res"
+fi
+
+# DF#7 — Revert the off-by-one fix. At attempts=max-1=4 with max=5, the
+# buggy version fires the "last attempt before bound" warning; the F2 fix
+# returns "" because attempts != max.
+it "F2 DELIBERATE-FAIL #7 (ADV-3): reverting the bound-warning fix → 'last attempt before bound' fires at attempts==max-1 (the F2-fixed code does NOT warn there)"
+res="$(f2_df_with_patched_tick "$DF_DIR/df7_off_by_one.py" df-off-by-one-warns-early)"
+warns_early="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['warns_early'])" "$res")"
+attempts="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['attempts'])" "$res")"
+if [ "$warns_early" = "True" ] && [ "$attempts" = "4" ]; then
+  pass
+else
+  fail "DF#7 expected warns_early=True attempts=4; got warns_early=$warns_early attempts=$attempts res=$res"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
