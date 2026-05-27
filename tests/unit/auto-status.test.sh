@@ -280,6 +280,62 @@ KS_UNSET_OUT="$(env -u CLAUDE_AUTO_DISABLE_ITERATION CLAUDE_AUTO_REPO="$REPO" ba
 it "kill_switch OMITTED when DISABLE_ITERATION unset"
 assert_not_contains "$KS_UNSET_OUT" "kill_switch" "kill_switch off"
 
+# ─── Scenario 9 (G7 / ADV-R2-2): shape-defensive render boundary ──────────
+# A corrupt iteration block, stringified iteration_attempts, or bound
+# corruption that slipped past the WRITE-side gates (G2 in lib/iteration.py)
+# must NOT crash /auto-status — the operator needs visibility during the
+# exact incident that needs diagnosis. Defense-in-depth at the read
+# chokepoint: render a single "<shape error: ...>" line instead of crashing.
+
+# DF 1 — corrupt iteration as a string (not a dict, not None).
+CORRUPT_ITER_RUN="corrupt-iter-run"
+CORRUPT_ITER_EXPR='{
+  "run_id": "corrupt-iter-run",
+  "adapter": "ce",
+  "adapter_scale": "three-tier",
+  "loop": {"loop_phase": "work", "driver": "self"},
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
+  "units": [{"id": "u1", "state": "dispatched", "phase": "work"}],
+  "iteration": "broken",
+  "iteration_attempts": 0,
+  "iteration_emit_count": 0,
+  "active_wall_seconds": 0,
+  "last_active_at": None
+}'
+write_ledger "$CORRUPT_ITER_RUN" "$CORRUPT_ITER_EXPR"
+CORRUPT_ITER_OUT="$(run_status "$CORRUPT_ITER_RUN")"
+
+it "G7 DF1: corrupt iteration block renders shape-error line, not crash"
+assert_contains "$CORRUPT_ITER_OUT" "iteration: <shape error:" "shape-error line"
+
+# DF 2 — stringified iteration_attempts ("five" instead of an int).
+STRING_ATTEMPTS_RUN="string-attempts-run"
+STRING_ATTEMPTS_EXPR='{
+  "run_id": "string-attempts-run",
+  "adapter": "ce",
+  "adapter_scale": "three-tier",
+  "loop": {"loop_phase": "work", "driver": "self"},
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
+  "units": [{"id": "u1", "state": "dispatched", "phase": "work"}],
+  "iteration": None,
+  "iteration_attempts": "five",
+  "iteration_emit_count": 0,
+  "active_wall_seconds": 0,
+  "last_active_at": None
+}'
+write_ledger "$STRING_ATTEMPTS_RUN" "$STRING_ATTEMPTS_EXPR"
+STRING_ATTEMPTS_OUT="$(run_status "$STRING_ATTEMPTS_RUN")"
+
+it "G7 DF2: stringified iteration_attempts triggers render (not crash)"
+# _should_render_iteration must return True on stringified attempts, so the
+# iteration section renders (either happy-path or shape-error line — both
+# acceptable; what's NOT acceptable is a crash that suppresses the section).
+case "$STRING_ATTEMPTS_OUT" in
+  *"iteration:"*) pass ;;
+  *) fail "stringified iteration_attempts suppressed iteration section:
+$STRING_ATTEMPTS_OUT" ;;
+esac
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "auto-status.test.sh: ${PASS} passed, ${FAIL} failed"

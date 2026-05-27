@@ -86,15 +86,43 @@ def _should_render_iteration(led: dict) -> bool:
     v0.2.x a2/a4) stay quiet. ``init_ledger`` always sets ``iteration``=None
     by default, so the check is ``bool(ledger.get("iteration"))``, NOT
     ``"iteration" in ledger`` — the key is always present.
+
+    G7 (ADV-R2-2) — SHAPE-DEFENSIVE on the READ chokepoint. A corrupt
+    ``iteration`` (non-dict, non-None) or stringified ``iteration_attempts``
+    / ``active_wall_seconds`` must still trigger rendering so the operator
+    SEES the corruption — denying visibility during the exact incident that
+    needs diagnosis would be the worst possible failure mode.
     """
-    if led.get("iteration"):
+    # G7: corrupt iteration value (non-dict, non-None) → still render so the
+    # operator sees the shape error in the rendered section.
+    iter_val = led.get("iteration")
+    if iter_val is not None and not isinstance(iter_val, dict):
         return True
-    if int(led.get("iteration_attempts", 0) or 0) > 0:
+    if iter_val:
         return True
-    if float(led.get("active_wall_seconds", 0) or 0) > 0:
+    try:
+        attempts_int = int(led.get("iteration_attempts", 0) or 0)
+    except (TypeError, ValueError):
+        # G7: stringified attempts → still render so operator sees it.
         return True
-    for u in led.get("units") or []:
-        dc = u.get("dispatch_context") or {}
+    if attempts_int > 0:
+        return True
+    try:
+        wall_f = float(led.get("active_wall_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        # G7: stringified wall seconds → still render so operator sees it.
+        return True
+    if wall_f > 0:
+        return True
+    units = led.get("units")
+    if not isinstance(units, list):
+        units = []
+    for u in units:
+        if not isinstance(u, dict):
+            continue
+        dc = u.get("dispatch_context")
+        if not isinstance(dc, dict):
+            continue
         if dc.get("bound_override"):
             return True
     return False
@@ -117,52 +145,80 @@ def _render_iteration_section(led: dict) -> None:
 
     Read-only. Reads CACHED iteration_pending from the predicate result, never
     recomputes (memory `feedback_loop_monitor_terminal_state_field`).
+
+    G7 (ADV-R2-2) — Defense-in-depth at the render boundary. The function
+    body is wrapped in a top-level try/except: any corruption that slipped
+    past the WRITE-side gates (G2 in lib/iteration.py) still produces a
+    single operator-visible line ("iteration: <shape error: ...>") rather
+    than crashing /auto-status. Denying visibility during the exact incident
+    that needs diagnosis is the worst possible failure mode.
     """
-    iteration_block = led.get("iteration") or {}
-    bound = iteration_block.get("bound") or {}
-    epr = led.get("exit_predicate_result") or {}
-
-    sys.stdout.write("  iteration:\n")
-
-    gate_unit = iteration_block.get("gate_unit") or "—"
-    sys.stdout.write(f"    gate_unit: {gate_unit}\n")
-
-    attempts = led.get("iteration_attempts", 0)
-    max_attempts = bound.get("max_attempts", "—")
-    sys.stdout.write(f"    attempts: {attempts} / {max_attempts}\n")
-
-    active_wall = led.get("active_wall_seconds", 0)
-    max_wall = bound.get("max_wall_seconds", "—")
-    # Render integer seconds for compactness; the field is float on disk.
     try:
-        active_wall_s = f"{int(active_wall)}s"
-    except (TypeError, ValueError):
-        active_wall_s = f"{active_wall}s"
-    if isinstance(max_wall, (int, float)):
-        max_wall_s = f"{int(max_wall)}s"
-    else:
-        max_wall_s = str(max_wall)
-    sys.stdout.write(f"    wall_time: {active_wall_s} / {max_wall_s}\n")
+        iteration_block = led.get("iteration") or {}
+        if not isinstance(iteration_block, dict):
+            # Corrupt iteration value (string, list, etc.) — render the
+            # shape error explicitly via the except branch below.
+            raise TypeError(
+                f"iteration must be dict or None, got {type(iteration_block).__name__}"
+            )
+        bound = iteration_block.get("bound") or {}
+        if not isinstance(bound, dict):
+            raise TypeError(
+                f"iteration.bound must be dict or None, got {type(bound).__name__}"
+            )
+        epr = led.get("exit_predicate_result") or {}
+        if not isinstance(epr, dict):
+            epr = {}
 
-    sys.stdout.write(
-        f"    emit_count: {led.get('iteration_emit_count', 0)}\n"
-    )
+        sys.stdout.write("  iteration:\n")
 
-    last_active = led.get("last_active_at")
-    if last_active:
-        sys.stdout.write(f"    last_active: {last_active}\n")
+        gate_unit = iteration_block.get("gate_unit") or "—"
+        sys.stdout.write(f"    gate_unit: {gate_unit}\n")
 
-    if "iteration_pending" in epr:
+        attempts = led.get("iteration_attempts", 0)
+        max_attempts = bound.get("max_attempts", "—")
+        sys.stdout.write(f"    attempts: {attempts} / {max_attempts}\n")
+
+        active_wall = led.get("active_wall_seconds", 0)
+        max_wall = bound.get("max_wall_seconds", "—")
+        # Render integer seconds for compactness; the field is float on disk.
+        try:
+            active_wall_s = f"{int(active_wall)}s"
+        except (TypeError, ValueError):
+            active_wall_s = f"{active_wall}s"
+        if isinstance(max_wall, (int, float)):
+            max_wall_s = f"{int(max_wall)}s"
+        else:
+            max_wall_s = str(max_wall)
+        sys.stdout.write(f"    wall_time: {active_wall_s} / {max_wall_s}\n")
+
         sys.stdout.write(
-            f"    iteration_pending: {epr.get('iteration_pending')}\n"
+            f"    emit_count: {led.get('iteration_emit_count', 0)}\n"
         )
 
-    # Kill-switch: render when the operator has set the env var. Routed
-    # through is_iteration_disabled (F5 unfence) — the SAME helper tick.py
-    # uses, so /auto-status and the actual iteration check can never disagree.
-    if is_iteration_disabled():
+        last_active = led.get("last_active_at")
+        if last_active:
+            sys.stdout.write(f"    last_active: {last_active}\n")
+
+        if "iteration_pending" in epr:
+            sys.stdout.write(
+                f"    iteration_pending: {epr.get('iteration_pending')}\n"
+            )
+
+        # Kill-switch: render when the operator has set the env var. Routed
+        # through is_iteration_disabled (F5 unfence) — the SAME helper tick.py
+        # uses, so /auto-status and the actual iteration check can never disagree.
+        if is_iteration_disabled():
+            sys.stdout.write(
+                "    kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION\n"
+            )
+    except Exception as exc:  # noqa: BLE001 — render boundary, must not crash
+        # G7 (ADV-R2-2): defense-in-depth at the render boundary. A corrupt
+        # iteration block, bound dict, or stringified counter must produce
+        # operator-visible output rather than crashing the status surface
+        # during the exact incident that needs diagnosis.
         sys.stdout.write(
-            "    kill_switch: DISABLED via CLAUDE_AUTO_DISABLE_ITERATION\n"
+            f"  iteration: <shape error: {exc.__class__.__name__}: {str(exc)[:100]}>\n"
         )
 
 
