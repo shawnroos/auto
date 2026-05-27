@@ -58,7 +58,6 @@ import time
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
-    is_iteration_disabled,
     load_ledger,
     load_lib_module,
     test_hatch_enabled,
@@ -69,16 +68,13 @@ ledger = load_ledger()
 # AST lint forbids the raw "loop_phase" literal here so a divergent comparison
 # can't sneak back in.
 phase_grammar = load_lib_module("phase-grammar")
-# v0.3.0 U1: the ONE iteration-decision module. Every read of the gate unit's
-# verdict.decision field routes through `iteration.read_decision` /
-# `iteration.evaluate_decision`; the AST lint (tests/unit/iteration-ast-lint
-# .test.sh) forbids the raw "decision" string literal anywhere in this file.
-iteration = load_lib_module("iteration")
-# The emitter registry (U5b/v0.2.0): the seam-handler resolves a recipe's
-# declared emitter name through emitters.resolve() and hands the function to
-# ledger.transition_and_emit. No hyphen in the module name, so a plain import
-# works once _LIB_DIR is on sys.path.
-import emitters  # noqa: E402
+# B4: the advance + stall-detection logic (advance_plan_loop / advance_work_loop
+# / advance_iteration_loop / detect_and_halt_stalled / _maybe_seam / …) and the
+# guidance + report builders (_operator_guidance_for / _build_report / …) live
+# in sibling modules. tick.py is the dispatcher that orchestrates them; the
+# dependency is one-way (tick.py → tick_advance → tick_guidance; no back-edge).
+tick_advance = load_lib_module("tick_advance")
+tick_guidance = load_lib_module("tick_guidance")
 
 # Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -87,11 +83,28 @@ DEFAULT_REARM_DELAY_SECONDS = 60
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Errors.
+# Errors. TickError is DEFINED in tick_advance (raised by advance_plan_loop);
+# re-exported here so the single class identity is shared — resolve_adapter
+# below and _cli's catch both reference the same class as advance_plan_loop's
+# raises.
 
+TickError = tick_advance.TickError
 
-class TickError(Exception):
-    """Base class for tick errors."""
+# B4 re-exports: tests load tick.py via spec_from_file_location("tick", …) and
+# access these as attributes on the tick module (t.advance_plan_loop,
+# tick._maybe_seam, …). The functions now live in the sibling modules; binding
+# them here keeps the test surface byte-identical. Internal callers in this
+# file reach through the qualified module name (tick_advance.X / tick_guidance.X)
+# so the dependency stays grep-visible; these aliases exist ONLY for the tests.
+advance_iteration_loop = tick_advance.advance_iteration_loop
+advance_plan_loop = tick_advance.advance_plan_loop
+advance_work_loop = tick_advance.advance_work_loop
+detect_and_halt_stalled = tick_advance.detect_and_halt_stalled
+_maybe_seam = tick_advance._maybe_seam
+# advance_to_phase is a PRODUCTION re-export: lib/auto-resume.py calls
+# tick.advance_to_phase on the manual seam→work resume path.
+advance_to_phase = tick_advance.advance_to_phase
+_iteration_guidance_prefix = tick_guidance._iteration_guidance_prefix
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -181,8 +194,6 @@ def run_id_of(tick_lock_path: str) -> str:
 # U6b ships the real `native` / `ce` adapters. U4 resolves an adapter via
 # `resolve_adapter(name)`; a test injects its own object through `adapter=`.
 
-_PLAN_STEP_OPS = ("plan", "deepen", "review_plan")
-
 
 def resolve_adapter(name: str):
     """Resolve a named adapter to a callable object.
@@ -212,313 +223,6 @@ def resolve_adapter(name: str):
     if hasattr(module, "Adapter"):
         return module.Adapter()
     return module
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Stall detection + transitive halt (the parallel-fan-out promise).
-
-
-def _seconds_since(iso_value, now) -> float:
-    parsed = ledger._parse_iso(iso_value)
-    if parsed is None:
-        return -1.0
-    return (now - parsed).total_seconds()
-
-
-def _transitive_dependents(units, root_ids):
-    """All units (transitively) depending on any id in `root_ids`, plus the roots."""
-    halted = set(root_ids)
-    changed = True
-    while changed:
-        changed = False
-        for u in units:
-            uid = u.get("id")
-            if uid in halted:
-                continue
-            deps = u.get("depends_on") or []
-            if any(d in halted for d in deps):
-                halted.add(uid)
-                changed = True
-    return halted
-
-
-def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
-    """Mark dispatched-past-threshold units `stalled`; return the halted-id set.
-
-    A unit is stalled if it is `dispatched` and has been so for longer than its
-    `stall_threshold_seconds` with no verdict. We mark it via ledger.transition
-    (so the write goes through the I-1 chokepoint) with last_error preserved as
-    null (a plain timeout; an adapter raise sets last_error elsewhere). The
-    stalled unit AND its transitive dependents are halted for this tick;
-    independent siblings still advance.
-    """
-    newly_stalled = []
-    for u in ledger_dict.get("units", []):
-        if u.get("state") != "dispatched":
-            continue
-        threshold = int(
-            u.get("stall_threshold_seconds")
-            or ledger.DEFAULT_STALL_THRESHOLD_SECONDS
-        )
-        age = _seconds_since(u.get("dispatched_at"), now)
-        if age >= 0 and age > threshold:
-            newly_stalled.append(u.get("id"))
-
-    for uid in newly_stalled:
-        # Plain timeout stall: last_error stays null (vs an adapter-raise stall,
-        # which records {call, message, at}). See record_stall_error.
-        ledger.transition(repo_root, run_id, uid, "stalled")
-
-    # Compute the full halted set (newly + already-stalled) and their dependents.
-    fresh = ledger.read_ledger(repo_root, run_id)
-    stalled_ids = [
-        u.get("id") for u in fresh.get("units", []) if u.get("state") == "stalled"
-    ]
-    halted = _transitive_dependents(fresh.get("units", []), stalled_ids)
-    return fresh, sorted(halted), newly_stalled
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Error recording (atomic, via ledger.py).
-
-
-def record_stall_error(repo_root, run_id, unit_id, call, message, now_iso):
-    """On an adapter raise mid-advance: mark the unit `stalled` AND record
-    last_error = {call, message, at}, in one grammar-checked atomic write.
-
-    The unit must be `dispatched` for the dispatched → stalled edge to be legal.
-    If it is not dispatched (e.g. a plan-step raise with no unit in flight), we
-    cannot use the dispatched→stalled edge, so we record the error on the run by
-    flipping the loop to manual and surfacing — the caller decides. We return a
-    flag indicating whether a unit-level stall was recorded.
-    """
-    fresh = ledger.read_ledger(repo_root, run_id)
-    unit = None
-    for u in fresh.get("units", []):
-        if u.get("id") == unit_id:
-            unit = u
-            break
-    err = {"call": call, "message": message, "at": now_iso}
-    if unit is not None and unit.get("state") == "dispatched":
-        ledger.transition(
-            repo_root, run_id, unit_id, "stalled", last_error=err
-        )
-        return True
-    return False
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# The advance.
-
-
-def _ready_fix_unit(ledger_dict, halted_ids):
-    """Pick ONE unit whose latest verdict is converged and needs a fix applied.
-
-    A fix-due unit is `verdict-returned` with an open GATING finding and is NOT
-    in the halted set. The tick applies the fix as a state transition only
-    (verdict-returned → fixed); it does NOT touch findings (R8 — closure only via
-    a fresh verdict). Returns the unit id or None.
-
-    SCALE-AWARE (Bug #3): which severities are fix-due is decided by the SINGLE
-    helper ``ledger.gating_severities(scale)``, read off this ledger's
-    ``adapter_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
-    blocker-only run: the tick would forever try to fix a major-only unit that
-    re-reviews to the same advisory major, fix→re-enqueue→re-review forever, while
-    the predicate already reports met. The fix-class and the terminality class
-    MUST share the gating decision so they agree on which units still need work.
-    """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
-    for u in ledger_dict.get("units", []):
-        if u.get("id") in halted_ids:
-            continue
-        if u.get("state") != "verdict-returned":
-            continue
-        for f in u.get("findings") or []:
-            if f.get("severity") in gating:
-                return u.get("id")
-    return None
-
-
-def _ready_reenqueue_unit(ledger_dict, halted_ids):
-    """Pick ONE `fixed` unit whose STALE verdict still shows a GATING finding.
-
-    After a fix is applied (verdict-returned → fixed) the findings remain stale
-    (R8 — only a fresh verdict clears them), so the unit is NOT yet terminal.
-    The tick re-enqueues it (fixed → pending) so the orchestrator re-dispatches
-    it for a fresh review. Skips halted units. Returns the unit id or None.
-
-    SCALE-AWARE (Bug #3): same single-helper gating decision as ``_ready_fix_unit``
-    and ``unit_is_terminal`` — a blocker-only run never re-enqueues a major-only
-    fixed unit (majors are advisory), so it cannot churn fix→re-enqueue forever.
-    """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
-    for u in ledger_dict.get("units", []):
-        if u.get("id") in halted_ids:
-            continue
-        if u.get("state") != "fixed":
-            continue
-        for f in u.get("findings") or []:
-            if f.get("severity") in gating:
-                return u.get("id")
-    return None
-
-
-def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
-    """Work-loop advance: apply ONE fix, OR re-enqueue ONE fixed-stale unit.
-
-    Returns a dict describing what advanced (for the tick result). The tick
-    NEVER dispatches and NEVER writes verdicts here. The TWO smallest-useful
-    work-loop advances the tick owns (state grammar §3 / closure loop R8):
-
-      1. verdict-returned + gating finding  → fixed   (apply ONE fix)
-      2. fixed + STALE gating finding       → pending (re-enqueue for re-review)
-
-    Fix-due takes PRIORITY over re-enqueue-due so a single tick on a fresh
-    verdict-returned+blocker unit applies the fix (one step), and the NEXT tick
-    re-enqueues that fixed-with-stale-blocker unit. This MIRRORS the plan_step
-    advance: one persisted advance per fresh-process tick. Without step 2 the
-    loop livelocks at `fixed` (the stale blocker keeps all_units_terminal false
-    forever) — the closure loop is unreachable.
-
-    The fixed→pending re-enqueue honors the test-only
-    ``CLAUDE_AUTO_TEST_NO_REENQUEUE`` hatch (a deliberate-fail control: with
-    it set the work-loop closure test goes RED — livelocks at `fixed`). The
-    hatch is FENCED via ``test_hatch_enabled`` (task #31): only honored
-    when ``CLAUDE_AUTO_TEST_HARNESS=1`` is ALSO set, so a stray production
-    export of NO_REENQUEUE alone has no effect.
-    """
-    fix_uid = _ready_fix_unit(ledger_dict, halted_ids)
-    if fix_uid is not None:
-        ledger.transition(repo_root, run_id, fix_uid, "fixed")
-        return {"advanced": "fix-applied", "unit": fix_uid}
-    if not test_hatch_enabled("CLAUDE_AUTO_TEST_NO_REENQUEUE"):
-        reenq_uid = _ready_reenqueue_unit(ledger_dict, halted_ids)
-        if reenq_uid is not None:
-            ledger.transition(repo_root, run_id, reenq_uid, "pending")
-            return {"advanced": "re-enqueued", "unit": reenq_uid}
-    return {"advanced": "none", "reason": "no-fix-due"}
-
-
-def _persist_enumerated_units(repo_root, run_id, enumerated):
-    """Persist the plan's enumerated work units onto the plan unit (U6 producer).
-
-    Targets the plan-phase unit being advanced. For A1 (single plan unit) and the
-    per-tick serialized A2 advance, that is the lone plan unit currently at
-    plan-done; we resolve it from the fresh ledger (the unit whose phase is
-    'plan'). If there are multiple plan units (A2), the active one is the one the
-    round-robin advanced this tick — for the V1 testable slice we target the first
-    plan-phase unit lacking enumerated_units, which the serialized one-per-tick
-    advance makes unambiguous. Idempotent-safe: re-persist overwrites.
-    """
-    led = ledger.read_ledger(repo_root, run_id)
-    plan_units = [u for u in led.get("units", []) if u.get("phase") == "plan"]
-    if not plan_units:
-        return
-    target = next(
-        (u for u in plan_units
-         if not (u.get("dispatch_context") or {}).get("enumerated_units")),
-        plan_units[0],
-    )
-    ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
-
-
-def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
-    """Plan-loop advance: ask the adapter for the next step and call that ONE
-    step. The ADAPTER owns plan-step sequencing — the engine never picks it.
-
-    Returns (result_dict, raised_call_or_None). On an adapter raise the caller
-    records the error; we surface which op raised so last_error.call is precise.
-
-    CRITICAL (anti-livelock — schema §3.1): after the adapter op returns
-    SUCCESSFULLY, we PERSIST the executed step to the ledger via
-    ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the ledger and
-    each tick is a fresh process reading ALL state from disk; without this write
-    the next tick reads ``plan_step == null``, the adapter returns ``"plan"``,
-    and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
-    thus only on success): a step that raised is recorded as a stall by the
-    caller's try/except, never as a completed step.
-
-    PLAN→exit (schema §3.1 / adapter-contract §4.1, §5): when ``next_plan_step``
-    returns ``"done"`` the plan sequence is complete (gaps closed). The plan-loop
-    must NOT re-arm on ``plan``; the caller (``_maybe_seam``) routes the met plan
-    predicate to seam (manual) or work (auto). We surface ``{"advanced":
-    "plan-done"}`` so the caller knows the sequence finished this tick.
-
-    GAPS persist (gap-write, adapter-contract §2.2): when the executed step is
-    ``review_plan``, its return is the gap-set; the engine reads ONLY its length
-    and persists ``gaps_open = len(gap_set)`` via ``ledger.set_gaps_open`` (the
-    I-1 atomic write path). The gap-set arrives either as a bare list (a direct
-    return) OR inside the live PREPARE envelope (a dict) under the canonical
-    ``gap_set`` key (§2.2), which the model fills out-of-band before the engine
-    reads. We extract from whichever shape carries the array; a bare envelope
-    that has no ``gap_set`` yet leaves ``gaps_open`` untouched (no default-0
-    short-circuit). This is what makes plan-met depend on a REAL review having
-    reported its gaps, not the default — closing the deepen-refinement loop.
-    """
-    step = adapter.next_plan_step(ledger_dict)
-    if step == "done":
-        # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
-        # via the v0.2.0 adapter op and PERSIST them onto the plan unit's
-        # dispatch_context.enumerated_units, so the phase-transition emitter (U5b)
-        # can read them when it emits work units (resolves F4 — the producer).
-        # enumerate_plan_units is prepare-only: it may return a bare list (a
-        # synchronous/test adapter) OR a PREPARE envelope the model fills with the
-        # units under the canonical "units" key. We persist whichever concrete list
-        # is available; a freshly-prepared envelope with no "units" key leaves the
-        # field untouched (same no-premature-default discipline as gaps_open).
-        enum_op = getattr(adapter, "enumerate_plan_units", None)
-        if callable(enum_op):
-            enum_result = enum_op(ledger_dict)
-            enumerated = None
-            if isinstance(enum_result, list):
-                enumerated = enum_result
-            elif isinstance(enum_result, dict) and isinstance(enum_result.get("units"), list):
-                enumerated = enum_result["units"]
-            if enumerated is not None:
-                _persist_enumerated_units(repo_root, run_id, enumerated)
-        return {"advanced": "plan-done"}, None
-    if step not in _PLAN_STEP_OPS:
-        raise TickError(f"adapter returned unknown plan step: {step!r}")
-    op = getattr(adapter, step, None)
-    if op is None or not callable(op):
-        raise TickError(f"adapter missing op {step!r}")
-    # The adapter step is the work-bearing call; the caller wraps this in the
-    # try/except so a raise becomes a recorded last_error, not a crash.
-    result = op(ledger_dict)
-    # review_plan returns the gap-set; the engine reads ONLY its length and
-    # persists it (adapter-contract §2.2). The gap-set arrives in one of two
-    # shapes (Bug #5 — gaps_open was never written from the LIVE adapters, which
-    # return a dict envelope, so plan-met fired after a SINGLE review pass and the
-    # deepen-refinement loop was unreachable):
-    #   * a bare array — direct return (e.g. a test/synchronous adapter); OR
-    #   * the live PREPARE envelope (a dict) with the model-filled ``gap_set``
-    #     array under the canonical ``gap_set`` key (contract §2.2). The bare
-    #     envelope ships WITHOUT ``gap_set``; the model fills it before the engine
-    #     reads, so a freshly-prepared envelope with no key leaves gaps_open
-    #     untouched (never a default 0 that would short-circuit plan-met).
-    gap_set = None
-    if isinstance(result, list):
-        gap_set = result
-    elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):
-        gap_set = result["gap_set"]
-    if step == "review_plan" and gap_set is not None:
-        ledger.set_gaps_open(repo_root, run_id, len(gap_set))
-    # Op succeeded — persist the step so the NEXT fresh-process tick advances
-    # from it instead of re-reading null and re-planning (the livelock).
-    ledger.set_loop(repo_root, run_id, plan_step=step)
-    return {"advanced": "plan-step", "step": step}, None
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Seam handling.
-
-
-def _is_auto(auto_flag) -> bool:
-    """Auto mode: the explicit --auto flag. The tick honors only the flag the
-    driver passes; there is no ledger-driven auto marker (the schema has no slot
-    for one, and the driver owns the policy). Kept as a named predicate so the
-    seam-routing call site reads intentionally."""
-    return bool(auto_flag)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -554,172 +258,6 @@ def dispatch_tick(
     except _TickLockHeld:
         # Another live tick is driving this run — no-op (the double-drive guard).
         return {"action": "noop", "reason": "lock-held-by-live-tick", "run": run_id}
-
-
-def _no_emit(ledger_dict, to_phase):
-    """v0.3.0 F2: no-op emitter for the iterate path on a recipe that omits
-    `iteration.emit_template`. Returns an empty list so `_apply_emit`'s
-    `emitter(ledger, to_phase) or []` line treats it as "no new units" —
-    `iteration_emit_count` stays unchanged (the counter bumps per emitted
-    unit) and `appended` is []. The default `caller_depends_on=None` path in
-    `atomic_iterate_step` then computes `gate.depends_on + [] = gate.depends_on`,
-    preserving the existing dependency graph; the gate is reset
-    (verdict-returned → pending, decision cleared) and `iteration_attempts`
-    increments, so the existing siblings re-engage on the next tick.
-    """
-    return []
-
-
-def advance_iteration_loop(repo_root, run_id, led):
-    """v0.3.0 U4 / KTD §A+§C+§D: the engine-side iteration check.
-
-    Fires in `_tick_body` BEFORE the predicate-met short-circuit at lines
-    564-576. Reads the gate unit's effective decision via
-    `iteration.evaluate_decision` and routes:
-
-      * No iteration block / no gate_unit / kill-switch enabled → return None.
-        Standard flow continues; the predicate-met short-circuit evaluates
-        normally.
-      * No decision yet (gate hasn't verdicted, or its decision was cleared by
-        the most recent reset_for_iteration) → return None. Same path.
-      * "advance" → return {"action": "advance"}. The caller falls through; the
-        existing predicate-met short-circuit (now suppressed only by
-        iteration_pending=True) advances to the terminal "done" state via the
-        normal flow.
-      * "iterate" under bound → call `ledger.atomic_iterate_step` (one locked
-        body: increment + emit + reset). Return {"action": "iterate"}. The
-        caller emits a rearm intent so the next tick dispatches the new units.
-      * "exit" OR "iterate over bound" → write `bound_override` on the gate
-        unit's dispatch_context, then flip the loop to "done" / driver="manual"
-        DIRECTLY via set_loop (NOT through advance_to_phase, which would re-
-        invoke `judge_winner_to_work_units` and raise on missing winner_unit_id
-        — KTD §D / round-2 P0 fix). Return {"action": "stop", "reason":
-        "bound-exit", "report": ...}.
-
-    Two safety gates fire BEFORE the decision read (no ledger writes on either
-    early-return path — keeps a1/W ticks side-effect-clean):
-      1. a1/W early-return: `led.get("iteration")` missing OR `gate_unit` is
-         None → return None. No call to `evaluate_decision`.
-      2. Kill-switch: `_bootstrap.is_iteration_disabled()` True
-         (CLAUDE_AUTO_DISABLE_ITERATION=1) → return None. A REAL operator
-         knob, not a test-only hatch: set the env var at runtime to skip the
-         iteration check without redeploying — useful for emergency rollback
-         of an outcomes-gated recipe. v0.3.0 F5 unfenced this (CRIT-2 + rel-3);
-         it used to require the CLAUDE_AUTO_TEST_HARNESS=1 sentinel as well.
-
-    The `new_depends_on` argument to `atomic_iterate_step` is passed as `None`:
-    the ledger mutator computes the union of `gate.depends_on + appended` ids
-    INSIDE the locked body (lib/ledger.py:1605-1607). Pre-computing here would
-    race with the in-locked-body `_apply_emit` counter bump.
-    """
-    # Gate 1: no iteration declared (a1, W, legacy ledgers). Side-effect-free.
-    iter_block = led.get("iteration") or {}
-    gate_unit_id = iter_block.get("gate_unit")
-    if not gate_unit_id:
-        return None
-    # Gate 2: kill-switch. Operators can set CLAUDE_AUTO_DISABLE_ITERATION=1
-    # to skip the iteration check at runtime — useful for emergency rollback
-    # of an outcomes-gated recipe without redeploying. Unfenced in v0.3.0 F5;
-    # see _bootstrap.is_iteration_disabled.
-    if is_iteration_disabled():
-        return None
-
-    eval_result = iteration.evaluate_decision(
-        led, gate_unit_id, now_monotonic=time.monotonic()
-    )
-    effective = eval_result.get("decision_effective")
-
-    if effective is None:
-        # Gate hasn't verdicted (or decision was cleared by the most recent
-        # reset_for_iteration). Standard flow continues; short-circuit evaluates.
-        return None
-
-    if effective == "advance":
-        # Caller falls through to standard flow; the predicate-met short-
-        # circuit then fires (iteration_pending is now False — the gate said
-        # advance, not iterate — so the AND-NOT clause doesn't suppress).
-        return {"action": "advance"}
-
-    if effective == "iterate":
-        # Under-bound iterate. Drive ONE atomic step (increment + emit +
-        # reset) through the composite mutator. new_depends_on=None tells
-        # atomic_iterate_step to compute the union of gate.depends_on +
-        # appended ids inside its own locked body.
-        #
-        # v0.3.0 F2 (correctness-emit-template): the recipe validator at
-        # lib/recipes.py:380-393 makes `iteration.emit_template` OPTIONAL
-        # ("re-engage the gate without spawning new siblings" — e.g. A4's
-        # comparator re-comparing the same builders after a clarifying
-        # signal). When the recipe omits emit_template, the iterate path
-        # must still advance the loop (increment iteration_attempts + reset
-        # the gate) WITHOUT emitting new units; the existing units re-
-        # engage. We honor that by passing a no-op emitter to
-        # atomic_iterate_step: `_apply_emit` calls `emitter(ledger,
-        # to_phase) or []`, so returning `[]` cleanly skips emission AND
-        # leaves iteration_emit_count unchanged (the counter bumps PER
-        # emitted unit). The deps default (`caller_depends_on=None` →
-        # `gate.depends_on + [] = gate.depends_on`) preserves the existing
-        # dependency graph. Going through atomic_iterate_step (one locked
-        # body) preserves the all-or-nothing contract — splitting into two
-        # writes (increment then reset) would open a window where a tick
-        # could read attempts++ but a still-verdict-returned gate.
-        if (led.get("iteration") or {}).get("emit_template"):
-            emitter = emitters.iterate_template
-        else:
-            emitter = _no_emit
-        ledger.atomic_iterate_step(
-            repo_root,
-            run_id,
-            gate_unit_id,
-            emitter=emitter,
-            new_depends_on=None,
-        )
-        return {"action": "iterate"}
-
-    # effective in ("exit", "iterate"-over-bound). Both shapes: write the
-    # bound_override (carries bound_type + original_decision + at) and force
-    # the loop to "done" / driver="manual" via set_loop DIRECTLY.
-    # advance_to_phase would re-invoke `judge_winner_to_work_units` which
-    # raises on missing winner_unit_id (the gate said iterate, not advance, so
-    # no winner is set). Skipping advance_to_phase preserves the audit trail
-    # in the gate's dispatch_context.bound_override.
-    bound_type = eval_result.get("bound_type")
-    original = eval_result.get("original_decision") or "iterate"
-    if eval_result.get("bound_breached"):
-        ledger.set_bound_override(
-            repo_root, run_id, gate_unit_id,
-            bound_type=bound_type, original_decision=original,
-        )
-    ledger.set_loop(
-        repo_root, run_id, loop_phase="done", driver="manual", beat=True,
-    )
-    final_led = ledger.read_ledger(repo_root, run_id)
-    report = _build_bound_exit_report(final_led, gate_unit_id)
-    return {
-        "action": "stop",
-        "reason": "bound-exit",
-        "run": run_id,
-        "report": report,
-    }
-
-
-def _build_bound_exit_report(led, gate_unit_id):
-    """Build the bound-exit report from the gate unit's dispatch_context.
-
-    Mirrors `_build_report`'s shape but adds the bound_override block + best-
-    so-far state per OQ2. The best-so-far is the gate's last
-    decision_payload (the payload that accompanied either the last iterate or
-    the last advance) — surfaced for operator diagnostics so the
-    operator-guidance branch in R9 can name what we tried before bound trip.
-    """
-    base = _build_report(led)
-    gate = next(
-        (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
-    )
-    dc = (gate or {}).get("dispatch_context") or {}
-    base["bound_override"] = dc.get("bound_override")
-    base["best_so_far"] = dc.get("decision_payload")
-    return base
 
 
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
@@ -784,7 +322,7 @@ def _tick_body_inner(
             repo_root, run_id, led, phase=phase)) is not None:
         return intent
 
-    led, halted_ids, newly_stalled = detect_and_halt_stalled(
+    led, halted_ids, newly_stalled = tick_advance.detect_and_halt_stalled(
         repo_root, run_id, led, now
     )
 
@@ -849,7 +387,7 @@ def _try_iteration_check(
     produce one, not silently exit.
     """
     try:
-        iteration_result = advance_iteration_loop(repo_root, run_id, led)
+        iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)
     except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
         # v0.3.0 G2 / rel-r2-2: recipe-bug LedgerError subclasses signal a
         # mis-built caller (unknown gate unit id, illegal transition, stale
@@ -944,7 +482,7 @@ def _try_iteration_check(
                 },
                 "stalled": [],
                 "halted": [],
-                "operator_guidance": _operator_guidance_for(phase, None, led_now),
+                "operator_guidance": tick_guidance._operator_guidance_for(phase, None, led_now),
             }, led
         # action == "advance": fall through to the standard flow. The gate
         # said "advance"; the existing predicate-met short-circuit (now
@@ -991,7 +529,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
-        report = _build_report(led)
+        report = tick_guidance._build_report(led)
         return {
             "action": "stop",
             "reason": "predicate-met",
@@ -1020,15 +558,19 @@ def _dispatch_phase_advance(
         if phase == "plan":
             if adapter is None:
                 adapter = resolve_adapter(led.get("adapter"))
-            advance_result, _ = advance_plan_loop(repo_root, run_id, led, adapter)
+            advance_result, _ = tick_advance.advance_plan_loop(
+                repo_root, run_id, led, adapter
+            )
             # Plan predicate just (re)computed on the prior write; re-read to see
             # whether the plan step closed the gaps.
             led = ledger.read_ledger(repo_root, run_id)
-            advance_result = _maybe_seam(
+            advance_result = tick_advance._maybe_seam(
                 repo_root, run_id, led, auto=auto, advance_result=advance_result
             )
         elif phase == "work":
-            advance_result = advance_work_loop(repo_root, run_id, led, halted_ids)
+            advance_result = tick_advance.advance_work_loop(
+                repo_root, run_id, led, halted_ids
+            )
         elif phase == "seam":
             # A seam tick should not normally fire (the seam does not re-arm),
             # but if one does, re-affirm the pause and stop.
@@ -1053,10 +595,10 @@ def _dispatch_phase_advance(
         # Find the unit that was in flight (best-effort: the most recently
         # dispatched unit). For a plan-step raise with no unit dispatched, we
         # still record the error on the run via the seam/manual path.
-        in_flight = _most_recently_dispatched(led)
+        in_flight = tick_guidance._most_recently_dispatched(led)
         recorded = False
         if in_flight is not None:
-            recorded = record_stall_error(
+            recorded = tick_advance.record_stall_error(
                 repo_root, run_id, in_flight, call, message, now_iso
             )
         advance_error = {
@@ -1109,7 +651,7 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
             "action": "stop",
             "reason": "predicate-met-after-advance",
             "run": run_id,
-            "report": _build_report(led),
+            "report": tick_guidance._build_report(led),
             "advance": advance_result,
         }
     return None
@@ -1138,309 +680,14 @@ def _build_rearm_intent(
         "advance": advance_result,
         "stalled": newly_stalled,
         "halted": halted_ids,
-        "operator_guidance": _operator_guidance_for(phase, advance_result, led_now),
+        "operator_guidance": tick_guidance._operator_guidance_for(
+            phase, advance_result, led_now
+        ),
     }
-    gap_guard = _gaps_open_guard(phase, led_now)
+    gap_guard = tick_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
         intent["gaps_open_guard"] = gap_guard
     return intent
-
-
-def _operator_guidance_for(phase, advance_result, led):
-    """Build the prepare/execute reminder block that rides every rearm intent.
-
-    v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
-    field bug where an agent ticked 5 times expecting units to populate. Root
-    cause was invisible contract: the tick prepares invocations; the model
-    EXECUTES them; if the model doesn't, the ledger doesn't progress. The
-    rearm intent now carries this reminder explicitly. Phase-aware so plan-
-    loop and work-loop get the right framing.
-
-    v0.3.0 R9 (KTD §D operator-diagnostics):
-      * If the gate unit just had `bound_override` written on this tick →
-        prepend a notice naming which bound tripped + the best-so-far state
-        from the gate's last decision_payload (OQ2). Operators see WHY the
-        loop exited and WHAT we tried before bound.
-      * Else if iteration is active AND `iteration_attempts == max_attempts`
-        → prepend a "last attempt before bound" warning. Operators know the
-        NEXT iterate decision will trip the bound (the engine overrides
-        when `attempts_made >= max_attempts` per lib/iteration.py:136).
-    """
-    iteration_prefix = _iteration_guidance_prefix(led)
-
-    if phase == "plan":
-        step = None
-        if isinstance(advance_result, dict):
-            step = advance_result.get("step")
-        invocation = _PLAN_STEP_INVOCATION.get(step, "(see adapter contract)")
-        body = (
-            "prepare/execute contract: I PREPARED a plan-loop invocation; "
-            "YOU must run it. I do NOT dispatch the work — my role is to "
-            "advance the state machine AFTER you feed structured results back "
-            "(set_gaps_open for review_plan, etc.). Re-ticking without running "
-            f"the invocation is a NO-OP — units will stay []. Just-prepared "
-            f"step: {step!r}; expected invocation: {invocation}."
-        )
-        return iteration_prefix + body if iteration_prefix else body
-    if phase == "work":
-        # In the work-loop, the trap is different: the driver dispatches background
-        # Agents via the orchestrator and then YIELDS for harness re-invocation
-        # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
-        body = (
-            "prepare/execute contract: in the work-loop YOU drive the "
-            "orchestrator fan-out (orchestrator.ready_units + dispatch_batch); "
-            "after dispatching, YIELD silently — the harness re-invokes you "
-            "when a verdict lands (fix-pass G). Re-ticking without running "
-            "dispatch is a no-op."
-        )
-        return iteration_prefix + body if iteration_prefix else body
-    body = (
-        "prepare/execute contract: I prepare; YOU execute. Re-ticking without "
-        "running the prepared invocation does not advance the ledger."
-    )
-    return iteration_prefix + body if iteration_prefix else body
-
-
-def _iteration_guidance_prefix(led):
-    """Build the iteration-aware operator-guidance prefix (R9 / KTD §D).
-
-    Returns an empty string when no iteration is declared, or when neither
-    R9 condition fires. Otherwise returns a one-sentence prefix that names
-    either the bound-override (operator sees WHY the loop exited) or the
-    last-attempt warning (operator sees that the NEXT iterate trips bound).
-
-    The bound-override read goes through `dispatch_context.bound_override` —
-    the field key (`"bound_override"`) is NOT the literal `"decision"` so
-    the AST lint allows it. The bound type is read from the same dict.
-
-    The "best-so-far" payload (OQ2) is the gate's `decision_payload` — the
-    payload that rode the LAST advance/iterate decision. On a bound-exit
-    tick, that payload was the iterate that the engine overrode to exit.
-    """
-    iter_block = led.get("iteration") or {}
-    gate_id = iter_block.get("gate_unit")
-    if not gate_id:
-        return ""
-    gate = next(
-        (u for u in led.get("units", []) if u.get("id") == gate_id), None
-    )
-    if gate is None:
-        return ""
-    dc = gate.get("dispatch_context") or {}
-
-    # Branch 1 (higher priority): bound_override was written. Surface bound
-    # type + best-so-far so the operator sees what we tried before bound.
-    override = dc.get("bound_override")
-    if override:
-        btype = override.get("bound") or "unknown"
-        payload = dc.get("decision_payload")
-        payload_repr = (
-            json.dumps(payload, sort_keys=True) if payload is not None else "null"
-        )
-        return (
-            f"iteration bound tripped: {btype}. "
-            f"Best-so-far (last gate payload): {payload_repr}. "
-            "The engine overrode the gate's iterate to exit; the run is done. "
-        )
-
-    # Branch 2: under bound, but the next iterate decision the engine sees
-    # will trip the bound. Surface a warning so the operator knows.
-    #
-    # v0.3.0 F2 (ADV-3 off-by-one): the warning fires when the NEXT iterate
-    # decision will be overridden to exit by `iteration.evaluate_decision`.
-    # That override fires when `attempts_made >= max_attempts` (lib/iteration
-    # .py:136). `iteration_attempts` increments per HONORED iterate (in
-    # atomic_iterate_step, pre-check). So the next iterate trips bound EXACTLY
-    # when `attempts == max_attempts` — i.e., max_attempts iterates have been
-    # honored and the (max+1)-th would trip. The prior code compared `attempts
-    # == max - 1`, which fires ONE tick early (with max=3, that warns at
-    # attempts=2 even though attempts=2 still has TWO more iterates to honor
-    # before bound trip: the iterate at attempts=2 becomes attempts=3, and the
-    # iterate read at attempts=3 is the one that trips).
-    bound = iter_block.get("bound") or {}
-    max_attempts = bound.get("max_attempts")
-    attempts = int(led.get("iteration_attempts", 0))
-    if max_attempts is not None and attempts == int(max_attempts):
-        return (
-            f"iteration: last attempt before bound (attempts={attempts}, "
-            f"max_attempts={max_attempts}). The next iterate decision will "
-            "trip the bound and force exit. "
-        )
-
-    return ""
-
-
-def _gaps_open_guard(phase, led):
-    """Warn the operator when they are in the deepen↔review livelock state.
-
-    This is Trap 2 from feedback_auto_prepare_execute_operator_traps: the
-    plan-loop cycles `plan → deepen → review_plan → deepen → review_plan → …`
-    forever unless the operator runs a real review and feeds back
-    ``set_gaps_open(N)``. Without that, gaps_open stays null, plan-met never
-    fires, and units never materialize.
-
-    The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
-    ``gaps_open is None``. We do NOT key only on review_plan because the tick
-    PERSISTS plan_step AFTER the step runs (anti-livelock §3.1 fix), so by the
-    time this guard reads the ledger the just-completed review_plan has been
-    succeeded by a deepen → plan_step="deepen", gaps_open still null. Both
-    states are diagnostically equivalent: the operator hasn't fed back gaps yet.
-    """
-    if phase != "plan":
-        return None
-    plan_step = led.get("plan_step") or ""
-    if plan_step not in ("deepen", "review_plan"):
-        return None
-    pred = led.get("exit_predicate_result") or {}
-    if pred.get("gaps_open") is not None:
-        return None
-    return (
-        "gaps_open is NULL — plan-met cannot fire until a real review_plan "
-        "step has run and you call ledger.set_gaps_open(<N>) with the gap "
-        "count from /ce-doc-review's output. Without this the plan-loop will "
-        "deepen↔review_plan forever and units will never materialize. "
-        "Feeding back gaps_open=0 closes the loop and starts the work-loop."
-    )
-
-
-# Map a plan_step name to the invocation an operator should run. Authoritative
-# source for the operator-guidance string; if a new plan-step ships, add it here.
-_PLAN_STEP_INVOCATION = {
-    "plan": "/ce-plan <issue>",
-    "deepen": "/ce-plan deepen",
-    "review_plan": "/ce-doc-review",
-}
-
-
-def advance_to_phase(repo_root, run_id, led, *, to_phase):
-    """Advance loop_phase to ``to_phase``, emitting that phase's units if the
-    recipe declares an emitter for arrival there.
-
-    v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
-    the recipe's {to: to_phase} emitter via phase_grammar.emitter_name_for_arrival
-    and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
-    no emitter is declared we still need to fall back to a raw set_loop:
-
-    * Legacy ledger (recipe is None, e.g. a v0.1.x run resumed under v0.2.0) —
-      no recipe means no phase_transitions; use set_loop to preserve byte-
-      identical R13 behavior.
-    * v0.2.0 ledger with no matching transition — the recipe declares no
-      emitter for arrival at to_phase; this is a RECIPE BUG (the validator
-      should have rejected it earlier, but defense in depth: raise here so a
-      misconfigured workspace recipe can't silently no-op).
-
-    `feedback_plan_documents_transition_code_doesnt_wire_it`: this helper IS
-    the wire — every phase advance that crosses a transition boundary goes
-    through here.
-    """
-    emitter_name = phase_grammar.emitter_name_for_arrival(led, to_phase)
-    legacy_ledger = led.get("recipe") is None
-    if emitter_name is None:
-        if not legacy_ledger:
-            raise ledger.LedgerError(
-                f"recipe {led.get('recipe',{}).get('name')!r} declares no emitter "
-                f"for arrival at {to_phase!r}; either add a phase_transitions entry "
-                f"or fix the recipe"
-            )
-        # legacy: no recipe declared, behave like v0.1.x — raw advance.
-        # transition_and_emit's v0.2.0 path writes seam_paused=(to_phase=="seam");
-        # we mirror that here so manual seam→work via auto-resume clears the
-        # pause flag on legacy ledgers too. The auto-flip path (called with
-        # to_phase="work") clears it; future helpers that arrive at "seam"
-        # would set it. Either way, both writes happen in one set_loop.
-        ledger.set_loop(
-            repo_root,
-            run_id,
-            loop_phase=to_phase,
-            seam_paused=(to_phase == "seam"),
-            driver="self",
-            beat=True,
-        )
-        return
-    emitter_fn = emitters.resolve(emitter_name)
-    ledger.transition_and_emit(repo_root, run_id, to_phase, emitter_fn)
-
-
-def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
-    """If the plan-loop is complete, transition out of plan (gap #5).
-
-    The plan sequence is complete when EITHER the cached predicate is met
-    (plan-phase: gaps_open == 0) OR the adapter signalled the sequence finished
-    this tick (``next_plan_step`` returned "done" → advance "plan-done"). The two
-    MUST agree (adapter-contract §4.1 coherence guard); we trigger on either so a
-    `next_plan_step=="done"` always transitions loop_phase, never re-arming on
-    `plan`.
-
-    Manual (not auto): write loop_phase="seam", seam_paused=true,
-    loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
-    Auto: flip plan → work directly via the recipe's emitter (v0.2.0; P0 #1
-    fix-pass A.2 — the load-bearing rewire). Reads the recipe's
-    phase_transitions for the {to: work} emitter, resolves it, and calls
-    ledger.transition_and_emit atomically (advance + emit + recompute in ONE
-    locked snapshot — the G3/F2 invariant). Legacy ledgers (no recipe) fall
-    back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep
-    working. A v0.2.0 ledger missing the {to: work} declaration is a recipe
-    bug; we raise rather than silently no-op (per
-    feedback_plan_documents_transition_code_doesnt_wire_it — silent fallback
-    on configured recipes IS the build-bug class).
-    """
-    pred = led.get("exit_predicate_result") or {}
-    plan_done = (
-        isinstance(advance_result, dict)
-        and advance_result.get("advanced") == "plan-done"
-    )
-    if not pred.get("met") and not plan_done:
-        return advance_result  # gaps still open; keep ticking the plan loop.
-    if _is_auto(auto):
-        advance_to_phase(repo_root, run_id, led, to_phase="work")
-        out = dict(advance_result or {})
-        out["seam"] = "auto-flip-to-work"
-        return out
-    ledger.set_loop(
-        repo_root,
-        run_id,
-        loop_phase="seam",
-        seam_paused=True,
-        driver="manual",
-        beat=True,
-    )
-    out = dict(advance_result or {})
-    out["seam_pause"] = True
-    out["seam"] = "paused"
-    return out
-
-
-def _build_report(led):
-    """Exit report — emit the minors list for a work-loop (R6)."""
-    pred = led.get("exit_predicate_result") or {}
-    minors = []
-    for u in led.get("units", []):
-        for f in u.get("findings") or []:
-            if f.get("severity") == "minor":
-                minors.append({"unit": u.get("id"), "note": f.get("note", "")})
-    return {
-        phase_grammar.LOOP_PHASE_KEY: phase_grammar.current_phase(led),
-        "blockers": pred.get("blockers", 0),
-        "majors": pred.get("majors", 0),
-        "minors": pred.get("minors", 0),
-        "minor_findings": minors,
-        "all_units_terminal": pred.get("all_units_terminal", False),
-    }
-
-
-def _most_recently_dispatched(led):
-    best_id = None
-    best_at = None
-    for u in led.get("units", []):
-        if u.get("state") != "dispatched":
-            continue
-        at = ledger._parse_iso(u.get("dispatched_at"))
-        if at is None:
-            continue
-        if best_at is None or at > best_at:
-            best_at = at
-            best_id = u.get("id")
-    return best_id
 
 
 def _now_dt():

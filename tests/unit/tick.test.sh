@@ -1453,21 +1453,42 @@ fi
 u4_df_with_patched_tick() {
   local patch_script="$1" probe_op="$2"
   local tmpdir; tmpdir="$(mktemp -d -t u4-df.XXXXXX)"
+  # B4: the tick is split across tick.py + tick_advance.py + tick_guidance.py.
+  # A DF anchor may live in any of the three, so copy all three into the tmpdir
+  # and let the patch script (which takes the DIR) edit whichever file holds its
+  # anchor. The probe pre-loads the patched siblings so the patched tick picks
+  # them up instead of the canonical on-disk copies.
   cp "$TICK_PY" "$tmpdir/tick.py"
-  "$PY" "$patch_script" "$tmpdir/tick.py"
+  cp "$AUTO_ROOT/lib/tick_advance.py" "$tmpdir/tick_advance.py"
+  cp "$AUTO_ROOT/lib/tick_guidance.py" "$tmpdir/tick_guidance.py"
+  "$PY" "$patch_script" "$tmpdir"
   local patch_rc=$?
   if [ "$patch_rc" -ne 0 ]; then
     rm -rf "$tmpdir"
     fail "DF patch script $patch_script failed with rc=$patch_rc"
     return 0
   fi
-  TICK_PY_OVERRIDE="$tmpdir/tick.py" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
+  TICK_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-t_path = os.environ["TICK_PY_OVERRIDE"]
+tmpdir = os.environ["TICK_PY_OVERRIDE_DIR"]
+# Pre-load the patched siblings under the names tick.py looks up, masking
+# __file__ so load_lib_module's path-keyed cache accepts them (the canonical
+# tick.py does `load_lib_module("tick_advance")` etc.; the cache check requires
+# the cached module's __file__ to equal the canonical lib path).
+def _preload(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(tmpdir, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    mod.__file__ = os.path.join(auto_root, "lib", name + ".py")
+    return mod
+_preload("tick_guidance")
+_preload("tick_advance")
+t_path = os.path.join(tmpdir, "tick.py")
 t_spec = importlib.util.spec_from_file_location("tick_patched", t_path)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
@@ -1583,8 +1604,8 @@ cat > "$DF_DIR/df1_skip_bound.py" <<'PYEOF'
 """DF#1: force evaluate_decision's result to keep decision_effective='iterate'
 even at attempts==max. After the patched advance_iteration_loop reads the
 result, it always takes the iterate branch — bound is functionally skipped."""
-import sys
-p = sys.argv[1]
+import os, sys
+p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
 src = open(p).read()
 old = 'eval_result = iteration.evaluate_decision(\n        led, gate_unit_id, now_monotonic=time.monotonic()\n    )'
 new = (old + '\n'
@@ -1610,28 +1631,34 @@ bearing by ALSO disabling the composition (set CLAUDE_AUTO_TEST_NO_RECOMPUTE)
 circuit to ALSO accept iteration_pending=True as a trigger, then disable
 the iteration helper. With both disabled, an iterate-pending ledger exits
 'predicate-met' instead of iterating."""
-import sys
-p = sys.argv[1]
-src = open(p).read()
+import os, sys
+# B4: anchor 1 (advance_iteration_loop no-op) is in tick_advance.py; anchor 2
+# (the predicate-met short-circuit) is in tick.py's _try_predicate_met_shortcircuit.
+pa = os.path.join(sys.argv[1], "tick_advance.py")
+src_a = open(pa).read()
 old_def = 'def advance_iteration_loop(repo_root, run_id, led):\n    """'
 new_def = 'def advance_iteration_loop(repo_root, run_id, led):\n    return None  # DF#2 PATCH\n    """'
-if old_def not in src:
+if old_def not in src_a:
     sys.exit("DF#2 anchor 1 not found")
-src = src.replace(old_def, new_def, 1)
+src_a = src_a.replace(old_def, new_def, 1)
+open(pa, "w").write(src_a)
+
+pt = os.path.join(sys.argv[1], "tick.py")
+src_t = open(pt).read()
 old_sc = ('if pred.get("met") and not pred.get("iteration_pending", False) \\\n'
           '            and phase != "plan" and phase != "seam":')
 new_sc = ('if (pred.get("met") or pred.get("iteration_pending")) \\\n'
           '            and phase != "plan" and phase != "seam":')
-if old_sc not in src:
+if old_sc not in src_t:
     sys.exit("DF#2 anchor 2 not found")
-src = src.replace(old_sc, new_sc)
-open(p, "w").write(src)
+src_t = src_t.replace(old_sc, new_sc)
+open(pt, "w").write(src_t)
 PYEOF
 
 cat > "$DF_DIR/df3_no_fence.py" <<'PYEOF'
 """DF#3: remove the kill-switch fence so the env hatch is ignored."""
-import sys
-p = sys.argv[1]
+import os, sys
+p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
 src = open(p).read()
 old = 'if is_iteration_disabled():\n        return None'
 new = 'if False:  # DF#3 PATCH — kill-switch removed\n        return None'
@@ -1643,8 +1670,8 @@ PYEOF
 cat > "$DF_DIR/df4_no_finally.py" <<'PYEOF'
 """DF#4: remove the try/finally wrapping _tick_body_inner so the crashed-
 tick path no longer accumulates active_wall_seconds."""
-import sys
-p = sys.argv[1]
+import os, sys
+p = os.path.join(sys.argv[1], "tick.py")  # B4: _tick_body stays in tick.py
 src = open(p).read()
 old1 = "    t_start = time.monotonic()\n    try:\n        return _tick_body_inner("
 new1 = "    t_start = time.monotonic()\n    if True:\n        return _tick_body_inner("
@@ -1730,14 +1757,14 @@ fi
 # (which catches only TickError/LedgerError) → no JSON intent, wedge.
 cat > "$DF_DIR/df5_no_iteration_try.py" <<'PYEOF'
 """DF#5: strip the try/except around advance_iteration_loop in
-_tick_body_inner so a non-Ledger raise propagates instead of being
-converted into a stop intent."""
-import sys
-p = sys.argv[1]
+_try_iteration_check (tick.py, post-B4) so a non-Ledger raise propagates
+instead of being converted into a stop intent."""
+import os, sys
+p = os.path.join(sys.argv[1], "tick.py")  # B4: the try/except is in _try_iteration_check (tick.py)
 src = open(p).read()
 old = (
     "    try:\n"
-    "        iteration_result = advance_iteration_loop(repo_root, run_id, led)\n"
+    "        iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)\n"
     "    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
 )
 if old not in src:
@@ -1745,15 +1772,14 @@ if old not in src:
 # Replace the try-line + the entire wrap with a bare call, dropping
 # everything from `    try:` through the closing `}` of the except handler.
 start = src.find(old)
-# Locate the end of the wrap: the closing `}` of the stop-intent dict
-# returned by the converter, then a blank line. The wrap ends just before
-# the line `    if iteration_result is not None:`.
+# Locate the end of the wrap: the wrap ends just before the line
+# `    if iteration_result is not None:`.
 end_marker = "    if iteration_result is not None:"
 end_idx = src.find(end_marker, start)
 if end_idx < 0:
     sys.exit("DF#5 anchor 2 not found")
 replacement = (
-    "    iteration_result = advance_iteration_loop(repo_root, run_id, led)\n"
+    "    iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)\n"
 )
 open(p, "w").write(src[:start] + replacement + src[end_idx:])
 PYEOF
@@ -1766,8 +1792,8 @@ cat > "$DF_DIR/df6_no_optional_emit.py" <<'PYEOF'
 """DF#6: revert the F2 emit_template-optional branch so the iterate path
 unconditionally hardcodes emitter=iterate_template. With a recipe that
 omits iteration.emit_template, iterate_template raises RecipeError."""
-import sys
-p = sys.argv[1]
+import os, sys
+p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
 src = open(p).read()
 old = (
     '        if (led.get("iteration") or {}).get("emit_template"):\n'
@@ -1806,8 +1832,8 @@ PYEOF
 cat > "$DF_DIR/df7_off_by_one.py" <<'PYEOF'
 """DF#7: revert the off-by-one fix in _iteration_guidance_prefix so the
 "last attempt before bound" warning fires one tick too early."""
-import sys
-p = sys.argv[1]
+import os, sys
+p = os.path.join(sys.argv[1], "tick_guidance.py")  # B4: anchor moved to tick_guidance
 src = open(p).read()
 old = 'if max_attempts is not None and attempts == int(max_attempts):'
 new = 'if max_attempts is not None and attempts == int(max_attempts) - 1:  # DF#7 PATCH'
@@ -1822,21 +1848,34 @@ PYEOF
 f2_df_with_patched_tick() {
   local patch_script="$1" probe_op="$2"
   local tmpdir; tmpdir="$(mktemp -d -t f2-df.XXXXXX)"
+  # B4: same three-file copy + sibling pre-load pattern as u4_df_with_patched_tick.
   cp "$TICK_PY" "$tmpdir/tick.py"
-  "$PY" "$patch_script" "$tmpdir/tick.py"
+  cp "$AUTO_ROOT/lib/tick_advance.py" "$tmpdir/tick_advance.py"
+  cp "$AUTO_ROOT/lib/tick_guidance.py" "$tmpdir/tick_guidance.py"
+  "$PY" "$patch_script" "$tmpdir"
   local patch_rc=$?
   if [ "$patch_rc" -ne 0 ]; then
     rm -rf "$tmpdir"
     fail "F2 DF patch script $patch_script failed with rc=$patch_rc"
     return 0
   fi
-  TICK_PY_OVERRIDE="$tmpdir/tick.py" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
+  TICK_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-t_path = os.environ["TICK_PY_OVERRIDE"]
+tmpdir = os.environ["TICK_PY_OVERRIDE_DIR"]
+def _preload(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(tmpdir, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    mod.__file__ = os.path.join(auto_root, "lib", name + ".py")
+    return mod
+_preload("tick_guidance")
+_preload("tick_advance")
+t_path = os.path.join(tmpdir, "tick.py")
 t_spec = importlib.util.spec_from_file_location("tick_patched", t_path)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
@@ -2116,13 +2155,17 @@ m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
               phase_order=["plan","work"], terminal_phase="work",
               units=units)
 
-# Monkey-patch ON THE TICK MODULE — replace advance_iteration_loop with one
-# that raises ledger.UnknownUnit. The narrowed except in _tick_body_inner
-# refers to the lazily-imported `ledger` module attribute, which IS the same
-# module we imported via load_lib_module, so the isinstance check matches.
+# Monkey-patch the advance helper — replace advance_iteration_loop with one
+# that raises ledger.UnknownUnit. Post-B4 the function lives in the sibling
+# tick_advance module and the dispatcher calls it qualified
+# (tick_advance.advance_iteration_loop), so we patch it THERE (patching the
+# tick-module re-export alias would not affect the qualified call site). The
+# narrowed except in _tick_body_inner refers to the same `ledger` module
+# (shared via load_lib_module's __file__-keyed cache), so the isinstance
+# check matches.
 def _boom(repo_root, run_id, led):
     raise m.UnknownUnit("recipe-bug: gate_unit refers to a unit not in units[]")
-t.advance_iteration_loop = _boom
+t.tick_advance.advance_iteration_loop = _boom
 
 try:
     r = t.dispatch_tick(repo, run)
