@@ -11,23 +11,32 @@
 # divergent literal comparison without tripping this.
 #
 # Exceptions (allowed to contain the literal):
-#   - lib/iteration.py — the sole READER of the iteration-decision field; this
-#     module is the centralized decision point every caller routes through.
-#   - lib/ledger.py    — the sole WRITER of the iteration-decision field (via
-#                        set_verdict_decision); also stores the field name in
-#                        schema constants. Reads in ledger.py route through
-#                        iteration.read_decision().
-#   - lib/on-stop.py   — uses the literal "decision" for the CLAUDE CODE HOOK
-#                        PROTOCOL ({"decision":"block"} in stop-hook output) —
-#                        a different "decision" than v0.3.0's iteration decision.
-#                        Pre-dates v0.3.0; harness contract, not internal data.
+#   - lib/iteration.py        — the sole READER of the iteration-decision field;
+#                        this module is the centralized decision point every
+#                        caller routes through.
+#   - lib/ledger_mutators.py  — the sole WRITER of the iteration-decision field
+#                        (via set_verdict_decision). After the B5 split of
+#                        ledger.py, set_verdict_decision lives here (the facade
+#                        ledger.py only re-exports the NAME, not the literal).
+#   - lib/ledger_emitters.py  — clears the iteration-decision field in the
+#                        gate-unit reset combo (_reset_gate_for_iteration's
+#                        dc.pop("decision", None) — round-3 P0-R3-1). After the
+#                        B5 split this code lives here, so the literal moved here
+#                        with it.
+#   - lib/on-stop.py          — uses the literal "decision" for the CLAUDE CODE
+#                        HOOK PROTOCOL ({"decision":"block"} in stop-hook output)
+#                        — a different "decision" than v0.3.0's iteration
+#                        decision. Pre-dates v0.3.0; harness contract, not
+#                        internal data.
 #
-# NOTE: ledger.py's allowance is narrow — it may CONSTRUCT/WRITE the field, but
-# any decision-comparison logic in ledger.py (e.g. recompute_predicate's
-# iteration_pending check) must use iteration.read_decision(). on-stop.py's
-# allowance covers the harness-protocol literal specifically. This test asserts
-# the literal's ABSENCE outside the three allowed files; a finer check
-# (write-only vs compare; hook-protocol vs iteration-protocol) lives in code review.
+# NOTE: the ledger_mutators.py / ledger_emitters.py allowance is narrow — they
+# may CONSTRUCT/WRITE/CLEAR the field, but any decision-comparison logic (e.g.
+# recompute_predicate's iteration_pending check in ledger_core.py) must use
+# iteration.read_decision(). on-stop.py's allowance covers the harness-protocol
+# literal specifically. The facade ledger.py is NOT allowed — its re-exports are
+# names, not the string. This test asserts the literal's ABSENCE outside the four
+# allowed files; a finer check (write-only vs compare; hook-protocol vs
+# iteration-protocol) lives in code review.
 
 set -uo pipefail
 
@@ -55,7 +64,7 @@ auto_root = sys.argv[1]
 # Optional extra file path (the deliberate-fail control passes a temp module).
 extra = sys.argv[2] if len(sys.argv) > 2 else None
 
-ALLOWED = {"iteration.py", "ledger.py", "on-stop.py"}
+ALLOWED = {"iteration.py", "ledger_mutators.py", "ledger_emitters.py", "on-stop.py"}
 LITERAL = "decision"
 
 def offenders_in(path):
@@ -88,7 +97,7 @@ PYEOF
 }
 
 # ─── Scenario 1: the lint passes on the real tree ───────────────────────────
-it "no 'decision' string literal outside iteration.py / ledger.py"
+it "no 'decision' string literal outside iteration.py / ledger_mutators.py / ledger_emitters.py / on-stop.py"
 result="$(run_lint)"
 if [ "$result" = "CLEAN" ]; then
   pass
