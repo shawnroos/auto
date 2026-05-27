@@ -294,6 +294,50 @@ case "$res" in
   *) fail "F0 DF assertions failed: $res" ;;
 esac
 
+# ─── DF Scenario 5: G1 / ADV-R2-3 — isdigit() Unicode trap on F0 seed path ──
+# F0's seed math (lib/ledger.py:770-782) previously called
+# `suffix.isdigit()` then `int(suffix)` on the suffix-after-prefix of every
+# unit id. `'²'.isdigit()` returns True but `int('²')` raises ValueError on
+# the Unicode superscript-2 — so a unit declared as `"plan-²"` (or any
+# recipe that names a unit with a Unicode numeric character) would crash
+# `init_ledger` with an unhandled ValueError instead of being treated as
+# "not iterate-shaped" and seeded to 0.
+#
+# G1 fix: `suffix.isdecimal()` matches exactly the base-10 digits `int()`
+# accepts (ASCII 0-9). The Unicode superscript falls through harmlessly
+# and seed_count stays at 0. The DF revert (Edit isdecimal→isdigit in
+# lib/ledger.py) makes init_ledger RAISE ValueError on this input,
+# bombing the test before it can `print("OK")`.
+it "G1 / ADV-R2-3 DF: init_ledger handles Unicode-superscript unit ids without crashing (isdecimal vs isdigit)"
+res="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_ledger
+ledger = load_ledger()
+
+with tempfile.TemporaryDirectory() as repo:
+    # Unit id "plan-²" has prefix "plan-" + suffix "²". '²'.isdigit() == True
+    # but int('²') raises. With G1's isdecimal guard, this unit falls through
+    # and seed_count stays at 0. Without the fix, init_ledger crashes.
+    led = ledger.init_ledger(
+        repo, "df-g1-unicode", adapter="ce",
+        units=[{"id":"plan-²","phase":"plan"},
+               {"id":"judge","phase":"work","depends_on":["plan-²"]}],
+        iteration={"gate_unit":"judge","emit_template":"pc",
+                   "bound":{"max_attempts":3}},
+        emit_templates={"pc":{"phase":"plan","invokes":{},"id_prefix":"plan-"}})
+    # isdecimal('²') == False → suffix NOT counted → seed stays at 0
+    assert led["iteration_emit_count"] == 0, f"expected 0, got {led['iteration_emit_count']}"
+
+print("OK")
+PYEOF
+)"
+case "$res" in
+  *OK*) pass ;;
+  *) fail "G1 DF: init_ledger raised (or wrong seed) on Unicode-superscript unit id: $res" ;;
+esac
+
 # ─── summary ────────────────────────────────────────────────────────────────
 echo ""
 echo "$(basename "$0"): ${PASS} passed, ${FAIL} failed"

@@ -177,6 +177,25 @@ elif op == "pending-corrupt-max-wall":
     led["iteration"]["bound"]["max_wall_seconds"] = "not-a-number"
     print(iteration.compute_pending_state(led))
 
+# ─── G1 / rel-r2-1: kill-switch read-side parity ───────────────────────────
+# When the operator sets CLAUDE_AUTO_DISABLE_ITERATION=1, compute_pending_state
+# must short-circuit to False — symmetric with tick.advance_iteration_loop's
+# write-side fence (lib/tick.py:624). Without parity, a kill-switched mid-iter
+# run still computes iteration_pending=True from the gate's stale "iterate"
+# verdict and blocks the predicate's `met` branch via the AND-NOT clause.
+#
+# This test constructs a ledger that WOULD return True (iterate under bound)
+# and asserts the kill-switch flips it to False. The deliberate-fail control
+# (Edit-revert of iteration.py) proves the test isn't vacuous: without the
+# top-of-function `if is_iteration_disabled(): return False` it returns True
+# even with the env var set.
+
+elif op == "pending-kill-switch-on":
+    # Same shape as `pending-iterate-under` (which returns True) — caller sets
+    # CLAUDE_AUTO_DISABLE_ITERATION=1 in the environment before invoking.
+    led = make_led("iterate", attempts=2, max_attempts=5)
+    print(iteration.compute_pending_state(led))
+
 PYEOF
 }
 
@@ -260,6 +279,23 @@ assert_eq "False" "$(run_iter pending-corrupt-active-wall)"
 
 it "compute_pending_state: corrupt max_wall_seconds → False (no raise)"
 assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
+
+# ─── G1 / rel-r2-1: kill-switch read-side parity ──────────────────────────
+# Operator sets CLAUDE_AUTO_DISABLE_ITERATION=1; compute_pending_state must
+# return False even on a ledger that would otherwise be iterate-under-bound.
+# This mirrors the write-side check at lib/tick.py:624. The same ledger
+# shape WITHOUT the env var returns True (covered by pending-iterate-under
+# above) — the only difference is the kill-switch, isolating the behavior
+# the test is asserting.
+
+it "compute_pending_state: kill-switch (CLAUDE_AUTO_DISABLE_ITERATION=1) → False even on iterate-under-bound"
+assert_eq "False" "$(CLAUDE_AUTO_DISABLE_ITERATION=1 run_iter pending-kill-switch-on)"
+
+# Sanity: kill-switch UNSET on the SAME ledger shape returns True. Without
+# this paired check, a regression that flips both sides (e.g. accidentally
+# returns False unconditionally) would still see this section "pass."
+it "compute_pending_state: same ledger WITHOUT kill-switch → True (sanity for the pair above)"
+assert_eq "True" "$(run_iter pending-kill-switch-on)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

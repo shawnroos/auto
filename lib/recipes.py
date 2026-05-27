@@ -287,12 +287,18 @@ def validate(recipe: dict) -> None:
         with base >= 0 and i >= 0). For depends_on validation we accept any
         prefix-match whose remainder parses as a positive int — string
         ``"build-1"`` matches, ``"build-typo"`` does not.
+
+        G1 / ADV-R2-3: use ``isdecimal()`` not ``isdigit()`` —
+        ``'²'.isdigit()`` is True but ``int('²')`` raises ValueError, so an
+        author-crafted depends_on like ``"build-²"`` would crash the
+        validator instead of being rejected as not-iterate-shaped.
+        ``isdecimal()`` matches exactly the base-10 digits ``int()`` accepts.
         """
         for p in emit_prefixes_for_deps:
             if not dep_id.startswith(p) or dep_id == p:
                 continue
             suffix = dep_id[len(p):]
-            if suffix.isdigit() and int(suffix) >= 1:
+            if suffix.isdecimal() and int(suffix) >= 1:
                 return True
         return False
 

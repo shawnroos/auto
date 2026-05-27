@@ -773,7 +773,15 @@ def init_ledger(
                     if not uid.startswith(prefix):
                         continue
                     suffix = uid[len(prefix):]
-                    if suffix.isdigit():
+                    # G1 / ADV-R2-3: use ``isdecimal()`` not ``isdigit()`` —
+                    # ``'²'.isdigit()`` is True but ``int('²')`` raises
+                    # ValueError. ``isdecimal()`` returns True ONLY for the
+                    # base-10 digits ``int()`` actually accepts, so a
+                    # Unicode superscript suffix on a recipe-declared id is
+                    # treated as "not iterate-shaped" and falls through —
+                    # the original isdigit-guard intent, hardened against
+                    # the Unicode class-int() mismatch.
+                    if suffix.isdecimal():
                         seed_count = max(seed_count, int(suffix))
 
         ledger = {
