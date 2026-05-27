@@ -470,9 +470,7 @@ Importable string-tuple / named-string constants that consumers should prefer ov
 | `LOOP_PHASES` | tuple[str] | `("plan", "seam", "work", "done")` | the legal loop_phase values; `"done"` is post-terminal |
 | `PLAN_STEPS` | tuple[str] | `("plan", "deepen", "review_plan")` | the legal non-null plan_step values |
 | `GRACE_SECONDS` | int | `4200` | orphan-detection grace window (> 3600s ScheduleWakeup clamp + slack) |
-| `EXIT_REASON_ITERATION_CHECK_FAILED` | str | `"iteration-check-failed"` | `exit_reason.kind` written when `advance_iteration_loop` raises a non-`LedgerError` exception (typically a malformed iteration block or gate verdict) |
-| `EXIT_REASON_RECIPE_BUG` | str | `"recipe-bug"` | `exit_reason.kind` written when a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escapes the iteration check — signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for |
-| `EXIT_REASON_KINDS` | tuple[str] | `(EXIT_REASON_ITERATION_CHECK_FAILED, EXIT_REASON_RECIPE_BUG)` | the validation tuple `set_exit_reason` checks `kind` against |
+| `ExitReason` | StrEnum | `ITERATION_CHECK_FAILED="iteration-check-failed"`, `RECIPE_BUG="recipe-bug"` | **(v0.3.1 B11, replaces v0.3.0's three top-level EXIT_REASON_\* names)** the legal `exit_reason.kind` values. StrEnum: members ARE strings (`ExitReason.RECIPE_BUG == "recipe-bug"` is True, JSON-serializes as the value). `set_exit_reason` validates `kind` against membership and raises `LedgerError` on bad input — convention-only enum upgraded to mechanism. `ITERATION_CHECK_FAILED` is written when `advance_iteration_loop` raises a non-`LedgerError` exception (typically a malformed iteration block or gate verdict); `RECIPE_BUG` is written when a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escapes the iteration check — signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for |
 
 CLI entry (for `lib/ledger.sh` and ad-hoc scripting): `python3 ledger.py <subcommand> ...`.
 

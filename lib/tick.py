@@ -399,7 +399,7 @@ def _try_iteration_check(
         # LedgerError; Python matches the first parent in source order).
         try:
             ledger.set_exit_reason(
-                repo_root, run_id, ledger.EXIT_REASON_RECIPE_BUG,
+                repo_root, run_id, ledger.ExitReason.RECIPE_BUG,
                 {"type": exc.__class__.__name__, "message": str(exc),
                  "call": "advance_iteration_loop"},
             )
@@ -413,7 +413,7 @@ def _try_iteration_check(
             pass
         return {
             "action": "stop",
-            "reason": ledger.EXIT_REASON_RECIPE_BUG,
+            "reason": ledger.ExitReason.RECIPE_BUG.value,
             "run": run_id,
             "error": {
                 "call": "advance_iteration_loop",
@@ -435,7 +435,7 @@ def _try_iteration_check(
         # from a clean exit.
         try:
             ledger.set_exit_reason(
-                repo_root, run_id, ledger.EXIT_REASON_ITERATION_CHECK_FAILED,
+                repo_root, run_id, ledger.ExitReason.ITERATION_CHECK_FAILED,
                 {"type": exc.__class__.__name__, "message": str(exc),
                  "call": "advance_iteration_loop"},
             )
@@ -449,7 +449,7 @@ def _try_iteration_check(
             pass
         return {
             "action": "stop",
-            "reason": ledger.EXIT_REASON_ITERATION_CHECK_FAILED,
+            "reason": ledger.ExitReason.ITERATION_CHECK_FAILED.value,
             "run": run_id,
             "error": {
                 "call": "advance_iteration_loop",

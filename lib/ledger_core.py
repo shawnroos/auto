@@ -71,23 +71,39 @@ LOOP_PHASES = ("plan", "seam", "work", "done")
 # adapter reads plan_step to compute the NEXT step; the tick persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
 PLAN_STEPS = ("plan", "deepen", "review_plan")
-# v0.3.0 H / API-R3-2: canonical exit_reason.kind values. set_exit_reason
-# writes ledger["exit_reason"]["kind"] from one of these; tick.py imports and
-# uses the named constants rather than re-spelling the strings inline (which
-# would create a divergent-literal class the prose claims is a fixed enum but
-# the code only enforces by convention). EXIT_REASON_KINDS is the validation
-# tuple; the named constants are how callers spell intent.
+# v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
+# set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; tick.py
+# spells intent as `ledger.ExitReason.RECIPE_BUG` rather than a string literal
+# (which would create a divergent-literal class the prose claims is a fixed enum
+# but the code only enforces by convention). StrEnum: members ARE strings, so
+# `ExitReason.RECIPE_BUG == "recipe-bug"` is True and JSON-serialization round-
+# trips. Membership check (`kind in ExitReason`) replaces H's manual KINDS tuple
+# — one canonical surface instead of three top-level names + a tuple.
+#
 #   ITERATION_CHECK_FAILED → an unexpected raise from advance_iteration_loop
 #     (typically a malformed iteration block or gate verdict).
 #   RECIPE_BUG → a LedgerError subclass (UnknownUnit, InvalidTransition,
 #     StaleVerdict) escaping the iteration check, which signals the recipe's
 #     units[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
+#
 # Both reasons drive /auto-status's exit_reason render and the harness
 # stop-intent's reason field.
-EXIT_REASON_ITERATION_CHECK_FAILED = "iteration-check-failed"
-EXIT_REASON_RECIPE_BUG = "recipe-bug"
-EXIT_REASON_KINDS = (EXIT_REASON_ITERATION_CHECK_FAILED, EXIT_REASON_RECIPE_BUG)
+from enum import Enum
+
+
+# `str, Enum` (the pre-3.11 portable equivalent of StrEnum — Python 3.9 is the
+# auto runtime's actual floor, per `#!/usr/bin/env python3` on macOS which
+# resolves to 3.9). Members ARE strings via the str mixin:
+# `ExitReason.RECIPE_BUG == "recipe-bug"` is True; JSON-serializes as the
+# value when `default=str` or via explicit `.value`. The one wrinkle vs
+# native StrEnum: `str(ExitReason.RECIPE_BUG)` gives `"ExitReason.RECIPE_BUG"`
+# (the repr), so set_exit_reason persists `kind.value` explicitly to keep
+# the on-disk shape backwards-compatible with v0.3.0 (where kind was a
+# plain string like "recipe-bug").
+class ExitReason(str, Enum):
+    ITERATION_CHECK_FAILED = "iteration-check-failed"
+    RECIPE_BUG = "recipe-bug"
 UNIT_STATES = (
     "pending",
     "dispatched",

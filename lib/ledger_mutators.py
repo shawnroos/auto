@@ -468,14 +468,34 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
 
     Mirrors ``set_bound_override``'s shape — operator-diagnostic data lives on
     the ledger via a single timestamped envelope, NOT on findings.
+
+    v0.3.1 B11: ``kind`` MUST be a member of ``ledger_core.ExitReason``.
+    Validating at the write boundary closes the convention-only gap H left
+    (the named-constants tuple was advisory; this is mechanism). Accepts the
+    enum member directly (e.g. ``ExitReason.RECIPE_BUG``) or its string
+    value (e.g. ``"recipe-bug"``) — StrEnum membership matches both.
     """
+    try:
+        kind_enum = ledger_core.ExitReason(kind)  # raises ValueError on bad input
+    except ValueError as e:
+        raise ledger_core.LedgerError(
+            f"set_exit_reason: kind {kind!r} is not a member of ExitReason; "
+            f"valid kinds: {[m.value for m in ledger_core.ExitReason]!r}"
+        ) from e
+
+    # Persist as the raw string value so the on-disk JSON shape stays
+    # backwards-compatible with v0.3.0 (where kind was a plain string).
+    # Use `.value` explicitly: `str(member)` on the pre-3.11 `(str, Enum)`
+    # mixin returns the repr ("ExitReason.RECIPE_BUG"), not the value.
+    kind_value = kind_enum.value
+
     def mutate(ledger):
         ledger["exit_reason"] = {
-            "kind": kind,
+            "kind": kind_value,
             "error": error,
             "at": ledger_core._now_iso(),
         }
-        return kind
+        return kind_value
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
