@@ -781,6 +781,39 @@ def _tick_body_inner(
     # produce one, not silently exit.
     try:
         iteration_result = advance_iteration_loop(repo_root, run_id, led)
+    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
+        # v0.3.0 G2 / rel-r2-2: recipe-bug LedgerError subclasses signal a
+        # mis-built caller (unknown gate unit id, illegal transition, stale
+        # verdict), NOT a torn ledger. Convert to a stop intent — same shape
+        # as the generic-Exception branch below — so the operator gets a rearm
+        # signal with reason="recipe-bug" rather than _cli swallowing the
+        # raise with no JSON. ORDER MATTERS: this branch MUST precede the
+        # bare LedgerError catch below (these classes are subclasses of
+        # LedgerError; Python matches the first parent in source order).
+        try:
+            ledger.set_exit_reason(
+                repo_root, run_id, "recipe-bug",
+                {"type": exc.__class__.__name__, "message": str(exc),
+                 "call": "advance_iteration_loop"},
+            )
+        except Exception:  # noqa: BLE001 — never bury the original.
+            pass
+        try:
+            ledger.set_loop(
+                repo_root, run_id, loop_phase="done", driver="manual", beat=True,
+            )
+        except Exception:  # noqa: BLE001 — never bury the original.
+            pass
+        return {
+            "action": "stop",
+            "reason": "recipe-bug",
+            "run": run_id,
+            "error": {
+                "call": "advance_iteration_loop",
+                "message": f"recipe-bug: {type(exc).__name__}: {exc}",
+                "at": now_iso,
+            },
+        }
     except ledger.LedgerError:
         # Ledger-level failures are NOT recoverable here — the inconsistent-
         # ledger signal must propagate to _cli (which records the error and
@@ -790,7 +823,17 @@ def _tick_body_inner(
         # Mark the loop finished + manual so liveness checks don't treat the
         # wedged run as orphaned, then surface the crash in a stop intent so
         # the harness gets the natural signal (rather than _cli exiting with
-        # no JSON on stdout).
+        # no JSON on stdout). v0.3.0 G2 / AN-W1: persist the exit_reason FIRST
+        # so /auto-status of the crashed run can distinguish wedge-marked-done
+        # from a clean exit.
+        try:
+            ledger.set_exit_reason(
+                repo_root, run_id, "iteration-check-failed",
+                {"type": exc.__class__.__name__, "message": str(exc),
+                 "call": "advance_iteration_loop"},
+            )
+        except Exception:  # noqa: BLE001 — never bury the original.
+            pass
         try:
             ledger.set_loop(
                 repo_root, run_id, loop_phase="done", driver="manual", beat=True,

@@ -200,6 +200,18 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         line += "  [seam_paused]"
     sys.stdout.write(line + "\n")
 
+    # v0.3.0 G2 / AN-W1: surface exit_reason on a done run so the operator can
+    # tell a clean exit from a wedge that F2 force-marked done after an
+    # iteration-check crash or a recipe-bug raise. Quiet when the run is live
+    # or finished cleanly (exit_reason==None).
+    er = led.get("exit_reason")
+    if phase == "done" and isinstance(er, dict):
+        err = er.get("error") or {}
+        sys.stdout.write(
+            f"  exit_reason: {er.get('kind', '?')}: "
+            f"{err.get('type', '?')}: {err.get('message', '')}\n"
+        )
+
     sys.stdout.write(
         f"  adapter: {led.get('adapter', '?')} "
         f"(scale={led.get('adapter_scale', '?')})\n"

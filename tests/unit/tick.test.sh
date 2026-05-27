@@ -1738,7 +1738,7 @@ src = open(p).read()
 old = (
     "    try:\n"
     "        iteration_result = advance_iteration_loop(repo_root, run_id, led)\n"
-    "    except ledger.LedgerError:\n"
+    "    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
 )
 if old not in src:
     sys.exit("DF#5 anchor 1 not found")
@@ -1997,6 +1997,166 @@ if [ "$warns_early" = "True" ] && [ "$attempts" = "4" ]; then
   pass
 else
   fail "DF#7 expected warns_early=True attempts=4; got warns_early=$warns_early attempts=$attempts res=$res"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# v0.3.0 G2 — exit_reason persistence (AN-W1) + LedgerError-subclass narrow
+# catch (rel-r2-2). Two GREEN-path tests + one DF cycle each. Both run against
+# the PRODUCTION tick.py (not a patched copy) so the assertions verify the
+# fix is wired in the canonical source. The DF cycles are documented as
+# operator-run Edit-revert recipes — the existing DF#5 sibling already
+# enforces the try/except's presence; G2's narrower contract is the
+# subclass branch + the exit_reason write.
+# ════════════════════════════════════════════════════════════════════════════
+
+# G2 GREEN test #1 (AN-W1): on an iteration-check crash, F2's try/except must
+# persist exit_reason on the ledger BEFORE force-marking the loop done. This
+# uses the SAME corrupted-gate-decision shape as DF#5 (decision="GARBAGE" →
+# iteration.evaluate_decision raises ValueError → caught by the generic
+# Exception branch). The contract: exit_reason.kind == "iteration-check-failed"
+# AND exit_reason.error carries {type, message}. DF cycle (operator probe):
+# comment out the `ledger.set_exit_reason(...)` call in the Exception branch
+# of lib/tick.py → this test reports exit_reason=None.
+it "G2 AN-W1: iteration-check crash persists exit_reason on the ledger (kind=iteration-check-failed)"
+g2_anw1="$("$PY" - "$AUTO_ROOT" "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import json, sys, os, importlib.util
+auto_root, repo, tick_py, ledger_py = sys.argv[1:5]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+m = load_lib_module("ledger")
+t_spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
+
+run = "g2-anw1"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+units = [
+    {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
+    {"id": "judge", "state": "pending", "phase": "work",
+     "depends_on": ["plan-1"]},
+]
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              phase_order=["plan","seam","work"], terminal_phase="work",
+              units=units)
+def seed(L):
+    L["iteration"] = {"gate_unit": "judge", "emit_template":
+                      "plan-candidate", "bound": {"max_attempts": 5}}
+    L["emit_templates"] = {"plan-candidate": {
+        "phase":"plan","invokes":{"adapter_op":"next_plan_step"},
+        "id_prefix":"plan-"}}
+    L["iteration_attempts"] = 0
+    L["iteration_emit_count"] = 1
+    for u in L["units"]:
+        if u["id"] == "judge":
+            u["state"] = "dispatched"
+m._with_locked_ledger(repo, run, seed)
+m.record_verdict(repo, run, "judge", [])
+def corrupt(L):
+    for u in L["units"]:
+        if u["id"] == "judge":
+            dc = u.setdefault("dispatch_context", {})
+            dc["decision"] = "GARBAGE"
+m._with_locked_ledger(repo, run, corrupt)
+
+r = t.dispatch_tick(repo, run)
+after = m.read_ledger(repo, run)
+er = after.get("exit_reason") or {}
+err = er.get("error") or {}
+print(json.dumps({
+    "intent_action": (r or {}).get("action"),
+    "intent_reason": (r or {}).get("reason"),
+    "exit_reason_kind": er.get("kind"),
+    "error_type": err.get("type"),
+    "has_message": bool(err.get("message")),
+    "has_at": bool(er.get("at")),
+}))
+PYEOF
+)"
+exit_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['exit_reason_kind'])" "$g2_anw1")"
+err_type="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['error_type'])" "$g2_anw1")"
+has_msg="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['has_message'])" "$g2_anw1")"
+has_at="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['has_at'])" "$g2_anw1")"
+if [ "$exit_kind" = "iteration-check-failed" ] && [ "$err_type" = "ValueError" ] \
+   && [ "$has_msg" = "True" ] && [ "$has_at" = "True" ]; then
+  pass
+else
+  fail "G2 AN-W1 expected kind=iteration-check-failed err_type=ValueError + message+at; got $g2_anw1"
+fi
+
+# G2 GREEN test #2 (rel-r2-2): when advance_iteration_loop raises a
+# LedgerError SUBCLASS (UnknownUnit / InvalidTransition / StaleVerdict — these
+# indicate a recipe-bug caller, NOT a torn ledger), F2's try/except must
+# catch it via the NARROWED branch and emit reason="recipe-bug". The bare
+# `except ledger.LedgerError: raise` MUST come AFTER the subclass tuple, or
+# the parent catch would shadow the subclasses (they ARE LedgerError).
+# We monkey-patch advance_iteration_loop on the production tick module to
+# raise UnknownUnit directly — same shape as a recipe-bug field bug.
+# DF cycle (operator probe): swap the except-order in lib/tick.py so the
+# bare LedgerError catch precedes the subclass tuple → this test sees the
+# raise propagate (no stop intent, no exit_reason on the ledger).
+it "G2 rel-r2-2: ledger.UnknownUnit from advance_iteration_loop → stop reason=recipe-bug + exit_reason persisted"
+g2_recipe="$("$PY" - "$AUTO_ROOT" "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import json, sys, os, importlib.util
+auto_root, repo, tick_py, ledger_py = sys.argv[1:5]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+m = load_lib_module("ledger")
+t_spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
+
+run = "g2-relr22"
+p = m.ledger_path(repo, run)
+if os.path.exists(p): os.unlink(p)
+# Plan-loop ledger so the iteration check normally returns None — but the
+# monkey-patched advance_iteration_loop forces an UnknownUnit raise
+# regardless of ledger shape. We seed it with one pending plan unit so
+# dispatch_tick reaches the iteration check.
+units = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
+m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+              phase_order=["plan","work"], terminal_phase="work",
+              units=units)
+
+# Monkey-patch ON THE TICK MODULE — replace advance_iteration_loop with one
+# that raises ledger.UnknownUnit. The narrowed except in _tick_body_inner
+# refers to the lazily-imported `ledger` module attribute, which IS the same
+# module we imported via load_lib_module, so the isinstance check matches.
+def _boom(repo_root, run_id, led):
+    raise m.UnknownUnit("recipe-bug: gate_unit refers to a unit not in units[]")
+t.advance_iteration_loop = _boom
+
+try:
+    r = t.dispatch_tick(repo, run)
+    raised = False
+    exc_type = None
+except Exception as exc:
+    r = None
+    raised = True
+    exc_type = type(exc).__name__
+
+after = m.read_ledger(repo, run)
+er = after.get("exit_reason") or {}
+err = er.get("error") or {}
+print(json.dumps({
+    "raised": raised,
+    "exc_type": exc_type,
+    "intent_action": (r or {}).get("action"),
+    "intent_reason": (r or {}).get("reason"),
+    "exit_reason_kind": er.get("kind"),
+    "error_type": err.get("type"),
+}))
+PYEOF
+)"
+raised="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raised'])" "$g2_recipe")"
+intent_action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_action'])" "$g2_recipe")"
+intent_reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_reason'])" "$g2_recipe")"
+exit_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['exit_reason_kind'])" "$g2_recipe")"
+err_type="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['error_type'])" "$g2_recipe")"
+if [ "$raised" = "False" ] && [ "$intent_action" = "stop" ] \
+   && [ "$intent_reason" = "recipe-bug" ] && [ "$exit_kind" = "recipe-bug" ] \
+   && [ "$err_type" = "UnknownUnit" ]; then
+  pass
+else
+  fail "G2 rel-r2-2 expected raised=False action=stop reason=recipe-bug exit_kind=recipe-bug err_type=UnknownUnit; got $g2_recipe"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

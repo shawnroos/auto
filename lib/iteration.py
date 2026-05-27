@@ -248,7 +248,18 @@ def compute_pending_state(ledger: dict) -> bool:
     if is_iteration_disabled():
         return False
 
-    iteration_block = ledger.get("iteration")
+    # v0.3.0 G2 / ADV-R2-1: shape-corruption shield. ``iteration`` may be any
+    # JSON-deserializable value if the ledger is torn (e.g. a non-dict scalar
+    # from a partial write or a corrupted recovery); the subsequent
+    # ``.get(...)`` calls would raise AttributeError, which would propagate
+    # through ``_atomic_write -> recompute_predicate`` and block the very
+    # ledger writes F2 needs to mark the loop done. Fence here before the
+    # "no iteration declared" check (None stays the legitimate signal).
+    iter_block_raw = ledger.get("iteration")
+    if iter_block_raw is not None and not isinstance(iter_block_raw, dict):
+        return False
+
+    iteration_block = iter_block_raw
     if not iteration_block:
         return False
     gate_unit_id = iteration_block.get("gate_unit")

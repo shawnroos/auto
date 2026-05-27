@@ -196,6 +196,36 @@ elif op == "pending-kill-switch-on":
     led = make_led("iterate", attempts=2, max_attempts=5)
     print(iteration.compute_pending_state(led))
 
+# ─── G2 / ADV-R2-1: shape-corruption shield ────────────────────────────────
+# compute_pending_state is called from the _atomic_write chokepoint. If the
+# ``iteration`` key is corrupted to a non-dict scalar (e.g. partial write,
+# torn recovery), the subsequent ``.get(...)`` calls would raise AttributeError
+# and that raise would propagate through _atomic_write → recompute_predicate,
+# BLOCKING the very ledger writes F2 needs to mark the loop done.
+#
+# The fix at iteration.py adds an isinstance check that fences the function to
+# return False on non-dict iteration shapes (None stays the legitimate "no
+# iteration declared" signal — already covered by pending-no-iteration-block).
+#
+# Sentinel uses ``raised:<exc_type>`` / ``returned:<value>`` so the bash
+# discriminator can distinguish the raise (DF state) from the False return.
+
+elif op == "pending-iteration-non-dict-string":
+    led = {"units": [], "iteration": "broken-string"}
+    try:
+        v = iteration.compute_pending_state(led)
+        print(f"returned:{v}")
+    except Exception as e:
+        print(f"raised:{type(e).__name__}")
+
+elif op == "pending-iteration-non-dict-list":
+    led = {"units": [], "iteration": ["broken", "list"]}
+    try:
+        v = iteration.compute_pending_state(led)
+        print(f"returned:{v}")
+    except Exception as e:
+        print(f"raised:{type(e).__name__}")
+
 PYEOF
 }
 
@@ -296,6 +326,22 @@ assert_eq "False" "$(CLAUDE_AUTO_DISABLE_ITERATION=1 run_iter pending-kill-switc
 # returns False unconditionally) would still see this section "pass."
 it "compute_pending_state: same ledger WITHOUT kill-switch → True (sanity for the pair above)"
 assert_eq "True" "$(run_iter pending-kill-switch-on)"
+
+# ─── G2 / ADV-R2-1: shape-corruption shield ────────────────────────────────
+# If ``iteration`` is a non-dict scalar (string, list — torn-write shapes),
+# compute_pending_state MUST return False, NOT raise. A raise here would
+# propagate through _atomic_write → recompute_predicate and block the very
+# ledger writes F2 (lib/tick.py) needs to force-mark the loop done.
+#
+# The DF cycle: comment out the isinstance check in iteration.py → these tests
+# go RED with "raised:AttributeError" (the iteration_block.get('gate_unit')
+# line crashes on a str/list). With the fix, both return "returned:False".
+
+it "compute_pending_state: iteration='broken-string' (non-dict scalar) → returns False (no raise)"
+assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-string)"
+
+it "compute_pending_state: iteration=['broken','list'] (non-dict list) → returns False (no raise)"
+assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-list)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

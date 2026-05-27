@@ -824,6 +824,13 @@ def init_ledger(
             "last_active_at": None,
             "iteration_attempts": 0,
             "iteration_emit_count": seed_count,
+            # v0.3.0 G2 / AN-W1: persisted record of a non-clean run exit. None
+            # on a healthy run; populated by ``set_exit_reason`` when F2's
+            # try/except (lib/tick.py) catches an iteration-check raise or a
+            # recipe-bug LedgerError subclass. ``/auto-status`` renders it
+            # alongside loop_phase=done so the operator can distinguish a clean
+            # finish from a wedge that was force-marked done.
+            "exit_reason": None,
             # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
             # ledger at init so the engine's iteration check (advance_iteration_loop)
             # and the iterate_template emitter find them at every tick. None on a
@@ -1468,6 +1475,31 @@ def set_bound_override(
             "at": _now_iso(),
         }
         return bound_type
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_exit_reason(repo_root, run_id, kind: str, error: dict):
+    """Record a non-clean exit on the ledger (v0.3.0 G2 / AN-W1).
+
+    Writes ``ledger["exit_reason"] = {"kind": kind, "error": error, "at": iso}``
+    via the standard locked-RMW path. Called by F2's try/except in
+    ``lib/tick.py`` BEFORE force-marking the loop done, so ``/auto-status`` of
+    a crashed run can distinguish a wedge-marked-done from a clean exit. ``kind``
+    is a short tag (e.g. ``"iteration-check-failed"``, ``"recipe-bug"``);
+    ``error`` is a dict carrying at minimum ``{"type": ..., "message": ...}``
+    so the operator surface can render the original exception type.
+
+    Mirrors ``set_bound_override``'s shape — operator-diagnostic data lives on
+    the ledger via a single timestamped envelope, NOT on findings.
+    """
+    def mutate(ledger):
+        ledger["exit_reason"] = {
+            "kind": kind,
+            "error": error,
+            "at": _now_iso(),
+        }
+        return kind
 
     return _with_locked_ledger(repo_root, run_id, mutate)
 
