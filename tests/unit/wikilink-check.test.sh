@@ -37,6 +37,9 @@ fail() {
 # The lint, as a reusable function the deliberate-fail control can re-run.
 # Searches the four shipped public trees for memory-name wikilinks.
 # Excludes this test file itself (it documents the forbidden pattern in prose).
+# Excludes __pycache__/ and *.pyc — Python bytecode caches retain the old
+# string contents from prior source state until they're regenerated, and
+# those caches are gitignored so they don't belong in the lint scope.
 run_wikilink_lint() {
   # `|| true` so an empty result (the green path) doesn't trip set -e and
   # collapse the result to empty correctly. Grep exits 1 on no-match.
@@ -44,6 +47,8 @@ run_wikilink_lint() {
     grep -rn -E '\[\[(feedback|idea|project|reference)_' \
       lib/ docs/contracts/ skills/ commands/ \
       --exclude-dir='.claude' \
+      --exclude-dir='__pycache__' \
+      --exclude='*.pyc' \
       2>/dev/null \
       || true \
   )
