@@ -752,33 +752,102 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
 def _tick_body_inner(
     repo_root, run_id, *, adapter, auto, delay, rearm_prompt, now, now_iso
 ):
+    """Flat dispatcher over short-circuit helpers (B6 decomposition).
+
+    Each `_try_*` helper returns either a terminal intent dict (short-circuit:
+    return it) or None (fall through). The ORDER the short-circuits fire is
+    load-bearing and unchanged from the pre-B6 inline body:
+
+      0. iteration check  (KTD §A: BEFORE the predicate-met short-circuit)
+      1. predicate-met short-circuit  (work/seam → done)
+      2. detect + halt stalls         (always; computes halted/newly-stalled)
+      3. the ONE advance              (plan/work/seam dispatch, try/except)
+         + seam-pause short-circuit
+      4. predicate-met-after-advance  (work → done)
+      5. build the rearm intent
+
+    Each helper extracts its branch VERBATIM from the pre-B6 body; no logic
+    changed. Locals each branch needs (now_iso, pred, phase, …) are passed
+    explicitly — no state smuggled via mutation.
+    """
     led = ledger.read_ledger(repo_root, run_id)
     phase = phase_grammar.current_phase(led)
 
-    # 0. v0.3.0 U4 / KTD §A: iteration check fires BEFORE the predicate-met
-    #    short-circuit below. Without this, A2's judge writing verdict-returned
-    #    makes the work-loop's all_units_terminal=True (with iteration_pending
-    #    not yet composed), and the short-circuit would exit as "done" before
-    #    any iteration logic runs. The check is side-effect-free on a1/W
-    #    ledgers (early-return at step 1). When iteration drives the run, this
-    #    helper writes its own ledger mutations (atomic_iterate_step on
-    #    iterate; set_bound_override + set_loop on bound-exit) which the next
-    #    block's `pred` re-reads via the recomputed exit_predicate_result.
-    #
-    # v0.3.0 F2 (rel-1): wrap the iteration check in try/except so a raise
-    # inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
-    # malformed gate decision, KeyError on a missing gate unit, RecipeError on
-    # a misshapen emit_template) DOES NOT propagate to _cli — which catches
-    # only (TickError, LedgerError) and exits with no JSON intent (the harness
-    # never sees a rearm and the run wedges). Instead, we mark the loop done +
-    # manual (so an orphan check never mistakes a wedged run for a live one)
-    # AND emit a stop intent carrying the diagnostic. LedgerError is re-raised
-    # so the existing handler still catches it (LedgerError indicates the
-    # ledger itself is in an inconsistent state — we should NOT mark such a
-    # run done with a clean signal). Per memory
-    # feedback_polling_inside_vs_outside_agentic_loop: the natural harness
-    # signal is the rearm/stop intent; the iteration-check crash path must
-    # produce one, not silently exit.
+    intent, led = _try_iteration_check(
+        repo_root, run_id, led, phase=phase, delay=delay,
+        rearm_prompt=rearm_prompt, now_iso=now_iso,
+    )
+    if intent is not None:
+        return intent
+
+    if (intent := _try_predicate_met_shortcircuit(
+            repo_root, run_id, led, phase=phase)) is not None:
+        return intent
+
+    led, halted_ids, newly_stalled = detect_and_halt_stalled(
+        repo_root, run_id, led, now
+    )
+
+    advance_result, advance_intent, led = _dispatch_phase_advance(
+        repo_root, run_id, led, adapter, halted_ids, phase=phase,
+        auto=auto, now_iso=now_iso,
+    )
+    if advance_intent is not None:
+        return advance_intent
+
+    if (intent := _try_seam_pause(advance_result, run_id)) is not None:
+        return intent
+
+    # Persist the beat (liveness) BEFORE signalling re-arm (R10). The advance
+    # itself already wrote the ledger atomically (predicate recomputed inside
+    # ledger.py per I-1); here we only stamp last_beat_at + reaffirm driver.
+    ledger.set_loop(repo_root, run_id, driver="self", beat=True)
+
+    if (intent := _try_post_advance_predicate_met(
+            repo_root, run_id, advance_result, phase=phase)) is not None:
+        return intent
+
+    return _build_rearm_intent(
+        repo_root, run_id, advance_result, halted_ids, newly_stalled,
+        phase=phase, delay=delay, rearm_prompt=rearm_prompt,
+    )
+
+
+def _try_iteration_check(
+    repo_root, run_id, led, *, phase, delay, rearm_prompt, now_iso
+):
+    """Step 0 — the iteration check (KTD §A). Returns (intent_or_None, led).
+
+    The `led` return is load-bearing: on the "iterate" and "advance" branches
+    the body re-reads the ledger so the downstream predicate-met short-circuit
+    sees the recomputed exit_predicate_result. Returning the refreshed `led`
+    keeps that re-read honest instead of letting a stale snapshot leak through.
+
+    v0.3.0 U4 / KTD §A: iteration check fires BEFORE the predicate-met
+    short-circuit below. Without this, A2's judge writing verdict-returned
+    makes the work-loop's all_units_terminal=True (with iteration_pending
+    not yet composed), and the short-circuit would exit as "done" before
+    any iteration logic runs. The check is side-effect-free on a1/W
+    ledgers (early-return at step 1). When iteration drives the run, this
+    helper writes its own ledger mutations (atomic_iterate_step on
+    iterate; set_bound_override + set_loop on bound-exit) which the next
+    block's `pred` re-reads via the recomputed exit_predicate_result.
+
+    v0.3.0 F2 (rel-1): wrap the iteration check in try/except so a raise
+    inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
+    malformed gate decision, KeyError on a missing gate unit, RecipeError on
+    a misshapen emit_template) DOES NOT propagate to _cli — which catches
+    only (TickError, LedgerError) and exits with no JSON intent (the harness
+    never sees a rearm and the run wedges). Instead, we mark the loop done +
+    manual (so an orphan check never mistakes a wedged run for a live one)
+    AND emit a stop intent carrying the diagnostic. LedgerError is re-raised
+    so the existing handler still catches it (LedgerError indicates the
+    ledger itself is in an inconsistent state — we should NOT mark such a
+    run done with a clean signal). Per memory
+    feedback_polling_inside_vs_outside_agentic_loop: the natural harness
+    signal is the rearm/stop intent; the iteration-check crash path must
+    produce one, not silently exit.
+    """
     try:
         iteration_result = advance_iteration_loop(repo_root, run_id, led)
     except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
@@ -813,7 +882,7 @@ def _tick_body_inner(
                 "message": f"recipe-bug: {type(exc).__name__}: {exc}",
                 "at": now_iso,
             },
-        }
+        }, led
     except ledger.LedgerError:
         # Ledger-level failures are NOT recoverable here — the inconsistent-
         # ledger signal must propagate to _cli (which records the error and
@@ -849,13 +918,13 @@ def _tick_body_inner(
                 "message": f"iteration check failed: {type(exc).__name__}: {exc}",
                 "at": now_iso,
             },
-        }
+        }, led
     if iteration_result is not None:
         action = iteration_result.get("action")
         if action == "stop":
             # Bound-exit: the loop is "done" already; the finally still fires
             # to accumulate the active-time delta for this tick.
-            return iteration_result
+            return iteration_result, led
         if action == "iterate":
             # New units emitted + gate reset to pending; the next tick will
             # see fresh pending units for the orchestrator to dispatch. Re-
@@ -876,7 +945,7 @@ def _tick_body_inner(
                 "stalled": [],
                 "halted": [],
                 "operator_guidance": _operator_guidance_for(phase, None, led_now),
-            }
+            }, led
         # action == "advance": fall through to the standard flow. The gate
         # said "advance"; the existing predicate-met short-circuit (now
         # suppressed only by iteration_pending=True) will fire normally
@@ -884,30 +953,37 @@ def _tick_body_inner(
         # Re-read so subsequent code sees any predicate recompute.
         led = ledger.read_ledger(repo_root, run_id)
 
-    # 1. Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
-    #    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
-    #    the terminal `done` exit but flipping driver to manual so an orphan
-    #    check never mistakes a finished run for a live self-paced one.
-    #      * WORK-met (or seam) → done (terminal exit, emit report).
-    #      * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
-    #        it to seam (manual) or work (auto); `done` is NEVER a plan exit.
-    #    A seam-phase tick has its own branch below (re-affirm pause).
-    #
-    # v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
-    # layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
-    # ledger.py:441-442) AND defensively re-checked here. The redundant guard
-    # is belt-and-braces: if U2's composition ever drifts (or a future caller
-    # bypasses recompute_predicate), this guard still protects the iteration
-    # loop from being short-circuited as "predicate-met" before
-    # advance_iteration_loop can write the bound-exit / iterate-step.
-    #
-    # The downstream short-circuit at the "predicate-met-after-advance" path
-    # below is untouched — by the time it fires, advance_iteration_loop has
-    # ALREADY run at the top of this body and either stopped (bound-exit),
-    # iterated (returned a rearm), or signalled "no iteration" (effective is
-    # None or "advance"). Guarding both would risk dropping a real terminal
-    # exit on the advance branch; deliberate-fail #2 proves this guard +
-    # the iteration check are jointly load-bearing.
+    return None, led
+
+
+def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
+    """Step 1 — predicate-met short-circuit. Returns intent or None.
+
+    Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
+    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
+    the terminal `done` exit but flipping driver to manual so an orphan
+    check never mistakes a finished run for a live self-paced one.
+      * WORK-met (or seam) → done (terminal exit, emit report).
+      * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
+        it to seam (manual) or work (auto); `done` is NEVER a plan exit.
+    A seam-phase tick has its own branch below (re-affirm pause).
+
+    v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
+    layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
+    ledger.py:441-442) AND defensively re-checked here. The redundant guard
+    is belt-and-braces: if U2's composition ever drifts (or a future caller
+    bypasses recompute_predicate), this guard still protects the iteration
+    loop from being short-circuited as "predicate-met" before
+    advance_iteration_loop can write the bound-exit / iterate-step.
+
+    The downstream short-circuit at the "predicate-met-after-advance" path
+    below is untouched — by the time it fires, advance_iteration_loop has
+    ALREADY run at the top of this body and either stopped (bound-exit),
+    iterated (returned a rearm), or signalled "no iteration" (effective is
+    None or "advance"). Guarding both would risk dropping a real terminal
+    exit on the advance branch; deliberate-fail #2 proves this guard +
+    the iteration check are jointly load-bearing.
+    """
     pred = led.get("exit_predicate_result") or {}
     if pred.get("met") and not pred.get("iteration_pending", False) \
             and phase != "plan" and phase != "seam":
@@ -922,18 +998,24 @@ def _tick_body_inner(
             "run": run_id,
             "report": report,
         }
+    return None
 
-    # 2. Detect stalled units; halt them + transitive dependents; advance
-    #    independent siblings (the parallel-fan-out promise).
-    led, halted_ids, newly_stalled = detect_and_halt_stalled(
-        repo_root, run_id, led, now
-    )
 
-    # 3. The ONE advance, inside try/except. On a raise: atomically record
-    #    last_error + mark stalled; the ledger is never half-written (each
-    #    ledger.py mutation is its own atomic RMW).
+def _dispatch_phase_advance(
+    repo_root, run_id, led, adapter, halted_ids, *, phase, auto, now_iso
+):
+    """Step 3 — the ONE advance, inside try/except.
+
+    Returns (advance_result, terminal_intent_or_None, led). A seam-phase tick
+    short-circuits with a terminal intent; every other phase returns an
+    advance_result for the dispatcher to carry forward. The `led` return
+    captures the re-read after the plan-loop advance (the plan predicate just
+    recomputed on the prior write).
+
+    On a raise: atomically record last_error + mark stalled; the ledger is
+    never half-written (each ledger.py mutation is its own atomic RMW).
+    """
     advance_result = None
-    advance_error = None
     try:
         if phase == "plan":
             if adapter is None:
@@ -958,11 +1040,11 @@ def _tick_body_inner(
                 driver="manual",
                 beat=True,
             )
-            return {
+            return advance_result, {
                 "action": "stop",
                 "reason": "seam-pause",
                 "run": run_id,
-            }
+            }, led
         else:
             advance_result = {"advanced": "none", "reason": f"phase={phase}"}
     except Exception as exc:  # noqa: BLE001 — convert ANY raise into a recorded stall.
@@ -985,9 +1067,15 @@ def _tick_body_inner(
             "recorded_unit_stall": recorded,
         }
         advance_result = {"advanced": "error", "error": advance_error}
+    return advance_result, None, led
 
-    # If a seam pause was decided, _maybe_seam already wrote the ledger and
-    # signalled it; surface as a stop (no re-arm).
+
+def _try_seam_pause(advance_result, run_id):
+    """Step 3b — seam-pause short-circuit. Returns intent or None.
+
+    If a seam pause was decided, _maybe_seam already wrote the ledger and
+    signalled it; surface as a stop (no re-arm).
+    """
     if isinstance(advance_result, dict) and advance_result.get("seam_pause"):
         return {
             "action": "stop",
@@ -995,21 +1083,22 @@ def _tick_body_inner(
             "run": run_id,
             "advance": advance_result,
         }
+    return None
 
-    # 4. Persist the beat (liveness) BEFORE signalling re-arm (R10). The advance
-    #    itself already wrote the ledger atomically (predicate recomputed inside
-    #    ledger.py per I-1); here we only stamp last_beat_at + reaffirm driver.
-    ledger.set_loop(repo_root, run_id, driver="self", beat=True)
 
-    # 5. Re-read to decide the stop-check from the freshly-cached predicate
-    #    (memory feedback_loop_monitor_terminal_state_field — read the cached
-    #    field, never re-derive). PHASE-AWARE (gap #4): only a WORK predicate
-    #    routes to `done`. A plan tick already routed through `_maybe_seam`
-    #    (seam/auto-flip); never let the post-advance met-check turn a met PLAN
-    #    predicate into `done` (that would skip the seam). After an auto-flip the
-    #    ledger phase is now "work", but this tick STARTED in plan, so we gate on
-    #    the start-of-tick `phase` to leave the just-flipped work loop to its own
-    #    first work tick.
+def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase):
+    """Step 4 — predicate-met-after-advance short-circuit. Returns intent or None.
+
+    Re-read to decide the stop-check from the freshly-cached predicate
+    (memory feedback_loop_monitor_terminal_state_field — read the cached
+    field, never re-derive). PHASE-AWARE (gap #4): only a WORK predicate
+    routes to `done`. A plan tick already routed through `_maybe_seam`
+    (seam/auto-flip); never let the post-advance met-check turn a met PLAN
+    predicate into `done` (that would skip the seam). After an auto-flip the
+    ledger phase is now "work", but this tick STARTED in plan, so we gate on
+    the start-of-tick `phase` to leave the just-flipped work loop to its own
+    first work tick.
+    """
     led = ledger.read_ledger(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
     if pred.get("met") and phase == "work":
@@ -1023,15 +1112,23 @@ def _tick_body_inner(
             "report": _build_report(led),
             "advance": advance_result,
         }
+    return None
 
-    # 6. Re-arm the successor. The driver issues ScheduleWakeup(delay, prompt).
-    # v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
-    # reading the INTENT can't miss the prepare/execute contract. The plan-loop
-    # is the most common operator trap (field bug 2026-05-25, second report:
-    # agent ticked 5 times expecting units to materialize; ledger stayed at
-    # units=[] because they never ran the prepared /ce-plan invocation). The
-    # guidance is phase-aware: plan-loop names the invocation + the gaps_open
-    # guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
+
+def _build_rearm_intent(
+    repo_root, run_id, advance_result, halted_ids, newly_stalled,
+    *, phase, delay, rearm_prompt,
+):
+    """Step 5 — re-arm the successor. The driver issues ScheduleWakeup(delay, prompt).
+
+    v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
+    reading the INTENT can't miss the prepare/execute contract. The plan-loop
+    is the most common operator trap (field bug 2026-05-25, second report:
+    agent ticked 5 times expecting units to materialize; ledger stayed at
+    units=[] because they never ran the prepared /ce-plan invocation). The
+    guidance is phase-aware: plan-loop names the invocation + the gaps_open
+    guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
+    """
     led_now = ledger.read_ledger(repo_root, run_id)
     intent = {
         "action": "rearm",
