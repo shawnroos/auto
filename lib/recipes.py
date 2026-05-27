@@ -406,8 +406,8 @@ def validate(recipe: dict) -> None:
             )
 
         # bound is required (max_attempts inside is required; max_wall_seconds
-        # optional). Per [[feedback_deterministic_over_probabilistic_v1]], bounds
-        # are engine-enforced — they live in the recipe so the engine can't be
+        # optional). Bounds are engine-enforced (deterministic over
+        # probabilistic) — they live in the recipe so the engine can't be
         # fooled into running forever by a misbehaving gate agent.
         if "bound" not in iteration:
             _bad("iteration: missing required field 'bound'")

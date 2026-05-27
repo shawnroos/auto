@@ -114,8 +114,8 @@ a designated **gate unit**'s `verdict.decision` drives whether the run advances
 to its terminal phase (`advance`), emits another round of units within the
 gate's current phase and re-engages the gate (`iterate`), or stops with an
 audit trail (`exit`). An engine-enforced **bound** caps runaway iteration so a
-misbehaving gate agent cannot loop forever (per
-[[feedback_deterministic_over_probabilistic_v1]]).
+misbehaving gate agent cannot loop forever (deterministic over probabilistic
+— the bound lives in the engine, not in the gate agent's disposition).
 
 ```
 iteration:
@@ -187,7 +187,8 @@ only and would strip the decision). All reads route through
 `tests/unit/iteration-ast-lint.test.sh` forbids the literal `"decision"` as an
 `ast.Constant` outside `lib/iteration.py` + `lib/ledger.py`. A new consumer cannot
 re-introduce a divergent literal access without tripping the lint (the institutional
-mitigation for [[feedback_plan_documents_transition_code_doesnt_wire_it]]).
+mitigation for the "plan documents a behavior the code never wires" build-bug
+class).
 
 ## 7. `emit_templates` — within-phase emit definitions (v0.3.0+)
 

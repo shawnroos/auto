@@ -108,8 +108,8 @@ predicate-met short-circuit at the top of `_tick_body`):
   The bound breach is a recorded decision, not an error — surface it from the
   `bound_override` audit trail when reporting the run's exit.
 
-**Bounds are engine-enforced** (per
-[[feedback_deterministic_over_probabilistic_v1]]): `bound.max_attempts` caps the
+**Bounds are engine-enforced** (deterministic over probabilistic):
+`bound.max_attempts` caps the
 honored iterate count (pre-increment check, so the Nth attempt is blocked when
 `iteration_attempts == max_attempts` on entry); optional
 `bound.max_wall_seconds` caps cumulative ACTIVE wall-time
@@ -131,8 +131,8 @@ operator about it when they're stuck in a misbehaving iteration loop.
 (`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"` literal
 anywhere in `lib/*.py` except `lib/iteration.py` + `lib/ledger.py` (the writer).
 NEVER reach into a unit's `dispatch_context["decision"]` from this skill or any
-operator path — the lint exists because that's exactly how
-[[feedback_plan_documents_transition_code_doesnt_wire_it]] keeps happening.
+operator path — the lint exists because that's exactly how the "plan documents
+a behavior the code never wires" build-bug class keeps happening.
 
 See `docs/contracts/recipe-format.md` §6 + §7 for the recipe shape and
 `docs/contracts/ledger-schema.md` §2.1 + §2.3 for the ledger fields the engine

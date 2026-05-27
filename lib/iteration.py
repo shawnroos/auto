@@ -170,9 +170,8 @@ def _try_int(value):
     Used by ``compute_pending_state`` — a coercion failure on any numeric
     bound field is treated as "ledger numeric state is corrupt; cannot make
     a safe iteration decision; collapse to not-pending so writes still go
-    through." Per [[feedback_recurring_class_close_a_dimension_not_a_sibling]]
-    (rel-2): the predicate-recompute chokepoint must degrade gracefully on
-    bad inputs.
+    through." Per the "close a dimension, not a sibling" rule (rel-2): the
+    predicate-recompute chokepoint must degrade gracefully on bad inputs.
     """
     try:
         return int(value)
@@ -220,9 +219,8 @@ def compute_pending_state(ledger: dict) -> bool:
     duplicated between ``evaluate_decision`` (lines 130-152 in this file)
     and ``ledger._compute_iteration_pending`` was the NEXT dimension of
     the recurring "rule the prose describes that the code enforces in
-    some sites but not its siblings" class
-    ([[feedback_recurring_class_close_a_dimension_not_a_sibling]]).
-    Centralizing it here closes the dimension.
+    some sites but not its siblings" class — close a dimension, not a
+    sibling. Centralizing it here closes the dimension.
     """
     iteration_block = ledger.get("iteration")
     if not iteration_block:
