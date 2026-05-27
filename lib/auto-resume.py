@@ -32,20 +32,20 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+# The ONE phase-decision module (U5): all phase routing reads through it so the
+# AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
+phase_grammar = load_lib_module("phase-grammar")
+# v0.2.0 fix-pass A.2: the manual seam→work resume routes through tick.py's
+# centralized advance helper so it fires the recipe's emitter the same way the
+# auto-flip does. tick.py uses a hyphenless name so plain import works.
+import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
 
-def _resolve_repo() -> str:
-    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto."""
-    env = os.environ.get("CLAUDE_AUTO_REPO")
-    if env:
-        return env
-    dir_ = os.getcwd()
-    while dir_ and dir_ != os.path.dirname(dir_):
-        if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
-            return dir_
-        dir_ = os.path.dirname(dir_)
-    return os.getcwd()
+# Repo root resolution is shared with auto.py and auto-status.py; lives in
+# _bootstrap.resolve_repo (P2-8 — was three identical copies).
+_resolve_repo = resolve_repo
 
 
 def _resumable_runs(ledger, repo_root: str):
@@ -60,10 +60,10 @@ def _resumable_runs(ledger, repo_root: str):
                 led = json.load(fh)
         except Exception:
             continue
-        if not isinstance(led, dict) or led.get("loop_phase") == "done":
+        if not isinstance(led, dict) or phase_grammar.current_phase(led) == "done":
             continue
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
-        seam_paused = led.get("loop_phase") == "seam" and led.get("seam_paused")
+        seam_paused = phase_grammar.current_phase(led) == "seam" and led.get("seam_paused")
         try:
             orphaned = ledger.is_orphaned(led)
         except Exception:
@@ -95,15 +95,19 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     except ledger.LedgerNotFound as exc:
         sys.stderr.write(f"resume: {exc}\n")
         return 1
-    phase = led.get("loop_phase")
+    phase = phase_grammar.current_phase(led)
     if phase == "done":
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to resume.\n")
         return 0
     if phase == "seam":
-        # seam -> work: clear seam_paused, hand the driver back to self.
-        ledger.set_loop(
-            repo_root, run_id, loop_phase="work", seam_paused=False, driver="self"
-        )
+        # seam -> work: route through tick.advance_to_phase so the recipe's
+        # emitter fires the same way it does on the auto-flip path (P0 #1
+        # fix-pass A.2 — without this the manual resume would silently skip
+        # emission and the work-loop would start with empty units). Legacy
+        # ledgers (no recipe) fall through to set_loop inside the helper,
+        # preserving v0.1.x behavior. seam_paused=False is written by both
+        # paths inside the helper.
+        tick.advance_to_phase(repo_root, run_id, led, to_phase="work")
         return _emit_rearm(run_id, "seam -> work; arm a fresh tick chain")
     # Orphaned (or otherwise active): re-arm cleanly off the durable ledger.
     ledger.set_loop(repo_root, run_id, driver="self")

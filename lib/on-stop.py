@@ -71,7 +71,11 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
+
+# The ONE phase-decision module (U5): all phase routing reads through it so the
+# AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
+phase_grammar = load_lib_module("phase-grammar")
 
 
 def _read_stop_hook_active(raw: str) -> bool:
@@ -96,9 +100,7 @@ def _blocking_runs(repo_root: str, now=None):
     # beat is older than this is treated as a dead chain (it does NOT block stop).
     # The hatch forces the OLD behaviour (no freshness check) so the deliberate-
     # fail test can prove a stale chain WOULD block without the gate.
-    skip_staleness = (
-        os.environ.get("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK") == "1"
-    )
+    skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
     stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
     import datetime
 
@@ -115,7 +117,7 @@ def _blocking_runs(repo_root: str, now=None):
             continue
         if not isinstance(led, dict):
             continue
-        if led.get("loop_phase") == "done":
+        if phase_grammar.current_phase(led) == "done":
             continue
         loop = led.get("loop") or {}
         # SEAM/MANUAL carve-out: a manual-driver run is the engine signaling a
@@ -159,10 +161,27 @@ def _reason_for(blocking) -> str:
             parts.append("units not yet terminal")
         detail = " / ".join(parts) if parts else "loop not complete"
         chunks.append(f"{run_id} ({detail})")
+    # The block holds the session open; the reason message routes the driver's
+    # next move. v0.2.0 (fix-pass G): make the harness re-invocation model
+    # explicit so the driver does NOT read "continue the loop" as "act now."
+    # The two viable paths from a blocked stop:
+    #   1. Background `Agent` work is in flight → YIELD; the harness re-invokes
+    #      on completion (the natural signal — do not ScheduleWakeup-poll).
+    #   2. The loop is genuinely stalled outside its natural channel (rate-
+    #      limited, waiting on external event) → ScheduleWakeup with a LONG
+    #      delay calibrated to the wake event.
+    # The driver knows which case it is in (it knows what it just dispatched);
+    # the hook doesn't and shouldn't guess. Naming both cases explicitly lets
+    # the driver route correctly.
     return (
         "auto: loop exit condition not met — "
         + "; ".join(chunks)
-        + ". Continue the loop (or /auto-resume abort to stop early)."
+        + ". If you have background work in flight (Agent.run_in_background), "
+        + "YIELD silently — the harness re-invokes you when a verdict lands. "
+        + "Do NOT ScheduleWakeup-poll waiting for it. ScheduleWakeup is only "
+        + "for genuine waits outside the agentic loop (rate-limit reset, "
+        + "external deploy ETA) — long delays (1200s+), calibrated to the wake "
+        + "event. `/auto-resume abort <run>` to stop early."
     )
 
 
@@ -189,8 +208,9 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         "decision": "block",
         "reason": _reason_for(blocking),
         "systemMessage": (
-            "auto held the stop: "
-            f"{len(blocking)} run(s) have unmet loop exit conditions."
+            f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
+            "conditions. If you have background work in flight, the harness "
+            "will re-invoke you when a verdict lands — do not poll."
         ),
     }
 

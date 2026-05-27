@@ -255,7 +255,7 @@ assert_eq "False" "$exited2b"
 # in Scenario 2 — this control proves the positive scenario's exit comes from the
 # engine's re-enqueue, not from any other path.
 it "deliberate-fail: WITH NO_REENQUEUE the engine never re-enqueues -> livelock at fixed (re-enqueue is load-bearing)"
-out2c="$(CLAUDE_AUTO_TEST_NO_REENQUEUE=1 "$PY" - "$REPO" "$LEDGER_PY" "$TICK_PY" "$ORCH_PY" <<'PYEOF'
+out2c="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_REENQUEUE=1 "$PY" - "$REPO" "$LEDGER_PY" "$TICK_PY" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, ledger_py, tick_py, orch_py = sys.argv[1:5]
 def load(n,p):

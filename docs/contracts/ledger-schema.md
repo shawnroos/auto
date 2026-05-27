@@ -99,6 +99,16 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `exit_predicate_result` | object | the **cached** loop-done computation; see §2.2. NEVER re-derive downstream — read this field (memory `feedback_loop_monitor_terminal_state_field`) |
 | `units` | array | per-unit ledger entries; see §2.3 |
 | `loop` | object | liveness / driver metadata; see §2.4 |
+| `recipe` | object/null | **(v0.2.0, additive)** `{ "name": str, "source_tier": "workspace"\|"global"\|"built-in" }` — the recipe this run was built from. **`null` on a recipe-blind (v0.1.x) ledger**, which the engine treats as the implicit A1 (classic) topology. The recipe is baked into the ledger at `init_ledger`; resume reads it here, never re-loading the recipe file. |
+| `phase_order` | string[] | **(v0.2.0, additive)** the run's ordered phase sequence. **Defaults to `["plan", "seam", "work"]`** (the v0.1.x grammar) when absent — so a recipe-blind ledger routes phases exactly as before. A recipe may declare a different order; the V1 validator accepts only the default and the work-only `["work"]` (KTD-15), rejecting all other non-default values until v0.2.1 (A3). `terminal_phase` MUST be a member. |
+| `terminal_phase` | string | **(v0.2.0, additive)** the phase whose completion ends the run. **Defaults to `"work"`** when absent. `exit_predicate_result.met` can be `true` only when `loop_phase == terminal_phase`. For all V1 recipes this is `"work"`, so the predicate behaves identically to v0.1.x. |
+| `active_wall_seconds` | int/float | **(v0.3.0, additive)** wall-time accumulator for the iteration `max_wall_seconds` bound (R5 / U2). **Defaults to `0`** on a legacy ledger; all reads use `ledger.get("active_wall_seconds", 0)`. Only `accumulate_active_time` writes it — atomic add-write, never overwrite. Counted from a `finally` clause around `_tick_body` so a crashed tick still contributes its delta. |
+| `last_active_at` | `<iso>`/null | **(v0.3.0, additive)** ISO timestamp of the most recent `accumulate_active_time` call. **Defaults to `null`** on a legacy ledger. Diagnostic only — the bound math reads `active_wall_seconds`. |
+| `iteration_attempts` | int | **(v0.3.0, additive)** count of HONORED iterate decisions (KTD §D / U2). **Defaults to `0`** on a legacy ledger; all reads use `ledger.get("iteration_attempts", 0)`. Incremented atomically by `atomic_iterate_step` (or the standalone `increment_iteration_attempts`). Pre-increment value drives `iteration.evaluate_decision`'s bound check — the Nth attempt is checked BEFORE its decision is honored, so the override path fires when `iteration_attempts == max_attempts` on entry. |
+| `iteration_emit_count` | int | **(v0.3.0, additive)** monotonic emit-id counter (KTD §D / OQ4). **Defaults to `0`** on a legacy ledger. `emit_within_phase` increments it per emitted unit. Drives `iterate_template`'s id assignment via `id_prefix + (counter+1)` — never recounts existing units, so it survives partial-emit crashes that delete units. |
+| `iteration` | object/null | **(v0.3.0, additive — written by U5's recipe wiring)** `{ "gate_unit": str, "emit_template": str?, "bound": { "max_attempts": int, "max_wall_seconds": int? } }`. **`null` on a non-iterating recipe (a1 / W)** — the iteration_pending compute returns `false`, every iteration mutator short-circuits to legacy behavior. The recipe layer writes this at `init_ledger`; U2 only DEFINES the read shape (no init param). |
+| `emit_templates` | object/null | **(v0.3.0, additive — written by U5's recipe wiring)** `{ "<template_name>": { "phase": str, "invokes": object, "id_prefix": str } }` — the recipe's emit-template registry, the source the `iterate_template` emitter resolves when the gate's `iteration.emit_template` names a key. **`null` on a recipe that declares no templates** (legacy / non-iterating). Baked into the ledger at `init_ledger` so a resume reads the templates from disk without re-loading the recipe file (mirrors the `phase_transitions` precedent). Validator (`lib/recipes.py::_KNOWN_EMIT_TEMPLATE_KEYS`) rejects unknown inner keys so a typo doesn't silently no-op at emit. |
+| `exit_reason` | object/null | **(v0.3.0, additive — written by `set_exit_reason`)** `{ "kind": str, "error": object, "at": <iso> }` — the diagnostic envelope persisted when `tick.advance_iteration_loop` raises (the F2 catches in `lib/tick.py`). **`null` on a clean run** (predicate-met exit, bound-breach exit via `bound_override`, or any path that doesn't crash the iteration check). `kind` is one of `EXIT_REASON_KINDS` (see §8): `"iteration-check-failed"` for an unexpected raise from `advance_iteration_loop` (typically a malformed iteration block or gate verdict), `"recipe-bug"` for a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escaping the iteration check — that subclass set signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for. `error` carries `{type, message, call}` from the originating exception. Persisted BEFORE the matching `set_loop(loop_phase="done", driver="manual")` so `/auto-status` of the wedge-marked-done run can distinguish a clean exit from a crash exit (memory `feedback_plan_documents_transition_code_doesnt_wire_it` — the durable on-ledger field, not just the transient stop intent). |
 
 ### 2.2 `exit_predicate_result` (the cached predicate — I-1)
 
@@ -110,6 +120,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `minors` | int | count of `minor`-severity findings (reported at exit, never gate — R5/R6) |
 | `gaps_open` | int | open plan-loop gaps (adapter-supplied); `0` outside plan-loop |
 | `all_units_terminal` | bool | `true` iff EVERY unit is terminal (see "terminal" definition, §4, I-2) |
+| `iteration_pending` | bool | **(v0.3.0, additive — KTD §B)** `true` iff the run declares an `iteration` block AND the gate unit's `dispatch_context.decision == "iterate"` AND the bound is unbreached (`iteration_attempts < max_attempts` AND `active_wall_seconds < max_wall_seconds`). The new `met` rule is `met = (existing met conditions) AND NOT iteration_pending` — without this AND-NOT clause, a recipe that emits plan-N units while `loop_phase == "work"` would see work-met fire spuriously (the phase-scoped terminal check ignores plan-N units; they are phase=plan, invisible). A ledger with no `iteration` block reads `iteration_pending = false` and the predicate behaves exactly as v0.2.x. |
 
 This whole object is **recomputed from the in-memory unit state on every write**
 (I-1) and persisted in the same atomic snapshot. It is a cache of a pure function
@@ -128,6 +139,11 @@ recompute it.
 | `stall_threshold_seconds` | int | per-unit timeout; adapter-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
 | `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
 | `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the orchestrator on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
+| `phase` | string | **(v0.2.0, additive)** the unit's phase. When absent, defaults to the run's start phase if that is a plan phase, else `"work"` — matching v0.1.x (plan-phase runs have no work units yet; any pre-declared unit is a work unit). Recipes set it explicitly. |
+| `plan_step` | enum/null | **(v0.2.0, additive)** per-unit plan-step for N>1 parallel plan-loops (R11). `null` default. A1's single plan-loop keeps using the **top-level** `plan_step` scalar (so A1's first-tick ledger stays byte-identical to v0.1.x); this per-unit field is populated only when a recipe declares multiple plan-phase units. |
+| `gaps_open` | int/null | **(v0.2.0, additive)** per-unit open-gap count for N>1 plan-loops. `null` until a review feeds one back. Same A1-uses-the-scalar rule as `plan_step`. |
+| `dispatch_context` | object | **(v0.2.0, additive)** `{}` default. Recipe-side metadata merged from the recipe unit's `invokes` (e.g. `prompt_template`, `bias`) — after path-bounding validation — plus engine-written keys such as `enumerated_units` (the plan unit's `enumerate_plan_units` output, persisted at `plan-done` so emitters read it without re-calling the adapter). The adapter reads it via its existing `unit` parameter. **(v0.3.0, additive sub-keys on a gate unit's `dispatch_context`):** `decision` ∈ `iteration.DECISIONS` (`"advance" \| "iterate" \| "exit"`) — the gate's verdict-time decision, written by `set_verdict_decision` (replaces the v0.2.x `winner_unit_id` pattern: the gate's outcome lives on `dispatch_context`, never on `findings[]` which `record_verdict` normalizes to `{severity, note}` only; readers MUST go through `lib/iteration.py::read_decision`, the AST lint enforces); `decision_payload` (optional dict) — caller-supplied data accompanying an `iterate` decision (e.g. `emit_count` for `iterate_template`); `bound_override` (object) — `{ "bound": "max_attempts"\|"max_wall_seconds", "original_decision": <enum>, "at": <iso> }`, written by `set_bound_override` when the engine forced `iterate → exit` because the bound was breached. Both `decision`/`decision_payload` are cleared by `reset_for_iteration` so a fresh iteration doesn't read the stale decision (round-3 P0-R3-1). |
+| `last_advanced_at` | `<iso>`/null | **(v0.2.0, additive)** `null` default (sorts oldest → picked first). The round-robin tiebreaker for serialized N>1 plan-loop advance: `orchestrator.pick_next_plan_unit_to_advance` picks the ready plan unit with the oldest `last_advanced_at`, ties broken by `units[]` declaration order. State lives here so resume continues round-robin correctly. |
 | `findings` | array | LATEST review verdict's findings; each `{ "severity": "blocker"\|"major"\|"minor", "note": str }`. See §4 findings semantics |
 
 ### 2.4 `loop` object (liveness — I-3)
@@ -178,6 +194,30 @@ from a unit currently in `{dispatched, verdict-returned, stalled}`:
 These edges are enforced in `record_verdict`, NOT `ALLOWED_TRANSITIONS`, because
 adding them to the latter would let `transition()` change state without findings —
 exactly what the "use `record_verdict()` to write findings" guard blocks.
+
+### 3.x `reset_for_iteration` reuses the existing `verdict-returned → pending` edge (v0.3.0)
+
+v0.3.0's `reset_for_iteration` mutator (KTD §C / U2) cycles the gate unit back
+to `pending` to re-engage it for the next iteration. It does **NOT** introduce
+a new state-grammar edge — the `verdict-returned → pending` edge already exists
+in the table above (and in `ALLOWED_TRANSITIONS` at `lib/ledger.py:84`). What is
+new is the atomic **COMBINATION** the mutator wraps in ONE locked body:
+
+1. State edge `verdict-returned → pending` (the existing edge; grammar-checked
+   inline because `transition()` cannot be re-called from a held lock).
+2. `depends_on` is replaced with the caller-supplied list (the union of the
+   gate's prior deps + newly-emitted sibling ids — caller computes the union).
+3. `dispatch_context.decision` and `dispatch_context.decision_payload` are
+   CLEARED. Without this clear, a subsequent tick would re-read the stale
+   `decision: "iterate"` and re-fire the iteration loop before the gate
+   re-verdicts (double-incrementing `iteration_attempts` until bound trip).
+4. `verdict_at` is cleared.
+5. `findings` is cleared.
+
+`reset_for_iteration` is the **engine-only** caller for this combo. The
+composite `atomic_iterate_step` wraps an increment + emit + reset in ONE
+locked body for all-or-nothing semantics (a failing emit leaves the ledger
+in the pre-iterate state).
 
 **Explicitly rejected** (illustrative — anything not in the table above is rejected):
 `pending → fixed` (skips review), `pending → verdict-returned`, `pending → terminal-skip`,
@@ -411,7 +451,28 @@ Consumers use these; the schema above is what they read/write through them.
 | `set_gaps_open(repo_root, run_id, gaps_open)` | persist the plan-loop open-gap count from `review_plan`'s return length (U4); writes `exit_predicate_result.gaps_open` then recompute + atomic write (I-1). The ONLY writer of `gaps_open` |
 | `unit_is_terminal(unit)` | pure `terminal(u)` predicate (§4.1) |
 | `is_orphaned(ledger, now=None)` | pure I-3 orphan predicate (§5) |
-| `recompute_predicate(ledger)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests |
+| `recompute_predicate(ledger)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests. **(v0.3.0)** also returns `iteration_pending: bool` (KTD §B) |
+| `set_verdict_decision(repo, run, gate_unit_id, decision, payload=None)` | **(v0.3.0, U2)** write `dispatch_context.decision` (validated against `iteration.DECISIONS`) + optional `dispatch_context.decision_payload`. Mirrors `set_winner_unit_id`. Atomic; predicate recomputed |
+| `set_bound_override(repo, run, gate_unit_id, bound_type, original_decision)` | **(v0.3.0, U2)** engine-only audit trail for iterate→exit. Writes `dispatch_context.bound_override = {bound, original_decision, at: <iso>}` |
+| `accumulate_active_time(repo, run, delta_seconds)` | **(v0.3.0, U2)** atomic ADD-write of `active_wall_seconds` (NEVER overwrite); stamps `last_active_at`. Negative deltas clamped to 0; rounded to 3dp. Called from U4's `finally` clause |
+| `increment_iteration_attempts(repo, run, gate_unit_id)` | **(v0.3.0, U2)** atomic `iteration_attempts += 1`. Validates `gate_unit_id` exists |
+| `reset_for_iteration(repo, run, gate_unit_id, new_depends_on)` | **(v0.3.0, U2 / KTD §C)** atomic gate-unit cycle-back combo (state edge `verdict-returned → pending` + depends_on replace + clear `dispatch_context.decision/decision_payload` + clear `verdict_at` + clear `findings`). Re-uses the existing state edge — see §3.x |
+| `emit_within_phase(repo, run, to_phase, emitter)` | **(v0.3.0, U2)** sibling to `transition_and_emit`: emits new units into `to_phase` WITHOUT advancing `loop_phase`. Increments `iteration_emit_count` per emitted unit. Same emitter contract (pure `(ledger, to_phase) -> list[unit_dict]`; F3 deadlock guard) |
+| `atomic_iterate_step(repo, run, gate_unit_id, emitter, new_depends_on)` | **(v0.3.0, U2)** composite — wraps `iteration_attempts++` + emit + reset in ONE locked body (all-or-nothing). Engine-only caller (U4's `advance_iteration_loop`) |
+| `set_exit_reason(repo, run, kind, error)` | **(v0.3.0, G2 / AN-W1)** persist the diagnostic envelope for a crashed iteration check. Writes `ledger["exit_reason"] = {kind, error, at: <iso>}`; predicate recomputed; atomic. `kind` MUST be a member of `EXIT_REASON_KINDS` (see constants below). Called from U4's F2 try/except branches BEFORE the matching `set_loop(loop_phase="done", driver="manual")` so the durable on-ledger record exists before the run is marked done. `/auto-status` renders `exit_reason` on done runs (memory `feedback_plan_documents_transition_code_doesnt_wire_it` — the transient stop intent is consumed by the harness, this is the persistent operator-visible record) |
+
+### Module constants (`lib/ledger.py`)
+
+Importable string-tuple / named-string constants that consumers should prefer over re-spelling literals (the divergent-literal class the prose claims is an enum but the code would only enforce by convention):
+
+| constant | type | values | purpose |
+|----------|------|--------|---------|
+| `LOOP_PHASES` | tuple[str] | `("plan", "seam", "work", "done")` | the legal loop_phase values; `"done"` is post-terminal |
+| `PLAN_STEPS` | tuple[str] | `("plan", "deepen", "review_plan")` | the legal non-null plan_step values |
+| `GRACE_SECONDS` | int | `4200` | orphan-detection grace window (> 3600s ScheduleWakeup clamp + slack) |
+| `EXIT_REASON_ITERATION_CHECK_FAILED` | str | `"iteration-check-failed"` | `exit_reason.kind` written when `advance_iteration_loop` raises a non-`LedgerError` exception (typically a malformed iteration block or gate verdict) |
+| `EXIT_REASON_RECIPE_BUG` | str | `"recipe-bug"` | `exit_reason.kind` written when a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escapes the iteration check — signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for |
+| `EXIT_REASON_KINDS` | tuple[str] | `(EXIT_REASON_ITERATION_CHECK_FAILED, EXIT_REASON_RECIPE_BUG)` | the validation tuple `set_exit_reason` checks `kind` against |
 
 CLI entry (for `lib/ledger.sh` and ad-hoc scripting): `python3 ledger.py <subcommand> ...`.
 

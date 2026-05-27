@@ -14,12 +14,45 @@ description: >
 
 # auto skill (the loop driver)
 
-You are the **driving agent** for a auto run. The engine is split into
-mechanical pieces (the tick, the ledger) and agent-driven pieces (the
-orchestrator, this skill). Your job is to chain the two loops —
-**plan-loop -> seam -> work-loop** — by arming the tick chain, driving the
-orchestrator's fan-out in the work-loop, and honoring the seam gate. You do the
-*policy*; the tick does the *mechanical advance + re-arm*.
+## 0. The prepare/execute contract — read this FIRST
+
+**Auto is a prepare/execute engine, not a self-driving loop.** This is the
+single most important thing to understand before doing anything else, and
+the most common operator trap (field bugs 2026-05-25, two separate agents).
+
+- **The tick PREPARES**: `lib/tick.py` advances the state machine ONE step,
+  writes the ledger, and prints a JSON INTENT envelope telling YOU what to
+  do next (e.g. `{"action": "rearm", "advance": {"step": "plan"}, ...}`).
+- **YOU EXECUTE**: when the INTENT names a `plan_step` (`plan`, `deepen`,
+  `review_plan`), YOU run the corresponding invocation (`/ce-plan`,
+  `/ce-doc-review`, …). When work-loop units exist, YOU drive
+  `orchestrator.dispatch_batch`. The tick does NOT dispatch agents. The
+  tick does NOT run `/ce-plan`. The tick does NOT write verdicts.
+
+**Re-ticking without running the prepared invocation is a no-op.**
+Ticking 5 times in a bash loop produces `units: []` — exactly what the
+second field agent saw. The ledger advances ONLY when you feed structured
+results back: `ledger.set_gaps_open(N)` after a `review_plan`,
+`ledger.record_verdict(...)` from each background unit-agent, etc.
+
+**Two specific traps:**
+
+1. **The bash-loop trap.** Calling `tick.sh` in a loop just cycles the state
+   machine; it never executes prepared invocations. Units stay 0.
+2. **The deepen↔review livelock.** Plan-met requires
+   `plan_step == "review_plan" AND gaps_open == 0`. If you never run a
+   real review and call `set_gaps_open`, `gaps_open` stays null and the
+   plan-loop cycles `plan → deepen → review_plan → deepen → …` forever.
+   The tick INTENT carries a `gaps_open_guard` field when you are in this
+   exact state — surface it.
+
+**You are the driver.** The engine is split into mechanical pieces (the
+tick, the ledger) and agent-driven pieces (the orchestrator, this skill).
+Your job is to chain the two loops — **plan-loop -> seam -> work-loop** —
+by arming the tick chain, driving the orchestrator's fan-out in the
+work-loop, and honoring the seam gate. You do the *policy* and the
+*execution* of prepared invocations; the tick does the *mechanical
+advance + re-arm*.
 
 **Source of truth is the disk ledger, never this conversation.** Every decision
 you make reads the ledger at `<repo>/.claude/auto/<run>.json` (via
@@ -42,6 +75,68 @@ The three pieces you integrate:
   concurrency constant.
 - **`lib/ledger.py`** — the disk-persisted per-unit ledger; the loop's source of
   truth. Read `exit_predicate_result.met` from it; never re-derive it.
+
+---
+
+## 0.5. Outcomes-gated emission (v0.3.0)
+
+**v0.3.0 closes the gap that v0.2.x's A2/A4 were round-gated, not outcomes-gated.**
+A recipe may now declare an `iteration` block that lets a designated **gate
+unit**'s `verdict.decision` drive the loop directly — the gate decides whether
+the run advances to the terminal phase, emits another round of work and
+re-engages, or stops with an audit trail. Auto's identity is **durability +
+outcomes-gating**; v0.3.0 is the second half landing.
+
+**How it routes** (`lib/tick.py::advance_iteration_loop`, fires BEFORE the
+predicate-met short-circuit at the top of `_tick_body`):
+
+- **No `iteration` block on the ledger → no-op.** A1, W, and every v0.2.x
+  recipe early-return through this path with zero side effects. Standard flow
+  continues; the predicate-met short-circuit evaluates exactly as before.
+- **Gate verdict `decision == "advance"`** → fall through to the standard
+  predicate-met flow; the loop advances to `done`.
+- **`decision == "iterate"` under bound** → engine calls
+  `ledger.atomic_iterate_step` in ONE locked body: increments
+  `iteration_attempts`, emits N new sibling units via `iterate_template`
+  (N from `decision_payload.emit_count`, default 1, capped at 10), resets the
+  gate unit (`verdict-returned → pending`, `depends_on` extended,
+  `dispatch_context.decision` cleared). The tick emits a rearm intent; the next
+  tick dispatches the new units.
+- **`decision == "exit"` OR `"iterate" over bound`** → engine writes
+  `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
+  on the gate unit and flips the loop directly to `done` / `driver = "manual"`.
+  The bound breach is a recorded decision, not an error — surface it from the
+  `bound_override` audit trail when reporting the run's exit.
+
+**Bounds are engine-enforced** (deterministic over probabilistic):
+`bound.max_attempts` caps the
+honored iterate count (pre-increment check, so the Nth attempt is blocked when
+`iteration_attempts == max_attempts` on entry); optional
+`bound.max_wall_seconds` caps cumulative ACTIVE wall-time
+(`active_wall_seconds`) — pauses don't burn budget, only `_tick_body`'s active
+duration. A misbehaving gate agent cannot loop forever.
+
+**Operator kill-switch.** Setting `CLAUDE_AUTO_DISABLE_ITERATION=1` in the
+environment makes `advance_iteration_loop` return None — every tick proceeds
+as if the recipe had no `iteration` block, so the run exits through the
+standard predicate-met path on the first terminal-state tick. This is a REAL
+operator knob (unfenced in v0.3.0 F5), useful for emergency rollback of an
+outcomes-gated recipe without redeploying or editing the recipe. The decision
+on disk is UNTOUCHED — unsetting the var resumes outcomes-gating on the next
+tick. As the skill driver you don't toggle this yourself, but you CAN tell an
+operator about it when they're stuck in a misbehaving iteration loop.
+
+**Reading the decision.** Every consumer routes through
+`lib/iteration.py::read_decision` / `evaluate_decision`; the AST lint
+(`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"` literal
+anywhere in `lib/*.py` except `lib/iteration.py` + `lib/ledger.py` (the writer).
+NEVER reach into a unit's `dispatch_context["decision"]` from this skill or any
+operator path — the lint exists because that's exactly how the "plan documents
+a behavior the code never wires" build-bug class keeps happening.
+
+See `docs/contracts/recipe-format.md` §6 + §7 for the recipe shape and
+`docs/contracts/ledger-schema.md` §2.1 + §2.3 for the ledger fields the engine
+reads/writes through this primitive.
 
 ---
 
@@ -89,19 +184,21 @@ Fire the first tick by calling **`ScheduleWakeup`** with a literal prompt:
 ScheduleWakeup(delay=60, prompt="/auto-tick <run>")
 ```
 
-`ScheduleWakeup` clamps the delay to `[60, 3600]s`; 60 is the floor (fastest
-pacing the substrate allows). Each tick re-arms its own successor: it returns a
-re-arm intent, and the model acts on it. Your handling of the intent dict the
-tick returns:
+`ScheduleWakeup` clamps the delay to `[60, 3600]s`. Each tick re-arms its own
+successor: it returns a re-arm intent, and the model acts on it. Your handling
+of the intent dict the tick returns is PHASE-AWARE:
 
-| `action` | meaning | what you do |
-|----------|---------|-------------|
-| `rearm`  | advanced one step; chain continues | issue `ScheduleWakeup(intent.delay, intent.prompt)` |
-| `stop`   | predicate met OR seam pause; chain ends | do NOT re-arm; if `reason == "predicate-met*"`, emit the report (step 6); if `reason == "seam-pause"`, surface the seam (step 4) |
-| `noop`   | another live tick holds the lock (double-drive guard) | do nothing; do NOT re-arm |
+| `action` | phase | what you do |
+|----------|-------|-------------|
+| `rearm`  | `plan` | issue `ScheduleWakeup(intent.delay, intent.prompt)` — the plan-loop runs adapter steps inline, no background work to wake on, so a short delay is correct |
+| `rearm`  | `work` | **do NOT immediately ScheduleWakeup**; you are in the work-loop's event-driven flow. Step 5 below: yield to the harness re-invocation on the next verdict. Only ScheduleWakeup with a LONG delay (1200s+) when no background work is in flight and you have no ready units to dispatch (genuinely stalled / waiting outside the loop) |
+| `stop`   | any   | chain ends; do NOT re-arm. If `reason == "predicate-met*"`, emit the report (step 6); if `reason == "seam-pause"`, surface the seam (step 4) |
+| `noop`   | any   | another live tick holds the lock (double-drive guard); do nothing; do NOT re-arm |
 
-You own policy (the batch caps, the goal); the tick owns the mechanical advance
-and tells you whether to re-arm. **Never re-arm on `stop` or `noop`.**
+You own policy (the batch caps, the goal, when to yield); the tick owns the
+mechanical advance and tells you whether the chain continues. **Never re-arm on
+`stop` or `noop`.** And in the work-loop specifically, **never short-poll** —
+the harness re-invokes you on background verdict completion (see §5).
 
 ---
 
@@ -139,7 +236,14 @@ When the plan predicate is met:
 ## 5. Work-loop (you drive the orchestrator's fan-out)
 
 While `loop_phase == "work"` and `exit_predicate_result.met == false`, drive the
-fan-out yourself, wave by wave:
+fan-out yourself, wave by wave. **The work-loop is event-driven, not polled.**
+The Claude harness re-invokes you automatically when a background `Agent`
+finishes — that IS the natural wake signal. Do NOT ScheduleWakeup as a
+sub-minute poll waiting for verdicts; that is the polling antipattern the
+Agent tool explicitly forbids ("when harness-tracked work finishes, you are
+re-invoked automatically; do NOT sleep, poll, or proactively check").
+
+Each wave:
 
 1. `units = orchestrator.ready_units(repo, run)` — the units dispatchable RIGHT
    NOW (pending, dependencies satisfied, no stalled ancestor).
@@ -153,16 +257,51 @@ fan-out yourself, wave by wave:
    independent of whether this driving session survives. Your `launch_fn` wraps an
    `Agent` `run_in_background` dispatch whose prompt instructs the agent to call
    `record_verdict` when done.
-4. `orchestrator.converge(repo, run)` — **reads** landed verdicts off disk (it is
-   a reconcile/read step, never the verdict-writer). A resumed session reads
-   completed verdicts straight off the ledger and does NOT re-dispatch them.
-5. The ticks (which you keep re-arming) **apply fixes** from converged verdicts:
-   `verdict-returned -> fixed`. A fix does NOT clear findings (R8 — closure only
-   via a fresh verdict); the unit is re-enqueued (`fixed -> pending`),
-   re-dispatched, and re-reviewed until a fresh verdict returns clean. The loop
-   terminates only when every unit reaches a clean terminal verdict.
+4. **YIELD silently after dispatch.** When the wave is dispatched and you have
+   nothing else to do this turn, end the turn — do NOT ScheduleWakeup, do NOT
+   loop checking the ledger. The harness re-invokes you when the first verdict
+   lands. On re-invocation, fall through to step 5.
+5. **On re-invocation: `orchestrator.converge(repo, run)`** — **reads** landed
+   verdicts off disk (a reconcile/read step, never the verdict-writer). It is
+   partial-completion-safe: a single verdict landing is enough to re-enter the
+   wave. A resumed session reads completed verdicts straight off the ledger and
+   does NOT re-dispatch them. After converge:
+   - if `exit_predicate_result.met` → exit (step 6 — no wait, you act immediately
+     on the cached predicate)
+   - if `ready_units()` returns work → dispatch the next wave (back to step 1)
+   - if work is still in flight → yield again (step 4); the next verdict will
+     re-invoke you
+6. The ticks **apply fixes** from converged verdicts: `verdict-returned -> fixed`.
+   A fix does NOT clear findings (R8 — closure only via a fresh verdict); the
+   unit is re-enqueued (`fixed -> pending`), re-dispatched, and re-reviewed until
+   a fresh verdict returns clean. The loop terminates only when every unit
+   reaches a clean terminal verdict.
 
-You own the batching; the tick is mechanical and writes no verdicts.
+You own the batching; the tick is mechanical; the harness owns the wake signal.
+
+### When ScheduleWakeup IS the right mechanism (the long-tail fallback)
+
+Polling is correct ONLY when activity has stopped for a long period **outside**
+the agentic loop — that is, when no natural harness signal will wake you. The
+canonical case: a rate-limit reset (the next viable wake time is a calendar
+timestamp, no event will fire). Other examples: an external deploy with a
+known ETA, a CI run polled across sessions.
+
+Per the ScheduleWakeup tool's own description: short-interval wakeups for
+"polling background work you started" are explicitly wasted — the harness
+re-invokes on completion. Long-tail wakeups (1200s+, calibrated to the wake
+event) are the legitimate use. If you find yourself reaching for
+ScheduleWakeup(60s) in the work-loop, the answer is to yield to the harness
+instead.
+
+A work-loop wave SHOULD ScheduleWakeup only when:
+- the predicate is not met,
+- no background units are in flight (nothing for the harness to re-invoke on),
+- AND there is no ready work to dispatch.
+
+That state is rare and indicates a stalled chain. The right delay is long
+(1200-1800s), not 60s — the work that would resume the loop is a separate
+session or an external event, not a near-term tick.
 
 **State transitions you drive (enforced by the ledger grammar):**
 
@@ -188,6 +327,28 @@ The exit report lists the **remaining minor findings** for operator promotion �
 minors never gate the loop (they ship), but they are reported so the operator can
 promote any that are actually long-term work. Format: per remaining minor, the
 unit id and the finding note.
+
+**v0.3.0 — non-clean exit reasons (G2).** If the ledger's top-level
+`exit_reason` field is non-null, the loop did NOT exit via the clean
+predicate-met path — `advance_iteration_loop` raised and the F2 catches
+forced `loop_phase=done`. Surface this in the exit report alongside the
+minors so the operator sees WHY the loop ended. Two `kind` values exist
+(`lib/ledger.py::EXIT_REASON_KINDS`):
+
+- `iteration-check-failed` — an unexpected raise from
+  `advance_iteration_loop` (typically a malformed iteration block or
+  corrupted gate verdict). Surface the `error.type` + `error.message`;
+  recommend the operator inspect the ledger's `iteration` block.
+- `recipe-bug` — a `LedgerError` subclass (`UnknownUnit`,
+  `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
+  Surface `error.type` + `error.message`; recommend the operator
+  inspect the recipe JSON against `docs/contracts/recipe-format.md`.
+
+`exit_reason` is the durable on-ledger record (the transient harness
+stop intent carries the same `kind`, but it's consumed by the harness —
+the ledger field is what `/auto-status` reads to distinguish a clean
+exit from a crash exit post-run). Do not invent additional `kind`
+values; the constant tuple is the contract.
 
 ---
 

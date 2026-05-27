@@ -126,6 +126,23 @@ class Adapter:
     def next_plan_step(self, ledger):
         return _next_plan_step(ledger)
 
+    def enumerate_plan_units(self, ledger):
+        """PREPARE the plan→work-units enumeration (v0.2.0 contract re-lock, KTD-4).
+
+        The producer the emitters read. When a plan unit reaches `plan-done`, the
+        engine calls this to turn the reviewed plan into a concrete work-unit list.
+        Prepare-only (like the other plan-loop ops): returns an invocation envelope
+        the MODEL executes — it reads the reviewed plan and returns a list of
+        unit dicts `[{id, invokes, dispatch_context?}, ...]`. The engine persists
+        that list onto the plan unit's `dispatch_context.enumerated_units` (U6);
+        the emitters (U5b) then shape it into ledger units at the phase boundary.
+        Resolves the F4 producer gap: v0.1.x had no in-code work-unit producer."""
+        return {
+            "adapter": ADAPTER_NAME,
+            "op": "enumerate_plan_units",
+            "invocation": "enumerate the reviewed plan's work units",
+        }
+
     def plan(self, ledger):
         """PREPARE /ce-plan. Returns an opaque invocation envelope the engine
         round-trips into deepen/review_plan; the model runs the command."""
