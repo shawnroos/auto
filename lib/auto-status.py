@@ -37,7 +37,6 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     load_ledger,
     load_lib_module,
     resolve_repo,
-    test_hatch_enabled,
 )
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the

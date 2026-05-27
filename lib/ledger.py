@@ -503,9 +503,8 @@ def _compute_iteration_pending(ledger: dict) -> bool:
     ``iteration.evaluate_decision``'s lines 130-152. That was the NEXT
     dimension of the recurring "one rule lives in two places" class — the AST
     lint catches the literal ``"decision"`` but not duplicated bound math
-    (per [[feedback_recurring_class_close_a_dimension_not_a_sibling]]).
-    Centralizing the math in ``iteration.compute_pending_state`` closes that
-    dimension.
+    (close a dimension, not a sibling). Centralizing the math in
+    ``iteration.compute_pending_state`` closes that dimension.
 
     Brittleness contract (rel-2): ``compute_pending_state`` swallows
     coercion errors on the numeric bound fields and returns ``False`` on
@@ -1389,7 +1388,8 @@ def set_verdict_decision(
     ``decision`` MUST be a member of ``iteration.DECISIONS`` —
     ``("advance", "iterate", "exit")``. The validation is the contract the
     engine relies on; a garbage decision is the dominant build-bug class this
-    centralization closes (per [[feedback_plan_documents_transition_code_doesnt_wire_it]]).
+    centralization closes (the "plan documents a behavior the code never
+    wires" class).
     Optional ``payload`` (dict) is persisted alongside on
     ``dispatch_context.decision_payload`` — used by ``iterate_template`` to
     read e.g. ``emit_count`` (U3).
