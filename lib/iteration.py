@@ -276,6 +276,15 @@ def compute_pending_state(ledger: dict) -> bool:
         return False
 
     bound = iteration_block.get("bound") or {}
+    # v0.3.0 H / corr-r3-1: shape guard on iteration.bound — symmetric with
+    # G2's top-level iteration guard (line 259-260) and G7's render-side
+    # bound guard (auto-status.py:165-168). Without this, a torn ledger
+    # writing iteration.bound="corrupted" survives `or {}` (truthy non-dict
+    # string) and the subsequent `bound.get(...)` raises AttributeError —
+    # which propagates through _atomic_write→recompute_predicate and blocks
+    # the very ledger writes F2 needs to mark the loop done.
+    if not isinstance(bound, dict):
+        return False
 
     # max_attempts bound: coerce defensively. ANY coercion failure on either
     # the bound limit OR the counter degrades to "not pending" (rel-2).

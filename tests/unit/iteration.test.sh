@@ -226,6 +226,25 @@ elif op == "pending-iteration-non-dict-list":
     except Exception as e:
         print(f"raised:{type(e).__name__}")
 
+elif op == "pending-bound-non-dict":
+    # v0.3.0 H / corr-r3-1: shape guard on iteration.bound, symmetric to
+    # G2's top-level iteration guard. A torn-write scalar (string here) on
+    # the bound key would survive `iteration.get('bound') or {}` (truthy
+    # non-dict), then `bound.get('max_attempts')` would raise AttributeError
+    # — which propagates through _atomic_write → recompute_predicate and
+    # blocks the very ledger writes F2 needs to mark the loop done. The
+    # isinstance guard degrades to False, keeping the ledger writable.
+    led = {
+        "units": [{"id": "judge", "phase": "work",
+                   "dispatch_context": {"decision": "iterate"}}],
+        "iteration": {"gate_unit": "judge", "bound": "corrupted-string"},
+    }
+    try:
+        v = iteration.compute_pending_state(led)
+        print(f"returned:{v}")
+    except Exception as e:
+        print(f"raised:{type(e).__name__}")
+
 PYEOF
 }
 
@@ -342,6 +361,18 @@ assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-string)"
 
 it "compute_pending_state: iteration=['broken','list'] (non-dict list) → returns False (no raise)"
 assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-list)"
+
+# ─── v0.3.0 H / corr-r3-1: bound shape guard symmetry ──────────────────────
+# G2 added isinstance(iter_block, dict) at the top of compute_pending_state
+# but did NOT add the parallel guard for iteration.bound. A torn ledger
+# writing iteration.bound="corrupted" survives `iteration.get('bound') or {}`
+# (truthy non-dict string), then bound.get('max_attempts') raises
+# AttributeError — propagating through _atomic_write → recompute_predicate
+# and blocking the recovery writes. H closes the read-side asymmetry.
+# DF cycle: comment out the new isinstance(bound, dict) line in
+# iteration.py → this test goes RED with "raised:AttributeError".
+it "compute_pending_state: iteration.bound='corrupted-string' (non-dict) → returns False (no raise)"
+assert_eq "returned:False" "$(run_iter pending-bound-non-dict)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

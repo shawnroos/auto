@@ -792,7 +792,7 @@ def _tick_body_inner(
         # LedgerError; Python matches the first parent in source order).
         try:
             ledger.set_exit_reason(
-                repo_root, run_id, "recipe-bug",
+                repo_root, run_id, ledger.EXIT_REASON_RECIPE_BUG,
                 {"type": exc.__class__.__name__, "message": str(exc),
                  "call": "advance_iteration_loop"},
             )
@@ -806,7 +806,7 @@ def _tick_body_inner(
             pass
         return {
             "action": "stop",
-            "reason": "recipe-bug",
+            "reason": ledger.EXIT_REASON_RECIPE_BUG,
             "run": run_id,
             "error": {
                 "call": "advance_iteration_loop",
@@ -828,7 +828,7 @@ def _tick_body_inner(
         # from a clean exit.
         try:
             ledger.set_exit_reason(
-                repo_root, run_id, "iteration-check-failed",
+                repo_root, run_id, ledger.EXIT_REASON_ITERATION_CHECK_FAILED,
                 {"type": exc.__class__.__name__, "message": str(exc),
                  "call": "advance_iteration_loop"},
             )
@@ -842,7 +842,7 @@ def _tick_body_inner(
             pass
         return {
             "action": "stop",
-            "reason": "iteration-check-failed",
+            "reason": ledger.EXIT_REASON_ITERATION_CHECK_FAILED,
             "run": run_id,
             "error": {
                 "call": "advance_iteration_loop",

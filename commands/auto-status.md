@@ -53,6 +53,32 @@ which bound was breached (`max_attempts` or `max_wall_seconds`), the
 `original_decision` the engine would have honored, and the ISO timestamp
 of the forced exit.
 
+### Exit-reason line (v0.3.0 G2)
+
+On done runs (`loop_phase == "done"`) that carry a non-null top-level
+`exit_reason`, `/auto-status` prints an additional `exit_reason:` line
+beneath the loop_phase line. It surfaces a forced exit driven by an
+unexpected raise in the iteration check (NOT the clean predicate-met or
+bound-breach paths — those are silent on this line because they're not
+diagnostic). The line carries `kind: <error-type>: <message>`. Two
+`kind` values exist (see `lib/ledger.py::EXIT_REASON_KINDS`):
+
+- `iteration-check-failed` — `advance_iteration_loop` raised a
+  non-`LedgerError` exception (typically a malformed iteration block, a
+  corrupted gate verdict, or a raise from the emitter). Investigate the
+  ledger's `iteration` block + the gate unit's `dispatch_context`.
+- `recipe-bug` — `advance_iteration_loop` raised a `LedgerError`
+  subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) — the
+  recipe's `units[]` / `phase_transitions` don't match what the engine
+  reached for. Investigate the recipe JSON against the schema in
+  `docs/contracts/recipe-format.md`.
+
+`exit_reason` is persisted on the ledger BEFORE the forced
+`loop_phase=done` write, so the operator surface can distinguish a
+crash-marked-done run from a clean exit. The transient harness stop
+intent (`{action: "stop", reason: "..."}`) carries the same `kind` —
+both are written by `lib/tick.py`'s F2 / G2 catches.
+
 ## Argument handling (orchestrator routes BEFORE invoking the script)
 
 Inspect the argument string and route as follows:

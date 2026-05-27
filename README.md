@@ -68,4 +68,4 @@ finished work.
 
 ## Tests
 
-`bash tests/run.sh all` — pure stdlib + bash, no install. (412 passing at v0.3.0.)
+`bash tests/run.sh all` — pure stdlib + bash, no install. (427 passing at v0.3.0.)

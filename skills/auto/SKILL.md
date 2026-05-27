@@ -328,6 +328,28 @@ minors never gate the loop (they ship), but they are reported so the operator ca
 promote any that are actually long-term work. Format: per remaining minor, the
 unit id and the finding note.
 
+**v0.3.0 — non-clean exit reasons (G2).** If the ledger's top-level
+`exit_reason` field is non-null, the loop did NOT exit via the clean
+predicate-met path — `advance_iteration_loop` raised and the F2 catches
+forced `loop_phase=done`. Surface this in the exit report alongside the
+minors so the operator sees WHY the loop ended. Two `kind` values exist
+(`lib/ledger.py::EXIT_REASON_KINDS`):
+
+- `iteration-check-failed` — an unexpected raise from
+  `advance_iteration_loop` (typically a malformed iteration block or
+  corrupted gate verdict). Surface the `error.type` + `error.message`;
+  recommend the operator inspect the ledger's `iteration` block.
+- `recipe-bug` — a `LedgerError` subclass (`UnknownUnit`,
+  `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
+  Surface `error.type` + `error.message`; recommend the operator
+  inspect the recipe JSON against `docs/contracts/recipe-format.md`.
+
+`exit_reason` is the durable on-ledger record (the transient harness
+stop intent carries the same `kind`, but it's consumed by the harness —
+the ledger field is what `/auto-status` reads to distinguish a clean
+exit from a crash exit post-run). Do not invent additional `kind`
+values; the constant tuple is the contract.
+
 ---
 
 ## Invariants you must respect
