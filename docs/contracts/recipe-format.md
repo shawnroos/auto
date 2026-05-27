@@ -49,6 +49,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 | `phase_transitions` | no | array | emitter declarations (§4). |
 | `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate unit, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
 | `emit_templates` | no | object | **(v0.3.0, additive)** map of `<template_name> → {phase, invokes, id_prefix}` consumed by the `iterate_template` emitter at iteration time (§7). MUST be present (and contain the named template) when `iteration.emit_template` is set; MAY be absent when `iteration` is absent or when `iteration.emit_template` is omitted (the "re-engage the gate without spawning new siblings" shape, round-3 P2 #21). |
+| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of unit ids the recipe declares will be materialized by a **phase-boundary emitter** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `units[]` and NOT iterate-shape (§8). Default `[]`. |
 | `python_hook` | no | (reserved) | RESERVED — parses but the V1 engine ignores it. The ONLY unknown-ish key tolerated; every OTHER unknown top-level field is rejected. |
 
 ## 3. `units[]` entries
@@ -57,7 +58,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 |-------|-----|------|---------|
 | `id` | yes | string | unique within the recipe, non-empty. |
 | `phase` | yes | string | MUST be a member of `phase_order`. |
-| `depends_on` | no | string[] | unit ids this unit waits for. Each MUST reference an existing unit id. |
+| `depends_on` | no | string[] | unit ids this unit waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `units[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` emitter materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary emitter materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
 | `invokes` | no | object | what the unit invokes — `adapter_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger unit's `dispatch_context` at load (after path-bounding). |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
@@ -116,6 +117,11 @@ gate's current phase and re-engages the gate (`iterate`), or stops with an
 audit trail (`exit`). An engine-enforced **bound** caps runaway iteration so a
 misbehaving gate agent cannot loop forever (per
 [[feedback_deterministic_over_probabilistic_v1]]).
+
+> **Carve-outs.** `iteration.gate_unit` may reference an `emit_templates[].id_prefix`
+> (documented inline in the block below). Separately, `depends_on` integrity has
+> its own three-branch contract (units[] / iterate-shape / `expected_emit_outputs`)
+> — see §3 + §8.
 
 ```
 iteration:
@@ -223,7 +229,81 @@ defaulting to `1`. The emitter validates `1 ≤ emit_count ≤ 10` (round-3 P1-R
 upper bound prevents a misbehaving gate from DOS-emitting a thousand units in
 one tick).
 
-## 8. V1 acceptance boundary (deferred to v0.2.1)
+## 8. `expected_emit_outputs` — declared phase-boundary emit ids (v0.3.0+)
+
+A recipe MAY declare a top-level `expected_emit_outputs: [<unit-id-str>, ...]`
+list. It names unit ids the recipe asserts will be **materialized at run time
+by a phase-boundary emitter** (one of the `phase_transitions[]` emitters listed
+in §4 — `plan_output_to_work_units`, `judge_winner_to_work_units`, or
+`plan_output_to_paired_builders`). The validator consults this list when
+checking `depends_on` integrity (§3 row 3): a `depends_on` member that is NOT
+in `units[]` AND NOT iterate-shape (§7's `iterate_template` id math) is
+accepted iff it is listed here.
+
+```
+expected_emit_outputs: ["<unit_id>", "<unit_id>", ...]    # optional; default []
+```
+
+**Why this exists.** Two emitter classes produce work units the recipe author
+declares structurally:
+
+- **`iterate_template`** (within-phase, §7) emits ids of the form
+  `{id_prefix}{positive_int}` — the validator infers acceptance from the
+  id-prefix-and-integer-suffix shape, no declaration needed.
+- **Phase-boundary emitters** (§4) emit **explicitly-named** ids. A4's
+  `plan_output_to_paired_builders` produces `build-clarity` and `build-perf`;
+  these are concrete strings without an iterate-shape suffix, so the validator
+  cannot infer them from any id-prefix coincidence (F4 closed the prior loose
+  prefix-match — `"build-typo"` no longer passes against id_prefix `"build-"`
+  by accident). The recipe author declares the producer-output contract here.
+
+**When to use.** Declare a member in `expected_emit_outputs` when a `units[]`
+unit's `depends_on` names an id that:
+
+1. is NOT in `units[]` (no structural producer), AND
+2. is NOT iterate-shape (i.e., NOT `{id_prefix}{positive_int}` for any
+   `emit_templates[].id_prefix`), AND
+3. WILL be produced at run time by a `phase_transitions[]` emitter.
+
+If none of those apply, you don't need this field. A4 is the only built-in
+that uses it (see §5); a v0.2.x recipe never needed it because the prior
+carve-out accepted any prefix-matching string — F4 tightened that to require
+an explicit declaration, and A4 was updated atomically.
+
+**Worked example — A4's `compare` unit.** A4 declares a structural `compare`
+unit in `units[]` whose `depends_on` names `build-clarity` and `build-perf`:
+
+```json
+{
+  "units": [
+    {"id": "plan",    "phase": "plan", "invokes": {...}},
+    {"id": "compare", "phase": "work",
+     "depends_on": ["build-clarity", "build-perf"],
+     "invokes": {"adapter_op": "review", "prompt_template": "compare.md"}}
+  ],
+  "expected_emit_outputs": ["build-clarity", "build-perf"],
+  "phase_transitions": [
+    {"from": "plan", "to": "work", "emitter": "plan_output_to_paired_builders"}
+  ]
+}
+```
+
+The `plan_output_to_paired_builders` emitter (§4) fires at plan→work and
+materializes the two builder units; `compare` waits on both. Because neither
+id is in `units[]` and neither is iterate-shape, the recipe declares them in
+`expected_emit_outputs` so `depends_on` integrity passes. (A4 also declares an
+`iteration` block with an `iterate_template` named `bias-builder`; that's the
+RE-EMIT path on `iterate` verdicts, distinct from the initial plan-output
+emission — see §6 + §7.)
+
+**Validator cross-reference.** `lib/recipes.py::validate`:
+
+- shape check (~line 269-280): each entry must be a non-empty string; the
+  field itself must be a list.
+- integrity check (~line 300-311): `depends_on` accepts members iff (a) in
+  `units[]`, (b) iterate-shape per §7, OR (c) in `expected_emit_outputs`.
+
+## 9. V1 acceptance boundary (deferred to v0.2.1)
 
 The validator REJECTS, in V1: non-default `phase_order` other than work-only
 (A3's `["work_sketch","review","plan","work_refine"]`); unregistered emitter
@@ -233,7 +313,7 @@ KTD-15). These ship in v0.2.1 with A3, the recipe-declared-emitter feature, and
 W's init-time enumeration. The rejection is mechanical (a tested code path), so
 no untested topology can ship.
 
-## 9. Cross-references
+## 10. Cross-references
 
 - `lib/recipes.py` — the validator + registry (`validate`, `validate_and_lint`,
   `resolve`, `list_available`, `load_and_validate`, `unit_for`).

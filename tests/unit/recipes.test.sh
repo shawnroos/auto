@@ -564,6 +564,56 @@ elif op == "f4-eeo-rejects-non-list":
         "expected_emit_outputs": "build-clarity",  # str, not list
     }
     print(vresult(r))
+
+elif op == "g3-doc-claim-parity-without-eeo":
+    # G3 (API-R2-1): doc-claim ↔ validator-behavior parity check (§8 of
+    # docs/contracts/recipe-format.md). The doc says depends_on members are
+    # accepted iff (a) in units[], (b) iterate-shape, OR (c) in
+    # expected_emit_outputs. Toggle pair: same recipe, depends_on names
+    # `unicorn` (not in units[], not iterate-shape, NOT in EEO) → must reject.
+    r = {
+        "name": "g3-no-eeo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["unicorn"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        # NO expected_emit_outputs declared, and `unicorn` isn't iterate-shape
+        # against any declared id_prefix.
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "g3-doc-claim-parity-with-eeo":
+    # G3 (API-R2-1): same recipe as g3-doc-claim-parity-without-eeo BUT with
+    # `unicorn` declared in expected_emit_outputs → must validate. Together
+    # these two prove the third branch of the documented contract (§8) is
+    # exactly what the validator enforces.
+    r = {
+        "name": "g3-with-eeo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["unicorn"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "expected_emit_outputs": ["unicorn"],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
 PYEOF
 }
 
@@ -639,6 +689,25 @@ assert_eq "rejected" "$(itr f4-bare-prefix-rejected)"
 
 it "F4 shape: expected_emit_outputs must be a list of non-empty strings"
 assert_eq "rejected" "$(itr f4-eeo-rejects-non-list)"
+
+# ── G3 (API-R2-1): doc-claim ↔ validator-behavior parity check ─────────────
+# docs/contracts/recipe-format.md §8 documents `expected_emit_outputs`. The
+# doc claims depends_on members are accepted iff (a) in units[], (b)
+# iterate-shape, OR (c) in expected_emit_outputs. These two tests are a
+# toggle pair on branch (c) — same recipe, only `expected_emit_outputs`
+# differs. If the doc and validator ever drift on this contract, one of
+# these will flip.
+#
+# DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
+# we proved this test is real by commenting out the `if d in
+# expected_emit_outputs_set: continue` lines in lib/recipes.py via Edit and
+# observing the g3-doc-claim-parity-with-eeo case flip from valid → rejected
+# (red), then restoring. Without the DF the green here proves nothing.
+it "G3 doc-parity (§8): depends_on='unicorn' without expected_emit_outputs → rejected"
+assert_eq "rejected" "$(itr g3-doc-claim-parity-without-eeo)"
+
+it "G3 doc-parity (§8): depends_on='unicorn' WITH expected_emit_outputs → valid"
+assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
