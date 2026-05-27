@@ -1058,7 +1058,7 @@ old = (
     '        if (led.get("iteration") or {}).get("emit_template"):\n'
     '            emitter = emitters.iterate_template\n'
     '        else:\n'
-    '            emitter = _no_emit\n'
+    '            emitter = emitters.no_emit\n'
     '        ledger.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'

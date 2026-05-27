@@ -293,6 +293,27 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
     ]
 
 
+def no_emit(ledger_dict, to_phase):
+    """v0.3.0 F2: no-op emitter for the iterate path on a recipe that omits
+    ``iteration.emit_template``. Returns an empty list so ``_apply_emit``'s
+    ``emitter(ledger, to_phase) or []`` line treats it as "no new units" —
+    ``iteration_emit_count`` stays unchanged (the counter bumps per emitted
+    unit) and ``appended`` is []. The default ``caller_depends_on=None`` path
+    in ``atomic_iterate_step`` then computes ``gate.depends_on + [] =
+    gate.depends_on``, preserving the existing dependency graph; the gate is
+    reset (verdict-returned → pending, decision cleared) and
+    ``iteration_attempts`` increments, so the existing siblings re-engage on
+    the next tick.
+
+    Lives here (B10, v0.3.1) — it's an emitter and belongs next to the others.
+    NOT in ``REGISTRY``: it's selected by ``tick_advance.advance_iteration_loop``
+    as the internal fallback when the recipe declares no ``emit_template``;
+    promoting it to a recipe-namable emitter would duplicate the "omit
+    emit_template" recipe shape with no added authoring expressiveness.
+    """
+    return []
+
+
 # NAME → emitter function. `recipes.V1_EMITTER_NAMES` mirrors these keys; a U5b
 # test asserts the two sets are equal so a recipe can never name an emitter that
 # isn't registered here (and the registry can't drift from the validator).

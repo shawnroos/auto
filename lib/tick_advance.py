@@ -357,18 +357,9 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
 # Iteration loop (v0.3.0 U4).
 
 
-def _no_emit(ledger_dict, to_phase):
-    """v0.3.0 F2: no-op emitter for the iterate path on a recipe that omits
-    `iteration.emit_template`. Returns an empty list so `_apply_emit`'s
-    `emitter(ledger, to_phase) or []` line treats it as "no new units" —
-    `iteration_emit_count` stays unchanged (the counter bumps per emitted
-    unit) and `appended` is []. The default `caller_depends_on=None` path in
-    `atomic_iterate_step` then computes `gate.depends_on + [] = gate.depends_on`,
-    preserving the existing dependency graph; the gate is reset
-    (verdict-returned → pending, decision cleared) and `iteration_attempts`
-    increments, so the existing siblings re-engage on the next tick.
-    """
-    return []
+# v0.3.1 B10: `no_emit` moved to lib/emitters.py (collocated with the other
+# emit functions per kieran-r2-2 — emitters belong in the emitters module).
+# The call site below now references `emitters.no_emit`.
 
 
 def advance_iteration_loop(repo_root, run_id, led):
@@ -467,7 +458,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         if (led.get("iteration") or {}).get("emit_template"):
             emitter = emitters.iterate_template
         else:
-            emitter = _no_emit
+            emitter = emitters.no_emit
         ledger.atomic_iterate_step(
             repo_root,
             run_id,
