@@ -29,6 +29,19 @@ from __future__ import annotations
 
 import math
 
+# Kill-switch parity with tick.advance_iteration_loop (G1 / rel-r2-1).
+# `_bootstrap` is on sys.path before this module loads: every caller of
+# `load_lib_module("iteration")` (tick.py at module top, ledger.py via
+# `_lazy_load`) prepends lib/ to sys.path first. Importing the symbol here is
+# the same shape tick.py uses at line 60. The fence has to hold on the READ
+# side (compute_pending_state) too — without it, a kill-switched mid-iteration
+# run still computes iteration_pending=True from the gate's stale "iterate"
+# verdict, which blocks the predicate's `met` branch via the AND-NOT clause
+# and leaves /auto-resume abort as the only escape. F5 unfenced the write
+# side (tick.py:624); G1 mirrors it on the read side so the standard
+# predicate-met flow takes over when the operator flips the switch.
+from _bootstrap import is_iteration_disabled  # noqa: E402
+
 # The three legal values a gate unit's verdict.decision may carry. The engine
 # reads `decision_effective` from `evaluate_decision()` and routes on it; raw
 # unit-side reads MUST go through `read_decision()` so the AST lint can hold.
@@ -221,7 +234,20 @@ def compute_pending_state(ledger: dict) -> bool:
     the recurring "rule the prose describes that the code enforces in
     some sites but not its siblings" class — close a dimension, not a
     sibling. Centralizing it here closes the dimension.
+
+    Kill-switch parity (G1 / rel-r2-1): when ``CLAUDE_AUTO_DISABLE_ITERATION=1``
+    is set, return False unconditionally — symmetric with the write-side
+    short-circuit at ``tick.advance_iteration_loop`` (lib/tick.py:624).
+    Without this, a kill-switched mid-iteration run can't exit via the
+    standard predicate-met path: the gate's stale ``decision="iterate"``
+    still composes ``iteration_pending=True`` into the predicate, blocking
+    ``met`` via the AND-NOT clause. The operator's only escape would be
+    ``/auto-resume abort``. With the parity, flipping the switch lets the
+    run exit normally.
     """
+    if is_iteration_disabled():
+        return False
+
     iteration_block = ledger.get("iteration")
     if not iteration_block:
         return False

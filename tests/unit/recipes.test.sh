@@ -614,6 +614,37 @@ elif op == "g3-doc-claim-parity-with-eeo":
             "id_prefix": "build-"}}
     }
     print(vresult(r))
+
+elif op == "g1-isdigit-unicode-superscript":
+    # G1 / ADV-R2-3: `_matches_iterate_shape` previously used
+    # `suffix.isdigit() and int(suffix) >= 1`. The trap: `'²'.isdigit()` is
+    # True but `int('²')` raises ValueError, so a depends_on of "build-²"
+    # would crash the validator with an unhandled exception instead of
+    # rejecting cleanly. G1 swaps isdigit→isdecimal: `'²'.isdecimal()` is
+    # False, so "build-²" falls through to "not iterate-shaped" and the
+    # validator rejects it via the existing unknown-unit path — same final
+    # verdict the author intended.
+    #
+    # The DF revert (Edit isdecimal→isdigit in lib/recipes.py) shows the
+    # un-fixed validator RAISES on this input (test goes RED with a
+    # `raised:ValueError` shape instead of `rejected`).
+    r = {
+        "name": "g1-isdigit-trap", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-²"],  # 'build-²' — isdigit True, int raises
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
 PYEOF
 }
 
@@ -708,6 +739,22 @@ assert_eq "rejected" "$(itr g3-doc-claim-parity-without-eeo)"
 
 it "G3 doc-parity (§8): depends_on='unicorn' WITH expected_emit_outputs → valid"
 assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
+
+# ── v0.3.0 G1 / ADV-R2-3: isdigit() Unicode trap closed ────────────────────
+# `_matches_iterate_shape` previously called `suffix.isdigit()` then
+# `int(suffix)`. `'²'.isdigit()` is True but `int('²')` raises ValueError —
+# an author-crafted depends_on of "build-²" would crash the validator
+# (unhandled ValueError escapes through `validate` → caller). G1 uses
+# `isdecimal()` which matches exactly the chars `int()` accepts, so
+# "build-²" is treated as not-iterate-shaped and rejected via the standard
+# unknown-unit path (i.e. with a RecipeError, not a ValueError).
+#
+# DF-verified (commit message): with the production fix reverted
+# (isdecimal → isdigit), this test fails RED — vresult returns a
+# non-"rejected" value because the underlying `int(suffix)` raises
+# ValueError, which vresult only handles for RecipeError.
+it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
+assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
