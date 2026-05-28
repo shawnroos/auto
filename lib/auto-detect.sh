@@ -62,8 +62,18 @@ set -uo pipefail
 CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 auto::detect() {
-  "$CLAUDE_AUTO_PYTHON3" - <<'PYEOF'
+  # Pass the script's directory via argv[1] so the embedded Python can
+  # locate sibling lib files (auto-workspace.py for the workspace probe
+  # added in plan 004). The single-quoted heredoc disables shell
+  # substitution, so script_dir must come through argv — referencing
+  # an undefined `script_dir` inside the heredoc was the P0 bug surfaced
+  # by the plan 004 round-1 review.
+  local _det_dir
+  _det_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  "$CLAUDE_AUTO_PYTHON3" - "$_det_dir" <<'PYEOF'
 import sys, os, json, glob, subprocess
+
+script_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
 
 
 def _repo_root():

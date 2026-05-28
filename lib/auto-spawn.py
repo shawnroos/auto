@@ -47,7 +47,7 @@ import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module, resolve_host_repo_root, resolve_shared_dir  # noqa: E402
+from _bootstrap import cmux_available as _cmux_available, load_lib_module, resolve_host_repo_root, resolve_shared_dir  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -318,22 +318,9 @@ def _git_worktree_remove(host_repo: str, worktree: str):
         pass
 
 
-def _cmux_available() -> bool:
-    """Probe whether the cmux binary (or its override) is on PATH."""
-    name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
-    # `command -v` parity; subprocess to avoid shell quoting subtleties.
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"command -v {name} >/dev/null 2>&1"],
-            check=False,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
-
-
 def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
-                    host_repo: str | None = None) -> dict:
+                    host_repo: str | None = None,
+                    ws_state: dict | None = None) -> dict:
     """Spawn a sub-run via cmux. Branches on project-workspace presence.
 
     v0.4.0 KTD-2 mechanism (workspace-per-plan fallback):
@@ -366,18 +353,23 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
     # to tab-mode ONLY when status == "project" (marker matches env AND
     # cmux says the workspace is live). Stale markers degrade to the
     # workspace-per-plan fallback rather than spawning into a dead pane.
+    #
+    # Round-1 plan-004 review P3 #6: ws_state can be precomputed once
+    # per fanout by _spawn_all_via_cmux and passed in via kwarg to avoid
+    # N redundant `cmux list-workspaces` subprocess calls. When not
+    # supplied, we still detect locally (back-compat for any other caller).
     use_tab = False
     left_pane_id = None
-    if host_repo is not None:
+    if ws_state is None and host_repo is not None:
         try:
             wsmod = _load_workspace_module()
             ws_state = wsmod.detect(host_repo)
-            if ws_state.get("status") == "project":
-                left_pane_id = ws_state.get("left_pane_id")
-                use_tab = bool(left_pane_id)
         except Exception:
             # rel-001 parity: detection problems never break the spawn.
-            use_tab = False
+            ws_state = None
+    if ws_state is not None and ws_state.get("status") == "project":
+        left_pane_id = ws_state.get("left_pane_id")
+        use_tab = bool(left_pane_id)
 
     if use_tab and left_pane_id:
         # spawn-tab branch: new-surface then send. The spawn-tab helper
@@ -537,8 +529,25 @@ def _spawn_all_via_cmux(plans, *, host_repo: str | None = None):
 
     Mutates each plan entry: adds ``plan["cmux"] = {"mode": ..., "tab_surface_id": ...}``
     so the batch sidecar carries the dispatch state (plan 004 KTD-3).
+
+    Round-1 plan-004 review P1 #2: when any spawn dispatched as `tab`,
+    append the surface to the workspace marker's tabs[] as well — the
+    auto-crex contract (docs/contracts/auto-crex-composition.md §3.2)
+    promises crex et al. that tabs[] is the source of truth for which
+    surfaces auto dispatched.
     """
+    # P3 #6 fix: detect workspace state ONCE per fanout (was N times
+    # before — one cmux list-workspaces subprocess per plan).
+    ws_state = None
+    if host_repo is not None:
+        try:
+            wsmod = _load_workspace_module()
+            ws_state = wsmod.detect(host_repo)
+        except Exception:
+            ws_state = None
+
     spawn_errors = []
+    tab_appends = []
     for entry in plans:
         try:
             cmux_state = _spawn_via_cmux(
@@ -546,10 +555,31 @@ def _spawn_all_via_cmux(plans, *, host_repo: str | None = None):
                 plan_rel=entry["path"],
                 slug=entry["slug"],
                 host_repo=host_repo,
+                ws_state=ws_state,
             )
             entry["cmux"] = cmux_state
+            if cmux_state.get("mode") == "tab" and cmux_state.get("tab_surface_id"):
+                tab_appends.append({
+                    "surface_id": cmux_state["tab_surface_id"],
+                    "kind": "fanout",
+                    "plan": entry["path"],
+                    "run_id": entry.get("suggested_run_id"),
+                })
         except SpawnError as exc:
             spawn_errors.append((entry["slug"], str(exc)))
+    # Write back to the marker once per fanout (batched). Failures here
+    # are non-fatal — the sub-runs are live; we surface a stderr notice.
+    if tab_appends and host_repo is not None:
+        try:
+            wsmod = _load_workspace_module()
+            marker = wsmod.read_marker(host_repo)
+            if marker is not None:
+                marker.setdefault("tabs", []).extend(tab_appends)
+                wsmod._atomic_write_marker(host_repo, marker)
+        except Exception as exc:
+            sys.stderr.write(
+                f"auto-spawn: warning — failed to update workspace marker tabs[]: {exc}\n"
+            )
     if spawn_errors:
         msgs = "; ".join(f"{s}: {m}" for s, m in spawn_errors)
         raise SpawnError(f"cmux spawn failed for: {msgs}")

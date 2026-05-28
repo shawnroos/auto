@@ -139,6 +139,40 @@ auto_test::assert_eq "1" "$ws_count"
 auto_test::assert_eq "0" "$surface_count"
 rm -rf "$R3"
 
+# ── Scenario 3b: tab-mode fanout APPENDS to marker tabs[] (round-1 P1 #2)
+# The auto-crex composition contract promises that tabs[] reflects every
+# auto-dispatched surface. Before the fix, only the batch sidecar was
+# updated; the marker stayed with only the primary entry.
+auto_test::it "tab-mode dispatch appends each new tab to marker.tabs[] (contract)"
+R3b="$(make_host_repo)"
+seed_plans "$R3b" "p1" "p2"
+plant_marker "$R3b" "workspace:proj-3b"
+# Plant a primary tab entry so we can assert the append BEHAVIOR (not replace).
+"$PY" - <<PYEOF
+import json
+p = "$R3b/.claude/auto/workspace.json"
+d = json.load(open(p))
+d["tabs"] = [{"surface_id":"surface:primary-original","kind":"primary","plan":None,"run_id":None}]
+json.dump(d, open(p,"w"))
+PYEOF
+: > "$CMUX_LOG"
+export CLAUDE_AUTO_TEST_WS_LIST="workspace:proj-3b"
+export CMUX_WORKSPACE_ID="workspace:proj-3b"
+rc="$(run_fanout "$R3b" "docs/plans/p1.md" "docs/plans/p2.md")"
+auto_test::assert_eq "0" "$rc"
+# Marker now has 3 tabs: 1 primary + 2 fanout.
+tabs_count="$("$PY" -c "import json; print(len(json.load(open('$R3b/.claude/auto/workspace.json'))['tabs']))")"
+auto_test::assert_eq "3" "$tabs_count"
+# The two new tabs have kind=fanout and reference their plans.
+fanout_kinds="$("$PY" -c "
+import json
+d = json.load(open('$R3b/.claude/auto/workspace.json'))
+fanouts = [t for t in d['tabs'] if t['kind'] == 'fanout']
+print(','.join(sorted(t['plan'] for t in fanouts)))
+")"
+auto_test::assert_eq "docs/plans/p1.md,docs/plans/p2.md" "$fanout_kinds"
+rm -rf "$R3b"
+
 # ── Scenario 4: marker exists but cmux says workspace gone → fallback
 auto_test::it "marker stale (cmux workspace missing) → workspace-per-plan fallback"
 R4="$(make_host_repo)"

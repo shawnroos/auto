@@ -38,13 +38,15 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 invoke `/ce-plan <ARGUMENTS>` via Skill and end the turn. Preserves
 v0.3.x intent routing.
 
-**Workspace handling** (plan 004): branch on `workspace_action` from
-the envelope before dispatching. `create`/`recreate`: shell out to
-`python lib/auto-workspace.py create <host-repo> [--force]` FIRST
-(builds the left/right split, writes the marker); then dispatch.
-`use`: dispatch (spawn-side reads the marker). `ambiguous`: ask one
-question (switch / create / one-off). `none`: dispatch directly.
-Mention workspace creation in the summary.
+**Workspace handling** (plan 004): branch on `workspace_action`.
+`create`/`recreate`: `python lib/auto-workspace.py create <repo>
+[--force]` FIRST; capture `workspace_id` from the returned marker;
+`export CMUX_WORKSPACE_ID=<id>` so the next dispatch lands in the
+NEW workspace (without the re-export the spawn-side falls back to
+workspace-per-plan, abandoning the freshly-created workspace).
+`use`: dispatch directly. `ambiguous`: ask one question
+(switch / create / one-off). `none`: dispatch. Mention creation
+in the summary.
 
 **Unknown situation** (defensive guard): treat as `raw`.
 

@@ -37,7 +37,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from _bootstrap import resolve_host_repo_root  # noqa: E402
+from _bootstrap import cmux_available as _cmux_available, resolve_host_repo_root  # noqa: E402
 
 
 # ── Public API surface ─────────────────────────────────────────────────────
@@ -96,21 +96,21 @@ def _atomic_write_marker(host_repo: str, marker: dict) -> None:
         raise
 
 
-def _cmux_available() -> bool:
-    """Probe whether the cmux binary is on PATH."""
-    name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"command -v {name} >/dev/null 2>&1"],
-            check=False,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
-
-
 def _cmux_workspace_exists(workspace_id: str) -> bool:
-    """Ask cmux whether a workspace with the given ID is still live."""
+    """Ask cmux whether a workspace with the given ID is still live.
+
+    Round-1 plan-004 review P2 #4: previously did a naive
+    `workspace_id in result.stdout` substring match, which:
+      (a) gave false positives when a short ID was a prefix of a
+          live one (marker `workspace:abc` matched live
+          `workspace:abc12345`),
+      (b) gave false positives when the ID happened to appear inside
+          a workspace NAME (cmux includes names in list output),
+      (c) gave false negatives when cmux truncated the line.
+
+    Fix: regex-extract every `workspace:<id>` token on its own and
+    check for exact membership.
+    """
     if not workspace_id or not _cmux_available():
         return False
     name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
@@ -123,7 +123,9 @@ def _cmux_workspace_exists(workspace_id: str) -> bool:
         return False
     if result.returncode != 0:
         return False
-    return workspace_id in result.stdout
+    import re
+    live_ids = set(re.findall(r"workspace:[0-9a-zA-Z_.-]+", result.stdout))
+    return workspace_id in live_ids
 
 
 def detect(host_repo: str) -> dict:

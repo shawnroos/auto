@@ -294,6 +294,84 @@ multi_unmarked_setup() {
 }
 assert_eq "create" "$(get_action_for multi_unmarked_setup)"
 
+# ── Scenario 10c: ROUND-1 P2 regression coverage for the non-degraded
+# action paths. The plan 004 round-1 review's P0 was that
+# _detect_workspace_safe referenced an undefined `script_dir` inside a
+# single-quoted heredoc, so the workspace block was ALWAYS the degraded
+# {unmarked, no-stale} fallback. The original scenario-10b assertions
+# only covered values that the degraded path happens to produce
+# (none / create / create) — none of these three new scenarios passes
+# unless detect actually runs.
+#
+# Each scenario requires a stub `cmux` on PATH because detect() shells
+# out to list-workspaces to check liveness. We set up the stub once and
+# control its output per-scenario via env.
+
+# Stub cmux on PATH for these scenarios.
+ws_stub_dir="$(mktemp -d -t det-ws-stub.XXXXXX)"
+cat > "$ws_stub_dir/cmux" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  list-workspaces) echo "${CLAUDE_AUTO_TEST_WS_LIST:-}" ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$ws_stub_dir/cmux"
+ORIG_PATH_FOR_WS="$PATH"
+export PATH="$ws_stub_dir:$PATH"
+
+plant_marker() {
+  local repo="$1" workspace_id="$2"
+  mkdir -p "$repo/.claude/auto"
+  cat > "$repo/.claude/auto/workspace.json" <<EOF
+{"workspace_id":"$workspace_id","left_pane_id":"pane:left-1","layout_version":"v1","created_at":"2026-05-27T00:00:00Z"}
+EOF
+}
+
+it "workspace_action: reviewed-plan + marker matches env → action=use"
+project_match_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  echo "# P1" > "$repo/docs/plans/p1.md"
+  plant_marker "$repo" "workspace:proj-A"
+  export CLAUDE_AUTO_TEST_WS_LIST="workspace:proj-A (test)"
+  export CMUX_WORKSPACE_ID="workspace:proj-A"
+}
+assert_eq "use" "$(get_action_for project_match_setup)"
+unset CMUX_WORKSPACE_ID
+unset CLAUDE_AUTO_TEST_WS_LIST
+
+it "workspace_action: reviewed-plan + marker mismatches env → action=ambiguous"
+non_project_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  echo "# P1" > "$repo/docs/plans/p1.md"
+  plant_marker "$repo" "workspace:proj-B"
+  export CLAUDE_AUTO_TEST_WS_LIST="workspace:proj-B (test)"
+  export CMUX_WORKSPACE_ID="workspace:different"
+}
+assert_eq "ambiguous" "$(get_action_for non_project_setup)"
+unset CMUX_WORKSPACE_ID
+unset CLAUDE_AUTO_TEST_WS_LIST
+
+it "workspace_action: reviewed-plan + marker stale (cmux doesn't list it) → action=recreate"
+stale_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  echo "# P1" > "$repo/docs/plans/p1.md"
+  plant_marker "$repo" "workspace:proj-C"
+  # Stub returns a DIFFERENT workspace, so cmux says proj-C is gone.
+  export CLAUDE_AUTO_TEST_WS_LIST="workspace:something-else"
+  export CMUX_WORKSPACE_ID="workspace:proj-C"
+}
+assert_eq "recreate" "$(get_action_for stale_setup)"
+unset CMUX_WORKSPACE_ID
+unset CLAUDE_AUTO_TEST_WS_LIST
+
+# Restore PATH; clean up the stub dir.
+export PATH="$ORIG_PATH_FOR_WS"
+rm -rf "$ws_stub_dir"
+
 # ── Scenario 11: detector exits 0 on every path (rel-001) ──────────────────
 it "exit code: detector exits 0 even on the unexpected-error fallback"
 repo="$(mktemp -d -t hyp-repo.XXXXXX)"

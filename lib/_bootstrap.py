@@ -174,6 +174,25 @@ def resolve_shared_dir(*, cwd=None):
     return os.path.join(host, ".claude", "auto")
 
 
+def cmux_available() -> bool:
+    """Probe whether the cmux binary (or its override) is on PATH.
+
+    Plan-004 round-1 review P3 #7: previously duplicated in
+    lib/auto-spawn.py and lib/auto-workspace.py. Lifted here so both
+    callers share one definition (and one place to evolve, e.g. to
+    add a timeout if cmux gets slow).
+    """
+    name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"command -v {name} >/dev/null 2>&1"],
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
 def load_ledger():
     """Load and return the canonical ledger module (lib/ledger.py).
 
