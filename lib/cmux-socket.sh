@@ -202,6 +202,50 @@ auto::cmux_spawn_workspace() {
     --focus false
 }
 
+# auto::cmux_spawn_tab <pane-ref> <cwd> <command>
+#   v0.4.1 U2 (plan 004): in-pane analog of cmux_spawn_workspace.
+#   Creates a new surface (tab) in <pane-ref> and starts <command>
+#   inside it. Unlike new-workspace, `cmux new-surface` does NOT
+#   accept --command — the command is delivered via a follow-up
+#   `cmux send` call, with the same `sleep 1;` lead-in that workspace
+#   spawn uses (a freshly-created surface's login shell can still
+#   swallow keystrokes).
+#
+#   Mechanism (per the spike at docs/research/cmux-layout-fanout-spike.md):
+#     1. `cmux new-surface --pane <ref> --focus false` returns the new
+#        surface ID on stdout.
+#     2. `cmux send --surface <ref> "<sleep 1; cd <cwd> && <command>>"`
+#        sends the command. The `cd <cwd>` is explicit because
+#        `cmux new-surface` doesn't accept --cwd.
+#
+#   Echoes the new surface ID on stdout so the caller (auto-spawn.py)
+#   can record it in the batch sidecar's `cmux.tab_surface_id` field.
+#   Returns non-zero if either step fails.
+auto::cmux_spawn_tab() {
+  local pane="$1" cwd="$2" command="$3"
+  local surface_out surface_id
+  surface_out="$("$CLAUDE_AUTO_CMUX" new-surface --pane "$pane" --focus false 2>&1)"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: new-surface failed: %s\n' "$surface_out" >&2
+    return "$rc"
+  fi
+  surface_id="$(printf '%s\n' "$surface_out" | grep -oE 'surface:[0-9a-zA-Z_.-]+' | head -1)"
+  if [ -z "$surface_id" ]; then
+    printf 'auto::cmux_spawn_tab: could not extract surface id from: %s\n' "$surface_out" >&2
+    return 1
+  fi
+  # Build the full command line with the sleep lead-in and explicit cd.
+  local full="sleep 1; cd $(printf '%q' "$cwd") && $command"
+  "$CLAUDE_AUTO_CMUX" send --surface "$surface_id" "$full"
+  local send_rc=$?
+  if [ "$send_rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: send failed (surface %s)\n' "$surface_id" >&2
+    return "$send_rc"
+  fi
+  printf '%s\n' "$surface_id"
+}
+
 # auto::spawn_resume <repo> <run>
 #   Spawn ONE fresh /auto-resume workspace for an orphaned run, IF safe:
 #     * tick lock free (no live driver) — else NO-OP (double-drive guard).
