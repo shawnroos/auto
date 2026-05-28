@@ -328,6 +328,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # auto-resume + multi-plan fanout). Three positional args: name, cwd,
     # command. Used by lib/auto-spawn.py shelling into this script.
     spawn-workspace)  auto::cmux_spawn_workspace "$@" ;;
+    # v0.4.1 U2 (plan 004): in-pane tab spawn for in-workspace fanout.
+    # Three positional args: pane-ref, cwd, command. Echoes new surface
+    # ID on stdout so the Python caller (auto-spawn.py) can record it
+    # in the batch sidecar's cmux.tab_surface_id field.
+    spawn-tab)        auto::cmux_spawn_tab "$@" ;;
     *)
       echo "cmux-socket.sh: unknown subcommand '${sub}'" >&2
       exit 2

@@ -70,6 +70,18 @@ scanning runs only; the Stop hook globs `batches/*.json` separately.
 | `branch` | string | branch name git worktree was created on (typically `auto/<slug>`) |
 | `port` | int | dev port assigned to this sub-run, in `[3001, 3099]` |
 | `suggested_run_id` | string | preferred run-id when the sub-run is dispatched — `lib/auto.py` may uniquify on date collision but should respect this as the stem |
+| `cmux` | object \| absent | v0.4.1 (plan 004 KTD-3): dispatch state captured post-spawn. Absent if the spawn has not yet attempted dispatch for this plan |
+
+### 2.2.1 `plans[].cmux` (v0.4.1, plan 004)
+
+When the spawn dispatches a sub-run via cmux, the captured state is
+recorded here so the operator and downstream tools (auto-cleanup, crex,
+status) can correlate sub-runs with their cmux surfaces:
+
+| field | type | meaning |
+|-------|------|---------|
+| `mode` | enum | `"workspace"` (sub-run dispatched as a new top-level workspace — v0.4.0 fallback path) \| `"tab"` (sub-run dispatched as a new surface in the project workspace's left pane — v0.4.1 in-workspace dispatch when a marker is present and `$CMUX_WORKSPACE_ID` matches) |
+| `tab_surface_id` | string \| null | the cmux surface ID returned by `new-surface`, present only when `mode == "tab"`. Null in `workspace` mode (the workspace's surface ID isn't separately captured today; could be added if needed) |
 
 ---
 

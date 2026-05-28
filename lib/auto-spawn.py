@@ -47,7 +47,7 @@ import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import resolve_host_repo_root, resolve_shared_dir  # noqa: E402
+from _bootstrap import load_lib_module, resolve_host_repo_root, resolve_shared_dir  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -332,43 +332,88 @@ def _cmux_available() -> bool:
     return result.returncode == 0
 
 
-def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str):
-    """Shell out to cmux-socket.sh::auto::cmux_spawn_workspace.
+def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
+                    host_repo: str | None = None) -> dict:
+    """Spawn a sub-run via cmux. Branches on project-workspace presence.
 
-    The dispatch contract per the v0.4.0 plan (KTD-2):
+    v0.4.0 KTD-2 mechanism (workspace-per-plan fallback):
       cmux new-workspace
         --name "auto-fanout-<slug>"
         --cwd  "<worktree>"
         --command "sleep 1; CLAUDE_AUTO_REPO=<worktree> claude '/auto <plan>'"
         --focus false
 
-    The CLAUDE_AUTO_REPO env-pin (KTD-3 part B / round-2 R2-001) ensures
-    the sub-run's ledger writes land at <worktree>/.claude/auto/ rather
-    than escaping to ~/.claude/auto/ via the walk-up in
-    _bootstrap.resolve_repo().
+    v0.4.1 (plan 004) KTD-4 mechanism (project workspace present):
+      cmux new-surface --pane <marker.left_pane_id> --focus false
+      cmux send --surface <captured> "sleep 1; cd <worktree> &&
+        CLAUDE_AUTO_REPO=<worktree> claude '/auto <plan>'"
+
+    The CLAUDE_AUTO_REPO env-pin (round-2 R2-001) ensures the sub-run's
+    ledger writes land at <worktree>/.claude/auto/.
+
+    Returns a dict with the captured cmux state for the batch sidecar:
+        {"mode": "workspace"|"tab", "tab_surface_id": "<surface-uuid>"|None}
     """
-    name = f"auto-fanout-{slug}"
-    # Quote the plan path for the inner shell so paths with spaces work.
-    # The single-quote-escape pattern: replace `'` with `'\''`.
     plan_esc = plan_rel.replace("'", "'\\''")
-    command = (
-        f"sleep 1; CLAUDE_AUTO_REPO='{worktree}' "
+    inner_cmd = (
+        f"CLAUDE_AUTO_REPO='{worktree}' "
         f"claude '/auto {plan_esc}'"
     )
     script = os.path.join(_LIB_DIR, "cmux-socket.sh")
+
+    # Decide dispatch mode via the full detect() check. detect() handles
+    # the four cases — unmarked, project, non-project, stale — so we route
+    # to tab-mode ONLY when status == "project" (marker matches env AND
+    # cmux says the workspace is live). Stale markers degrade to the
+    # workspace-per-plan fallback rather than spawning into a dead pane.
+    use_tab = False
+    left_pane_id = None
+    if host_repo is not None:
+        try:
+            wsmod = _load_workspace_module()
+            ws_state = wsmod.detect(host_repo)
+            if ws_state.get("status") == "project":
+                left_pane_id = ws_state.get("left_pane_id")
+                use_tab = bool(left_pane_id)
+        except Exception:
+            # rel-001 parity: detection problems never break the spawn.
+            use_tab = False
+
+    if use_tab and left_pane_id:
+        # spawn-tab branch: new-surface then send. The spawn-tab helper
+        # in cmux-socket.sh handles the explicit `cd <cwd>` because
+        # new-surface doesn't accept --cwd.
+        result = subprocess.run(
+            ["bash", script, "spawn-tab", left_pane_id, worktree, inner_cmd],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            raise SpawnError(
+                f"cmux spawn-tab failed for {slug!r}: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        # The helper echoes the new surface ID on stdout.
+        surface_id = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else None
+        return {"mode": "tab", "tab_surface_id": surface_id}
+
+    # Workspace-per-plan fallback (v0.4.0 default behavior).
+    name = f"auto-fanout-{slug}"
+    command = f"sleep 1; {inner_cmd}"
     result = subprocess.run(
         ["bash", script, "spawn-workspace", name, worktree, command],
         capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
-        # The spawn failed AFTER the worktree was created. We do NOT roll
-        # back the worktree here — the batch sidecar is already committed
-        # at this point and an operator can re-spawn manually. Surface
-        # the error so the driver reports it.
         raise SpawnError(
             f"cmux spawn-workspace failed for {slug!r}: "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
+    return {"mode": "workspace", "tab_surface_id": None}
+
+
+def _load_workspace_module():
+    """Lazy-load lib/auto-workspace.py via _bootstrap (filename has a hyphen)."""
+    return load_lib_module("auto-workspace")
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -476,25 +521,33 @@ def fanout(plan_paths, *, composite_intent=None):
     sidecar["status"] = "committed"
     _atomic_write_sidecar(sidecar_path, sidecar)
 
-    _spawn_all_via_cmux(plans)
+    _spawn_all_via_cmux(plans, host_repo=host_repo)
+    # Re-write the sidecar with the captured cmux state (each plan now
+    # carries a "cmux" sub-dict if it dispatched as a tab).
+    _atomic_write_sidecar(sidecar_path, sidecar)
     return plans
 
 
-def _spawn_all_via_cmux(plans):
+def _spawn_all_via_cmux(plans, *, host_repo: str | None = None):
     """Spawn each backgrounded /auto <plan> via cmux.
 
     Failures here do NOT roll back worktrees — a sub-run may already be
     live in another workspace. Collect every failure, then raise once
     with the aggregated message so the driver can report.
+
+    Mutates each plan entry: adds ``plan["cmux"] = {"mode": ..., "tab_surface_id": ...}``
+    so the batch sidecar carries the dispatch state (plan 004 KTD-3).
     """
     spawn_errors = []
     for entry in plans:
         try:
-            _spawn_via_cmux(
+            cmux_state = _spawn_via_cmux(
                 worktree=entry["worktree"],
                 plan_rel=entry["path"],
                 slug=entry["slug"],
+                host_repo=host_repo,
             )
+            entry["cmux"] = cmux_state
         except SpawnError as exc:
             spawn_errors.append((entry["slug"], str(exc)))
     if spawn_errors:
