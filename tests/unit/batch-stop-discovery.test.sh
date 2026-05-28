@@ -254,5 +254,34 @@ fi
 (cd "$R6" && git worktree remove -f "$WT_R6" >/dev/null 2>&1 || true)
 rm -rf "$R6"
 
+# ── Scenario 7: submodule-like .git gitlink does NOT trigger slow path
+# Regression for review round 3 R3-1: a submodule's `.git` file points
+# at `<parent>/.git/modules/<name>` — not `worktrees/<name>` — so the
+# fast-path must NOT treat it as a worktree and pay resolve_shared_dir.
+# Correctness is already fine; this guards the EFFICIENCY motivation
+# (E-1) from drifting back.
+auto_test::it "submodule-style .git gitlink does not trigger worktree slow path"
+R7="$(make_fixture)"
+SUB="${R7}/submod"
+mkdir -p "$SUB"
+# Plant a submodule-shaped .git gitlink (no worktrees/ path component).
+echo "gitdir: ${R7}/.git/modules/submod" > "${SUB}/.git"
+# Probe _is_worktree_or_host directly via on-stop.py import.
+result="$("$PY" - <<PYEOF
+import sys
+sys.path.insert(0, "${ROOT}/lib")
+import importlib.util
+spec = importlib.util.spec_from_file_location("on_stop", "${ROOT}/lib/on-stop.py")
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print("True" if mod._is_worktree_or_host("${SUB}/.git") else "False")
+PYEOF
+)"
+if [ "$result" = "False" ]; then
+  auto_test::pass
+else
+  auto_test::fail "submodule gitlink incorrectly triggered slow path"
+fi
+rm -rf "$R7"
+
 auto_test::summary
 exit $?

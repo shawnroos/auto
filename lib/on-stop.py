@@ -123,6 +123,34 @@ def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
     return None
 
 
+def _is_worktree_or_host(git_path: str) -> bool:
+    """True iff `.git` (file or dir) belongs to a worktree-aware setup.
+
+    Distinguishes the three cases via cheap fs probes (no subprocess):
+      - Plain repo with no worktrees:    `.git` is a DIR; `.git/worktrees`
+        does NOT exist → return False (slow path is pure waste here).
+      - Host repo WITH worktrees:        `.git` is a DIR;
+        `.git/worktrees` exists → return True.
+      - Inside a WORKTREE:                `.git` is a FILE containing
+        `gitdir: <host>/.git/worktrees/<name>` → return True.
+      - Inside a SUBMODULE (round 3 R3-1): `.git` is a FILE containing
+        `gitdir: <parent>/.git/modules/<name>` → return False (the
+        gitdir path component is `modules/`, not `worktrees/`, so
+        submodules don't pay the resolve_shared_dir() cost).
+    """
+    if os.path.isdir(git_path):
+        return os.path.isdir(os.path.join(git_path, "worktrees"))
+    if os.path.isfile(git_path):
+        try:
+            with open(git_path, "r") as fh:
+                head = fh.read(200)
+        except OSError:
+            return False
+        # `gitdir: <abs-or-rel-path>` — worktrees live under .../worktrees/<n>
+        return "/worktrees/" in head or "\\worktrees\\" in head
+    return False
+
+
 def _load_ledger_safe(path):
     """Read a ledger JSON; return None on any read/parse failure (rel-001)."""
     try:
@@ -170,19 +198,15 @@ def _blocking_runs(repo_root: str, now=None):
 
     # Multi-plan batches (committed sidecars only). Fast-path guard: skip
     # the git-rev-parse subprocess if there's no batches dir locally AND
-    # this isn't a worktree (review round 1 finding E-1 — fork+exec of
-    # git on every Stop event in every project that never uses fanout was
-    # pure waste; review round 2 NEW finding R2-1 — the original guard's
-    # worktree-detection used `isdir(.git/worktrees)` which is FALSE inside
-    # a worktree because `.git` there is a gitlink FILE pointing at the
-    # host's worktrees/ dir).
+    # this isn't a worktree (review round 1 E-1 — fork+exec waste in
+    # projects that never use fanout; round 2 R2-1 — gitlink FILE inside
+    # worktrees broke the original isdir(.git/worktrees) check; round 3
+    # R3-1 — submodules ALSO have gitlink files but their target is
+    # `.git/modules/...`, NOT `.git/worktrees/...`, so reading the
+    # gitlink content distinguishes the two cases cheaply).
     local_batches = os.path.join(dispatch_dir, "batches")
     git_path = os.path.join(repo_root, ".git")
-    is_worktree = os.path.isfile(git_path)             # gitlink => worktree
-    host_with_worktrees = os.path.isdir(
-        os.path.join(git_path, "worktrees")
-    )                                                  # host has worktrees
-    if not os.path.isdir(local_batches) and not is_worktree and not host_with_worktrees:
+    if not os.path.isdir(local_batches) and not _is_worktree_or_host(git_path):
         return blocking
     shared = resolve_shared_dir(cwd=repo_root)
     if not shared:
