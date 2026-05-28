@@ -169,18 +169,21 @@ def _blocking_runs(repo_root: str, now=None):
             blocking.append((run_id, predicate))
 
     # Multi-plan batches (committed sidecars only). Fast-path guard: skip
-    # the git-rev-parse subprocess if there's no batches dir under the
-    # current repo's shared path (review round 1 finding E-1 — fork+exec
-    # of git on every Stop event in every project that never uses fanout
-    # was pure waste). The shared dir resolution still fires when batches/
-    # actually exists.
+    # the git-rev-parse subprocess if there's no batches dir locally AND
+    # this isn't a worktree (review round 1 finding E-1 — fork+exec of
+    # git on every Stop event in every project that never uses fanout was
+    # pure waste; review round 2 NEW finding R2-1 — the original guard's
+    # worktree-detection used `isdir(.git/worktrees)` which is FALSE inside
+    # a worktree because `.git` there is a gitlink FILE pointing at the
+    # host's worktrees/ dir).
     local_batches = os.path.join(dispatch_dir, "batches")
-    if not os.path.isdir(local_batches):
-        # No batches in this repo's view — check the worktree's shared dir
-        # only if it might differ (we're inside a git worktree, common-dir
-        # diverges from cwd). Otherwise skip entirely.
-        if not os.path.isdir(os.path.join(repo_root, ".git", "worktrees")):
-            return blocking
+    git_path = os.path.join(repo_root, ".git")
+    is_worktree = os.path.isfile(git_path)             # gitlink => worktree
+    host_with_worktrees = os.path.isdir(
+        os.path.join(git_path, "worktrees")
+    )                                                  # host has worktrees
+    if not os.path.isdir(local_batches) and not is_worktree and not host_with_worktrees:
+        return blocking
     shared = resolve_shared_dir(cwd=repo_root)
     if not shared:
         return blocking

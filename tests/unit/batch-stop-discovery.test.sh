@@ -228,5 +228,31 @@ else
 fi
 rm -rf "$R5"
 
+# ── Scenario 6: worktree-resident Stop sees the host's batches/
+# Regression for review round 2 finding R2-1: the round-1 isdir fast-path
+# used `isdir(.git/worktrees)` to detect worktree contexts, but inside
+# a worktree `.git` is a gitlink FILE not a directory, so the check
+# always returned False there. Round-2 fix uses `isfile(.git)` as the
+# worktree signal.
+auto_test::it "worktree-resident Stop discovers host batches and blocks correctly"
+R6="$(make_fixture)"
+WT_R6="${R6}/worktrees/plan-z"
+# Create a real git worktree (its .git is a gitlink file).
+(cd "$R6" && git worktree add -b auto/plan-z "$WT_R6" >/dev/null 2>&1)
+# Sub-run ledger at worktree-local path.
+plant_subrun "$WT_R6" "plan-z-2026-05-28" "false" "work"
+# Host's batches/ sidecar references it.
+plant_sidecar "$R6" "test-batch-6" "committed" \
+  '[{"path":"z","slug":"plan-z","worktree":"'"$WT_R6"'","branch":"auto/plan-z","port":3001,"suggested_run_id":"plan-z-2026-05-28"}]'
+# Invoke on-stop with REPO arg pointing at the WORKTREE (operator stops from inside it).
+out="$(on_stop_decision "$WT_R6")"
+if echo "$out" | grep -q '"decision":[[:space:]]*"block"'; then
+  auto_test::pass
+else
+  auto_test::fail "expected block (worktree-resident Stop sees host batches); got: $out"
+fi
+(cd "$R6" && git worktree remove -f "$WT_R6" >/dev/null 2>&1 || true)
+rm -rf "$R6"
+
 auto_test::summary
 exit $?
