@@ -71,7 +71,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, resolve_shared_dir, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -143,6 +143,50 @@ def _blocking_runs(repo_root: str, now=None):
         if not predicate.get("met"):
             run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
             blocking.append((run_id, predicate))
+
+    # v0.4.0 U4: also block on committed multi-plan batches whose sub-runs
+    # live in worktree-local ledger dirs the per-worktree glob above can't
+    # reach. The batch sidecar at <shared-dir>/batches/<id>.json records
+    # `worktree` per plan; the sub-run ledger lives at
+    # <worktree>/.claude/auto/<run-id>.json. Provisional sidecars are
+    # ignored (a half-built batch must NOT gate session exit — R4-002).
+    shared = resolve_shared_dir()
+    if shared:
+        batches_dir = os.path.join(shared, "batches")
+        for sidecar_path in sorted(glob.glob(os.path.join(batches_dir, "*.json"))):
+            try:
+                with open(sidecar_path, "r") as fh:
+                    sidecar = json.load(fh)
+            except Exception:
+                continue
+            if not isinstance(sidecar, dict):
+                continue
+            if sidecar.get("status") != "committed":
+                continue
+            for plan in sidecar.get("plans") or []:
+                worktree = plan.get("worktree")
+                run_id_hint = plan.get("suggested_run_id")
+                if not worktree or not run_id_hint:
+                    continue
+                # Glob the worktree's ledger dir for any run-id starting with
+                # the hint (the sub-run may stamp a suffix on collision).
+                wt_ledger_dir = os.path.join(worktree, ".claude", "auto")
+                for sub_path in sorted(glob.glob(os.path.join(wt_ledger_dir, f"{run_id_hint}*.json"))):
+                    try:
+                        with open(sub_path, "r") as fh:
+                            sub = json.load(fh)
+                    except Exception:
+                        continue
+                    if not isinstance(sub, dict):
+                        continue
+                    if phase_grammar.current_phase(sub) == "done":
+                        continue
+                    sub_predicate = sub.get("exit_predicate_result") or {}
+                    if not sub_predicate.get("met"):
+                        sub_run_id = sub.get("run_id") or run_id_hint
+                        # Tag with batch id so the operator can correlate.
+                        batch_id = sidecar.get("id", "?")
+                        blocking.append((f"{batch_id}:{sub_run_id}", sub_predicate))
     return blocking
 
 
