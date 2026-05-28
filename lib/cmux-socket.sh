@@ -163,6 +163,45 @@ auto::build_spawn_command() {
     "sleep 1; claude '/auto-resume ${run}'"
 }
 
+# auto::cmux_spawn_workspace <name> <cwd> <command>
+#   v0.4.0 U2 (KTD-2 dispatch contract): the REUSABLE cmux workspace spawn
+#   primitive, factored out of auto::spawn_resume's body so multi-plan fanout
+#   (lib/auto-spawn.py) can reach the same `cmux new-workspace` shape that
+#   ships in this repo for /auto-resume orphans.
+#
+#   Shape verified by docs/research/cmux-socket-spike.md and locked by the
+#   round-4 finding R4-001 (the harness's native Agent tool does NOT expose
+#   cwd/env, and `bash -lc "claude /auto <plan> &"` exits before the loop can
+#   drive — so the cmux primitive is the ONLY working dispatch).
+#
+#   Mechanism (per the spike):
+#     * --command sends keystrokes + Enter into a fresh, app-owned workspace.
+#       App-owned => survives the parent session's exit.
+#     * --focus false => parent's pane/layout undisturbed.
+#     * The `sleep 1;` lead-in is LOAD-BEARING: a still-initializing login
+#       shell can SWALLOW the keystrokes sent by --command. The lead-in lets
+#       the shell settle.
+#
+#   This helper deliberately omits the per-run double-drive + in-flight
+#   guards (which are auto::spawn_resume's concern — they don't apply at
+#   fanout-START because each fanout sub-run has a fresh run-id with NO
+#   prior tick lock and NO prior spawn-attempt sentinel). The guards stay
+#   in spawn_resume; this helper is the bare cmux invocation.
+#
+#   Both bash callers (auto::spawn_resume) and Python callers
+#   (lib/auto-spawn.py) shell out to the same surface: this function.
+#   The Python caller invokes via `bash -c 'source cmux-socket.sh;
+#   auto::cmux_spawn_workspace ...'`.
+auto::cmux_spawn_workspace() {
+  local name="$1" cwd="$2" command="$3"
+  # shellcheck disable=SC2046 — deliberate: word-split the command into argv.
+  $CLAUDE_AUTO_CMUX new-workspace \
+    --name "$name" \
+    --cwd "$cwd" \
+    --command "$command" \
+    --focus false
+}
+
 # auto::spawn_resume <repo> <run>
 #   Spawn ONE fresh /auto-resume workspace for an orphaned run, IF safe:
 #     * tick lock free (no live driver) — else NO-OP (double-drive guard).
@@ -203,13 +242,13 @@ PYEOF
   ( umask 077; : > "$sentinel" ) 2>/dev/null || true
 
   # ── Spawn the app-owned /auto-resume workspace (verified mechanism). ──
-  # shellcheck disable=SC2046 — deliberate: the command is built as a string and
-  # we want word-splitting into argv for the cmux binary.
-  $CLAUDE_AUTO_CMUX new-workspace \
-    --name "auto-resume-${run}" \
-    --cwd "$repo" \
-    --command "sleep 1; claude '/auto-resume ${run}'" \
-    --focus false
+  # v0.4.0 U2: routes through auto::cmux_spawn_workspace so multi-plan fanout
+  # (lib/auto-spawn.py) reaches the same workspace shape. The guards above
+  # (double-drive, in-flight) are auto-resume-specific and stay here.
+  auto::cmux_spawn_workspace \
+    "auto-resume-${run}" \
+    "$repo" \
+    "sleep 1; claude '/auto-resume ${run}'"
   return 0
 }
 
@@ -236,11 +275,15 @@ auto::scan() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   sub="${1:-scan}"; shift || true
   case "$sub" in
-    scan)      auto::scan "$@" ;;
-    spawn)     auto::spawn_resume "$@" ;;
-    command)   auto::build_spawn_command "$@" ;;
-    orphans)   auto::resumable_orphans "$@" ;;
-    lock-held) auto::tick_lock_held "$@" ;;
+    scan)             auto::scan "$@" ;;
+    spawn)            auto::spawn_resume "$@" ;;
+    command)          auto::build_spawn_command "$@" ;;
+    orphans)          auto::resumable_orphans "$@" ;;
+    lock-held)        auto::tick_lock_held "$@" ;;
+    # v0.4.0 U2: bare cmux workspace spawn (the dispatch primitive shared by
+    # auto-resume + multi-plan fanout). Three positional args: name, cwd,
+    # command. Used by lib/auto-spawn.py shelling into this script.
+    spawn-workspace)  auto::cmux_spawn_workspace "$@" ;;
     *)
       echo "cmux-socket.sh: unknown subcommand '${sub}'" >&2
       exit 2
