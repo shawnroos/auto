@@ -230,6 +230,9 @@ auto::cmux_spawn_tab() {
     printf 'auto::cmux_spawn_tab: new-surface failed: %s\n' "$surface_out" >&2
     return "$rc"
   fi
+  # Character class must match _bootstrap.CMUX_REF_CHARS (the Python
+  # source of truth for cmux ref tokens). Bash can't import Python
+  # constants — if cmux changes the alphabet, edit BOTH sites.
   surface_id="$(printf '%s\n' "$surface_out" | grep -oE 'surface:[0-9a-zA-Z_.-]+' | head -1)"
   if [ -z "$surface_id" ]; then
     printf 'auto::cmux_spawn_tab: could not extract surface id from: %s\n' "$surface_out" >&2

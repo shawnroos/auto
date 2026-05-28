@@ -37,13 +37,11 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from _bootstrap import cmux_available as _cmux_available, resolve_host_repo_root  # noqa: E402
-
-# Round-2 P3: shared character class for cmux ref tokens
-# (workspace/pane/surface). Three call sites previously inlined the
-# regex independently — if cmux adds a character to its id alphabet,
-# you'd need to edit each one. One constant, one edit site.
-_CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
+from _bootstrap import (
+    CMUX_REF_CHARS as _CMUX_REF_CHARS,
+    cmux_available as _cmux_available,
+    resolve_host_repo_root,
+)  # noqa: E402
 
 
 # ── Public API surface ─────────────────────────────────────────────────────

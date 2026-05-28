@@ -47,7 +47,13 @@ import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import cmux_available as _cmux_available, load_lib_module, resolve_host_repo_root, resolve_shared_dir  # noqa: E402
+from _bootstrap import (
+    CMUX_REF_CHARS as _CMUX_REF_CHARS,
+    cmux_available as _cmux_available,
+    load_lib_module,
+    resolve_host_repo_root,
+    resolve_shared_dir,
+)  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -389,7 +395,7 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
         # through the helper's redirect doesn't poison the parse
         # (round-2 P2 #5 — defense-in-depth alongside the helper's
         # `cmux send ... >&2` fix).
-        m = re.search(r"surface:[0-9a-zA-Z_.-]+", result.stdout or "")
+        m = re.search(rf"surface:{_CMUX_REF_CHARS}", result.stdout or "")
         surface_id = m.group(0) if m else None
         return {"mode": "tab", "tab_surface_id": surface_id}
 

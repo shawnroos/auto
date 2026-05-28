@@ -174,6 +174,18 @@ def resolve_shared_dir(*, cwd=None):
     return os.path.join(host, ".claude", "auto")
 
 
+# Round-3 P3: cmux ref token character class — shared across every
+# Python module that grep/regex-matches cmux IDs (workspace/pane/surface).
+# auto-workspace.py originally lifted this internally; auto-spawn.py
+# still inlined the literal, so the round-2 consolidation was incomplete.
+# Lifting here makes both consumers import from the same source of
+# truth. cmux-socket.sh (bash) inlines independently — Python constants
+# don't cross to bash; a one-line comment in that file points at this
+# constant as the source of truth so future cmux-alphabet changes get
+# a coordinated edit.
+CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
+
+
 def cmux_available() -> bool:
     """Probe whether the cmux binary (or its override) is on PATH.
 
