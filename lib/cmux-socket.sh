@@ -237,7 +237,11 @@ auto::cmux_spawn_tab() {
   fi
   # Build the full command line with the sleep lead-in and explicit cd.
   local full="sleep 1; cd $(printf '%q' "$cwd") && $command"
-  "$CLAUDE_AUTO_CMUX" send --surface "$surface_id" "$full"
+  # Round-2 P2: redirect `cmux send` output to stderr so the final
+  # surface_id printf is the ONLY line on stdout. Without this, any
+  # cmux release that adds a "sent N bytes" status to stdout would
+  # break the Python caller's `.splitlines()[-1]` parser.
+  "$CLAUDE_AUTO_CMUX" send --surface "$surface_id" "$full" >&2
   local send_rc=$?
   if [ "$send_rc" -ne 0 ]; then
     printf 'auto::cmux_spawn_tab: send failed (surface %s)\n' "$surface_id" >&2

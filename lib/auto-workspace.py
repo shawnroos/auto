@@ -39,6 +39,12 @@ if _LIB_DIR not in sys.path:
 
 from _bootstrap import cmux_available as _cmux_available, resolve_host_repo_root  # noqa: E402
 
+# Round-2 P3: shared character class for cmux ref tokens
+# (workspace/pane/surface). Three call sites previously inlined the
+# regex independently — if cmux adds a character to its id alphabet,
+# you'd need to edit each one. One constant, one edit site.
+_CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
+
 
 # ── Public API surface ─────────────────────────────────────────────────────
 
@@ -77,7 +83,7 @@ def read_marker(host_repo: str) -> dict | None:
     return data
 
 
-def _atomic_write_marker(host_repo: str, marker: dict) -> None:
+def write_marker(host_repo: str, marker: dict) -> None:
     """Atomically write the marker via mkstemp+fchmod+rename."""
     dst = marker_path(host_repo)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -124,7 +130,7 @@ def _cmux_workspace_exists(workspace_id: str) -> bool:
     if result.returncode != 0:
         return False
     import re
-    live_ids = set(re.findall(r"workspace:[0-9a-zA-Z_.-]+", result.stdout))
+    live_ids = set(re.findall(rf"workspace:{_CMUX_REF_CHARS}", result.stdout))
     return workspace_id in live_ids
 
 
@@ -300,7 +306,7 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
             }
         ],
     }
-    _atomic_write_marker(host_repo, marker)
+    write_marker(host_repo, marker)
     return marker
 
 
@@ -316,7 +322,7 @@ def _now_iso() -> str:
 def _extract_ref(text: str, kind: str) -> str | None:
     """Grep the first `<kind>:<id>` token from text. None if not present."""
     import re
-    m = re.search(rf"{kind}:[0-9a-zA-Z_.-]+", text)
+    m = re.search(rf"{kind}:{_CMUX_REF_CHARS}", text)
     return m.group(0) if m else None
 
 
@@ -333,7 +339,7 @@ def _list_refs(cmux: str, argv: list[str], kind: str) -> list[str]:
         raise WorkspaceError(
             f"cmux {argv[0]} failed: {result.stderr.strip() or result.stdout.strip()}"
         )
-    return re.findall(rf"{kind}:[0-9a-zA-Z_.-]+", result.stdout)
+    return re.findall(rf"{kind}:{_CMUX_REF_CHARS}", result.stdout)
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────
@@ -364,14 +370,16 @@ def _cli(argv) -> int:
         sys.stdout.write(marker_path(args[0]) + "\n")
         return 0
     if cmd == "create":
-        # auto-workspace.py create <host-repo> [--name <name>] [--force]
+        # auto-workspace.py create <host-repo> [--name <name>] [--force] [--print-id]
         if not args:
             sys.stderr.write(
-                "usage: auto-workspace.py create <host-repo> [--name <name>] [--force]\n"
+                "usage: auto-workspace.py create <host-repo> "
+                "[--name <name>] [--force] [--print-id]\n"
             )
             return 2
         host_repo = args[0]
         kwargs = {}
+        print_id_only = False
         i = 1
         while i < len(args):
             tok = args[i]
@@ -383,6 +391,16 @@ def _cli(argv) -> int:
                 kwargs["force"] = True
                 i += 1
                 continue
+            if tok == "--print-id":
+                # Round-2 P1 fix: skills run via the Bash tool, each
+                # invocation is a fresh shell — `export CMUX_WORKSPACE_ID`
+                # doesn't persist to the next Bash call. The skill needs
+                # to capture the new workspace_id in ONE bash call and
+                # prefix it onto the dispatch command. --print-id makes
+                # the CLI emit JUST the id (parseable without JSON tools).
+                print_id_only = True
+                i += 1
+                continue
             sys.stderr.write(f"auto-workspace.py create: unknown arg {tok!r}\n")
             return 2
         try:
@@ -390,8 +408,11 @@ def _cli(argv) -> int:
         except WorkspaceError as exc:
             sys.stderr.write(f"auto-workspace: {exc}\n")
             return 1
-        json.dump(marker, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
+        if print_id_only:
+            sys.stdout.write(marker["workspace_id"] + "\n")
+        else:
+            json.dump(marker, sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
         return 0
     sys.stderr.write(f"auto-workspace.py: unknown command {cmd!r}\n")
     return 2

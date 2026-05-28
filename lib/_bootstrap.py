@@ -181,16 +181,16 @@ def cmux_available() -> bool:
     lib/auto-spawn.py and lib/auto-workspace.py. Lifted here so both
     callers share one definition (and one place to evolve, e.g. to
     add a timeout if cmux gets slow).
+
+    Round-2 P1 — the original `sh -c "command -v {name}"` form had
+    a shell-injection surface: an operator with CLAUDE_AUTO_CMUX
+    containing shell metachars (typo, copy-paste, malicious dotfile)
+    would execute arbitrary code under `sh -c`. shutil.which does
+    the same PATH-resolution job with NO shell — safe by default.
     """
+    import shutil
     name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"command -v {name} >/dev/null 2>&1"],
-            check=False,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
+    return shutil.which(name) is not None
 
 
 def load_ledger():

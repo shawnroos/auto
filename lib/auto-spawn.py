@@ -384,8 +384,13 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
                 f"cmux spawn-tab failed for {slug!r}: "
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
-        # The helper echoes the new surface ID on stdout.
-        surface_id = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else None
+        # The helper echoes the new surface ID on stdout. Use regex
+        # extraction (not last-line) so any cmux stdout that leaks
+        # through the helper's redirect doesn't poison the parse
+        # (round-2 P2 #5 — defense-in-depth alongside the helper's
+        # `cmux send ... >&2` fix).
+        m = re.search(r"surface:[0-9a-zA-Z_.-]+", result.stdout or "")
+        surface_id = m.group(0) if m else None
         return {"mode": "tab", "tab_surface_id": surface_id}
 
     # Workspace-per-plan fallback (v0.4.0 default behavior).
@@ -575,7 +580,7 @@ def _spawn_all_via_cmux(plans, *, host_repo: str | None = None):
             marker = wsmod.read_marker(host_repo)
             if marker is not None:
                 marker.setdefault("tabs", []).extend(tab_appends)
-                wsmod._atomic_write_marker(host_repo, marker)
+                wsmod.write_marker(host_repo, marker)
         except Exception as exc:
             sys.stderr.write(
                 f"auto-spawn: warning — failed to update workspace marker tabs[]: {exc}\n"

@@ -39,11 +39,10 @@ invoke `/ce-plan <ARGUMENTS>` via Skill and end the turn. Preserves
 v0.3.x intent routing.
 
 **Workspace handling** (plan 004): branch on `workspace_action`.
-`create`/`recreate`: `python lib/auto-workspace.py create <repo>
-[--force]` FIRST; capture `workspace_id` from the returned marker;
-`export CMUX_WORKSPACE_ID=<id>` so the next dispatch lands in the
-NEW workspace (without the re-export the spawn-side falls back to
-workspace-per-plan, abandoning the freshly-created workspace).
+`create`/`recreate`: chain in ONE Bash call so the new workspace
+id propagates: `WS=$(python lib/auto-workspace.py create <repo>
+[--force] --print-id) && CMUX_WORKSPACE_ID="$WS" python lib/auto-
+spawn.py fanout ...` (separate Bash calls don't share exports).
 `use`: dispatch directly. `ambiguous`: ask one question
 (switch / create / one-off). `none`: dispatch. Mention creation
 in the summary.
