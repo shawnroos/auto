@@ -1,5 +1,5 @@
 ---
-argument-hint: "[<plan-or-spec> [auto] [--adapter ce|native] [--goal \"...\"] [--recipe <name>]] | freeform sentence"
+argument-hint: "[<plan-or-spec> [--review-plan] [--adapter ce|native] [--goal \"...\"] [--recipe <name>]] | freeform sentence"
 allowed-tools: Bash, Skill, AskUserQuestion
 ---
 
@@ -42,3 +42,12 @@ lives in the `auto-driver` skill.
   exit through the standard predicate-met path. Use for emergency
   rollback of a misbehaving recipe without redeploying. Unset to resume
   outcomes-gating on the next tick.
+
+## v0.4.0 seam-default flip (KTD-4)
+
+`/auto <plan>` now PROCEEDS past the plan→work seam by default. Pass
+`--review-plan` to opt in to the pause for first-pass plans where you
+want to inspect the planned units before any work fans out. The legacy
+`auto` positional token still parses (no-op against the new default)
+so scripted callers keep working without forced rewrites. A one-time
+stderr notice fires on the first post-upgrade run.
