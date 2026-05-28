@@ -244,12 +244,55 @@ it "malformed ledger: skipped silently → falls through to raw"
 assert_eq "raw" "$(json_field setup_malformed 'H["situation"]')"
 
 # ── Scenario 10: every envelope has the canonical key set (shape invariant)
-it "envelope shape: every emitted JSON has all six top-level keys"
+# v0.4.1 (plan 004): adds `workspace` + `workspace_action` to the envelope
+# so the skill can route project-workspace handling from one read.
+it "envelope shape: every emitted JSON has all eight top-level keys"
 shape_setup() {
   setup_inflight_one "$1"
 }
 keys="$(json_field shape_setup 'sorted(H.keys())')"
-assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'single_plan', 'situation', 'summary']" "$keys"
+assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
+
+# ── Scenario 10b: workspace_action correctly derived
+# v0.4.1 (plan 004): action routing rules per KTD-4
+#   * raw situation → action=none (workspace not relevant)
+#   * reviewed-plan + no marker → action=create
+#   * multi-plan + no marker → action=create
+#   * reviewed-plan + marker matches env → action=use
+#   * reviewed-plan + marker mismatch env → action=ambiguous
+
+# Helper: plant a marker, set env, return the action field.
+get_action_for() {
+  local setup_fn="$1"
+  json_field "$setup_fn" 'H["workspace_action"]'
+}
+
+it "workspace_action: raw situation → action=none"
+# setup_raw_empty exists in the test fixtures (no run, no plan).
+raw_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto"
+  # No plans, no runs.
+}
+assert_eq "none" "$(get_action_for raw_setup)"
+
+it "workspace_action: reviewed-plan + no marker → action=create"
+reviewed_unmarked_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  echo "# P1" > "$repo/docs/plans/p1.md"
+  # No marker file.
+}
+assert_eq "create" "$(get_action_for reviewed_unmarked_setup)"
+
+it "workspace_action: multi-plan + no marker → action=create"
+multi_unmarked_setup() {
+  local repo="$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  echo "# P1" > "$repo/docs/plans/p1.md"
+  echo "# P2" > "$repo/docs/plans/p2.md"
+}
+assert_eq "create" "$(get_action_for multi_unmarked_setup)"
 
 # ── Scenario 11: detector exits 0 on every path (rel-001) ──────────────────
 it "exit code: detector exits 0 even on the unexpected-error fallback"

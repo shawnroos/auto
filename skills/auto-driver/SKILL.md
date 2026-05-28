@@ -20,8 +20,9 @@ One action line per branch. Dispatch. Do not narrate.
 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
 
-Returns one JSON object: `{ situation, summary, ambiguity, single_plan,
-multi_plan, in_flight }`. Surface `summary` (one line). Then act on
+Returns one JSON object with `situation`, `summary`, `ambiguity`,
+`single_plan`, `multi_plan`, `in_flight`, `workspace`,
+`workspace_action`. Surface `summary` (one line); act on
 `situation` + `ambiguity`:
 
 | situation         | ambiguity null → dispatch                                                    | ambiguity non-null → AskUserQuestion |
@@ -32,10 +33,18 @@ multi_plan, in_flight }`. Surface `summary` (one line). Then act on
 | `multi-plan`      | `python "${CLAUDE_PLUGIN_ROOT}/lib/auto-spawn.py" fanout <plan...>` then surface manifest | (n/a — confirm-only in `summary`)    |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
-**Argument-aware freeform** (preserves v0.3.x intent routing): before
-loading the hypothesis, if `$ARGUMENTS` is non-empty AND does NOT
-resolve to an existing plan file, skip the funnel and invoke
-`/ce-plan <ARGUMENTS>` via the Skill tool, then end the turn.
+**Argument-aware freeform**: before loading the hypothesis, if
+`$ARGUMENTS` is non-empty AND does NOT resolve to a plan file,
+invoke `/ce-plan <ARGUMENTS>` via Skill and end the turn. Preserves
+v0.3.x intent routing.
+
+**Workspace handling** (plan 004): branch on `workspace_action` from
+the envelope before dispatching. `create`/`recreate`: shell out to
+`python lib/auto-workspace.py create <host-repo> [--force]` FIRST
+(builds the left/right split, writes the marker); then dispatch.
+`use`: dispatch (spawn-side reads the marker). `ambiguous`: ask one
+question (switch / create / one-off). `none`: dispatch directly.
+Mention workspace creation in the summary.
 
 **Unknown situation** (defensive guard): treat as `raw`.
 

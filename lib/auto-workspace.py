@@ -183,27 +183,155 @@ def detect(host_repo: str) -> dict:
 # ── Workspace creation (called by the skill in U4 — stub for U3) ──────────
 
 
-def create(host_repo: str, *, name: str | None = None) -> dict:
-    """Create a project workspace via the imperative cmux chain.
+def create(host_repo: str, *, name: str | None = None, force: bool = False) -> dict:
+    """Create a project workspace and write the marker atomically.
 
-    Per the U1 spike outcome (docs/research/cmux-layout-fanout-spike.md),
-    cmux's --layout JSON is opaque; we use the imperative chain:
+    Per the spike addendum (docs/research/cmux-layout-fanout-spike.md),
+    cmux DOES accept declarative layout JSON — the shape was hiding in
+    new-workspace's --help example. Single subprocess creates the
+    50/50 left/right split with the primary claude session in the
+    left pane.
 
-      1. cmux new-workspace --name <name> --cwd <repo> --focus true
-      2. capture workspace_id from stdout
-      3. cmux list-panes → capture primary pane id (left)
-      4. cmux new-split right --panel <left> → creates the right pane
-      5. cmux send --surface <left-primary> "claude\\n" → starts the
-         primary claude session in the left pane
+    Steps:
+      1. `cmux new-workspace --name <name> --cwd <repo> --layout <json>`
+         where the layout declares two panes (left runs `claude`,
+         right is an empty terminal). Returns `OK <workspace-id>`.
+      2. `cmux list-panes --workspace <ws>` → enumerate the two panes.
+         Left = first listed (focused by cmux convention); right = second.
+      3. `cmux list-pane-surfaces --pane <left>` → primary surface
+         (the running claude session).
+      4. Build the marker dict, write atomically.
+      5. Return the marker.
 
-    Writes the marker atomically and returns it. Raises WorkspaceError
-    on any cmux failure.
+    Args:
+        host_repo: absolute path to the project's main repo. Used as
+          the workspace cwd AND the marker's location.
+        name: workspace name. Defaults to the repo's basename.
+        force: when True, overwrite an existing marker. Without
+          force, raises WorkspaceError if a marker already exists.
+
+    Raises:
+        WorkspaceError: marker already exists (when force=False),
+          cmux is unavailable, any cmux subprocess fails, or pane
+          enumeration returns unexpected output.
     """
-    raise NotImplementedError(
-        "auto_workspace.create() lands in U4. For U3, only detect()/read_marker() "
-        "are required (the spawn-side branch consumes the existing marker, "
-        "doesn't create one)."
+    if not os.path.isdir(host_repo):
+        raise WorkspaceError(f"host_repo does not exist: {host_repo}")
+    mpath = marker_path(host_repo)
+    if os.path.isfile(mpath) and not force:
+        raise WorkspaceError(
+            f"marker already exists at {mpath} — pass force=True to overwrite"
+        )
+    if not _cmux_available():
+        raise WorkspaceError(
+            "cmux required for workspace creation — install or invoke "
+            "/auto without project-workspace setup"
+        )
+    if name is None:
+        name = os.path.basename(host_repo.rstrip("/")) or "auto-project"
+
+    # Step 1: create the workspace with the layout.
+    layout = {
+        "direction": "horizontal",
+        "split": 0.5,
+        "children": [
+            {"pane": {"surfaces": [{"type": "terminal", "command": "claude"}]}},
+            {"pane": {"surfaces": [{"type": "terminal"}]}},
+        ],
+    }
+    cmux = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
+    try:
+        result = subprocess.run(
+            [cmux, "new-workspace",
+             "--name", name,
+             "--cwd", host_repo,
+             "--layout", json.dumps(layout),
+             "--focus", "true"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as exc:
+        raise WorkspaceError(f"cmux new-workspace failed to start: {exc}") from exc
+    if result.returncode != 0:
+        raise WorkspaceError(
+            f"cmux new-workspace failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
+    workspace_id = _extract_ref(result.stdout, "workspace")
+    if not workspace_id:
+        raise WorkspaceError(
+            f"cmux new-workspace returned no workspace id: {result.stdout!r}"
+        )
+
+    # Step 2: enumerate panes.
+    panes = _list_refs(cmux, ["list-panes", "--workspace", workspace_id], "pane")
+    if len(panes) < 2:
+        raise WorkspaceError(
+            f"workspace {workspace_id} has {len(panes)} panes (expected ≥2): {panes!r}"
+        )
+    left_pane_id, right_pane_id = panes[0], panes[1]
+
+    # Step 3: enumerate surfaces in the left pane to find the primary one.
+    surfaces = _list_refs(
+        cmux,
+        ["list-pane-surfaces", "--pane", left_pane_id],
+        "surface",
     )
+    if not surfaces:
+        raise WorkspaceError(
+            f"left pane {left_pane_id} has no surfaces"
+        )
+    primary_surface_id = surfaces[0]
+
+    # Step 4: build + write the marker.
+    marker = {
+        "workspace_id": workspace_id,
+        "created_at": _now_iso(),
+        "layout_version": "v1",
+        "left_pane_id": left_pane_id,
+        "right_pane_id": right_pane_id,
+        "primary_surface_id": primary_surface_id,
+        "tabs": [
+            {
+                "surface_id": primary_surface_id,
+                "kind": "primary",
+                "plan": None,
+                "run_id": None,
+            }
+        ],
+    }
+    _atomic_write_marker(host_repo, marker)
+    return marker
+
+
+def _now_iso() -> str:
+    """UTC ISO-8601 with trailing Z (parity with ledger_core._now_iso)."""
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+
+
+def _extract_ref(text: str, kind: str) -> str | None:
+    """Grep the first `<kind>:<id>` token from text. None if not present."""
+    import re
+    m = re.search(rf"{kind}:[0-9a-zA-Z_.-]+", text)
+    return m.group(0) if m else None
+
+
+def _list_refs(cmux: str, argv: list[str], kind: str) -> list[str]:
+    """Run `cmux <argv>` and return all `<kind>:<id>` refs in stdout, in order."""
+    import re
+    try:
+        result = subprocess.run(
+            [cmux, *argv], capture_output=True, text=True, check=False,
+        )
+    except OSError as exc:
+        raise WorkspaceError(f"cmux {argv[0]} failed to start: {exc}") from exc
+    if result.returncode != 0:
+        raise WorkspaceError(
+            f"cmux {argv[0]} failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
+    return re.findall(rf"{kind}:[0-9a-zA-Z_.-]+", result.stdout)
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────
@@ -232,6 +360,36 @@ def _cli(argv) -> int:
             sys.stderr.write("usage: auto-workspace.py marker-path <host-repo>\n")
             return 2
         sys.stdout.write(marker_path(args[0]) + "\n")
+        return 0
+    if cmd == "create":
+        # auto-workspace.py create <host-repo> [--name <name>] [--force]
+        if not args:
+            sys.stderr.write(
+                "usage: auto-workspace.py create <host-repo> [--name <name>] [--force]\n"
+            )
+            return 2
+        host_repo = args[0]
+        kwargs = {}
+        i = 1
+        while i < len(args):
+            tok = args[i]
+            if tok == "--name" and i + 1 < len(args):
+                kwargs["name"] = args[i + 1]
+                i += 2
+                continue
+            if tok == "--force":
+                kwargs["force"] = True
+                i += 1
+                continue
+            sys.stderr.write(f"auto-workspace.py create: unknown arg {tok!r}\n")
+            return 2
+        try:
+            marker = create(host_repo, **kwargs)
+        except WorkspaceError as exc:
+            sys.stderr.write(f"auto-workspace: {exc}\n")
+            return 1
+        json.dump(marker, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
         return 0
     sys.stderr.write(f"auto-workspace.py: unknown command {cmd!r}\n")
     return 2

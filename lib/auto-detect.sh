@@ -94,7 +94,13 @@ def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
 
     Every consumer can rely on the same keys existing, so a Python/jq reader
     that asks for `.in_flight.run_id` never trips on `KeyError: in_flight`.
+
+    v0.4.1 (plan 004 KTD-4): adds the `workspace` block + the derived
+    `workspace_action`. `workspace` comes from auto_workspace.detect(repo);
+    the action is computed from (workspace.status, situation) so the skill
+    has one field to branch on instead of reconstructing the policy itself.
     """
+    workspace = _detect_workspace_safe()
     return {
         "situation": situation,
         "summary": summary,
@@ -102,7 +108,75 @@ def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
         "single_plan": single_plan,
         "multi_plan": multi_plan,
         "in_flight": in_flight,
+        "workspace": workspace,
+        "workspace_action": _workspace_action(workspace, situation),
     }
+
+
+def _detect_workspace_safe():
+    """Run auto_workspace.detect with rel-001-style safe degrade.
+
+    The detector subprocess-calls cmux to check workspace liveness; that
+    can fail or hang on a sick cmux. We DON'T want a sick cmux breaking
+    the hypothesis envelope — so on any failure, return a degraded
+    workspace block that routes to action=none (skill falls back to
+    v0.4.0 workspace-per-plan dispatch).
+    """
+    try:
+        repo = _repo_root()
+        # Import lazily to avoid the import cost on every detect call.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "auto_workspace",
+            os.path.join(script_dir, "auto-workspace.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.detect(repo)
+    except Exception:
+        return {
+            "status": "unmarked",
+            "marker_path": None,
+            "workspace_id": None,
+            "left_pane_id": None,
+            "env_workspace_id": os.environ.get("CMUX_WORKSPACE_ID"),
+            "marker_stale": False,
+        }
+
+
+def _workspace_action(workspace, situation):
+    """Compute the action the skill should take re: workspace handling.
+
+    Returns one of: none, use, create, recreate, ambiguous.
+
+    Routing rules (KTD-4):
+      * status=project, situation routes to dispatch (reviewed-plan,
+        multi-plan, in-flight) → use (skill dispatches tabs in this
+        workspace; v0.4.1 spawn-side path)
+      * status=unmarked + marker_stale=True, situation is
+        reviewed-plan/multi-plan → recreate (skill should overwrite
+        the stale marker with a fresh workspace)
+      * status=unmarked (no marker yet), situation is reviewed-plan
+        or multi-plan → create (skill creates first, then dispatches)
+      * status=non-project, situation is reviewed-plan/multi-plan →
+        ambiguous (skill asks: switch / create / one-off)
+      * other situations (raw, in-flight, ambiguous-runs) → none
+        (workspace setup isn't relevant; skill dispatches per
+        v0.4.0 behavior)
+    """
+    status = workspace.get("status")
+    dispatchable = situation in ("reviewed-plan", "multi-plan")
+    if not dispatchable:
+        return "none"
+    if status == "project":
+        return "use"
+    if status == "non-project":
+        return "ambiguous"
+    if status == "unmarked" and workspace.get("marker_stale"):
+        return "recreate"
+    if status == "unmarked":
+        return "create"
+    return "none"
 
 
 def _read_in_flight(ledger_dir):

@@ -119,3 +119,43 @@ chain reliably.
 shape becomes inferrable), U2 can swap to the declarative form
 without changing higher-level units.
 
+
+## Addendum (2026-05-27, U4 prep)
+
+**The layout JSON schema IS documented — just buried in `--help`.**
+`cmux new-workspace --help`'s final example shows the canonical shape:
+
+```json
+{
+  "direction": "horizontal",
+  "split": 0.5,
+  "children": [
+    {"pane": {"surfaces": [{"type": "terminal", "command": "vim"}]}},
+    {"pane": {"surfaces": [{"type": "terminal", "command": "npm run start"}]}}
+  ]
+}
+```
+
+Key differences from my round-1 candidates:
+- `split` is a NUMBER (ratio 0.0-1.0), not a string
+- `children[]` wraps each pane in `{"pane": {"surfaces": [...]}}` —
+  the extra `pane` key was missing in shape 3 and shape 4
+- `surfaces[]` items need `type: "terminal"` (or presumably `"browser"`)
+
+**Verified working** against a real cmux daemon:
+
+```bash
+cmux new-workspace --name "spike-verify" --layout '...' --focus false
+# → OK workspace:17
+# tree confirms 2 panes, each with its terminal surface, commands ran
+```
+
+**Plan 004 U4 reverts to the declarative path.** This eliminates
+the `new-workspace` + `list-panes` + `new-split right` + `send`
+imperative chain. One subprocess call creates the full layout.
+
+The marker still has to capture the workspace + pane + surface
+IDs after creation — they're not returned by `new-workspace`
+(only `OK <workspace-id>` comes back). U4 follows up with
+`cmux list-panes` and `cmux list-pane-surfaces` to enumerate
+the IDs, then writes the marker atomically.

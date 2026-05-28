@@ -35,9 +35,9 @@ auto_test::assert_file_exists "$SKILL"
 auto_test::it "auto-driver SKILL.md frontmatter names the skill"
 auto_test::assert_true "grep -qE '^name:[[:space:]]*auto-driver' '$SKILL'"
 
-auto_test::it "auto-driver SKILL.md is within the 60-line budget (U4)"
+auto_test::it "auto-driver SKILL.md is within the 70-line budget (v0.4.0 U4: ≤60; v0.4.1 plan 004 U4 widened to ≤70 for the workspace-handling step)"
 skill_lines="$(wc -l < "$SKILL" | tr -d ' ')"
-auto_test::assert_true "[ \"$skill_lines\" -le 60 ]"
+auto_test::assert_true "[ \"$skill_lines\" -le 70 ]"
 
 auto_test::it "auto-driver SKILL.md cites driver-reference.md (theory lives there)"
 auto_test::assert_true "grep -qF 'driver-reference.md' '$SKILL'"
