@@ -73,6 +73,8 @@ REQUIRED=(
   "set_exit_reason"
   # v0.3.1 B11: ExitReason StrEnum (replaces H's three top-level EXIT_REASON_* names)
   "ExitReason"
+  # v0.4.0 U1: goal_intent ledger field — one-line user-facing intent sentence
+  "goal_intent"
 )
 
 # ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────

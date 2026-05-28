@@ -759,6 +759,7 @@ def init_ledger(
     phase_transitions=None,
     iteration=None,
     emit_templates=None,
+    goal_intent=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -810,6 +811,15 @@ def init_ledger(
         )
     if plan_step is not None and plan_step not in PLAN_STEPS:
         raise LedgerError(f"invalid plan_step: {plan_step!r}")
+
+    # v0.4.0 goal_intent (KTD-2): one-line user-facing intent sentence, frozen
+    # at init time. Acceptable shapes: None (legacy / unknown), or a string
+    # (typically derived from plan title for /auto <plan>, from hypothesis for
+    # bare /auto, from input for freeform). We do NOT trim or normalize — the
+    # caller owns the wording — but we reject non-string non-None to keep the
+    # on-disk shape clean.
+    if goal_intent is not None and not isinstance(goal_intent, str):
+        raise LedgerError(f"goal_intent must be a string or None: {goal_intent!r}")
 
     # phase_transitions defaults to []; basic shape check (the recipe validator
     # does the full check, but we don't trust that the caller already validated).
@@ -931,6 +941,14 @@ def init_ledger(
             # plumbing gap U1-U5 left for U6 to close.
             "iteration": iteration,
             "emit_templates": emit_templates,
+            # v0.4.0 KTD-2 (additive): the one-line user-facing intent sentence
+            # frozen at init time. Derived by the caller — plan title for
+            # /auto <plan>, hypothesis summary for bare /auto, the input for
+            # freeform. None on a legacy or recipe-unaware init. The
+            # ambiguous-runs hypothesis surfaces this verbatim when listing
+            # in-flight runs so an operator picking between two runs sees what
+            # each was started for, not just a slug.
+            "goal_intent": goal_intent,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},

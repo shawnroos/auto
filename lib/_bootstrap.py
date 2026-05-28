@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -91,6 +92,72 @@ def resolve_repo() -> str:
             return dir_
         dir_ = os.path.dirname(dir_)
     return os.getcwd()
+
+
+def resolve_host_repo_root():
+    """Absolute path of the MAIN repo (the host of any worktrees), or None.
+
+    v0.4.0 KTD-3 (round-3 finding R3-001 — empirically verified): from inside a
+    git worktree, ``git rev-parse --show-toplevel`` returns the *worktree's*
+    own root, NOT the main repo. For multi-plan fanout we need the host repo
+    so spawned worktrees nest under the main checkout's ``worktrees/`` —
+    independent of which worktree the parent session is itself running in.
+
+    The mechanism uses ``git rev-parse --git-common-dir``: from a main repo
+    this returns ``.git`` (the actual git dir); from a worktree it returns
+    the main repo's ``.git`` (NOT the worktree's ``.git/worktrees/<name>/``
+    private dir). The parent of the resolved common-dir is the host repo
+    root in both cases.
+
+    Returns the absolute host repo path. Returns ``None`` when git is not
+    available or cwd is not inside a git tree — callers must handle the
+    None case (typically by erroring out: fanout requires a git repo).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    common_dir = result.stdout.strip()
+    if not common_dir:
+        return None
+    # git emits a relative path when cwd is inside the main repo (".git") and
+    # an absolute path from inside a worktree. Resolve to absolute either way,
+    # then return the parent (the main repo root).
+    abs_common = os.path.abspath(common_dir)
+    return os.path.dirname(abs_common)
+
+
+def resolve_shared_dir():
+    """Absolute path to ``<host-repo-root>/.claude/auto/``, or None.
+
+    v0.4.0 KTD-3: shared state — batch sidecars, cross-worktree run discovery,
+    the v0.4 default-flip back-compat marker — lives at the HOST repo's
+    ``.claude/auto/`` (NOT the cwd worktree's). This helper wraps
+    ``resolve_host_repo_root()`` + the ``.claude/auto/`` join so every shared-
+    state consumer reads the same path.
+
+    Returns ``None`` when ``resolve_host_repo_root()`` returns None (no git).
+    Callers that need a directory MUST handle None — typically by degrading
+    to per-worktree state (the legacy ``resolve_repo`` shape) or erroring out
+    for features that genuinely require shared state (fanout).
+
+    Distinct from ``resolve_repo()``: that returns the per-worktree ledger
+    home (env-pinned via ``CLAUDE_AUTO_REPO`` for sub-runs); this returns the
+    main repo's shared state directory. Both are needed: the per-worktree
+    helper for "what does THIS worktree own", this helper for "what does the
+    parent know across worktrees".
+    """
+    host = resolve_host_repo_root()
+    if host is None:
+        return None
+    return os.path.join(host, ".claude", "auto")
 
 
 def load_ledger():

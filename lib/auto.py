@@ -113,6 +113,34 @@ def _parse_args(argv):
             "recipe": recipe or "a1"}
 
 
+def _derive_goal_intent(plan: str) -> str:
+    """Derive a one-line goal_intent sentence from the plan file.
+
+    v0.4.0 KTD-2: every /auto <plan> run writes a one-line user-facing intent
+    sentence at init time so the bare-/auto hypothesis can surface it when
+    disambiguating between in-flight runs. Cheap and deterministic: prefer the
+    first ``# H1`` line of the plan markdown, fall back to the file stem.
+
+    Failure modes (unreadable file, no headline, gigantic line): return the
+    stem. ``goal_intent`` is advisory operator surface, not a load-bearing
+    decision input — a noisy or missing derivation must never block run init.
+    """
+    try:
+        with open(plan, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(50):  # only scan the head; plans put H1 near the top.
+                line = fh.readline()
+                if not line:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("# "):
+                    # Crop to a sensible one-line length; the ambiguous-runs
+                    # surface renders this verbatim.
+                    return stripped[2:].strip()[:120]
+    except OSError:
+        pass
+    return os.path.splitext(os.path.basename(plan))[0] or "run"
+
+
 def _make_run_id(ledger, repo_root: str, plan: str) -> str:
     """Derive a run-id from the plan stem + today's date; uniquify on collision.
 
@@ -214,6 +242,11 @@ def run(argv) -> int:
     phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
+    # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
+    # Frozen on the ledger so the bare-/auto hypothesis funnel can render it
+    # verbatim when disambiguating among multiple in-flight runs.
+    goal_intent = _derive_goal_intent(plan)
+
     try:
         ledger.init_ledger(
             repo_root,
@@ -230,6 +263,7 @@ def run(argv) -> int:
             # checked shape if non-None.
             iteration=recipe.get("iteration"),
             emit_templates=recipe.get("emit_templates"),
+            goal_intent=goal_intent,
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")

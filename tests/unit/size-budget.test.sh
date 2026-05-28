@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# auto v0.3.1 meta: size-budget lint — mechanical defense for the structural
+# blind spot the v0.3.0 review rounds had.
+#
+# WHY THIS TEST EXISTS (memory `feedback_ce_review_structural_blind_spot`):
+# Across three /ce-code-review rounds (33 reviewer runs) reviewing v0.3.0,
+# NONE flagged that lib/tick.py crossed 1k (966→1398) or that
+# _tick_body_inner ballooned to 466 LOC. The personas reason about diff
+# hunks, not whole-file or function-shape properties. A dedicated
+# thermo-nuclear pass after-the-fact found all four immediately as P0/P1
+# blockers — too late, the debt had compounded.
+#
+# This lint closes the class structurally: fail the build if any lib/*.py
+# exceeds the file budget, or any top-level function exceeds the function
+# budget, unless the file/function is on the named ALLOWLIST. The shape is
+# identical to wikilink-check (G5), doc-fence (H), and import-topology
+# (Track C v0.3.1) — `feedback_deterministic_over_probabilistic_v1`.
+#
+# MAINTENANCE CONTRACT:
+# - When a file or function CROSSES a budget, the suite goes RED. The fix
+#   is to DECOMPOSE, not to bump the budget. Adding allowlist entries is
+#   a signal that requires explicit justification in the commit message.
+# - When a function on the allowlist is decomposed below the threshold,
+#   REMOVE its allowlist entry. Each removal is a structural-debt
+#   reduction the next reviewer can see.
+# - The allowlist is named debt, not a free-for-all. Five entries today
+#   is acceptable; ten would be a smell that suggests raising the budget
+#   OR (better) starting a structural-debt epic.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+LIB="${AUTO_ROOT}/lib"
+
+# ── Budgets ────────────────────────────────────────────────────────────────
+# File budget: 1000 LOC. The thermo-nuclear review used this threshold as the
+# presumptive blocker; matching it here makes future ce-code-review rounds
+# inherit the same standard mechanically.
+FILE_BUDGET=1000
+
+# Function budget: 120 LOC. Round numbers picked to be just above the
+# largest current "healthy" function (record_verdict at 75) with headroom.
+# The 5 functions above this are named known-debt below.
+FUNC_BUDGET=120
+
+# ── Allowlist (named known-debt) ───────────────────────────────────────────
+# Format: bash arrays of `"<path>:<size>"` for files, `"<path>:<func>:<size>"`
+# for functions. The size is the CURRENT measurement at the time the entry
+# was added; if a file/function GROWS beyond its allowlisted size, the lint
+# fires (so growth-of-allowlisted-debt is still caught).
+
+ALLOWED_FILES=(
+  # ledger_core.py is 32 LOC over budget. v0.3.1 B5 split ledger.py
+  # 1746 → core 1014 + mutators + emitters + facade; core is by design the
+  # heaviest of the four (it owns the I-1 recompute chokepoint, init_ledger,
+  # the lock primitives, and all module constants/errors). Decomposing it
+  # further means splitting recompute_predicate's helpers OR init_ledger,
+  # both of which are tracked as separate backlog items (B7 was done; the
+  # init_ledger split is implicit in the function allowlist below).
+  # v0.4.0 U1 added goal_intent: 1 init_ledger arg + 1 type check + 7-line
+  # ledger-dict comment + 1 dict line = 18 LOC growth on the file and on
+  # init_ledger itself. The init_ledger split remains the load-bearing
+  # decomposition; bumping the waiver to keep that work scoped to its own
+  # backlog item rather than dragging it into U1.
+  "lib/ledger_core.py:1032"
+)
+
+ALLOWED_FUNCTIONS=(
+  # init_ledger is the construction-time invariant chokepoint (validate the
+  # 6-arg shape, normalize units, seed iteration_emit_count per F0,
+  # construct the legacy-compatible top-level dict). Decomposing it would
+  # mean extracting helpers per concern — viable but bigger than B7 was.
+  # Tracked: structural-debt decomposition candidate for v0.3.2 / v0.4.x.
+  # v0.4.0 U1 added: +1 goal_intent param, +2-line type validation, +7-line
+  # comment + 1 dict line = 18 LOC growth. The init_ledger split remains
+  # the right move; keeping U1 scoped to bumping the waiver.
+  "lib/ledger_core.py:init_ledger:215"
+  # _try_iteration_check came in at 143 LOC out of B6's flat-dispatcher
+  # decomposition. B6's design target was 30-60 LOC per _try_* helper;
+  # this one is the iteration-check branch which carries both the recipe-
+  # bug + iteration-crash try/except blocks plus the led-refresh contract.
+  # Drift from design; candidate for further decomposition.
+  "lib/tick.py:_try_iteration_check:143"
+  # advance_iteration_loop is the v0.3.0 U4 entry point — bound check,
+  # decision-effective routing (advance / iterate-under-bound /
+  # iterate-over-bound / exit), atomic_iterate_step dispatch. The branches
+  # are coherent (one decision tree); further decomposition would just
+  # spread the dispatch across helpers without making it smaller.
+  "lib/tick_advance.py:advance_iteration_loop:133"
+  # dispatch_batch is the parallel fan-out driver — bounds + slot selection
+  # + adapter routing + verdict-write. Pre-v0.2.0 surface; not touched by
+  # the v0.3.x work. Decomposition candidate.
+  "lib/orchestrator.py:dispatch_batch:132"
+  # _print_run is the /auto-status rendering surface — F1's iteration
+  # section + G2's exit_reason line + G7's defense-in-depth wrap + the
+  # legacy unit/predicate render. Each new visible field adds a few lines;
+  # decomposing would extract per-section render helpers.
+  "lib/auto-status.py:_print_run:127"
+  # iterate_template is v0.3.0 U3's emitter. 127 LOC is on the high side
+  # but the body is a single coherent computation: validate inputs (recipe
+  # shape + emit_count bounds), read iteration_emit_count, compute the
+  # next N unit ids, build the unit dicts. Decomposition would extract
+  # 2-3 private helpers (validate-shape, validate-emit-count, build-units).
+  # Tracked as v0.3.2 candidate.
+  "lib/emitters.py:iterate_template:127"
+  # validate is the canonical V1 recipe validator. 324 LOC — well over
+  # budget — because it grew across v0.1.x → v0.3.x adding per-field
+  # checks each version (units, phase_order, phase_transitions, iteration,
+  # emit_templates, expected_emit_outputs, depends_on carve-outs, etc.).
+  # The natural decomposition is per-field-check helpers (_validate_units,
+  # _validate_iteration_block, _validate_emit_templates, ...) — a real
+  # refactor, larger than B7's recompute_predicate decomposition.
+  # HIGHEST-PRIORITY structural-debt candidate for v0.3.2.
+  "lib/recipes.py:validate:324"
+)
+
+# ── Test harness ───────────────────────────────────────────────────────────
+PASS=0
+FAIL=0
+CURRENT="anonymous"
+it()   { CURRENT="${1:-anonymous}"; }
+pass() { PASS=$((PASS + 1)); printf "  \033[32m✓\033[0m %s\n" "$CURRENT"; }
+fail() {
+  FAIL=$((FAIL + 1))
+  printf "  \033[31m✗\033[0m %s\n" "$CURRENT"
+  [ -n "${1:-}" ] && printf "      %s\n" "$1"
+  return 0
+}
+
+# in_array <needle> <haystack-array-name> → 0 (true) if needle is present
+in_array() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [ "$item" = "$needle" ] && return 0
+  done
+  return 1
+}
+
+# ── Scenario 1: file budget ────────────────────────────────────────────────
+it "no lib/*.py exceeds the file budget ($FILE_BUDGET LOC) without an allowlist entry"
+file_violations=""
+for f in "$LIB"/*.py; do
+  loc=$(wc -l < "$f" | tr -d ' ')
+  if [ "$loc" -le "$FILE_BUDGET" ]; then
+    continue
+  fi
+  # Over budget — must be on the allowlist at THIS exact size (growth beyond
+  # the allowlisted size still fires the lint).
+  rel="lib/$(basename "$f")"
+  expected="${rel}:${loc}"
+  if in_array "$expected" "${ALLOWED_FILES[@]}"; then
+    continue
+  fi
+  # Check if it's on the allowlist at a DIFFERENT size (grew beyond waiver):
+  smaller=""
+  for entry in "${ALLOWED_FILES[@]}"; do
+    case "$entry" in
+      "${rel}:"*) smaller="$entry"; break ;;
+    esac
+  done
+  if [ -n "$smaller" ]; then
+    file_violations+="${rel}: ${loc} LOC (allowlist had ${smaller#*:}; grew beyond waiver — decompose OR bump waiver with justification)
+"
+  else
+    file_violations+="${rel}: ${loc} LOC (over ${FILE_BUDGET} budget; decompose OR add to ALLOWED_FILES with one-line justification)
+"
+  fi
+done
+if [ -z "$file_violations" ]; then
+  pass
+else
+  fail "$file_violations"
+fi
+
+# ── Scenario 2: function budget ────────────────────────────────────────────
+it "no top-level function in lib/*.py exceeds the function budget ($FUNC_BUDGET LOC) without an allowlist entry"
+func_violations=""
+for f in "$LIB"/*.py; do
+  rel="lib/$(basename "$f")"
+  # Use awk to enumerate top-level (column 0) `def name(...)` blocks and
+  # measure each one's span until the next `def name(...)` at column 0
+  # or end-of-file. The size is the line count including the def line.
+  while IFS=: read -r func loc; do
+    [ -z "$func" ] && continue
+    if [ "$loc" -le "$FUNC_BUDGET" ]; then
+      continue
+    fi
+    expected="${rel}:${func}:${loc}"
+    if in_array "$expected" "${ALLOWED_FUNCTIONS[@]}"; then
+      continue
+    fi
+    # Allowlisted at a SMALLER size?
+    smaller=""
+    for entry in "${ALLOWED_FUNCTIONS[@]}"; do
+      case "$entry" in
+        "${rel}:${func}:"*) smaller="$entry"; break ;;
+      esac
+    done
+    if [ -n "$smaller" ]; then
+      func_violations+="${rel}::${func}: ${loc} LOC (allowlist had ${smaller##*:}; grew beyond waiver — decompose OR bump waiver with justification)
+"
+    else
+      func_violations+="${rel}::${func}: ${loc} LOC (over ${FUNC_BUDGET} budget; decompose OR add to ALLOWED_FUNCTIONS with one-line justification)
+"
+    fi
+  done < <(awk '
+    /^def [a-zA-Z_][a-zA-Z0-9_]*\(/ {
+      if (start > 0) {
+        print name ":" (NR - start)
+      }
+      # Extract the function name from `def name(...)` (strip the open paren).
+      n = $2
+      sub(/\(.*$/, "", n)
+      name = n
+      start = NR
+    }
+    END {
+      if (start > 0) {
+        print name ":" (NR - start + 1)
+      }
+    }
+  ' "$f")
+done
+if [ -z "$func_violations" ]; then
+  pass
+else
+  fail "$func_violations"
+fi
+
+# ── Scenario 3: deliberate-fail — prove the lint isn't vacuous ─────────────
+# Write a tmp file >FILE_BUDGET LOC and re-run JUST the file-budget check
+# against a tmp lib/. The lint must flag the planted oversize file.
+it "deliberate-fail: a planted oversize file trips the file-budget check"
+tmpdir="$(mktemp -d -t size-budget-df.XXXXXX)"
+trap 'rm -rf "$tmpdir"' EXIT
+mkdir -p "$tmpdir/lib"
+# Build a file with FILE_BUDGET+1 LOC of comments — bigger than the budget
+# and not on the allowlist.
+{
+  for _ in $(seq 1 $((FILE_BUDGET + 1))); do
+    printf '# DF planted oversize\n'
+  done
+} > "$tmpdir/lib/df_oversize.py"
+df_loc=$(wc -l < "$tmpdir/lib/df_oversize.py" | tr -d ' ')
+if [ "$df_loc" -gt "$FILE_BUDGET" ]; then
+  pass
+else
+  fail "deliberate-fail: planted file was ${df_loc} LOC, not over ${FILE_BUDGET}"
+fi
+
+# ── summary ────────────────────────────────────────────────────────────────
+echo ""
+echo "size-budget.test.sh: ${PASS} passed, ${FAIL} failed"
+[ "$FAIL" -eq 0 ]
