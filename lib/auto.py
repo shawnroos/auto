@@ -48,7 +48,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 _DEFAULT_ADAPTER = "ce"
 _VALID_ADAPTERS = ("ce", "native")
@@ -63,13 +63,28 @@ def _parse_args(argv):
     """Split the /auto arg string into (plan, auto, adapter, goal, recipe).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
-    positional keyword. Flags: --adapter <ce|native>, --goal <text>, --recipe
-    <name>. Returns a dict; raises ValueError on a malformed flag. ``recipe``
-    defaults to ``"a1"`` (the classic stack — v0.1.x-equivalent default, KTD-1)
-    when no --recipe is given, so bare `/auto <plan>` keeps working unchanged.
+    positional keyword (v0.3.x; redundant under v0.4.0's seam-flip default but
+    accepted for back-compat). Flags: --adapter <ce|native>, --goal <text>,
+    --recipe <name>, --review-plan. Returns a dict; raises ValueError on a
+    malformed flag. ``recipe`` defaults to ``"a1"`` (the classic stack —
+    v0.1.x-equivalent default, KTD-1) when no --recipe is given, so bare
+    ``/auto <plan>`` keeps working unchanged.
+
+    v0.4.0 KTD-4 — seam-default FLIP:
+      * v0.3.x: ``auto`` defaulted False; the ``auto`` positional token opted
+        IN to skip the plan→work seam pause.
+      * v0.4.0: ``auto`` defaults True; the ``--review-plan`` flag opts IN to
+        pause at the seam for review. The default-flip delivers the operator-
+        facing intent ("involved only at goal-divergence checkpoints, not
+        fixed phase boundaries") without latency or a new intent type.
+        The ``auto`` positional token still parses to True for scripted
+        callers that spell it; it is now a no-op against the default but
+        deliberately not rejected.
     """
     plan = None
-    auto = False
+    # v0.4.0 KTD-4: default flip. The legacy ``auto`` positional still parses
+    # to True; ``--review-plan`` opts out of the new default.
+    auto = True
     adapter = _DEFAULT_ADAPTER
     goal = None
     recipe = None
@@ -95,7 +110,15 @@ def _parse_args(argv):
             recipe = argv[i + 1]
             i += 2
             continue
+        if tok == "--review-plan":
+            # v0.4.0 KTD-4: opt in to the seam pause for first-pass plans.
+            auto = False
+            i += 1
+            continue
         if tok == "auto":
+            # Legacy v0.3.x positional. Under v0.4.0 default-flip this is a
+            # no-op against the new True default — accepted (not rejected) so
+            # scripted callers keep working without a forced rewrite.
             auto = True
             i += 1
             continue
@@ -111,6 +134,76 @@ def _parse_args(argv):
     # v0.1.x because a1 IS the encoding of the v0.1.x topology (KTD-1).
     return {"plan": plan, "auto": auto, "adapter": adapter, "goal": goal,
             "recipe": recipe or "a1"}
+
+
+def _seam_default_notice():
+    """v0.4.0 KTD-4: one-time stderr notice for the seam-default flip.
+
+    The seam-pause default flipped from "pause unless `auto`" to "proceed
+    unless `--review-plan`". Scripted callers that relied on the pause
+    without spelling ``auto`` will now silently skip it. The notice makes
+    the change discoverable.
+
+    Marker file at ``<resolve_shared_dir>/.seam-default-acknowledged``;
+    first-run-after-upgrade emits the notice and writes the marker; every
+    subsequent run is silent. Scoped to the HOST repo (not the worktree)
+    so the notice doesn't re-fire per worktree under fanout — KTD-3 (the
+    dependency this skill declared on U1).
+
+    Best-effort: any IO failure swallows silently. A missing marker on a
+    next run re-fires the notice; not a load-bearing correctness path.
+    """
+    shared = resolve_shared_dir()
+    if shared is None:
+        return  # No git → can't anchor the marker; skip the notice.
+    marker = os.path.join(shared, ".seam-default-acknowledged")
+    if os.path.exists(marker):
+        return
+    sys.stderr.write(
+        "[auto] v0.4.0 seam-default FLIP: `/auto <plan>` now proceeds past "
+        "the plan→work seam by default. Pass `--review-plan` to opt in to "
+        "the pause for first-pass plans. See "
+        "docs/plans/2026-05-27-002-feat-auto-bare-entry-and-fanout-plan.md "
+        "KTD-4.\n"
+    )
+    try:
+        os.makedirs(shared, mode=0o700, exist_ok=True)
+        # 0600 / touch — anyone-readable would leak via /tmp inspection but
+        # we're under the .claude/ tree which is already user-private.
+        with open(marker, "w") as fh:
+            fh.write("ack")
+    except OSError:
+        # The notice already fired this run; failing to persist the marker
+        # just re-fires next time, which is the correct conservative fallback.
+        pass
+
+
+def _derive_goal_intent(plan: str) -> str:
+    """Derive a one-line goal_intent sentence from the plan file.
+
+    v0.4.0 KTD-2: every /auto <plan> run writes a one-line user-facing intent
+    sentence at init time so the bare-/auto hypothesis can surface it when
+    disambiguating between in-flight runs. Cheap and deterministic: prefer the
+    first ``# H1`` line of the plan markdown, fall back to the file stem.
+
+    Failure modes (unreadable file, no headline, gigantic line): return the
+    stem. ``goal_intent`` is advisory operator surface, not a load-bearing
+    decision input — a noisy or missing derivation must never block run init.
+    """
+    try:
+        with open(plan, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(50):  # only scan the head; plans put H1 near the top.
+                line = fh.readline()
+                if not line:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("# "):
+                    # Crop to a sensible one-line length; the ambiguous-runs
+                    # surface renders this verbatim.
+                    return stripped[2:].strip()[:120]
+    except OSError:
+        pass
+    return os.path.splitext(os.path.basename(plan))[0] or "run"
 
 
 def _make_run_id(ledger, repo_root: str, plan: str) -> str:
@@ -161,6 +254,11 @@ def run(argv) -> int:
     ledger = load_ledger()
     recipes = load_lib_module("recipes")
     repo_root = _resolve_repo()
+
+    # v0.4.0 KTD-4: surface the seam-default flip once per host repo, before
+    # any flag parsing — so a scripted caller that relied on the v0.3.x pause
+    # without spelling `auto` sees the notice on its first post-upgrade run.
+    _seam_default_notice()
 
     try:
         args = _parse_args(list(argv))
@@ -214,6 +312,11 @@ def run(argv) -> int:
     phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
+    # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
+    # Frozen on the ledger so the bare-/auto hypothesis funnel can render it
+    # verbatim when disambiguating among multiple in-flight runs.
+    goal_intent = _derive_goal_intent(plan)
+
     try:
         ledger.init_ledger(
             repo_root,
@@ -230,6 +333,7 @@ def run(argv) -> int:
             # checked shape if non-None.
             iteration=recipe.get("iteration"),
             emit_templates=recipe.get("emit_templates"),
+            goal_intent=goal_intent,
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")

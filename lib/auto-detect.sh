@@ -1,40 +1,69 @@
 #!/usr/bin/env bash
-# auto U12: smart-entry situation detector (READ-ONLY).
+# auto v0.4.0 U1: smart-entry hypothesis detector (READ-ONLY).
 #
 # Bare `/auto` should "gather context and determine where to pick up" (field
-# feedback 2026-05-25). The ROUTING is orchestrator prose in commands/auto.md,
-# but the DETECTION is deterministic and lives here (deterministic-over-
-# probabilistic for load-bearing infra). Prints ONE situation verdict line the
-# prose branches on:
+# feedback 2026-05-25). The DETECTION is deterministic and lives here
+# (deterministic-over-probabilistic for load-bearing infra). The ROUTING — what
+# the driver does with the verdict — lives in `skills/auto-driver`.
 #
-#   in-flight\t<run-id>           — a run exists whose exit_predicate_result.met
-#                                   is False (the I-1-fresh "not done" signal) →
-#                                   the prose resumes it (auto-chosen continue).
-#   ambiguous-runs\t<n>           — MORE THAN ONE in-flight run → prose lists them,
-#                                   asks which to resume (don't guess).
-#   reviewed-plan\t<path>         — no in-flight run, but exactly one reviewed
-#                                   plan present → prose offers work-only (W).
-#   ambiguous-plans\t<n>          — no run, multiple plans → prose shows the picker.
-#   raw                           — no run, no plan → prose recommends /ce-plan
-#                                   (plan-production is upstream of /auto's work).
+# v0.4.0 (this version): emits a JSON HYPOTHESIS object instead of a TSV
+# verdict line. The decision tree itself is unchanged from v0.2.x's tested
+# logic; the *output shape* changed so the driver consumes one envelope rather
+# than enumerating a verdict-tree case-by-case. KTD-1 of the v0.4.0 plan.
 #
-# Reviewed-plan heuristic: a *.md under docs/plans/ (or plans/, or *-plan.md at
-# repo root). We do NOT try to judge "reviewed" semantically — presence in the
-# plans dir is the signal; the operator confirms via the work-only offer.
+# JSON envelope (one line, machine-parseable):
+#   {
+#     "situation": "in-flight" | "ambiguous-runs" | "reviewed-plan"
+#                | "multi-plan" | "raw",
+#     "summary":   "one-line operator-facing description",
+#     "ambiguity": null | { "kind": "choice"|"open",
+#                           "question": "...",
+#                           "options": [ {"label":"…","run_id":"…","description":"…"}* ] },
+#       * "choice" — N-option pick-one (ambiguous-runs surface). Maps to
+#         AskUserQuestion's options array. NOT necessarily 2 — N may be 2..N.
+#       * "open"   — freeform text (raw surface). Maps to AskUserQuestion's
+#         open-question shape; `options` is the empty array.
+#     "single_plan": { "path": "...", "run_id_hint": "..." } | null,
+#     "multi_plan":  { "paths": ["..."], "batch_id_hint": "..." } | null,
+#     "in_flight":   { "run_id": "...", "run_ids": ["..."] } | null
+#   }
 #
-# READ-ONLY: scans the ledger dir + plan dirs; never writes. Repo root resolved
-# by the Python (CLAUDE_AUTO_REPO or walk-up), parity with the other shims.
+# Situations:
+#   in-flight       — exactly ONE run with exit_predicate_result.met == false.
+#                     `single_plan` carries the run via in_flight.run_id;
+#                     ambiguity null → driver resumes silently.
+#   ambiguous-runs  — MORE THAN ONE in-flight run; ambiguity carries a binary
+#                     options array of run-ids + their goal_intent strings so
+#                     AskUserQuestion shows what each run was started for.
+#   reviewed-plan   — no in-flight run; exactly one reviewed plan present.
+#                     single_plan.path filled; ambiguity null.
+#   multi-plan      — no run, MORE THAN ONE plan. multi_plan.paths filled;
+#                     ambiguity null (the driver fans out via auto-spawn.py).
+#                     v0.4.0 RENAME of v0.2.x's `ambiguous-plans` — under the
+#                     v0.4.0 fanout model, multiple plans is a fanout signal,
+#                     not an ambiguity to resolve. (KTD-1.)
+#   raw             — no run, no plan (clean OR dirty tree). ambiguity is an
+#                     open "what should we work on?" question so the driver
+#                     can route to /ce-plan or a freeform handoff. When the
+#                     working tree is dirty, summary includes branch + diff
+#                     context so the operator sees what they were doing —
+#                     but the situation is still raw because there's no
+#                     deterministic dispatch from a diff alone.
+#
+# READ-ONLY: scans the ledger dir + plan dirs + git status; never writes.
+# Repo root resolved by the Python (CLAUDE_AUTO_REPO or walk-up).
+#
+# Hypothesis-shape stability (NO TSV legacy): the previous TSV consumer was
+# `skills/auto-driver` only (one consumer, updated lock-step in U4). No
+# back-compat wrapper, no shim — the JSON output is the contract.
 
 set -uo pipefail
 
 CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 auto::detect() {
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  "$CLAUDE_AUTO_PYTHON3" - "$script_dir" <<'PYEOF'
-import sys, os, json, glob
-script_dir = sys.argv[1]
+  "$CLAUDE_AUTO_PYTHON3" - <<'PYEOF'
+import sys, os, json, glob, subprocess
 
 
 def _repo_root():
@@ -49,20 +78,43 @@ def _repo_root():
     return os.getcwd()
 
 
-# CLI-004: on any unexpected error path, emit the safe `raw` verdict (the most
-# conservative — the prose recommends /ce-plan, does not start a run). An empty
-# stdout would leave the smart-entry prose with no branch to take; `raw` is the
-# fall-closed surface. rel-001: never break hook callers — always exit 0.
-try:
-    repo = _repo_root()
+def _emit(hyp):
+    """Print the hypothesis envelope as ONE JSON line and exit 0.
 
-    # In-flight runs: ledgers whose exit_predicate_result.met is False.
-    # P2-1: log a corrupted/malformed ledger to stderr so a silent skip becomes
-    # observable. The hook contract (rel-001) still demands exit 0; stderr is the
-    # operator-visible side channel.
-    in_flight = []
-    ledger_dir = os.path.join(repo, ".claude", "auto")
-    for path in sorted(glob.glob(os.path.join(ledger_dir, "*.json")), key=os.path.getmtime, reverse=True):
+    rel-001 parity with v0.2.x: callers expect exit 0 on any non-fatal path.
+    """
+    json.dump(hyp, sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+
+
+def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
+                   multi_plan=None, in_flight=None):
+    """Build the canonical hypothesis dict — all slots present, unknowns null.
+
+    Every consumer can rely on the same keys existing, so a Python/jq reader
+    that asks for `.in_flight.run_id` never trips on `KeyError: in_flight`.
+    """
+    return {
+        "situation": situation,
+        "summary": summary,
+        "ambiguity": ambiguity,
+        "single_plan": single_plan,
+        "multi_plan": multi_plan,
+        "in_flight": in_flight,
+    }
+
+
+def _read_in_flight(ledger_dir):
+    """Return [(run_id, goal_intent_str_or_None)] for not-met runs.
+
+    Mtime-desc so the freshest run comes first — the in-flight branch picks
+    [0] when there's exactly one, and the ambiguous-runs branch lists them.
+    Malformed ledgers are skipped with a stderr note (parity with v0.2.x).
+    """
+    out = []
+    for path in sorted(glob.glob(os.path.join(ledger_dir, "*.json")),
+                       key=os.path.getmtime, reverse=True):
         try:
             with open(path) as f:
                 led = json.load(f)
@@ -73,33 +125,198 @@ try:
             continue
         if not isinstance(led, dict) or "exit_predicate_result" not in led:
             continue
-        if not led["exit_predicate_result"].get("met", False):
-            in_flight.append(led.get("run_id") or os.path.splitext(os.path.basename(path))[0])
+        if led["exit_predicate_result"].get("met", False):
+            continue
+        run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
+        # v0.4.0 KTD-2: surface goal_intent so the ambiguous-runs options
+        # carry "what was this started for" rather than just a slug. None on
+        # legacy ledgers (pre-v0.4.0) is fine — the renderer falls back to
+        # run_id.
+        out.append((run_id, led.get("goal_intent")))
+    return out
 
-    if len(in_flight) == 1:
-        print("in-flight\t%s" % in_flight[0]); raise SystemExit(0)
-    if len(in_flight) > 1:
-        print("ambiguous-runs\t%d" % len(in_flight)); raise SystemExit(0)
 
-    # No in-flight run → look for reviewed plans.
+def _discover_plans(repo):
+    """All plan files under the conventional locations, sorted + de-duped."""
     plans = []
     for pat in ("docs/plans/*.md", "plans/*.md", "*-plan.md"):
         plans.extend(glob.glob(os.path.join(repo, pat)))
-    plans = sorted(set(plans))
-    if len(plans) == 1:
-        print("reviewed-plan\t%s" % os.path.relpath(plans[0], repo)); raise SystemExit(0)
-    if len(plans) > 1:
-        print("ambiguous-plans\t%d" % len(plans)); raise SystemExit(0)
+    return sorted(set(plans))
 
-    print("raw")
+
+def _has_uncommitted_diff(repo):
+    """True iff git status reports a non-empty working tree.
+
+    Falls back to False on any git failure (no git, not in a repo, etc.) —
+    the worst case is we route to `raw` instead of `dirty-tree`, which is
+    the SAFER surface (recommends /ce-plan rather than acting on a tree we
+    couldn't inspect).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain"],
+            capture_output=True, text=True, check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return False
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
+
+
+def _current_branch(repo):
+    """Return the current branch name, or None if detached/git-unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    name = result.stdout.strip()
+    return name if name and name != "HEAD" else None
+
+
+def _diff_summary(repo):
+    """Short text summary of the uncommitted diff for the dirty-tree case.
+
+    Format: "<N> file(s) changed" — keeps the summary one line; the driver
+    surfaces the full diff via the operator's normal git inspection.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain"],
+            capture_output=True, text=True, check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return "uncommitted changes"
+    if result.returncode != 0:
+        return "uncommitted changes"
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    n = len(lines)
+    return "%d file%s changed" % (n, "" if n == 1 else "s")
+
+
+# CLI-004: on any unexpected error path, emit a safe `raw` envelope (the most
+# conservative — the driver recommends /ce-plan, does not start a run). An
+# empty stdout would leave the driver with no shape to parse; `raw` is the
+# fall-closed surface. rel-001: never break hook callers — always exit 0.
+try:
+    repo = _repo_root()
+
+    # ── Step 1: in-flight scan. ────────────────────────────────────────────
+    ledger_dir = os.path.join(repo, ".claude", "auto")
+    in_flight = _read_in_flight(ledger_dir)
+
+    if len(in_flight) == 1:
+        run_id, goal_intent = in_flight[0]
+        summary = "resuming `%s`" % run_id
+        if goal_intent:
+            summary = "resuming `%s` — %s" % (run_id, goal_intent)
+        _emit(_safe_envelope(
+            "in-flight", summary,
+            in_flight={"run_id": run_id, "run_ids": [run_id]},
+        ))
+
+    if len(in_flight) > 1:
+        options = []
+        for run_id, goal_intent in in_flight:
+            description = goal_intent if goal_intent else run_id
+            options.append({
+                "label": run_id,
+                "run_id": run_id,
+                "description": description,
+            })
+        _emit(_safe_envelope(
+            "ambiguous-runs",
+            "%d in-flight runs — pick one to resume" % len(in_flight),
+            ambiguity={
+                "kind": "choice",  # N-option pick-one → AskUserQuestion options
+                "question": "Multiple in-flight runs — which do you want to resume?",
+                "options": options,
+            },
+            in_flight={"run_id": None, "run_ids": [r for r, _ in in_flight]},
+        ))
+
+    # ── Step 2: plan discovery. ────────────────────────────────────────────
+    plans = _discover_plans(repo)
+
+    if len(plans) == 1:
+        plan_path = os.path.relpath(plans[0], repo)
+        # Operator-facing summary names the recipe + seam policy explicitly
+        # (review round 1 finding C-5: v0.4.0 silently runs full a1 on
+        # already-reviewed plans where v0.3.x required a confirm. Surface
+        # the action in the one-line summary so the operator can interrupt
+        # if the inference is wrong, rather than discovering it after the
+        # plan-loop has already begun deepening).
+        _emit(_safe_envelope(
+            "reviewed-plan",
+            "starting `%s` (recipe a1, auto-through seam — pass `--review-plan` to pause)"
+            % plan_path,
+            single_plan={"path": plan_path, "run_id_hint": None},
+        ))
+
+    if len(plans) > 1:
+        # v0.4.0 RENAME of v0.2.x's `ambiguous-plans` → `multi-plan`. Multiple
+        # plans is a fanout SIGNAL (the v0.4.0 driver dispatches one run per
+        # plan via auto-spawn.py), not an ambiguity for the operator to
+        # resolve. `ambiguity` stays null.
+        rel_paths = [os.path.relpath(p, repo) for p in plans]
+        _emit(_safe_envelope(
+            "multi-plan",
+            "%d plans — fanning out to %d worktrees" % (len(plans), len(plans)),
+            multi_plan={"paths": rel_paths, "batch_id_hint": None},
+        ))
+
+    # ── Step 3: raw — no run, no plan. ────────────────────────────────────
+    # Includes both clean and dirty trees: review round 1 finding C-2/C-3
+    # surfaced that a separate `dirty-tree` situation had no actionable
+    # dispatch (the skill's `<derived-args>` were never specifiable from a
+    # diff alone) AND that the dirty detection depended on downstream repos
+    # gitignoring `.claude/` — an unfixable assumption for a shipped plugin.
+    # The fix is to drop `dirty-tree` as a situation and inform `raw`'s
+    # summary with whatever git context we have. The operator still answers
+    # one open question; the engine doesn't pretend it can dispatch a run
+    # without a plan or explicit intent.
+    summary = "no plan, no in-flight run — what should we work on?"
+    if _has_uncommitted_diff(repo):
+        branch = _current_branch(repo) or "(detached)"
+        diff = _diff_summary(repo)
+        summary = (
+            "no plan; working on branch `%s` (%s) — what should we work on?"
+            % (branch, diff)
+        )
+    _emit(_safe_envelope(
+        "raw",
+        summary,
+        ambiguity={
+            "kind": "open",
+            "question": "What should we work on?",
+            "options": [],
+        },
+    ))
 except SystemExit:
     raise
 except BaseException as exc:
     # CLI-004: emit the safe `raw` fallback on any unexpected error so the
-    # smart-entry prose has a verdict to branch on (rather than empty stdout
-    # which would silently no-op). Surface the cause on stderr for diagnosis.
+    # driver has an envelope to consume (rather than empty stdout). Surface
+    # the cause on stderr for diagnosis.
     sys.stderr.write("auto: detector hit unexpected error: %s\n" % exc)
-    print("raw")
+    json.dump({
+        "situation": "raw",
+        "summary": "detector error — recommend /ce-plan",
+        "ambiguity": {
+            "kind": "open",
+            "question": "What should we work on?",
+            "options": [],
+        },
+        "single_plan": None,
+        "multi_plan": None,
+        "in_flight": None,
+    }, sys.stdout)
+    sys.stdout.write("\n")
     raise SystemExit(0)
 PYEOF
 }
