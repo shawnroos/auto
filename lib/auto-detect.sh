@@ -14,7 +14,7 @@
 # JSON envelope (one line, machine-parseable):
 #   {
 #     "situation": "in-flight" | "ambiguous-runs" | "reviewed-plan"
-#                | "multi-plan" | "dirty-tree" | "raw",
+#                | "multi-plan" | "raw",
 #     "summary":   "one-line operator-facing description",
 #     "ambiguity": null | { "kind": "choice"|"open",
 #                           "question": "...",
@@ -42,12 +42,13 @@
 #                     v0.4.0 RENAME of v0.2.x's `ambiguous-plans` — under the
 #                     v0.4.0 fanout model, multiple plans is a fanout signal,
 #                     not an ambiguity to resolve. (KTD-1.)
-#   dirty-tree      — NEW in v0.4.0. No run, no plan, but uncommitted changes
-#                     exist. summary derived from current branch + diff;
-#                     ambiguity null (the driver surfaces the summary and acts).
-#   raw             — no run, no plan, clean tree. ambiguity is an open
-#                     "what should we work on?" question so the driver can
-#                     route to /ce-plan or to a freeform handoff.
+#   raw             — no run, no plan (clean OR dirty tree). ambiguity is an
+#                     open "what should we work on?" question so the driver
+#                     can route to /ce-plan or a freeform handoff. When the
+#                     working tree is dirty, summary includes branch + diff
+#                     context so the operator sees what they were doing —
+#                     but the situation is still raw because there's no
+#                     deterministic dispatch from a diff alone.
 #
 # READ-ONLY: scans the ledger dir + plan dirs + git status; never writes.
 # Repo root resolved by the Python (CLAUDE_AUTO_REPO or walk-up).
@@ -244,9 +245,16 @@ try:
 
     if len(plans) == 1:
         plan_path = os.path.relpath(plans[0], repo)
+        # Operator-facing summary names the recipe + seam policy explicitly
+        # (review round 1 finding C-5: v0.4.0 silently runs full a1 on
+        # already-reviewed plans where v0.3.x required a confirm. Surface
+        # the action in the one-line summary so the operator can interrupt
+        # if the inference is wrong, rather than discovering it after the
+        # plan-loop has already begun deepening).
         _emit(_safe_envelope(
             "reviewed-plan",
-            "starting `%s`" % plan_path,
+            "starting `%s` (recipe a1, auto-through seam — pass `--review-plan` to pause)"
+            % plan_path,
             single_plan={"path": plan_path, "run_id_hint": None},
         ))
 
@@ -262,27 +270,27 @@ try:
             multi_plan={"paths": rel_paths, "batch_id_hint": None},
         ))
 
-    # ── Step 3: dirty-tree branch (NEW in v0.4.0). ─────────────────────────
-    # No run, no plan, but uncommitted changes exist. The driver surfaces the
-    # summary so the operator confirms (or corrects) the inferred intent.
-    #
-    # Project gitignore expectation: `.claude/auto/` is gitignored (per repo
-    # convention) so an untracked ledger file does NOT count as "uncommitted
-    # changes" — only real source-tree changes do. If a downstream project
-    # does NOT gitignore `.claude/`, every fresh ledger would falsely route
-    # to dirty-tree. The convention is upstream of this branch.
+    # ── Step 3: raw — no run, no plan. ────────────────────────────────────
+    # Includes both clean and dirty trees: review round 1 finding C-2/C-3
+    # surfaced that a separate `dirty-tree` situation had no actionable
+    # dispatch (the skill's `<derived-args>` were never specifiable from a
+    # diff alone) AND that the dirty detection depended on downstream repos
+    # gitignoring `.claude/` — an unfixable assumption for a shipped plugin.
+    # The fix is to drop `dirty-tree` as a situation and inform `raw`'s
+    # summary with whatever git context we have. The operator still answers
+    # one open question; the engine doesn't pretend it can dispatch a run
+    # without a plan or explicit intent.
+    summary = "no plan, no in-flight run — what should we work on?"
     if _has_uncommitted_diff(repo):
         branch = _current_branch(repo) or "(detached)"
         diff = _diff_summary(repo)
-        _emit(_safe_envelope(
-            "dirty-tree",
-            "working on branch `%s` (%s)" % (branch, diff),
-        ))
-
-    # ── Step 4: raw — no run, no plan, clean tree. ─────────────────────────
+        summary = (
+            "no plan; working on branch `%s` (%s) — what should we work on?"
+            % (branch, diff)
+        )
     _emit(_safe_envelope(
         "raw",
-        "no plan, no in-flight run — what should we work on?",
+        summary,
         ambiguity={
             "kind": "open",
             "question": "What should we work on?",

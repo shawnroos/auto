@@ -118,8 +118,8 @@ assert_eq "multi-plan" "$(detect_situation setup_three_plans)"
 it "smart-entry detect: 2 plans still multi-plan (count agnostic, all >1 fan out)"
 assert_eq "multi-plan" "$(detect_situation setup_two_plans)"
 
-it "smart-entry detect: dirty tree (no run, no plan) → situation=dirty-tree (NEW)"
-assert_eq "dirty-tree" "$(detect_situation setup_dirty_tree)"
+it "smart-entry detect: dirty tree (no run, no plan) → situation=raw (round-1 C-2/C-3: dirty-tree collapsed into raw)"
+assert_eq "raw" "$(detect_situation setup_dirty_tree)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

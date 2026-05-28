@@ -30,16 +30,14 @@ multi_plan, in_flight }`. Surface `summary` (one line). Then act on
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
 | `reviewed-plan`   | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path>"`                          | (n/a — single plan unambiguous)      |
 | `multi-plan`      | `python "${CLAUDE_PLUGIN_ROOT}/lib/auto-spawn.py" fanout <plan...>` then surface manifest | (n/a — confirm-only in `summary`)    |
-| `dirty-tree`      | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<derived-args>"`                  | (n/a — summary is the confirm)       |
-| `raw`             | (no signal — always ambiguous)                                               | open question; on answer, route as freeform text |
+| `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
-**Freeform text** (operator typed `/auto <text>` with no resolvable
-plan): invoke `/ce-plan <text>` via the Skill tool and end the turn.
-The operator re-invokes `/auto` after the plan lands. `/ce-plan` is a
-multi-turn skill — there is no in-session return to this driver.
+**Argument-aware freeform** (preserves v0.3.x intent routing): before
+loading the hypothesis, if `$ARGUMENTS` is non-empty AND does NOT
+resolve to an existing plan file, skip the funnel and invoke
+`/ce-plan <ARGUMENTS>` via the Skill tool, then end the turn.
 
-**Unknown situation** (defensive guard): treat as `raw`. Recommend
-`/ce-plan` and stop.
+**Unknown situation** (defensive guard): treat as `raw`.
 
 ## Dispatch grammar (reference)
 

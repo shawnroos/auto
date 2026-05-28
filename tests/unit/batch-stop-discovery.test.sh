@@ -47,7 +47,7 @@ met = ${py_met}
 data = {
   "run_id": "${run}",
   "loop_phase": "${phase}",
-  "loop": {"driver": "self", "last_beat_at": "2099-01-01T00:00:00+00:00"},
+  "loop": {"driver": "self", "last_beat_at": "2099-01-01T00:00:00Z"},
   "exit_predicate_result": {
     "met": met,
     "blockers": 0 if met else 1,
@@ -150,6 +150,64 @@ else
   auto_test::pass
 fi
 rm -rf "$R4"
+
+# ── Scenario 4b: sub-run with driver=manual (seam pause) → ALLOW
+# Regression for review round 1 finding C-1: the batch loop must apply
+# the same seam/manual carve-out as the per-worktree loop. Otherwise a
+# fanned-out sub-run paused at the seam blocks the parent forever.
+auto_test::it "committed batch with sub-run paused at seam (driver=manual) allows stop"
+R4b="$(make_fixture)"
+WT_A4b="${R4b}/worktrees/plan-a"
+mkdir -p "$WT_A4b/.claude/auto"
+"$PY" - <<PYEOF
+import json
+data = {
+  "run_id": "plan-a-2026-05-28",
+  "loop_phase": "seam",
+  "loop": {"driver": "manual", "last_beat_at": "2099-01-01T00:00:00Z"},
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "all_units_terminal": False},
+}
+with open("${WT_A4b}/.claude/auto/plan-a-2026-05-28.json", "w") as f:
+  json.dump(data, f)
+PYEOF
+plant_sidecar "$R4b" "test-batch-4b" "committed" \
+  '[{"path":"a","slug":"plan-a","worktree":"'"$WT_A4b"'","branch":"x","port":3001,"suggested_run_id":"plan-a-2026-05-28"}]'
+out="$(on_stop_decision "$R4b")"
+if echo "$out" | grep -q '"decision":[[:space:]]*"block"'; then
+  auto_test::fail "expected allow (seam-paused sub-run); got block: $out"
+else
+  auto_test::pass
+fi
+rm -rf "$R4b"
+
+# ── Scenario 4c: sub-run with driver=self + stale last_beat → ALLOW
+# Regression for review round 1 finding C-1: the batch loop must apply
+# the dead-self-chain staleness gate. A sub-run whose tick chain died
+# (driver=self, last_beat far in the past) must NOT block stop forever.
+auto_test::it "committed batch with stale self-driven sub-run allows stop"
+R4c="$(make_fixture)"
+WT_A4c="${R4c}/worktrees/plan-a"
+mkdir -p "$WT_A4c/.claude/auto"
+"$PY" - <<PYEOF
+import json
+data = {
+  "run_id": "plan-a-2026-05-28",
+  "loop_phase": "work",
+  "loop": {"driver": "self", "last_beat_at": "2020-01-01T00:00:00Z"},
+  "exit_predicate_result": {"met": False, "blockers": 1, "majors": 0, "all_units_terminal": False},
+}
+with open("${WT_A4c}/.claude/auto/plan-a-2026-05-28.json", "w") as f:
+  json.dump(data, f)
+PYEOF
+plant_sidecar "$R4c" "test-batch-4c" "committed" \
+  '[{"path":"a","slug":"plan-a","worktree":"'"$WT_A4c"'","branch":"x","port":3001,"suggested_run_id":"plan-a-2026-05-28"}]'
+out="$(on_stop_decision "$R4c")"
+if echo "$out" | grep -q '"decision":[[:space:]]*"block"'; then
+  auto_test::fail "expected allow (stale dead chain); got block: $out"
+else
+  auto_test::pass
+fi
+rm -rf "$R4c"
 
 # ── Scenario 5: mixed — one met, one unmet → BLOCK (the unmet one)
 auto_test::it "committed batch with mixed states blocks on the unmet sub-run"

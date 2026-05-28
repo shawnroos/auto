@@ -88,18 +88,63 @@ def _read_stop_hook_active(raw: str) -> bool:
     return bool(isinstance(data, dict) and data.get("stop_hook_active"))
 
 
+def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
+    """Single source of truth for 'does this ledger block stop?'
+
+    Applies the four carve-outs uniformly across per-worktree ledgers and
+    batch-discovered sub-run ledgers (the v0.4.0 U4 batch path originally
+    duplicated this predicate and dropped two carve-outs; code-review round
+    1 finding C-1 surfaced both gaps — manual-driver runs at the seam, and
+    stale-chain `driver == "self"` runs — would block stop indefinitely
+    via the batch path while correctly allowing it via the per-worktree
+    path). Returns the predicate dict when blocking, None otherwise.
+    """
+    if not isinstance(led, dict):
+        return None
+    if phase_grammar.current_phase(led) == "done":
+        return None
+    loop = led.get("loop") or {}
+    # SEAM/MANUAL carve-out: a manual-driver run is the engine signaling
+    # a valid stop-point awaiting human input.
+    if loop.get("driver") == "manual":
+        return None
+    # Bug #9 STALE-CHAIN carve-out: a driver=="self" run whose
+    # last_beat_at is older than DRIVER_SELF_STALE_SECONDS is a DEAD
+    # chain — does NOT block (surfaced for resume by SessionStart hook).
+    if not skip_staleness and loop.get("driver") == "self":
+        last_beat = ledger._parse_iso(loop.get("last_beat_at"))
+        if last_beat is None:
+            return None
+        if (now - last_beat).total_seconds() > stale_threshold:
+            return None
+    predicate = led.get("exit_predicate_result") or {}
+    if not predicate.get("met"):
+        return predicate
+    return None
+
+
+def _load_ledger_safe(path):
+    """Read a ledger JSON; return None on any read/parse failure (rel-001)."""
+    try:
+        with open(path, "r") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
 def _blocking_runs(repo_root: str, now=None):
     """Return [(run_id, predicate_dict)] for every ACTIVE run that is NOT met.
 
     Lock-free: each ledger file is read as a whole via the atomic-rename
     invariant. A malformed/partial file is skipped silently (rel-001 — never let
     a bad ledger break the stop machinery).
+
+    v0.4.0 U4: also walks committed multi-plan batch sidecars at
+    `<shared-dir>/batches/*.json` and applies the SAME `_is_blocking`
+    predicate to each sub-run ledger (sub-runs live in worktree-local
+    ledger dirs the per-worktree glob can't reach).
     """
     ledger = load_ledger()
-    # Bug #9: the dead-self-chain freshness gate. A driver=="self" run whose last
-    # beat is older than this is treated as a dead chain (it does NOT block stop).
-    # The hatch forces the OLD behaviour (no freshness check) so the deliberate-
-    # fail test can prove a stale chain WOULD block without the gate.
     skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
     stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
     import datetime
@@ -107,86 +152,68 @@ def _blocking_runs(repo_root: str, now=None):
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
 
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     blocking = []
+
+    # Per-worktree ledgers (the main glob).
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        try:
-            with open(path, "r") as fh:
-                led = json.load(fh)
-        except Exception:
+        led = _load_ledger_safe(path)
+        if led is None:
             continue
-        if not isinstance(led, dict):
-            continue
-        if phase_grammar.current_phase(led) == "done":
-            continue
-        loop = led.get("loop") or {}
-        # SEAM/MANUAL carve-out: a manual-driver run is the engine signaling a
-        # valid stop-point awaiting human input (seam pause). Only a live tick
-        # chain (driver == "self") expects to keep going, so only it gates stop.
-        if loop.get("driver") == "manual":
-            continue
-        # Bug #9 STALE-CHAIN carve-out: a driver=="self" run whose last_beat_at is
-        # older than DRIVER_SELF_STALE_SECONDS is a DEAD chain (tick killed after
-        # the beat, before the re-arm). It must NOT block stop — it will be
-        # surfaced for resume by the SessionStart hook. A healthy slow chain (last
-        # beat within the threshold) STILL blocks. A missing/unparseable
-        # last_beat_at on a self-driver run is treated as stale (no proof of
-        # liveness → do not hold the stop hostage on a chain that never beat).
-        if not skip_staleness and loop.get("driver") == "self":
-            last_beat = ledger._parse_iso(loop.get("last_beat_at"))
-            if last_beat is None:
-                continue
-            if (now - last_beat).total_seconds() > stale_threshold:
-                continue
-        predicate = led.get("exit_predicate_result") or {}
-        # Read the I-1-fresh `met` directly (never re-derived).
-        if not predicate.get("met"):
+        predicate = _is_blocking(
+            led, ledger=ledger, skip_staleness=skip_staleness,
+            stale_threshold=stale_threshold, now=now,
+        )
+        if predicate is not None:
             run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
             blocking.append((run_id, predicate))
 
-    # v0.4.0 U4: also block on committed multi-plan batches whose sub-runs
-    # live in worktree-local ledger dirs the per-worktree glob above can't
-    # reach. The batch sidecar at <shared-dir>/batches/<id>.json records
-    # `worktree` per plan; the sub-run ledger lives at
-    # <worktree>/.claude/auto/<run-id>.json. Provisional sidecars are
-    # ignored (a half-built batch must NOT gate session exit — R4-002).
-    shared = resolve_shared_dir()
-    if shared:
-        batches_dir = os.path.join(shared, "batches")
-        for sidecar_path in sorted(glob.glob(os.path.join(batches_dir, "*.json"))):
-            try:
-                with open(sidecar_path, "r") as fh:
-                    sidecar = json.load(fh)
-            except Exception:
+    # Multi-plan batches (committed sidecars only). Fast-path guard: skip
+    # the git-rev-parse subprocess if there's no batches dir under the
+    # current repo's shared path (review round 1 finding E-1 — fork+exec
+    # of git on every Stop event in every project that never uses fanout
+    # was pure waste). The shared dir resolution still fires when batches/
+    # actually exists.
+    local_batches = os.path.join(dispatch_dir, "batches")
+    if not os.path.isdir(local_batches):
+        # No batches in this repo's view — check the worktree's shared dir
+        # only if it might differ (we're inside a git worktree, common-dir
+        # diverges from cwd). Otherwise skip entirely.
+        if not os.path.isdir(os.path.join(repo_root, ".git", "worktrees")):
+            return blocking
+    shared = resolve_shared_dir(cwd=repo_root)
+    if not shared:
+        return blocking
+    batches_dir = os.path.join(shared, "batches")
+    if not os.path.isdir(batches_dir):
+        return blocking
+    for sidecar_path in sorted(glob.glob(os.path.join(batches_dir, "*.json"))):
+        sidecar = _load_ledger_safe(sidecar_path)
+        if sidecar is None or not isinstance(sidecar, dict):
+            continue
+        if sidecar.get("status") != "committed":
+            continue
+        batch_id = sidecar.get("id", "?")
+        for plan in sidecar.get("plans") or []:
+            worktree = plan.get("worktree")
+            run_id_hint = plan.get("suggested_run_id")
+            if not worktree or not run_id_hint:
                 continue
-            if not isinstance(sidecar, dict):
-                continue
-            if sidecar.get("status") != "committed":
-                continue
-            for plan in sidecar.get("plans") or []:
-                worktree = plan.get("worktree")
-                run_id_hint = plan.get("suggested_run_id")
-                if not worktree or not run_id_hint:
+            # Prefix glob — sub-run may stamp a collision suffix.
+            wt_ledger_dir = os.path.join(worktree, ".claude", "auto")
+            for sub_path in sorted(glob.glob(
+                os.path.join(wt_ledger_dir, f"{run_id_hint}*.json")
+            )):
+                sub = _load_ledger_safe(sub_path)
+                if sub is None:
                     continue
-                # Glob the worktree's ledger dir for any run-id starting with
-                # the hint (the sub-run may stamp a suffix on collision).
-                wt_ledger_dir = os.path.join(worktree, ".claude", "auto")
-                for sub_path in sorted(glob.glob(os.path.join(wt_ledger_dir, f"{run_id_hint}*.json"))):
-                    try:
-                        with open(sub_path, "r") as fh:
-                            sub = json.load(fh)
-                    except Exception:
-                        continue
-                    if not isinstance(sub, dict):
-                        continue
-                    if phase_grammar.current_phase(sub) == "done":
-                        continue
-                    sub_predicate = sub.get("exit_predicate_result") or {}
-                    if not sub_predicate.get("met"):
-                        sub_run_id = sub.get("run_id") or run_id_hint
-                        # Tag with batch id so the operator can correlate.
-                        batch_id = sidecar.get("id", "?")
-                        blocking.append((f"{batch_id}:{sub_run_id}", sub_predicate))
+                predicate = _is_blocking(
+                    sub, ledger=ledger, skip_staleness=skip_staleness,
+                    stale_threshold=stale_threshold, now=now,
+                )
+                if predicate is not None:
+                    sub_run_id = sub.get("run_id") or run_id_hint
+                    blocking.append((f"{batch_id}:{sub_run_id}", predicate))
     return blocking
 
 

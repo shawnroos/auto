@@ -223,15 +223,21 @@ assert_eq "True" "$(json_field setup_inflight_no_goal '"runX" in H["summary"]')"
 it "done run is NOT in-flight — falls through to raw"
 assert_eq "raw" "$(json_field setup_done_run 'H["situation"]')"
 
-# ── Scenario 8: dirty-tree (NEW in v0.4.0) ─────────────────────────────────
-it "dirty-tree: situation=dirty-tree when uncommitted changes exist (no run, no plan)"
-assert_eq "dirty-tree" "$(json_field setup_dirty_tree 'H["situation"]')"
+# ── Scenario 8: dirty-tree contextualizes `raw` (review round 1 finding C-2/C-3)
+# v0.4.0's original `dirty-tree` situation had no actionable dispatch (the
+# skill's `<derived-args>` couldn't be derived from a diff alone) AND its
+# detection depended on downstream repos gitignoring `.claude/`. The fix
+# collapsed dirty-tree into raw: situation stays `raw` (no run, no plan ⇒
+# operator must answer the open question), but the summary names the
+# branch + diff context so the operator sees what they were doing.
+it "dirty-tree: situation falls through to raw (no actionable dispatch from a diff alone)"
+assert_eq "raw" "$(json_field setup_dirty_tree 'H["situation"]')"
 
-it "dirty-tree: ambiguity is null — driver surfaces summary and acts"
-assert_eq "None" "$(json_field setup_dirty_tree 'H["ambiguity"]')"
+it "dirty-tree: ambiguity is still the open 'what should we work on?' question"
+assert_eq "open" "$(json_field setup_dirty_tree 'H["ambiguity"]["kind"]')"
 
-it "dirty-tree: summary references file count"
-assert_eq "True" "$(json_field setup_dirty_tree '"changed" in H["summary"]')"
+it "dirty-tree: summary surfaces git context (branch + diff)"
+assert_eq "True" "$(json_field setup_dirty_tree '"branch" in H["summary"]')"
 
 # ── Scenario 9: malformed ledger is skipped (parity with v0.2.x) ───────────
 it "malformed ledger: skipped silently → falls through to raw"

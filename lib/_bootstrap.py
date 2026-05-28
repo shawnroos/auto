@@ -94,7 +94,7 @@ def resolve_repo() -> str:
     return os.getcwd()
 
 
-def resolve_host_repo_root():
+def resolve_host_repo_root(*, cwd=None):
     """Absolute path of the MAIN repo (the host of any worktrees), or None.
 
     v0.4.0 KTD-3 (round-3 finding R3-001 — empirically verified): from inside a
@@ -112,13 +112,22 @@ def resolve_host_repo_root():
     Returns the absolute host repo path. Returns ``None`` when git is not
     available or cwd is not inside a git tree — callers must handle the
     None case (typically by erroring out: fanout requires a git repo).
+
+    Pass ``cwd`` to run git from a specific directory (review round 1 fix:
+    on-stop.py needs to query the host repo from a process whose cwd may
+    be elsewhere).
     """
+    return _resolve_host_repo_root(cwd=cwd)
+
+
+def _resolve_host_repo_root(*, cwd=None):
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
             check=False,
+            cwd=cwd,
         )
     except (OSError, FileNotFoundError):
         return None
@@ -129,12 +138,17 @@ def resolve_host_repo_root():
         return None
     # git emits a relative path when cwd is inside the main repo (".git") and
     # an absolute path from inside a worktree. Resolve to absolute either way,
-    # then return the parent (the main repo root).
+    # then return the parent (the main repo root). When cwd is provided,
+    # `os.path.abspath` resolves the relative path against the PROCESS cwd
+    # rather than the cwd we passed to git — so for relative outputs we must
+    # join explicitly against cwd before resolving.
+    if not os.path.isabs(common_dir) and cwd is not None:
+        common_dir = os.path.join(cwd, common_dir)
     abs_common = os.path.abspath(common_dir)
     return os.path.dirname(abs_common)
 
 
-def resolve_shared_dir():
+def resolve_shared_dir(*, cwd=None):
     """Absolute path to ``<host-repo-root>/.claude/auto/``, or None.
 
     v0.4.0 KTD-3: shared state — batch sidecars, cross-worktree run discovery,
@@ -154,7 +168,7 @@ def resolve_shared_dir():
     helper for "what does THIS worktree own", this helper for "what does the
     parent know across worktrees".
     """
-    host = resolve_host_repo_root()
+    host = resolve_host_repo_root(cwd=cwd)
     if host is None:
         return None
     return os.path.join(host, ".claude", "auto")
