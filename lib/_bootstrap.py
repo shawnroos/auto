@@ -174,6 +174,37 @@ def resolve_shared_dir(*, cwd=None):
     return os.path.join(host, ".claude", "auto")
 
 
+# Round-3 P3: cmux ref token character class — shared across every
+# Python module that grep/regex-matches cmux IDs (workspace/pane/surface).
+# auto-workspace.py originally lifted this internally; auto-spawn.py
+# still inlined the literal, so the round-2 consolidation was incomplete.
+# Lifting here makes both consumers import from the same source of
+# truth. cmux-socket.sh (bash) inlines independently — Python constants
+# don't cross to bash; a one-line comment in that file points at this
+# constant as the source of truth so future cmux-alphabet changes get
+# a coordinated edit.
+CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
+
+
+def cmux_available() -> bool:
+    """Probe whether the cmux binary (or its override) is on PATH.
+
+    Plan-004 round-1 review P3 #7: previously duplicated in
+    lib/auto-spawn.py and lib/auto-workspace.py. Lifted here so both
+    callers share one definition (and one place to evolve, e.g. to
+    add a timeout if cmux gets slow).
+
+    Round-2 P1 — the original `sh -c "command -v {name}"` form had
+    a shell-injection surface: an operator with CLAUDE_AUTO_CMUX
+    containing shell metachars (typo, copy-paste, malicious dotfile)
+    would execute arbitrary code under `sh -c`. shutil.which does
+    the same PATH-resolution job with NO shell — safe by default.
+    """
+    import shutil
+    name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
+    return shutil.which(name) is not None
+
+
 def load_ledger():
     """Load and return the canonical ledger module (lib/ledger.py).
 

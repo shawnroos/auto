@@ -2,9 +2,16 @@
 title: "auto: project-as-workspace, in-pane tab fanout via cmux layout"
 status: active
 created: 2026-05-27
+spike_done: 2026-05-27
 type: feat
 blocked_by: docs/plans/2026-05-27-002-feat-auto-bare-entry-and-fanout-plan.md
 ---
+
+> **U1 spike outcome (2026-05-27):** `--layout` JSON shape is opaque
+> (4 candidates rejected; no public schema). Per R1's fallback, U2
+> builds on the imperative chain: `new-workspace` + `new-split` +
+> `new-surface` + `send`, with the `sleep 1;` lead-in for shell-init
+> timing. Spike doc: `docs/research/cmux-layout-fanout-spike.md`.
 
 # auto: project-as-workspace, in-pane tab fanout via cmux layout
 

@@ -202,6 +202,57 @@ auto::cmux_spawn_workspace() {
     --focus false
 }
 
+# auto::cmux_spawn_tab <pane-ref> <cwd> <command>
+#   v0.4.1 U2 (plan 004): in-pane analog of cmux_spawn_workspace.
+#   Creates a new surface (tab) in <pane-ref> and starts <command>
+#   inside it. Unlike new-workspace, `cmux new-surface` does NOT
+#   accept --command — the command is delivered via a follow-up
+#   `cmux send` call, with the same `sleep 1;` lead-in that workspace
+#   spawn uses (a freshly-created surface's login shell can still
+#   swallow keystrokes).
+#
+#   Mechanism (per the spike at docs/research/cmux-layout-fanout-spike.md):
+#     1. `cmux new-surface --pane <ref> --focus false` returns the new
+#        surface ID on stdout.
+#     2. `cmux send --surface <ref> "<sleep 1; cd <cwd> && <command>>"`
+#        sends the command. The `cd <cwd>` is explicit because
+#        `cmux new-surface` doesn't accept --cwd.
+#
+#   Echoes the new surface ID on stdout so the caller (auto-spawn.py)
+#   can record it in the batch sidecar's `cmux.tab_surface_id` field.
+#   Returns non-zero if either step fails.
+auto::cmux_spawn_tab() {
+  local pane="$1" cwd="$2" command="$3"
+  local surface_out surface_id
+  surface_out="$("$CLAUDE_AUTO_CMUX" new-surface --pane "$pane" --focus false 2>&1)"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: new-surface failed: %s\n' "$surface_out" >&2
+    return "$rc"
+  fi
+  # Character class must match _bootstrap.CMUX_REF_CHARS (the Python
+  # source of truth for cmux ref tokens). Bash can't import Python
+  # constants — if cmux changes the alphabet, edit BOTH sites.
+  surface_id="$(printf '%s\n' "$surface_out" | grep -oE 'surface:[0-9a-zA-Z_.-]+' | head -1)"
+  if [ -z "$surface_id" ]; then
+    printf 'auto::cmux_spawn_tab: could not extract surface id from: %s\n' "$surface_out" >&2
+    return 1
+  fi
+  # Build the full command line with the sleep lead-in and explicit cd.
+  local full="sleep 1; cd $(printf '%q' "$cwd") && $command"
+  # Round-2 P2: redirect `cmux send` output to stderr so the final
+  # surface_id printf is the ONLY line on stdout. Without this, any
+  # cmux release that adds a "sent N bytes" status to stdout would
+  # break the Python caller's `.splitlines()[-1]` parser.
+  "$CLAUDE_AUTO_CMUX" send --surface "$surface_id" "$full" >&2
+  local send_rc=$?
+  if [ "$send_rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: send failed (surface %s)\n' "$surface_id" >&2
+    return "$send_rc"
+  fi
+  printf '%s\n' "$surface_id"
+}
+
 # auto::spawn_resume <repo> <run>
 #   Spawn ONE fresh /auto-resume workspace for an orphaned run, IF safe:
 #     * tick lock free (no live driver) — else NO-OP (double-drive guard).
@@ -284,6 +335,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # auto-resume + multi-plan fanout). Three positional args: name, cwd,
     # command. Used by lib/auto-spawn.py shelling into this script.
     spawn-workspace)  auto::cmux_spawn_workspace "$@" ;;
+    # v0.4.1 U2 (plan 004): in-pane tab spawn for in-workspace fanout.
+    # Three positional args: pane-ref, cwd, command. Echoes new surface
+    # ID on stdout so the Python caller (auto-spawn.py) can record it
+    # in the batch sidecar's cmux.tab_surface_id field.
+    spawn-tab)        auto::cmux_spawn_tab "$@" ;;
     *)
       echo "cmux-socket.sh: unknown subcommand '${sub}'" >&2
       exit 2
