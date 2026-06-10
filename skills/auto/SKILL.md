@@ -41,6 +41,12 @@ and `loop.driver` reflects state (`"self"` / `"manual"`); the Stop hook
 engages off that. Never proceed without a legible ledger predicate. Full
 mechanism: `driver-reference.md` §3.
 
+If the operator WANTS a native `/goal` (opt-in, additive to the Stop
+hook), the `auto-author-goal` skill turns a plan into a model-judgeable
+condition phrased to MIRROR auto's exit predicate (so the two gates
+agree) and saves it as a goal doc for the operator to bind by hand —
+auto still never runs `/goal` itself.
+
 ## 2. Arm the tick chain
 
 Fire the first tick:
