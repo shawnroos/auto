@@ -201,6 +201,7 @@ def set_loop(
     driver=None,
     beat=False,
     plan_step=ledger_core._UNSET,
+    blocked_on=ledger_core._UNSET,
 ):
     """Update loop-level phase / liveness / plan-step fields (U4's tick uses this).
 
@@ -238,6 +239,16 @@ def set_loop(
         loop = ledger.setdefault("loop", {})
         if driver is not None:
             loop["driver"] = driver
+        # blocked_on: a human/external reason this run is paused (e.g. "run
+        # `bf auth login --env dev4`"). UNSET sentinel => leave unchanged; None
+        # => clear (the resume path clears it on continue); a string => record.
+        # Not part of the exit predicate — purely a legibility field surfaced by
+        # auto-status and resume disambiguation.
+        if blocked_on is not ledger_core._UNSET:
+            if blocked_on is None:
+                loop.pop("blocked_on", None)
+            else:
+                loop["blocked_on"] = str(blocked_on)
         if beat:
             loop["last_beat_at"] = ledger_core._now_iso()
         return ledger["loop_phase"]

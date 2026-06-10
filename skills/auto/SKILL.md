@@ -29,10 +29,16 @@ Every `/auto` run is goaled before arming.
 - **Compound** (operator-supplied via `--goal`): honor verbatim; bind
   to BOTH the loop's `met` AND the operator's clause.
 
-Auto uses its own Stop hook (`lib/on-stop.py` via
-`lib/goal-status.py`); native `/goal` is model-judged with no external
-predicate seam. Ensure `loop.driver` reflects state (`"self"` /
-`"manual"`) and the goal is active. Never proceed un-goaled. Full
+Auto's deliberate-stop is its OWN Stop hook (`lib/on-stop.py` via
+`lib/goal-status.py`), which reads the ledger's `exit_predicate_result`.
+This "goal" is the ledger predicate — **not** the native `/goal`
+command. Do NOT run native `/goal`: it is model-judged with no external
+predicate seam (U9 spike), so auto can neither feed it the verdict nor
+clear it — a native `/goal` set alongside a run will re-prompt "Goal not
+yet met… continuing" on every turn and auto cannot stop it (only
+`/goal clear` can). Binding is automatic: ensure the run's ledger exists
+and `loop.driver` reflects state (`"self"` / `"manual"`); the Stop hook
+engages off that. Never proceed without a legible ledger predicate. Full
 mechanism: `driver-reference.md` §3.
 
 ## 2. Arm the tick chain
@@ -89,6 +95,25 @@ IS the wake signal. Per wave:
 
 Full mechanism + the "when ScheduleWakeup IS right" long-tail
 fallback: `driver-reference.md` §7.
+
+### 4.5 Blocked on a human/external action — PAUSE, do not yield
+
+YIELD is for work **you set in motion that will signal back** (a
+background `Agent`, a timed external wait). It is NOT for a wall only a
+human can clear — auth login, an approval, missing creds. There is no
+re-invoke coming, so yielding turn after turn makes zero progress and
+lets any other open gate (e.g. an operator-set native `/goal`) keep
+re-inviting you into a spam loop.
+
+When you hit such a wall:
+
+1. `bash lib/auto-resume.py pause <run> "<the one thing the human must
+   do>"` — flips `driver=manual` so the Stop hook releases (it never
+   blocks a manual-driver run) and the run stays resumable.
+2. Surface **one** line: the exact action + `/auto-resume continue
+   <run>` to resume. If you (or the operator) set a native `/goal`,
+   say so — it must be cleared with `/goal clear`; auto cannot.
+3. **Stop.** Do not re-arm, do not yield again.
 
 ## 5. Exit
 

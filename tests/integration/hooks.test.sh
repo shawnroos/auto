@@ -272,6 +272,11 @@ L.init_ledger(repo,"unmet2",adapter="ce",loop_phase="work",
 PYEOF
 out="$(printf '{"stop_hook_active":true}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "" "$(jget "$out" decision)"
+it "on-stop: re-fired stop is SILENT (no systemMessage spam under an external re-invite loop)"
+# A re-fire is NOT once-per-run: if another gate (e.g. an operator-set native
+# /goal) keeps re-inviting the model, this hook fires every time. Emitting a
+# note here used to produce one spam line per iteration. The allow is now quiet.
+assert_empty "$out"
 
 # ─── on-stop: Bug #9 — dead driver==self chain does NOT stale-block ───────────
 # A tick killed AFTER its beat write but BEFORE re-arm leaves driver==self,
@@ -406,6 +411,34 @@ PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" abort abortrun >/dev/null
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','abortrun')['loop_phase'])")"
 assert_eq "done" "$phase"
+
+# ─── resume pause: blocked-on-human -> driver=manual, NOT done, records reason ─
+it "resume pause: flips driver to manual without marking the loop done"
+REPO="$(mkrepo resume-pause)"
+pyledger "$REPO" <<'PYEOF'
+import sys, importlib.util
+repo, ledger_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_ledger(repo,"pauserun",adapter="ce",loop_phase="work",
+              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+L.set_loop(repo,"pauserun",driver="self",beat=True)  # a LIVE chain.
+PYEOF
+CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" pause pauserun "run bf auth login --env dev4" >/dev/null
+rd() { "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','pauserun');print($1)"; }
+assert_eq "manual" "$(rd "l['loop']['driver']")"
+it "resume pause: stays NOT done (resumable, not a cancellation)"
+assert_eq "work" "$(rd "l['loop_phase']")"
+it "resume pause: records the human-blocker reason in loop.blocked_on"
+assert_eq "run bf auth login --env dev4" "$(rd "l['loop'].get('blocked_on')")"
+it "resume pause: the Stop hook then DECLINES to block this run (manual carve-out)"
+# Even though the run is unmet (a blocker finding), driver=manual => on-stop
+# allows the stop. This is what stops the driver yielding into the wall.
+sout="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
+assert_eq "" "$(jget "$sout" decision)"
+it "resume continue (after pause): re-arms AND clears blocked_on"
+cout="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" continue pauserun)"
+assert_eq "arm-tick" "$(jget "$cout" action)"
+assert_eq "None" "$(rd "l['loop'].get('blocked_on')")"
 
 # ─── resume retry: stalled -> pending + clears last_error ─────────────────────
 it "resume retry: stalled unit -> pending"

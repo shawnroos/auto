@@ -8,6 +8,11 @@ Subcommands:
     [<run>]            default continue: flip a paused seam -> work, then emit a
                        re-arm INTENT (the model fires /auto-tick).
     continue <run>     explicit continue (same as default with a run-id).
+    pause <run> [why]  blocked on a human/external action (auth, approval,
+                       missing creds): flip driver -> "manual" so the Stop hook
+                       stops blocking and the driver stops yielding, record the
+                       reason, and stay resumable. Resume with `continue` once
+                       the human acts. NOT a cancellation (use abort for that).
     abort <run>        loop_phase -> "done" (cancellation marker).
     retry <run> <unit> stalled unit -> pending (clears last_error via ledger.py).
     skip <run> <unit>  stalled unit -> terminal-skip (terminal for I-2).
@@ -49,7 +54,7 @@ _resolve_repo = resolve_repo
 
 
 def _resumable_runs(ledger, repo_root: str):
-    """Run-ids that are resumable (seam-paused OR is_orphaned)."""
+    """Run-ids that are resumable (seam-paused OR blocked-paused OR is_orphaned)."""
     import glob
 
     dispatch_dir = os.path.join(repo_root, ".claude", "auto")
@@ -64,11 +69,16 @@ def _resumable_runs(ledger, repo_root: str):
             continue
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
         seam_paused = phase_grammar.current_phase(led) == "seam" and led.get("seam_paused")
+        # Blocked-paused: a manual-driver run that is NOT at a seam and NOT done
+        # (set by `pause`). Without this, a run paused on a human blocker would
+        # be invisible to bare `/auto-resume` and need an explicit run-id.
+        loop = led.get("loop") or {}
+        blocked_paused = loop.get("driver") == "manual" and not seam_paused
         try:
             orphaned = ledger.is_orphaned(led)
         except Exception:
             orphaned = False
-        if seam_paused or orphaned:
+        if seam_paused or blocked_paused or orphaned:
             runs.append(run_id)
     return runs
 
@@ -109,9 +119,46 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
         # paths inside the helper.
         tick.advance_to_phase(repo_root, run_id, led, to_phase="work")
         return _emit_rearm(run_id, "seam -> work; arm a fresh tick chain")
-    # Orphaned (or otherwise active): re-arm cleanly off the durable ledger.
-    ledger.set_loop(repo_root, run_id, driver="self")
-    return _emit_rearm(run_id, "resume orphaned run; arm a fresh tick chain")
+    # Orphaned, or resuming a blocked-pause: re-arm cleanly off the durable
+    # ledger. driver -> "self" reactivates the Stop hook; clear blocked_on (the
+    # human acted, so the pause reason no longer applies).
+    ledger.set_loop(repo_root, run_id, driver="self", blocked_on=None)
+    return _emit_rearm(run_id, "resume run; arm a fresh tick chain")
+
+
+def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
+    """Pause a run blocked on a human/external action.
+
+    Flips driver -> "manual" (the Stop hook's SEAM/MANUAL carve-out then
+    declines to block this run — on-stop.py) and records the reason, WITHOUT
+    marking the loop done. The run stays resumable: once the human does the
+    blocked-on thing, `/auto-resume continue <run>` reactivates it.
+
+    This is the clean exit when the driver hits a wall it cannot cross in-loop
+    (auth login, external approval, missing creds). The alternative — silently
+    yielding turn after turn — produces no progress and lets any other open gate
+    (e.g. an operator-set native `/goal`) re-invite the model into a spam loop.
+    """
+    try:
+        led = ledger.read_ledger(repo_root, run_id)
+    except ledger.LedgerNotFound as exc:
+        sys.stderr.write(f"resume: {exc}\n")
+        return 1
+    if phase_grammar.current_phase(led) == "done":
+        sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to pause.\n")
+        return 0
+    reason = (reason or "").strip()
+    ledger.set_loop(
+        repo_root, run_id, driver="manual", blocked_on=(reason or None)
+    )
+    why = f" — {reason}" if reason else ""
+    sys.stdout.write(
+        f"resume: run {run_id!r} paused (driver=manual){why}.\n"
+        f"Resume with `/auto-resume continue {run_id}` once unblocked.\n"
+        "NOTE: if you set a native `/goal` for this session, run `/goal clear` "
+        "too — auto neither arms nor can clear it.\n"
+    )
+    return 0
 
 
 def _cmd_abort(ledger, repo_root: str, run_id: str) -> int:
@@ -150,18 +197,44 @@ def _cmd_skip(ledger, repo_root: str, run_id: str, unit_id: str) -> int:
     return 0
 
 
-def _resolve_run_or_disambiguate(ledger, repo_root: str, run_id):
-    """Return a run-id, or print a disambiguation prompt and return None."""
+def _active_runs(ledger, repo_root: str):
+    """Run-ids that are NOT done (candidates for `pause`).
+
+    `pause` targets a LIVE run, not a resumable one, so it disambiguates over a
+    different set than continue/abort (which use `_resumable_runs`).
+    """
+    import glob
+
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
+    runs = []
+    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
+        try:
+            with open(path, "r") as fh:
+                led = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(led, dict) or phase_grammar.current_phase(led) == "done":
+            continue
+        runs.append(led.get("run_id") or os.path.splitext(os.path.basename(path))[0])
+    return runs
+
+
+def _resolve_run_or_disambiguate(ledger, repo_root: str, run_id, *, candidates=None, label="resumable"):
+    """Return a run-id, or print a disambiguation prompt and return None.
+
+    `candidates` is the run-list to draw from when no run-id is given; defaults
+    to the resumable set. `pause` passes the active set instead.
+    """
     if run_id:
         return run_id
-    runs = _resumable_runs(ledger, repo_root)
+    runs = _resumable_runs(ledger, repo_root) if candidates is None else candidates
     if len(runs) == 1:
         return runs[0]
     if not runs:
-        sys.stdout.write("resume: no resumable run found.\n")
+        sys.stdout.write(f"resume: no {label} run found.\n")
         return None
     sys.stdout.write(
-        "resume: multiple resumable runs — specify one:\n"
+        f"resume: multiple {label} runs — specify one:\n"
         + "".join(f"  /auto-resume {r}\n" for r in runs)
     )
     return None
@@ -171,7 +244,7 @@ def run(argv) -> int:
     ledger = load_ledger()
     repo_root = _resolve_repo()
 
-    SUBCOMMANDS = ("continue", "abort", "retry", "skip")
+    SUBCOMMANDS = ("continue", "pause", "abort", "retry", "skip")
     sub = None
     rest = list(argv)
     if rest and rest[0] in SUBCOMMANDS:
@@ -185,6 +258,17 @@ def run(argv) -> int:
         if run_id is None:
             return 0
         return _cmd_continue(ledger, repo_root, run_id)
+
+    if sub == "pause":
+        run_id = _resolve_run_or_disambiguate(
+            ledger, repo_root, run_arg,
+            candidates=_active_runs(ledger, repo_root), label="active",
+        )
+        if run_id is None:
+            return 0
+        # Everything after <run> is the free-text reason.
+        reason = " ".join(rest[1:]) if len(rest) >= 2 else ""
+        return _cmd_pause(ledger, repo_root, run_id, reason)
 
     if sub == "abort":
         run_id = _resolve_run_or_disambiguate(ledger, repo_root, run_arg)

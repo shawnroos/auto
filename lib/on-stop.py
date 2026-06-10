@@ -29,8 +29,12 @@ ACTIVE-RUN POLICY:
 
 LOOP-SAFETY:
     Claude Code re-fires Stop after a block with stop_hook_active == true. We
-    ALLOW the stop in that case (no decision JSON), surfacing a warning — the
+    ALLOW the stop in that case (no decision JSON) and stay SILENT — the
     deterministic gate fires once per stop attempt, never an inescapable loop.
+    The allow is quiet on purpose: if another gate (e.g. an operator-set native
+    `/goal`) keeps re-inviting the model, this hook fires every re-invite, so a
+    per-re-fire note would become one spam line per iteration of a loop auto is
+    not driving. The run is durable on disk; the first real block says so once.
 
 FRESHNESS: we read exit_predicate_result.met directly (the I-1-fresh field —
 schema §5). No cached/derived `done` copy exists; a re-review reopening the
@@ -289,14 +293,17 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
     Loop-safety: a re-fired Stop (stop_hook_active) always allows the stop.
     """
     if _read_stop_hook_active(stdin_raw):
-        # Re-fired after a prior block — allow the stop to avoid an inescapable
-        # loop. Surface a one-line note (no `decision` => stop proceeds).
-        return {
-            "systemMessage": (
-                "auto: Stop re-fired (stop_hook_active) — allowing "
-                "stop. Loop state is durable on disk; /auto-resume continues it."
-            )
-        }
+        # Re-fired after a prior block — allow the stop SILENTLY (return None =>
+        # no decision, no systemMessage, stop proceeds). We used to emit a
+        # "Stop re-fired … /auto-resume continues it" note here, but a re-fire
+        # is not a once-per-run event: when SOME OTHER gate keeps re-inviting
+        # the model after a stop (most commonly an operator-set native `/goal`,
+        # which auto neither arms nor can clear — see docs/research/
+        # native-goal-mechanism-spike.md), this hook fires on EVERY re-invite
+        # and the note became one spam line per iteration. The run is durable on
+        # disk regardless; the FIRST real block (below) already says so once.
+        # Stay quiet on re-fire so auto adds no noise to a loop it isn't driving.
+        return None
 
     blocking = _blocking_runs(repo_root)
     if not blocking:
