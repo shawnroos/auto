@@ -50,14 +50,26 @@ The criteria the model judges should each be:
 2. **Observable.** Verifiable from repo state or the transcript: tests pass,
    files exist, no open review findings, a command exits 0. Nothing only an
    external system knows.
-3. **Scoped to THIS plan, and INLINED.** The doc IS the condition, so write the
+3. **Agent-completable — the agent can REACH the done-state on its own.**
+   Observable is not enough. If a criterion requires a manual human action the
+   agent cannot perform — toggle a UI/LD flag, drag-and-drop, click through a
+   flow, do something *while a job is running*, exercise a device — then the
+   model-judged goal can NEVER flip to met autonomously and re-prompts "Goal not
+   yet met… continuing" forever. This is the **never-met loop**: the worst case
+   of the divergence above, because no amount of agent work can satisfy it. Every
+   criterion must name a state the agent can both REACH and verify. Any
+   human-gated / manual-QA step goes on the **out-of-scope** line, NOT in the
+   criteria. If the goal is *inherently* a manual test (its whole point is a human
+   exercising the UI), say so and do NOT author it as a `/goal` — it cannot be
+   one; recommend a checklist or a test the agent can drive instead.
+4. **Scoped to THIS plan, and INLINED.** The doc IS the condition, so write the
    specific acceptance outcomes INTO the doc — do not just cite "AE1–AE4 in
    `<plan>`" and assume the judge opens the plan (that's an unverified second-file
    read). Name the plan as provenance, but spell out the concrete done-states the
    judge can check from repo/transcript without leaving the doc.
-4. **No vague adjectives unless operationalized.** Not "clean / good / done
+5. **No vague adjectives unless operationalized.** Not "clean / good / done
    well" — instead "no P0/P1/P2 review findings remain" or "the suite is green."
-5. **Make auto's exit predicate the PRIMARY criterion; everything else is what
+6. **Make auto's exit predicate the PRIMARY criterion; everything else is what
    it entails.** Auto exits when *all units are terminal AND only P3 findings
    remain*. Lead with that as the sufficient condition, and frame the plan's
    acceptance examples / tests-green as what it ENTAILS ("which means AE1–AE4 are
@@ -68,7 +80,7 @@ The criteria the model judges should each be:
    keep the session going until tests pass, beyond auto's review-loop), that is a
    valid choice — but say so explicitly, because the extra "continuing" prompts
    are then INTENDED, not the spam failure mode.
-6. **Tight.** A focused checklist, not an essay. Exclude deferred/out-of-scope
+7. **Tight.** A focused checklist, not an essay. Exclude deferred/out-of-scope
    items explicitly so the judge doesn't hold the goal open on them.
 
 ## Procedure
@@ -80,8 +92,12 @@ The criteria the model judges should each be:
 2. **Compose the condition** per the rules above — lead with auto's exit
    predicate as the primary/sufficient criterion, then inline the concrete
    acceptance outcomes it entails (observable, spelled out, grounded in the
-   plan's acceptance examples / explicit success lines). Add an explicit "out of
-   scope" line for deferrals so the goal doesn't hang on them.
+   plan's acceptance examples / explicit success lines). **Screen every criterion
+   for agent-completability (rule 3): route any human-gated / manual-QA step to
+   the out-of-scope line — it must never be a criterion.** Add the out-of-scope
+   line for deferrals too, so the goal doesn't hang on them. If the only "done"
+   state is a manual human test, STOP — tell the user this can't be a `/goal` and
+   suggest a checklist instead.
 3. **Write the goal doc** to `<repo>/.claude/auto/goals/<plan-slug>.md` using
    the template below (create `goals/` if absent). `.claude/auto/` is gitignored
    runtime state — the doc is a local artifact, not a committed file.
@@ -106,7 +122,7 @@ resolved). Concretely, that state means:
 - <inlined acceptance outcome 2 — observable, spelled out, not a citation>
 - `tests/run.sh` exits 0.
 
-Out of scope (do NOT hold this goal open on these): <deferred items, or "none">.
+Out of scope (do NOT hold this goal open on these): <deferred items, and any human-gated/manual-QA steps the agent can't perform itself, or "none">.
 
 <!-- note: model-judged goal, independent of auto's Stop hook; release with `/goal clear`. -->
 ~~~
@@ -116,6 +132,10 @@ Out of scope (do NOT hold this goal open on these): <deferred items, or "none">.
 - **Never run `/goal`.** Author and surface only; the user binds.
 - **The doc is the condition.** Write judgeable criteria, not rationale prose —
   the model reads the whole file.
+- **Every criterion is agent-completable.** A criterion the agent can't reach on
+  its own (manual UI action, human QA) makes a never-met loop — `/goal` re-prompts
+  "continuing" forever. Human-gated steps go out-of-scope; a goal that is ONLY a
+  manual test must not be authored as a `/goal` at all.
 - **Ground in the plan.** Every criterion traces to a requirement / acceptance
   example / explicit success line — no invented scope. State deferrals as
   out-of-scope so the goal doesn't hang on them.
