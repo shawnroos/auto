@@ -50,6 +50,10 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
 
+# The ONE driving-session identity helper (KTD-5), shared with the resume
+# re-arm path so arm and re-arm record ownership identically (fix-round-6 P1).
+driver_session = load_lib_module("driver_session")
+
 _DEFAULT_ADAPTER = "ce"
 _VALID_ADAPTERS = ("ce", "native")
 
@@ -178,6 +182,39 @@ def _seam_default_notice():
         pass
 
 
+def _driving_session_id() -> str | None:
+    """The interactive driver's session_id, recorded at arm time (v0.6.0 U5 / KTD-5).
+
+    Thin delegate to ``driver_session.driving_session_id`` — the ONE source of
+    truth shared with the resume re-arm path (lib/auto-resume.py, fix-round-6
+    P1), so arm and re-arm record ownership identically. See that module's
+    docstring for the full rationale (session-id EQUALITY is the load-bearing
+    fact for both advisor-gate hooks; a child/unset env returns None and MUST
+    NOT be recorded as a cleared field).
+    """
+    return driver_session.driving_session_id()
+
+
+def _warn_if_backstop_dark(run_id: str) -> None:
+    """Loud stderr warning that the advisor-gate destructive backstop is DARK.
+
+    Emitted at arm time when the driving session id is unavailable (env unset or a
+    spawned child). The backstop (lib/on-pretooluse-action.py) owns a run by
+    session-id EQUALITY, so a null id can never match — the run is armed with no
+    destructive-action gate. Unlike the resume path (which REFUSES on a null id — a
+    paused run staying paused is a safe default), arm PROCEEDS (a hard refuse would
+    break headless / env-var-less contexts) but NEVER silently. (security-review fix.)
+    """
+    sys.stderr.write(
+        f"auto: WARNING — cannot determine the driving session id for run "
+        f"{run_id!r} (CLAUDE_CODE_SESSION_ID unset, or a spawned child). The "
+        "advisor-gate destructive-action backstop will be DARK for this run (it "
+        "matches a live run by session-id equality, and there is no owning session "
+        "to match). Run /auto from the interactive driver session, or abort with "
+        "/auto-resume abort if the backstop is required.\n"
+    )
+
+
 def _derive_goal_intent(plan: str) -> str:
     """Derive a one-line goal_intent sentence from the plan file.
 
@@ -227,8 +264,16 @@ def _make_run_id(ledger, repo_root: str, plan: str) -> str:
     return candidate
 
 
-def _emit_arm(run_id: str, *, auto: bool, goal, adapter: str, plan: str) -> int:
-    """Emit the arm-first-tick INTENT — the model fires /goal + ScheduleWakeup."""
+def _emit_arm(
+    run_id: str, *, auto: bool, goal, adapter: str, plan: str, loop_phase: str = "plan"
+) -> int:
+    """Emit the arm-first-tick INTENT — the model fires /goal + ScheduleWakeup.
+
+    ``loop_phase`` is the run's ENTRY phase (``phase_order[0]``); it surfaces in
+    the note so a non-default-entry recipe (e.g. the v0.6.0 ``pipeline`` spine,
+    which enters at ``brainstorm``) reports the true starting phase rather than a
+    hardcoded ``plan``.
+    """
     prompt = f"/auto-tick {run_id}"
     if auto:
         prompt += " --auto"
@@ -241,8 +286,8 @@ def _emit_arm(run_id: str, *, auto: bool, goal, adapter: str, plan: str) -> int:
         "plan": plan,
         "goal": goal,  # null => bind /goal to the loop's own exit predicate.
         "note": (
-            "new run created (loop_phase=plan); set the deliberate-stop /goal, "
-            "then arm the first tick"
+            f"new run created (loop_phase={loop_phase}); set the deliberate-stop "
+            "/goal, then arm the first tick"
         ),
     }
     json.dump(intent, sys.stdout)
@@ -317,6 +362,14 @@ def run(argv) -> int:
     # verbatim when disambiguating among multiple in-flight runs.
     goal_intent = _derive_goal_intent(plan)
 
+    # v0.6.0 U5 (KTD-5): record the driving session at arm time so the advisor-gate
+    # PreToolUse hooks can own this run by session_id equality. A null id means the
+    # destructive-action backstop is DARK — warn loudly (never silently) and proceed
+    # (security-review fix; see _warn_if_backstop_dark + auto-resume._rearm_owns_session).
+    driving_sid = _driving_session_id()
+    if not driving_sid:
+        _warn_if_backstop_dark(run_id)
+
     try:
         ledger.init_ledger(
             repo_root,
@@ -334,6 +387,10 @@ def run(argv) -> int:
             iteration=recipe.get("iteration"),
             emit_templates=recipe.get("emit_templates"),
             goal_intent=goal_intent,
+            # v0.6.0 U5 (KTD-5): record the driving session at arm time so the
+            # advisor-gate PreToolUse hooks can own this run by session_id equality.
+            # Computed + null-warned above (security-review fix).
+            driving_session_id=driving_sid,
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")
@@ -348,6 +405,7 @@ def run(argv) -> int:
         goal=args["goal"],
         adapter=adapter,
         plan=plan,
+        loop_phase=phase_order[0],
     )
 
 

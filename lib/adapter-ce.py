@@ -157,6 +157,25 @@ class Adapter:
         reads only its length (contract §2.2)."""
         return {"adapter": ADAPTER_NAME, "op": "review_plan", "invocation": "/ce-doc-review"}
 
+    # ── spine entry op (v0.6.0 / U7) ─────────────────────────────────────────
+    def brainstorm(self, unit):
+        """PREPARE /ce-brainstorm for the spine's brainstorm-entry unit
+        (recipes/pipeline.json declares ``invokes.adapter_op: "brainstorm"``).
+
+        Prepare-only, mirroring ``do_unit``: the model runs /ce-brainstorm,
+        records the requirements-doc path on the unit's
+        ``dispatch_context.requirements_doc``, and self-writes verdict-returned;
+        the engine then fires the U8 ``brainstorm_output_to_plan_unit`` emitter
+        on advance to plan. Without this op the spine's brainstorm unit resolved
+        to nothing and could never be worked to terminal (round-1 P1)."""
+        unit_id = unit.get("id") if isinstance(unit, dict) else unit
+        return {
+            "adapter": ADAPTER_NAME,
+            "op": "brainstorm",
+            "unit_id": unit_id,
+            "invocation": "/ce-brainstorm",
+        }
+
     # ── work-loop ops ──────────────────────────────────────────────────────
     def do_unit(self, unit):
         """PREPARE /ce-work for a unit. Returns an opaque dispatch_handle the

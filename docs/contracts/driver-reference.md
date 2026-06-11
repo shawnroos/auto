@@ -264,6 +264,29 @@ polling antipattern the Agent tool explicitly forbids.
 The driver owns the batching; the tick is mechanical; the harness
 owns the wake signal.
 
+### Work-unit `adapter_op` → invocation (the model-facing dispatch label)
+
+`orchestrator.dispatch_batch` is adapter-agnostic: it flips the unit
+`pending → dispatched` and calls the driver-injected `launch_fn`; it
+NEVER consults the adapter. So the DRIVER must map each work unit's
+`invokes.adapter_op` to the ce skill it launches in the background
+`Agent`. The CE adapter (`lib/adapter-ce.py`) exposes two work-loop ops,
+and the dispatch label differs per op:
+
+| `invokes.adapter_op` | launch this skill | used by |
+|----------------------|-------------------|---------|
+| `do_unit`            | `/ce-work <unit-id>` | `a1` / `w` / `pipeline` work units (the default) |
+| `review`             | `/ce-code-review`    | `review.json` off-spine unit (U11) |
+
+`review.json`'s single unit carries `adapter_op: "review"` — a work unit
+that runs a single review/fix loop to a P3-only terminal verdict (the
+work-loop's own exit predicate, KTD-1), so it must dispatch as
+`/ce-code-review`, NOT `/ce-work`. Defaulting every work unit to
+`/ce-work` would run the wrong skill for an off-spine review run. The
+adapter's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
+is the PARSE half (it maps the returned findings onto the shared severity
+scale); the launch label for `review` is `/ce-code-review`, set here.
+
 ### When ScheduleWakeup IS the right mechanism
 
 Polling is correct ONLY when activity stopped for a long period
@@ -360,3 +383,298 @@ See `docs/contracts/batch-sidecar-schema.md` for the sidecar format.
   never write verdicts from the driver.
 - **Always goaled.** No `/auto` run proceeds without an active
   deliberate-stop goal/status engaging the Stop hook.
+
+## 11. Conversation-driven entry (v0.6.0 — `conversation-context`)
+
+The `conversation-context` situation (lib/auto-detect.sh, U1) fires when there is
+no in-flight run AND no plan, but the driver judged the **current conversation**
+rich enough to route on and set `CLAUDE_AUTO_CONVERSATION_SIGNAL` before loading
+the hypothesis. The envelope's `recommendation` is null — the driver computes it.
+
+**Context sources (D2 — the split that keeps the classification honest):**
+- **Current conversation** = the driver reflecting on its OWN live transcript.
+  `ce-sessions` refuses the current session, so this is the agent's own read of
+  what just happened, not a tool call.
+- **~2-day lookback** = the `ce-sessions` discover+extract pipeline
+  (`discover-sessions.sh <repo> 2` then the extract scripts). Use the EXTRACTS —
+  never whole session files or thinking blocks.
+- **AVOID raw compaction text** — compaction summaries may hallucinate APIs /
+  decisions (`feedback_compaction_summary_may_hallucinate_apis_verify_against_git`);
+  verify any claim against git/the live transcript before acting on it.
+
+**The dispatch procedure (KTD-2/3/7):**
+1. **Classify** the session into ONE state label from `lib/recommender.py`'s
+   taxonomy (vague / clear-intent-no-plan / reviewed-plan / code-unreviewed /
+   bug / what-to-improve / perf), with a confidence in [0,1].
+2. **Recommend** — call the recommender:
+   `python "${CLAUDE_PLUGIN_ROOT}/lib/recommender.py" <state> <confidence>`.
+   It returns one JSON line: `{state, ce_step, recipe_or_entry, entry, is_spine,
+   kind, confidence, escalate}`.
+3. **Escalate-or-dispatch (PRE-DISPATCH GATE):** if `escalate` is true OR the
+   state is ambiguous, escalate to the operator via the **pause seam** BEFORE
+   dispatch — surface the candidate recommendation + why you're unsure and ask
+   one `AskUserQuestion`; create NO run. This is NOT "via the gate": the advisor
+   gate (PreToolUse hook) fires only once a LIVE self-driven run exists, and
+   pre-dispatch there is none. Do not fabricate an `auto-resume.py pause` call
+   against a run that does not exist yet.
+4. **kind == "skill"** (bug→`/ce-debug`, what-to-improve→`/ce-ideate`,
+   perf→`/ce-optimize`): recommend the skill command — NO auto-wrap, no run
+   created (the `ce-ideate` precedent; the CE adapter has no debug/optimize op).
+5. **kind == "recipe"** (vague→`pipeline`@brainstorm, clear-intent-no-plan→`a1`@plan,
+   reviewed-plan→`w`@work, code-unreviewed→`review`@work):
+   a. **Author a phase goal** by performing the `auto-author-goal` procedure
+      (skills/auto-author-goal) — draft `.claude/auto/goals/<slug>.md` whose
+      PRIMARY criterion is auto's own exit predicate (all units terminal, only
+      P3 findings remain). The authored doc is also the run's spec file.
+   b. **Dispatch** the entry recipe and bind auto's OWN deterministic predicate:
+      `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<goal-doc-path> --recipe <recipe_or_entry>"`.
+      The recipe's `phase_order[0]` IS the entry phase (`pipeline`→brainstorm,
+      `a1`→plan, `w`/`review`→work). The vague→`pipeline` dispatch enters at the
+      `brainstorm` phase and auto-advances brainstorm→plan→work (the spine ships
+      in this same v0.6.0 diff — §13, recipes/pipeline.json).
+   c. **NEVER run native `/goal`.** Auto can neither arm nor clear a native
+      model-judged goal (never-met-loop risk); the deterministic Stop-hook
+      predicate armed by the run is the single source of truth (§1, §3).
+
+## 12. Advisor gate (v0.6.0 — KTD-4/5)
+
+During a self-driven run the driver is hands-off for the *mechanical* work the
+operator types today, but **substantive design/architecture forks and
+irreversible/destructive actions still escalate to the operator**. Two
+`PreToolUse` hooks enforce this; both fire **only** when a live self-driven run
+owns the calling session.
+
+### Ownership predicate (the load-bearing fact)
+
+Both hooks scan `<repo>/.claude/auto/*.json` and treat a question/command as
+belonging to a live auto run iff, for some ledger:
+
+- current phase `!= "done"` (run not finished), AND
+- `driving_session_id == ` the hook's stdin `session_id` (KTD-5 — **equality**,
+  not presence; the field is read defensively, absent ⇒ no match).
+
+**Two conjuncts diverge between the hooks (deliberate). The action hook
+deliberately OMITS both, because it fails CLOSED and a denied tool call does not
+end the agent's turn — so any conjunct that goes false after the first fire would
+self-disarm the backstop:**
+
+- **`loop.driver == "self"` — question hook ONLY (round-1 P0).** The question
+  hook keeps it: it fails OPEN, and once a run is paused/manual there is no live
+  tick to redirect, so allowing the question through is correct. The action hook
+  drops it: its own `_pause_run` flips the owned run to `driver="manual"` the
+  moment it blocks the first destructive command; if it coupled to
+  `driver=="self"` it would self-disarm after firing once and then allow
+  unlimited `rm -rf` / force-push.
+- **`loop.last_beat_at` freshness (`< DRIVER_SELF_STALE_SECONDS`, 3900s) —
+  question hook ONLY (round-2 P2).** The question hook keeps it as a dead-chain
+  guard (stale ⇒ allow is a benign fail-OPEN). The action hook drops it because
+  `_pause_run` calls `set_loop` WITHOUT `beat=True` — it does NOT re-stamp
+  `last_beat_at`. So a run paused-by-backstop goes stale while the operator
+  deliberates; a stale-conjunct would then read the paused run as a dead chain
+  and ALLOW a second destructive command — the same self-disarm hole the driver
+  omission closes, reopened through the staleness door. For a fail-CLOSED
+  backstop stale⇒allow is a fail-open hole; for the fail-OPEN question gate it is
+  correct. A live session whose id equals the recorded driving id IS the run to
+  gate regardless of beat freshness, and pausing a genuinely-dead run is harmless
+  (fail-safe).
+
+A run paused-by-backstop must STAY armed (the action hook fails CLOSED) until an
+operator runs `/auto-resume continue`. Dimension #2 (a concurrent standalone
+ce-skill is never gated) is preserved by the `session_id` equality conjunct
+alone, independent of the driver/staleness checks.
+
+`session_id` equality is what cleanly **allows a concurrent standalone
+`/ce-plan`** in the same worktree: it has a different session, so no ledger
+matches and the gate never fires. Reads are lock-free (the atomic-rename
+invariant gives a consistent snapshot). Fan-out sub-agents have their OWN
+`session_id` and are out of hook scope **by design** — they carry the
+prompt-embedded two-seam instruction instead (KTD-5; set by the driver when it
+builds the unit prompt).
+
+> **⛔ Session-id parity — REQUIRED, UNPROVEN pre-release gate (round-1/round-2 P2).
+> CI CANNOT certify the advisor gate fires; only the live parity check below can.
+> Until that check is recorded green, treat BOTH gates as UNPROVEN in production.**
+>
+> The whole gate is load-bearing on the PreToolUse stdin `session_id` being the
+> SAME string the run recorded as `driving_session_id` at arm time. The arm-time
+> source is confirmed in-tree: `lib/auto.py::_driving_session_id()` reads
+> `CLAUDE_CODE_SESSION_ID` (asserting `CLAUDE_CODE_CHILD_SESSION` is falsey first).
+> The PreToolUse-stdin half CANNOT be verified by any in-tree test — no live
+> Claude Code harness runs in CI, and a synthetic test that constructs both id
+> strings equal passes BY CONSTRUCTION (`advisor-gate.test.sh` injects matching
+> ids into both the stdin payload and the ledger), so it proves nothing about
+> whether the two identifiers share a namespace in the live harness. A mismatch
+> would SILENTLY no-op BOTH gates — the question gate never redirects to the
+> advisor AND the destructive backstop never recognizes the run (`_owning_run_id`
+> returns None ⇒ allow), so destructive ops proceed unintercepted. This is NOT
+> caught by the fail-closed design, which covers only an unavailable `deny`
+> contract ("deny unavailable ⇒ pause"), NOT a session mismatch ("not my run ⇒
+> allow").
+>
+> **REQUIRED pre-merge / pre-release step (blocking, record the result):** from
+> one real `/auto` run, capture one PreToolUse stdin payload and the armed ledger,
+> and assert `stdin.session_id == ` what `_driving_session_id()` recorded as
+> `driving_session_id`. If they differ, switch the arm-time source in
+> `lib/auto.py::_driving_session_id()` (and the stdin-read key in BOTH
+> `lib/on-pretooluse-askuser.py::_read_session_id` and
+> `lib/on-pretooluse-action.py::_read_stdin`) to whatever the PreToolUse payload
+> actually carries. No code change is required if parity holds — this is a
+> one-time empirical confirmation gate, but it MUST be recorded green before the
+> gate is trusted in production.
+>
+> **The check is now a runnable artifact, not prose (fix-round-5).** Do NOT
+> hand-eyeball it — run `bash tests/verify-session-parity.sh <captured-stdin.json>
+> <repo>/.claude/auto/<run_id>.json` (capture instructions are in the script
+> header). It reads the SAME `session_id` / `driving_session_id` keys the hooks
+> read, prints `PASS`/`FAIL`, and exits NON-ZERO on mismatch so a release pipeline
+> cannot skip it silently. It is intentionally NOT a `*.test.sh` (so the in-tree
+> suite never auto-runs it / never reports a false green) and CANNOT run in CI —
+> it requires a live-run capture by construction.
+>
+> ### Release checklist — v0.6.0 advisor-gate sign-off (BLOCKING)
+>
+> Tag/publish 0.6.0 ONLY after this row is recorded green. Until then, treat BOTH
+> gates as NON-FUNCTIONAL in production.
+>
+> | Gate | How | Status |
+> | --- | --- | --- |
+> | Session-id parity (live) | `bash tests/verify-session-parity.sh <stdin.json> <ledger.json>` against ONE real `/auto` run | ☐ NOT YET RECORDED — requires a live operator run; cannot be certified in-tree or in CI |
+>
+> **Partial confirmation (2026-06-11, fix-round-3 P2 probe — NOT the live gate):**
+> Two of the three load-bearing facts are now confirmed; the third still requires
+> a live `/auto` run. (1) `CLAUDE_CODE_SESSION_ID` is a real, present env var in a
+> live Claude Code session, holding a 36-char UUID — so `_driving_session_id()`
+> reads an existing var, not a typo'd one. (2) Current Claude Code hooks docs
+> (code.claude.com/docs/en/hooks) confirm PreToolUse stdin carries a `session_id`
+> field and that `permissionDecision: "deny"` via `hookSpecificOutput` is
+> supported. STILL UNPROVEN (the actual gate): that the stdin `session_id` *value*
+> is byte-equal to the recorded `driving_session_id` at a real arm time — only the
+> live capture above can certify this. Treat both gates as UNPROVEN until that
+> value-equality check is recorded green.
+
+### Question hook (`AskUserQuestion` → advisor redirect, fails OPEN)
+
+`lib/on-pretooluse-askuser.py`. On a denied `AskUserQuestion`, the deny reason
+tells the driving agent to **consult the `advisor` tool** with the question's
+context and then **classify it itself** using that prose advice:
+
+- **Mechanical clarification** (which file, formatting, an unambiguous default)
+  → resolve autonomously and proceed.
+- **Substantive design/architecture fork** (which architecture, is this scope
+  right, a premise/positioning call) → **escalate** via
+  `auto-resume.py pause <run> "<the fork>"`. When unsure between the two, **treat
+  it as a fork and escalate** — the default for substantive choices is escalate,
+  not auto-resolve.
+
+The question hook **fails open**: any uncertainty (malformed ledger, absent
+`driving_session_id`, internal error, or an unavailable PreToolUse `deny`
+contract) degrades to allowing the question through — worst case the operator is
+asked directly. Under a confirmed-unavailable `deny` contract it allows the
+question but surfaces a loud `systemMessage` (never a pause).
+
+### Action hook (`Bash`/`Write` destructive backstop, fails CLOSED)
+
+`lib/on-pretooluse-action.py`. Because the question hook only intercepts the
+decision to *ask*, a separate hook matches `Bash`/`Write` and applies a
+deterministic classifier for the irreversible/destructive set, anchored to the
+project's CLAUDE.md list: `git push --force`/`-f`/`--force-with-lease` (matched in
+ANY flag position — `git push --force origin main` AND the canonical flag-last
+`git push origin main --force`/`-f`/`--force-with-lease`; fix-round-5 P1),
+`reset --hard`, the whole-tree-discard `checkout .`/`restore .` family (any
+spelling whose trailing ` .` pathspec discards the working tree —
+`checkout -- .`, `checkout HEAD -- .`, `restore -- .`, `restore --source=… .` —
+while a scoped pathspec like `checkout -- file.py` correctly does NOT fire),
+`clean -f`/`-fdx`, `branch -D`, `rm -rf`/`rm -fr`, the external-publish endpoints
+`npm publish` / `gh release create`, and the irreversible `gh` subcommands that
+run through the same gated Bash channel (fix-round-5 P2): `gh repo delete`,
+`gh release delete`, and `gh pr merge --admin` (the `--admin` flag bypasses
+branch protection / required reviews). Only the Bash `command` channel
+is classified: a `Write` reaches the hook (it is wired to both tool names) but
+its `content` is **deliberately NOT scanned** (round-4 P2) — classifying Write
+prose against the command set false-positive-pauses the driving session's own
+ce-skill doc Writes (a `/ce-plan` / `/ce-doc-review` markdown quoting `rm -rf`
+as an example), nearly all false-positive cost in auto's own domain. A real
+destructive operation runs through Bash, which IS gated. On a confirmed-destructive command for a confirmed live
+owned run it **pauses the run unconditionally** (`set_loop driver="manual"` +
+`blocked_on`) — even when the PreToolUse `deny` contract is unavailable (then it
+emits a `systemMessage` instead of the deny payload, never a silent allow). The
+halt is observable on the **ledger** (`driver=manual` / `blocked_on`), not the
+process exit code (which always stays 0). Fail-closed scope is precise: a
+malformed ledger, an unidentifiable/non-owned run, or a benign command all fall
+through to allow (an unrelated internal error must not brick the tool flow).
+
+Because this hook pauses the run it fires on (flipping it to `driver="manual"`
+WITHOUT re-stamping `last_beat_at`) and a denied tool call does not end the
+agent's turn, the action gate's ownership check deliberately **omits BOTH the
+`driver=="self"` and the `last_beat_at` staleness conjuncts** (see the Ownership
+predicate divergence above) — so it STAYS armed across a pause it caused, and
+across the staleness window while the operator deliberates, and a second
+destructive command from the same driving session is still denied. When it fires
+it appends its own `kind="action"` audit record (see Audit).
+
+**Documented out-of-scope residual bypasses** (NOT covered — the classifier is a
+deterministic minimum-set backstop, not a sandbox): the general
+flag-reorder/long-form class (`rm -vrf`, `rm --recursive --force`; only the
+literal `rm -rf`/`rm -fr` are caught), refspec force-push
+(`git push origin +<ref>`), compound commands (`a; rm -rf b`), and
+eval/obfuscation. **GitHub MCP write tools** (`delete_file`,
+`merge_pull_request`, `push_files`, `create_or_update_file`) are also an
+acknowledged residual (fix-round-5 P2): they do NOT flow through the Bash
+`command` channel the classifier reads (their `tool_input` carries no `command`),
+and the hook is wired to the `Bash`/`Write` tool names only, so an MCP tool name
+never reaches it at all. Gating MCP-write tools would be a tool-name interception
+change beyond v0.6.0's detect-and-escalate scope; fan-out units carry the
+prompt-embedded two-seam instruction (KTD-5) covering the destructive set instead.
+
+### Audit (KTD-5)
+
+Every autonomous advisor resolution AND every fired action backstop is appended
+to the ledger's `advisor_audit` list via `append_advisor_audit` (ledger-schema
+§2.1) — inside the locked write so concurrent fan-out denials/verdicts cannot
+clobber it. The exit report surfaces the list next to the P3 findings, so a
+wrong autonomous call or a fired backstop is diagnosable. `advisor_audit` is
+NEVER read by any predicate.
+
+## 13. Upstream-cluster detection → operator escalation (v0.6.0 — KTD-6)
+
+On a spine run, when a review verdict's findings **cluster on a single upstream
+phase**, auto detects it and **escalates the cluster to the operator** via the
+existing pause seam. v0.6.0 ships the *detection* half only — there is **no
+autonomous backward edge**: `loop_phase` is never moved backward, no rebound
+counter, no new persisted ledger field. (The autonomous rebound is deferred to
+v0.7.0.)
+
+### The weighting — reviewer-role diversity over raw count
+
+`lib/upstream-cluster.py` is a pure classifier. The trigger is **≥ 3 distinct
+reviewer roles attributing to ONE upstream phase**, NOT a finding-count
+threshold: three findings from three distinct lenses (e.g. adversarial +
+feasibility + security) converging on the same upstream phase is a far stronger
+signal than N same-role findings on local issues — independent lenses converging
+on one root cause is what makes an upstream flaw credible. Many same-role local
+findings never trigger (a single role is diversity == 1 < threshold), and
+current-phase / downstream findings are excluded from the upstream set.
+
+### Where the metadata lives
+
+`record_verdict` normalizes findings to `{severity, note}` only, so any
+reviewer-role / target-phase tag is stripped on the canonical write path.
+Role-tagged findings therefore survive on the unit's `dispatch_context` (same
+precedent as the iteration `decision`). The **producer** that tags review
+findings with role + attributed-phase is out of scope for v0.6.0 — until a
+producer populates the tags, the classifier returns "no cluster" (degrade-safe).
+
+### Escalation (same pause mechanism, no new field)
+
+`lib/tick_advance.py::detect_upstream_cluster` runs the classifier **read-only**
+(any failure collapses to not-detected, so a torn verdict can never raise out of
+the work-loop). On a positive detection,
+`_escalate_upstream_cluster` calls `ledger.set_loop(driver="manual",
+blocked_on=<message>)` — the SAME mechanism `auto-resume.py pause` uses — and
+returns `seam_pause: True` so the tick short-circuits before re-stamping
+`driver="self"` and re-arming (which would otherwise immediately undo the pause).
+The `blocked_on` message names the upstream phase and the converging roles. From
+the seam the operator revisits the upstream artifact; `/auto-resume continue`
+will re-detect the same cluster and re-pause (the upstream flaw is unchanged),
+so the run does not get past the cluster on its own — autonomous rebound is
+v0.7.0.

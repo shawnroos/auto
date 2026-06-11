@@ -246,12 +246,15 @@ assert_eq "raw" "$(json_field setup_malformed 'H["situation"]')"
 # ── Scenario 10: every envelope has the canonical key set (shape invariant)
 # v0.4.1 (plan 004): adds `workspace` + `workspace_action` to the envelope
 # so the skill can route project-workspace handling from one read.
-it "envelope shape: every emitted JSON has all eight top-level keys"
+# v0.6.0 (U1): adds `recommendation` — present on EVERY envelope (the detector
+# always emits null; the driver fills it via lib/recommender.py). The key-set
+# grew from eight to nine in lockstep with the U1 contract change.
+it "envelope shape: every emitted JSON has all nine top-level keys (incl. v0.6.0 recommendation)"
 shape_setup() {
   setup_inflight_one "$1"
 }
 keys="$(json_field shape_setup 'sorted(H.keys())')"
-assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
+assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
 
 # ── Scenario 10b: workspace_action correctly derived
 # v0.4.1 (plan 004): action routing rules per KTD-4

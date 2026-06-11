@@ -390,7 +390,11 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"contrun",adapter="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"contrun",driver="manual")
 PYEOF
-out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" continue contrun)"
+# fix-round-6 P1: continue RE-records driving_session_id, so it needs the
+# interactive session id in the env (resume runs inside the live session).
+# `-u CLAUDE_CODE_CHILD_SESSION` simulates the interactive driver (not a spawned
+# child) — the test harness itself runs as a child, which would otherwise refuse.
+out="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue contrun)"
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['loop_phase'])")"
 assert_eq "work" "$phase"
 it "resume continue: emits an arm-tick intent for the model to fire /auto-tick"
@@ -436,7 +440,9 @@ it "resume pause: the Stop hook then DECLINES to block this run (manual carve-ou
 sout="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "" "$(jget "$sout" decision)"
 it "resume continue (after pause): re-arms AND clears blocked_on"
-cout="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" continue pauserun)"
+# fix-round-6 P1: continue re-records driving_session_id (needs the live session
+# id; -u CLAUDE_CODE_CHILD_SESSION simulates the interactive driver).
+cout="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue pauserun)"
 assert_eq "arm-tick" "$(jget "$cout" action)"
 assert_eq "None" "$(rd "l['loop'].get('blocked_on')")"
 
@@ -497,7 +503,10 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"solo",adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"solo",driver="manual")
 PYEOF
-out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH")"
+# fix-round-6 P1: bare resume defaults to `continue`, which re-records
+# driving_session_id (needs the live session id; -u CLAUDE_CODE_CHILD_SESSION
+# simulates the interactive driver — the harness runs as a child otherwise).
+out="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH")"
 assert_eq "solo" "$(jget "$out" run)"
 
 # ════════════════════════════════════════════════════════════════════════════

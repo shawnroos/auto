@@ -75,6 +75,12 @@ REQUIRED=(
   "ExitReason"
   # v0.4.0 U1: goal_intent ledger field — one-line user-facing intent sentence
   "goal_intent"
+  # v0.6.0 U5 (KTD-5): the advisor-gate session-ownership field + audit record
+  # and their mutators.
+  "driving_session_id"
+  "advisor_audit"
+  "set_driving_session_id"
+  "append_advisor_audit"
 )
 
 # ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────

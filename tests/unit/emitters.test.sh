@@ -105,6 +105,50 @@ elif op == "a1-empty":
     led = {"units": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
     print(len(emitters.plan_output_to_work_units(led, "work")))
 
+# ─── v0.6.0 U8: brainstorm_output_to_plan_unit ──────────────────────────────
+elif op == "brainstorm-emit":
+    # The brainstorm unit carries its requirements-doc output on
+    # dispatch_context.requirements_doc; the emitter materializes ONE plan unit
+    # (5-key dict) carrying that path, invoking next_plan_step (a1's plan shape).
+    led = {"units": [
+        {"id": "brainstorm", "phase": "brainstorm",
+         "dispatch_context": {"requirements_doc": "docs/brainstorms/x-requirements.md"}}]}
+    out = emitters.brainstorm_output_to_plan_unit(led, "plan")
+    u = out[0]
+    print("%d|%s|%s|%s|%s|%s" % (
+        len(out), u["id"], u["phase"],
+        u["invokes"].get("adapter_op"),
+        u["dispatch_context"].get("requirements_doc"),
+        ",".join(sorted(u.keys()))))
+
+elif op == "brainstorm-pure":
+    # The emitter is PURE — it must not mutate the input ledger dict. Snapshot
+    # the units list identity + content before/after; both must be unchanged.
+    led = {"units": [
+        {"id": "brainstorm", "phase": "brainstorm",
+         "dispatch_context": {"requirements_doc": "docs/x.md"}}]}
+    before = json.dumps(led, sort_keys=True)
+    emitters.brainstorm_output_to_plan_unit(led, "plan")
+    after = json.dumps(led, sort_keys=True)
+    print("unchanged" if before == after else "MUTATED")
+
+elif op == "brainstorm-no-unit":
+    # No brainstorm unit at all → RecipeError (not a silent empty emit).
+    led = {"units": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
+    try:
+        emitters.brainstorm_output_to_plan_unit(led, "plan"); print("NO-RAISE")
+    except recipes.RecipeError:
+        print("raised")
+
+elif op == "brainstorm-no-output":
+    # brainstorm unit exists but carries no requirements_doc → RecipeError
+    # (mirrors A2/A4 emitter failure; silent empty emit would leave plan vacuous).
+    led = {"units": [{"id": "brainstorm", "phase": "brainstorm", "dispatch_context": {}}]}
+    try:
+        emitters.brainstorm_output_to_plan_unit(led, "plan"); print("NO-RAISE")
+    except recipes.RecipeError:
+        print("raised")
+
 elif op == "judge-winner":
     # Fix-pass I (P0): winner_unit_id lives on judge.dispatch_context, NOT on
     # findings — record_verdict's findings normalize strips every key except
@@ -377,6 +421,24 @@ assert_eq "w1:work,w2:work" "$(em a1-emit)"
 
 it "plan_output_to_work_units: empty enumerated → [] (vacuous, no crash)"
 assert_eq "0" "$(em a1-empty)"
+
+# ─── v0.6.0 U8: brainstorm_output_to_plan_unit ──────────────────────────────
+# The spine emitter that fires on arrival at `plan` from `brainstorm`: it reads
+# the brainstorm unit's requirements-doc output and emits ONE structural plan
+# unit (5-key dict), invoking next_plan_step so the downstream plan→work
+# machinery is identical to a1's plan-entry path. Registry symmetry (Scenario 1)
+# already asserts this emitter is in BOTH REGISTRY and V1_EMITTER_NAMES.
+it "U8: brainstorm_output_to_plan_unit → one plan unit (5-key, requirements-doc carried)"
+assert_eq "1|plan|plan|next_plan_step|docs/brainstorms/x-requirements.md|depends_on,dispatch_context,id,invokes,phase" "$(em brainstorm-emit)"
+
+it "U8: brainstorm_output_to_plan_unit is pure (no ledger mutation)"
+assert_eq "unchanged" "$(em brainstorm-pure)"
+
+it "U8: no brainstorm unit → RecipeError (not a silent empty emit)"
+assert_eq "raised" "$(em brainstorm-no-unit)"
+
+it "U8: brainstorm unit with missing requirements_doc → RecipeError"
+assert_eq "raised" "$(em brainstorm-no-output)"
 
 # ─── Scenario 4-5: judge_winner_to_work_units ───────────────────────────────
 it "judge_winner_to_work_units: emits the WINNER's units"

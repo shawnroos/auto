@@ -7,8 +7,9 @@ routes through ``ledger_core._with_locked_ledger`` (the one RMW primitive), whic
 recomputes the predicate in the SAME atomic snapshot as the write (I-1). Each is a
 single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
 ``set_gaps_open``, ``set_enumerated_units``, ``set_winner_unit_id``,
-``set_verdict_decision``, ``set_bound_override``, ``set_exit_reason``,
-``accumulate_active_time``, ``increment_iteration_attempts``.
+``set_verdict_decision``, ``set_bound_override``, ``set_driving_session_id``,
+``append_advisor_audit``, ``set_exit_reason``, ``accumulate_active_time``,
+``increment_iteration_attempts``.
 
 Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← emitters ← facade):
 imports ledger_core for constants, errors, the lock primitive, and the pure
@@ -462,6 +463,120 @@ def set_bound_override(
             "at": ledger_core._now_iso(),
         }
         return bound_type
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_driving_session_id(repo_root, run_id, session_id):
+    """Record the DRIVING session_id on the ledger at arm time (v0.6.0 U5 / KTD-5).
+
+    The advisor-gate PreToolUse hooks (lib/on-pretooluse-askuser.py +
+    lib/on-pretooluse-action.py) match a question/action to a live auto run by
+    comparing the PreToolUse stdin ``session_id`` against this recorded
+    ``driving_session_id`` — session-id EQUALITY, not ledger-state alone. That
+    is what lets a concurrent STANDALONE ce-skill in the same worktree be
+    correctly ignored (different session_id → no match → allow).
+
+    ``session_id`` is the interactive driver's id (``CLAUDE_CODE_SESSION_ID``,
+    asserted NOT a spawned child via ``driver_session.driving_session_id`` at the
+    call sites). ``None`` clears the field (and the hooks then fail-open /
+    fail-safe — they read it defensively). Stored top-level, alongside
+    ``exit_reason`` / ``goal_intent``; NOT inside ``loop`` (it is run-identity,
+    not liveness). Atomic (the predicate recompute is a no-op here, but the write
+    stays on the I-1 locked path).
+
+    Two callers, both inside the live interactive session (spawn-free):
+    ``init_ledger`` at arm time (lib/auto.py) AND the resume re-arm path
+    (lib/auto-resume.py::_rearm_owns_session, fix-round-6 P1). The resume caller
+    RE-records the field so a run resumed from a DIFFERENT interactive session
+    (after a seam pause, a crash, or a fresh window the next day) hands ownership
+    to the new driving session instead of keeping the stale arm-time id — without
+    which BOTH advisor-gate hooks would fall through to ALLOW on resume. NOTE the
+    None-clears-the-field semantics is a fail-OPEN footgun on the re-arm path:
+    that caller MUST guard on a non-None id and refuse to re-arm otherwise (a
+    cleared field => dark backstop), so it never passes None here.
+    """
+    if session_id is not None and not isinstance(session_id, str):
+        raise ledger_core.LedgerError(
+            f"driving_session_id must be a string or None: {session_id!r}"
+        )
+
+    def mutate(ledger):
+        if session_id is None:
+            ledger.pop("driving_session_id", None)
+        else:
+            ledger["driving_session_id"] = session_id
+        return session_id
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
+# Audit-record event kinds (v0.6.0 U5 / KTD-5). ``advisor`` = the driving agent
+# consulted the advisor on a denied AskUserQuestion and itself classified +
+# resolved/escalated. ``action`` = the destructive-action backstop hook fired.
+_AUDIT_KINDS = frozenset({"advisor", "action"})
+
+
+def append_advisor_audit(
+    repo_root,
+    run_id,
+    *,
+    kind: str,
+    subject: str,
+    classification: str,
+    resolution: str,
+):
+    """Append one advisor/action audit record to the ledger (v0.6.0 U5 / KTD-5).
+
+    Records every autonomous gate decision so a wrong call or a fired backstop
+    is diagnosable and trust is earned through visibility — surfaced in the exit
+    report next to the P3 findings.
+
+    Each record is ``{kind, subject, classification, resolution, at: <iso>}``:
+      ``kind``           — ``"advisor"`` (a denied question routed through the
+                           advisor) or ``"action"`` (the destructive backstop).
+      ``subject``        — the question text OR the command/content classified.
+      ``classification`` — the agent's / classifier's read (e.g. "mechanical",
+                           "design-fork", or the destructive-pattern label).
+      ``resolution``     — what happened ("resolved-autonomously",
+                           "escalated-via-pause", "blocked-and-paused").
+
+    Models ``set_bound_override``'s ENVELOPE (validated inputs, ``_now_iso``
+    timestamp) but is run-scoped and APPENDS to a top-level list rather than
+    writing one unit's ``dispatch_context``. The append happens INSIDE the
+    ``mutate`` closure, so it runs under the SAME flock as every other write —
+    that serialization is the concurrent-safety mechanism: a fan-out wave's
+    ``record_verdict`` writes landing on the ledger at the same moment cannot
+    clobber the audit list (and vice-versa). Atomic; the predicate recompute is
+    a no-op here (a new top-level key, untouched by ``recompute_predicate``).
+    """
+    if kind not in _AUDIT_KINDS:
+        raise ledger_core.LedgerError(
+            f"audit kind must be one of {sorted(_AUDIT_KINDS)!r}; got {kind!r}"
+        )
+    for label, val in (
+        ("subject", subject),
+        ("classification", classification),
+        ("resolution", resolution),
+    ):
+        if not isinstance(val, str) or not val:
+            raise ledger_core.LedgerError(
+                f"audit {label} must be a non-empty string; got {val!r}"
+            )
+
+    record = {
+        "kind": kind,
+        "subject": subject,
+        "classification": classification,
+        "resolution": resolution,
+        "at": ledger_core._now_iso(),
+    }
+
+    def mutate(ledger):
+        # setdefault + append INSIDE the lock — the chokepoint that makes
+        # concurrent fan-out denials/verdicts non-clobbering (KTD-5).
+        ledger.setdefault("advisor_audit", []).append(record)
+        return record
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 

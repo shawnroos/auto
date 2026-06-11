@@ -14,7 +14,7 @@
 # JSON envelope (one line, machine-parseable):
 #   {
 #     "situation": "in-flight" | "ambiguous-runs" | "reviewed-plan"
-#                | "multi-plan" | "raw",
+#                | "multi-plan" | "conversation-context" | "raw",
 #     "summary":   "one-line operator-facing description",
 #     "ambiguity": null | { "kind": "choice"|"open",
 #                           "question": "...",
@@ -25,7 +25,12 @@
 #         open-question shape; `options` is the empty array.
 #     "single_plan": { "path": "...", "run_id_hint": "..." } | null,
 #     "multi_plan":  { "paths": ["..."], "batch_id_hint": "..." } | null,
-#     "in_flight":   { "run_id": "...", "run_ids": ["..."] } | null
+#     "in_flight":   { "run_id": "...", "run_ids": ["..."] } | null,
+#     "recommendation": null  (v0.6.0 U1 — present on EVERY envelope, incl. the
+#                       catastrophic-error fallback; the detector has no
+#                       transcript access so it always emits null. The DRIVER
+#                       computes the real recommendation in U2/U3 — see
+#                       skills/auto-driver + lib/recommender.py.)
 #   }
 #
 # Situations:
@@ -42,6 +47,18 @@
 #                     v0.4.0 RENAME of v0.2.x's `ambiguous-plans` — under the
 #                     v0.4.0 fanout model, multiple plans is a fanout signal,
 #                     not an ambiguity to resolve. (KTD-1.)
+#   conversation-context (v0.6.0 U1) — no in-flight run AND no plan, but the
+#                     DRIVER has signalled a rich current conversation worth
+#                     routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL set).
+#                     The detector has no transcript access (single-quote
+#                     heredoc), so it cannot self-detect the conversation — it
+#                     only honours the driver's signal. It emits the situation
+#                     with an EMPTY (null) recommendation + ambiguity null; the
+#                     driver classifies state + calls lib/recommender.py to fill
+#                     in the recommendation, then dispatches or pre-dispatch
+#                     escalates (skills/auto-driver, KTD-2/3/7). Without the
+#                     signal this branch is skipped entirely and the engine
+#                     falls through to `raw` (byte-unchanged from v0.4.x).
 #   raw             — no run, no plan (clean OR dirty tree). ambiguity is an
 #                     open "what should we work on?" question so the driver
 #                     can route to /ce-plan or a freeform handoff. When the
@@ -99,7 +116,7 @@ def _emit(hyp):
 
 
 def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
-                   multi_plan=None, in_flight=None):
+                   multi_plan=None, in_flight=None, recommendation=None):
     """Build the canonical hypothesis dict — all slots present, unknowns null.
 
     Every consumer can rely on the same keys existing, so a Python/jq reader
@@ -109,6 +126,13 @@ def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
     `workspace_action`. `workspace` comes from auto_workspace.detect(repo);
     the action is computed from (workspace.status, situation) so the skill
     has one field to branch on instead of reconstructing the policy itself.
+
+    v0.6.0 (U1): adds the `recommendation` slot. The detector ALWAYS emits null
+    here — it has no transcript access (single-quote heredoc), so it cannot
+    classify the conversation. The DRIVER (skills/auto-driver) computes the real
+    recommendation via lib/recommender.py and consumes it; the key exists on
+    every envelope so a reader never trips on its absence (the same shape
+    contract the other slots honour).
     """
     workspace = _detect_workspace_safe()
     return {
@@ -120,6 +144,7 @@ def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
         "in_flight": in_flight,
         "workspace": workspace,
         "workspace_action": _workspace_action(workspace, situation),
+        "recommendation": recommendation,
     }
 
 
@@ -354,6 +379,29 @@ try:
             multi_plan={"paths": rel_paths, "batch_id_hint": None},
         ))
 
+    # ── Step 2.5 (v0.6.0 U1): conversation-context. ───────────────────────
+    # No in-flight run AND no plan, but the DRIVER signalled a rich current
+    # conversation worth routing on. The detector has NO transcript access (the
+    # single-quote heredoc disables shell substitution and carries no
+    # conversation), so it cannot self-classify — it only honours the driver's
+    # env-var signal. An argv signal would carry unstated invocation-plumbing
+    # work (the heredoc forwards only `_det_dir` today); an env var is read
+    # cleanly inside the heredoc with no plumbing change.
+    #
+    # The branch emits an EMPTY (null) recommendation + ambiguity null: the
+    # driver computes the recommendation via lib/recommender.py (U2) and either
+    # dispatches the entry recipe or pre-dispatch escalates (U3). When the signal
+    # is UNSET, this branch is skipped and the engine falls through to `raw`,
+    # byte-identical to v0.4.x (R-5: no conversation-context-vs-raw
+    # misclassification — the situation only fires on an explicit driver signal).
+    if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
+        _emit(_safe_envelope(
+            "conversation-context",
+            "no plan, no in-flight run — recommending a ce-family step from "
+            "the current conversation",
+            recommendation=None,
+        ))
+
     # ── Step 3: raw — no run, no plan. ────────────────────────────────────
     # Includes both clean and dirty trees: review round 1 finding C-2/C-3
     # surfaced that a separate `dirty-tree` situation had no actionable
@@ -399,6 +447,10 @@ except BaseException as exc:
         "single_plan": None,
         "multi_plan": None,
         "in_flight": None,
+        # v0.6.0 U1: the catastrophic-error fallback bypasses _safe_envelope, so
+        # carry `recommendation` here too — EVERY envelope on EVERY path must
+        # have the key (the shape contract a downstream reader relies on).
+        "recommendation": None,
     }, sys.stdout)
     sys.stdout.write("\n")
     raise SystemExit(0)

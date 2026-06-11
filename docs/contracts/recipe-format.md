@@ -44,7 +44,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 | `units` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
 | `default_adapter` | no | `"ce"`\|`"native"` | the adapter to use when `--adapter` is not passed. |
-| `phase_order` | no | array | the run's phase sequence. **V1 accepts ONLY `["plan","seam","work"]` (default) or `["work"]` (work-only).** Any other non-default value is REJECTED until v0.2.1 (A3's multi-phase grammar). |
+| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every unit/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","seam","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","seam","work"]` (the `pipeline` recipe) validate. |
 | `terminal_phase` | no | string | the phase whose completion ends the run. Default `"work"`. MUST be a member of `phase_order`. |
 | `phase_transitions` | no | array | emitter declarations (§4). |
 | `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate unit, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
@@ -91,7 +91,7 @@ Each entry declares which **emitter** fires at a phase boundary:
 > unit verdicts `iterate` under bound (§6). It is not a recipe-selectable
 > phase-boundary emitter.
 
-## 5. The four built-in recipes (the conformance corpus)
+## 5. The built-in recipes (the conformance corpus)
 
 - **a1** — Classic CE Stack. One plan unit; `plan_output_to_work_units` at
   plan→work. The v0.1.x-equivalent default. Also a Python constant
@@ -107,6 +107,18 @@ Each entry declares which **emitter** fires at a phase boundary:
   load work units from an operator-supplied plan at `init_ledger` time; until
   then, a work-only recipe with `units: []` is REJECTED by `validate()` (it
   would create a zero-unit ledger that re-arms forever).
+- **pipeline** — **(v0.6.0, U7)** Brainstorm-rooted creative spine.
+  `phase_order: ["brainstorm","plan","seam","work"]`, terminal `work`. One
+  structural `brainstorm` unit; `brainstorm_output_to_plan_unit` at
+  brainstorm→plan, then `plan_output_to_work_units` at plan→work. The
+  conversation-entry forward chain — brainstorm-entry runs auto-advance
+  brainstorm→plan→work. Spine-only phase (`brainstorm`) is advanced via the
+  direct-mutation `transition_and_emit` path, never `set_loop` (KTD-3).
+- **review** — **(v0.6.0, U11)** Off-spine code-review-only entry.
+  `phase_order: ["work"]`, terminal `work`; a single unit invoking the `review`
+  adapter op (one review/fix loop to P3, then stop). Distinct from `w` (which
+  invokes `do_unit` to build): same single-phase shape, different op — no
+  plan phase, no auto-advance, no rebound.
 
 ## 6. `iteration` — outcomes-gated emission (v0.3.0+)
 
@@ -304,15 +316,17 @@ emission — see §6 + §7.)
 - integrity check (~line 300-311): `depends_on` accepts members iff (a) in
   `units[]`, (b) iterate-shape per §7, OR (c) in `expected_emit_outputs`.
 
-## 9. V1 acceptance boundary (deferred to v0.2.1)
+## 9. Acceptance boundary
 
-The validator REJECTS, in V1: non-default `phase_order` other than work-only
-(A3's `["work_sketch","review","plan","work_refine"]`); unregistered emitter
-names; a loaded `python_hook`; AND a work-only recipe (`phase_order: ["work"]`)
-with an empty `units` list (the init-time enumeration path ships in v0.2.1 —
-KTD-15). These ship in v0.2.1 with A3, the recipe-declared-emitter feature, and
-W's init-time enumeration. The rejection is mechanical (a tested code path), so
-no untested topology can ship.
+The validator REJECTS: a `phase_order` with a non-string or empty element (the
+v0.6.0/U6 structural rule); a `terminal_phase`, unit `phase`, or
+`phase_transitions` from/to not a member of `phase_order`; unregistered emitter
+names; a loaded `python_hook` (parsed but ignored); AND a work-only recipe
+(`phase_order: ["work"]`) with an empty `units` list (the init-time enumeration
+path ships in v0.2.1 — KTD-15). **v0.6.0 (U6)** dropped the earlier literal
+allow-list, so a structurally-sound multi-phase `phase_order` (e.g. the
+`pipeline` spine) now validates. The rejection is mechanical (a tested code
+path), so no malformed topology can ship.
 
 ## 10. Cross-references
 

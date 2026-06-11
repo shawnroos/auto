@@ -5,8 +5,10 @@ Parses the resume argument string into a subcommand and applies the ledger
 transition via ledger.py (so the per-run RMW flock is inherited — no new flock).
 
 Subcommands:
-    [<run>]            default continue: flip a paused seam -> work, then emit a
-                       re-arm INTENT (the model fires /auto-tick).
+    [<run>]            default continue: re-record the driving session (so the
+                       advisor gates own the re-armed run — fix-round-6 P1),
+                       flip a paused seam -> work, then emit a re-arm INTENT
+                       (the model fires /auto-tick).
     continue <run>     explicit continue (same as default with a run-id).
     pause <run> [why]  blocked on a human/external action (auth, approval,
                        missing creds): flip driver -> "manual" so the Stop hook
@@ -46,6 +48,12 @@ phase_grammar = load_lib_module("phase-grammar")
 # centralized advance helper so it fires the recipe's emitter the same way the
 # auto-flip does. tick.py uses a hyphenless name so plain import works.
 import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
+
+# fix-round-6 P1: the resume re-arm path RE-records driving_session_id (the
+# advisor-gate ownership key) so a run resumed from a DIFFERENT interactive
+# session hands ownership to the new session instead of keeping the stale
+# arm-time id. ONE source of truth, shared with auto.py's arm-time recorder.
+driver_session = load_lib_module("driver_session")
 
 
 # Repo root resolution is shared with auto.py and auto-status.py; lives in
@@ -98,6 +106,40 @@ def _emit_rearm(run_id: str, note: str) -> int:
     return 0
 
 
+def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
+    """Re-record THIS interactive session as the run's driving session, or refuse.
+
+    fix-round-6 P1. A re-armed run becomes self-driven again, so the advisor-gate
+    PreToolUse hooks must be able to own it — they match on
+    ``driving_session_id == stdin.session_id``. Resume is the common cross-session
+    case (after a seam pause, a crash, or the next day from a fresh window), so
+    the stale arm-time id would never match the NEW driving session and BOTH gates
+    (question redirect AND the destructive-action backstop) would fall through to
+    ALLOW: a live self-driven run executing ``rm -rf`` / force-push with the
+    deterministic backstop dark. Re-recording closes that hole.
+
+    Returns 0 on success. Refuses (returns 1, leaves the run paused, prints a loud
+    warning) when the driving session cannot be determined — a child/unset env. We
+    must NOT pass None to ``set_driving_session_id`` (None CLEARS the field, which
+    fails BOTH gates OPEN), and we must NOT re-arm a self-driven run whose backstop
+    is dark. Resume runs INSIDE the live interactive session, so this is normally
+    a real id; None here means an unsupported environment, not a routine case.
+    """
+    sid = driver_session.driving_session_id()
+    if not sid:
+        sys.stderr.write(
+            f"resume: refusing to re-arm run {run_id!r} — cannot determine the "
+            "driving session id (CLAUDE_CODE_SESSION_ID unset, or a spawned "
+            "child). Re-arming now would leave the advisor-gate destructive "
+            "backstop dark (no owning session => gates fail open). The run stays "
+            "paused. Re-run `/auto-resume continue` from the interactive driver "
+            "session.\n"
+        )
+        return 1
+    ledger.set_driving_session_id(repo_root, run_id, sid)
+    return 0
+
+
 def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     """Flip a paused seam -> work (if applicable), then arm a tick."""
     try:
@@ -109,6 +151,12 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     if phase == "done":
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to resume.\n")
         return 0
+    # Re-record the driving session BEFORE either re-arm branch (both make the
+    # run self-driven). On refusal, leave the run paused and DO NOT re-arm — a
+    # dark backstop is worse than a not-resumed run (fix-round-6 P1).
+    rc = _rearm_owns_session(ledger, repo_root, run_id)
+    if rc != 0:
+        return rc
     if phase == "seam":
         # seam -> work: route through tick.advance_to_phase so the recipe's
         # emitter fires the same way it does on the auto-flip path (P0 #1

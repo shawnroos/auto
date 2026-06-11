@@ -1,0 +1,16 @@
+{
+  "name": "review",
+  "version": "1",
+  "description": "Off-spine code-review-only entry — I have code written but unreviewed; run one review/fix loop to P3-only exit and stop. No plan phase, no auto-advance, no rebound (v0.6.0).",
+  "default_adapter": "ce",
+  "phase_order": ["work"],
+  "terminal_phase": "work",
+  "units": [
+    {
+      "id": "review",
+      "phase": "work",
+      "depends_on": [],
+      "invokes": {"adapter_op": "review"}
+    }
+  ]
+}

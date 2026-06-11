@@ -59,6 +59,10 @@ def _plan_units(ledger: dict) -> list:
     return [u for u in ledger.get("units", []) if u.get("phase") == "plan"]
 
 
+def _brainstorm_units(ledger: dict) -> list:
+    return [u for u in ledger.get("units", []) if u.get("phase") == "brainstorm"]
+
+
 def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
     """A1: the single plan unit's enumerated output → one work unit per item.
 
@@ -76,6 +80,57 @@ def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
          "invokes": item.get("invokes", {}),
          "dispatch_context": item.get("dispatch_context", {})}
         for item in items
+    ]
+
+
+def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
+    """Spine (v0.6.0 / U8): the brainstorm unit's output → ONE plan unit.
+
+    The brainstorm-rooted spine (``recipes/pipeline.json``,
+    ``phase_order ["brainstorm","plan","seam","work"]``) fires this emitter on
+    arrival at ``plan`` from ``brainstorm`` (KTD-2). ce-brainstorm produces a
+    requirements document; the model records that doc's path on the brainstorm
+    unit's ``dispatch_context.requirements_doc`` when the brainstorm completes.
+    This emitter reads that path and materializes the single structural plan
+    unit the plan-loop then drives — exactly the shape ``a1`` declares at init
+    (``invokes.adapter_op == "next_plan_step"``), so the downstream plan→work
+    machinery is unchanged for both plan-entry (a1) and brainstorm-entry (spine).
+
+    PURE (mirrors ``plan_output_to_work_units``): reads the ledger dict, returns
+    a one-element list of a partial 5-key unit dict; no ledger mutation. The
+    requirements-doc path flows onto the plan unit's ``dispatch_context`` so the
+    plan adapter op has the brainstorm output as input.
+
+    Raises ``RecipeError`` (the recipe-shape error class, matching the A2/A4
+    emitter failure surface) when no brainstorm unit carries an output — a
+    silent empty emit would leave the plan phase with no unit and the run would
+    re-arm against a vacuous plan phase forever.
+    """
+    brainstorm_units = _brainstorm_units(ledger)
+    if not brainstorm_units:
+        raise RecipeError(
+            "brainstorm_output_to_plan_unit: no 'brainstorm' unit in ledger — "
+            "the spine recipe must declare a brainstorm unit whose output seeds "
+            "the plan phase"
+        )
+    # The spine has exactly one brainstorm unit; read its recorded output.
+    bdc = brainstorm_units[0].get("dispatch_context") or {}
+    requirements_doc = bdc.get("requirements_doc")
+    if not requirements_doc:
+        raise RecipeError(
+            "brainstorm_output_to_plan_unit: brainstorm unit "
+            "dispatch_context.requirements_doc is missing — the brainstorm step "
+            "must record the requirements-doc path before the plan phase can be "
+            "seeded (a silent empty emit would leave plan with no unit)"
+        )
+    return [
+        {
+            "id": "plan",
+            "phase": to_phase,
+            "depends_on": [],
+            "invokes": {"adapter_op": "next_plan_step"},
+            "dispatch_context": {"requirements_doc": requirements_doc},
+        }
     ]
 
 
@@ -322,6 +377,9 @@ REGISTRY = {
     "judge_winner_to_work_units": judge_winner_to_work_units,
     "plan_output_to_paired_builders": plan_output_to_paired_builders,
     "iterate_template": iterate_template,
+    # v0.6.0 (U8): brainstorm→plan spine emitter. Added atomically with the
+    # recipes.V1_EMITTER_NAMES entry so the symmetry test stays green.
+    "brainstorm_output_to_plan_unit": brainstorm_output_to_plan_unit,
 }
 
 
