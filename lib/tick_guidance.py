@@ -67,6 +67,34 @@ def _operator_guidance_for(phase, advance_result, led):
             f"step: {step!r}; expected invocation: {invocation}."
         )
         return iteration_prefix + body if iteration_prefix else body
+    if phase == "brainstorm":
+        # v0.6.0 U7/U8 (P0 fix-round-3): the spine's brainstorm phase is a
+        # SINGLE-unit, model-driven step (like plan, NOT a work-loop fan-out).
+        # The CE adapter has no `brainstorm` op, so nothing dispatches it for
+        # the model — the driver MUST run /ce-brainstorm itself, then record the
+        # two conditions advance_brainstorm_loop/_brainstorm_unit_ready gate on:
+        # (i) the requirements-doc path on the brainstorm unit's
+        # dispatch_context.requirements_doc, AND (ii) self-write that unit
+        # `verdict-returned`. Without BOTH, the forward brainstorm→plan emitter
+        # never fires and every tick re-arms identically (the livelock the U7
+        # success criterion forbids; feedback_plan_documents_transition_code_
+        # doesnt_wire_it). Mirrors the single-unit plan-phase guidance, not the
+        # work-loop fan-out reminder.
+        body = (
+            "prepare/execute contract: I PREPARED the brainstorm step; YOU "
+            "must run it. Invoke /ce-brainstorm to explore the conversation "
+            "context and produce a requirements doc. THEN, on the `brainstorm` "
+            "unit, record BOTH (i) dispatch_context.requirements_doc = <the doc "
+            "path> AND (ii) state `verdict-returned`, via the existing mutators "
+            "in THIS order (the unit starts `pending`, from which record_verdict "
+            "would raise): ledger.transition(repo, run, 'brainstorm', "
+            "'dispatched', dispatch_context={'requirements_doc': <path>}) then "
+            "ledger.record_verdict(repo, run, 'brainstorm', []). Both conditions "
+            "are required before the spine advances brainstorm→plan. Re-ticking "
+            "without running /ce-brainstorm and recording the doc is a NO-OP — "
+            "the brainstorm phase stays put until both conditions hold."
+        )
+        return iteration_prefix + body if iteration_prefix else body
     if phase == "work":
         # In the work-loop, the trap is different: the driver dispatches background
         # Agents via the orchestrator and then YIELDS for harness re-invocation

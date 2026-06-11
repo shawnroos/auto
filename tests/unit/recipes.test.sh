@@ -77,6 +77,36 @@ elif op == "render-deterministic":
     with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
         d = json.load(f)
     print("same" if tr.render(d, 60) == tr.render(d, 60) else "differs")
+
+# ─── v0.6.0 U6 / U7 / U11: structural phase_order validator + new recipes ────
+elif op == "validate-recipe-file":
+    # Validate a built-in recipe FILE by name (generalizes validate-builtins
+    # to the v0.6.0 recipes pipeline.json / review.json which the fixed
+    # ("a1","a2","a4","w") loop above does not cover).
+    with open(os.path.join(auto_root, "recipes", sys.argv[3] + ".json")) as f:
+        print(vresult(json.load(f)))
+elif op == "resolve-recipe-file":
+    # Resolve a recipe through the three-tier registry in a fresh repo (proves
+    # it lands at the built-in tier and loads+validates).
+    import tempfile
+    repo = tempfile.mkdtemp()
+    try:
+        r, tier = recipes.load_and_validate(sys.argv[3], repo)
+        print("%s:%s:%s" % (r["name"], tier, vresult(r)))
+    except recipes.RecipeError as e:
+        print("ERROR:%s" % e)
+elif op == "review-vs-w-distinct":
+    # U11: review.json must be MEANINGFULLY distinct from w.json — same single
+    # ["work"] phase shape, but its unit invokes the `review` adapter op (one
+    # review/fix loop to P3), NOT `do_unit` (build work). Surface both ops so a
+    # silent convergence (review collapsing into a w-clone) trips this.
+    with open(os.path.join(auto_root, "recipes", "review.json")) as f:
+        rev = json.load(f)
+    with open(os.path.join(auto_root, "recipes", "w.json")) as f:
+        w = json.load(f)
+    rev_op = rev["units"][0]["invokes"].get("adapter_op")
+    w_op = w["units"][0]["invokes"].get("adapter_op")
+    print("review:%s|w:%s|distinct:%s" % (rev_op, w_op, rev_op != w_op))
 PYEOF
 }
 
@@ -95,8 +125,14 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[],
 it "reserved python_hook accepted (R3)"
 assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[],"python_hook":"x"}')"
 
-it "non-default phase_order (A3 grammar) rejected in V1"
-assert_eq "rejected" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","units":[]}')"
+# v0.6.0 U6: the literal allow-list gate is gone — a multi-phase grammar that
+# is STRUCTURALLY sound (non-empty-string phases, terminal_phase ∈ phase_order)
+# now validates. Pre-U6 this exact recipe was REJECTED (the A3 grammar was not
+# in _V1_ALLOWED_PHASE_ORDERS); U6 deliberately unlocks it. Units list is
+# non-empty here (each unit's phase ∈ phase_order) so the work-only empty-units
+# guard is not in play.
+it "U6: structurally-sound non-default phase_order now VALIDATES (literal allow-list dropped)"
+assert_eq "valid" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","units":[{"id":"s","phase":"work_sketch","invokes":{}}]}')"
 
 it "work-only phase_order [work] accepted when units are pre-declared (KTD-15)"
 assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[{"id":"u1","phase":"work","invokes":{}}]}')"
@@ -126,6 +162,50 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"
 
 it "missing required field (units) rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
+
+# ─── v0.6.0 U6: structural phase_order validator (literal allow-list dropped) ─
+# U6 replaced the `phase_order not in _V1_ALLOWED_PHASE_ORDERS` literal gate
+# with a STRUCTURAL rule: every element a non-empty string, members cross-
+# checked downstream (terminal_phase / unit phase / phase_transitions). The
+# spine ["brainstorm","plan","seam","work"] must now validate; a1/a2/a4/w must
+# STILL validate unchanged (Scenario 1 above covers the four built-ins).
+it "U6: brainstorm-rooted spine phase_order validates (structural rule unlocks it)"
+assert_eq "valid" "$(rec validate-json '{"name":"pipeline","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","emitter":"brainstorm_output_to_plan_unit"},{"from":"plan","to":"work","emitter":"plan_output_to_work_units"}],"units":[{"id":"brainstorm","phase":"brainstorm","invokes":{"adapter_op":"brainstorm"}}]}')"
+
+it "U6: terminal_phase not in phase_order → rejected (downstream member-check intact)"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"ship","units":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
+
+it "U6: a unit whose phase is not in phase_order → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","units":[{"id":"u","phase":"deploy","invokes":{}}]}')"
+
+it "U6: phase_order with a non-string element → rejected (structural)"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan",3,"work"],"terminal_phase":"work","units":[{"id":"u","phase":"plan","invokes":{}}]}')"
+
+it "U6: phase_order with an empty-string element → rejected (structural)"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan","","work"],"terminal_phase":"work","units":[{"id":"u","phase":"plan","invokes":{}}]}')"
+
+it "U6: work-only empty-units guard STILL fires (regression — guard retained)"
+assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
+
+it "U6: phase_transitions naming an unregistered emitter STILL rejected on a spine"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","emitter":"nope"}],"units":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
+
+# ─── v0.6.0 U7: pipeline.json (the brainstorm-rooted spine) validates+resolves ─
+it "U7: pipeline.json validates"
+assert_eq "valid" "$(rec validate-recipe-file pipeline)"
+
+it "U7: pipeline.json resolves through the three-tier registry (built-in)"
+assert_eq "pipeline:built-in:valid" "$(rec resolve-recipe-file pipeline)"
+
+# ─── v0.6.0 U11: review.json (off-spine single-phase) validates + distinct ───
+it "U11: review.json validates"
+assert_eq "valid" "$(rec validate-recipe-file review)"
+
+it "U11: review.json resolves through the three-tier registry (built-in)"
+assert_eq "review:built-in:valid" "$(rec resolve-recipe-file review)"
+
+it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_unit)"
+assert_eq "review:review|w:do_unit|distinct:True" "$(rec review-vs-w-distinct)"
 
 # ─── Scenario 5: topology-render ────────────────────────────────────────────
 it "topology-render: a1 card names recipe + has PLAN + names emitter"
@@ -267,8 +347,10 @@ elif op == "lint-empty-phase":
 PYEOF
 }
 
-it "list_available in a fresh repo → exactly the built-ins (a1/a2/a4/w)"
-assert_eq "a1,a2,a4,w" "$(reg list-fresh)"
+# v0.6.0 U7/U11 added two built-in recipes: pipeline (brainstorm-rooted spine)
+# and review (off-spine single-phase). list_available is sorted by name.
+it "list_available in a fresh repo → exactly the built-ins (a1/a2/a4/pipeline/review/w)"
+assert_eq "a1,a2,a4,pipeline,review,w" "$(reg list-fresh)"
 
 it "AE2: workspace recipe shadows built-in (workspace wins, appears once)"
 assert_eq "workspace,WS,1" "$(reg shadow)"

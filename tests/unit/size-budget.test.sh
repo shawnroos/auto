@@ -63,7 +63,11 @@ ALLOWED_FILES=(
   # init_ledger itself. The init_ledger split remains the load-bearing
   # decomposition; bumping the waiver to keep that work scoped to its own
   # backlog item rather than dragging it into U1.
-  "lib/ledger_core.py:1032"
+  # v0.6.0 U5 added driving_session_id (KTD-5): same shape as goal_intent —
+  # 1 init_ledger arg + 1 type check + a 4-line ledger-dict field comment.
+  # A ledger field has no home but init_ledger (the construction chokepoint);
+  # the init_ledger split is still the right decomposition, kept off U5.
+  "lib/ledger_core.py:1046"
 )
 
 ALLOWED_FUNCTIONS=(
@@ -75,7 +79,10 @@ ALLOWED_FUNCTIONS=(
   # v0.4.0 U1 added: +1 goal_intent param, +2-line type validation, +7-line
   # comment + 1 dict line = 18 LOC growth. The init_ledger split remains
   # the right move; keeping U1 scoped to bumping the waiver.
-  "lib/ledger_core.py:init_ledger:215"
+  # v0.6.0 U5 added driving_session_id (KTD-5): +1 param, +3-line type
+  # validation, +4-line ledger-dict field. A ledger field's only home is
+  # this chokepoint; the split stays the right move, kept off U5.
+  "lib/ledger_core.py:init_ledger:229"
   # _try_iteration_check came in at 143 LOC out of B6's flat-dispatcher
   # decomposition. B6's design target was 30-60 LOC per _try_* helper;
   # this one is the iteration-check branch which carries both the recipe-
@@ -113,6 +120,14 @@ ALLOWED_FUNCTIONS=(
   # refactor, larger than B7's recompute_predicate decomposition.
   # HIGHEST-PRIORITY structural-debt candidate for v0.3.2.
   "lib/recipes.py:validate:324"
+  # _next_plan_step is the LAST top-level def before `class Adapter` in
+  # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
+  # `class`) attributes the ENTIRE ~106-line Adapter class body to it. The
+  # real _next_plan_step is ~27 LOC — this is a MEASUREMENT ARTIFACT, not a
+  # complex function. v0.6.0 U7 added the prepare-only `brainstorm` adapter
+  # op (mirrors do_unit) inside the class, growing the absorbed span past
+  # the budget. Waived (not decomposed) because the function itself is small.
+  "lib/adapter-ce.py:_next_plan_step:133"
 )
 
 # ── Test harness ───────────────────────────────────────────────────────────

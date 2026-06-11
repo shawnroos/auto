@@ -43,6 +43,12 @@ phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
 import emitters  # noqa: E402
 tick_guidance = load_lib_module("tick_guidance")
+# v0.6.0 U9: the pure upstream-cluster classifier. A stdlib-only leaf (it imports
+# no lib siblings) — this adds the single DAG edge tick_advance → upstream_cluster.
+# advance_work_loop consults it BEFORE applying a fix, so a flaw inherited from an
+# upstream spine phase escalates to the operator instead of ratcheting fix passes
+# against a gap it cannot close (KTD-6 — detect-and-escalate; rebound is v0.7.0).
+upstream_cluster = load_lib_module("upstream-cluster")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -207,6 +213,81 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
     return None
 
 
+def _collect_upstream_findings(ledger_dict):
+    """Gather role-tagged finding records from verdict-returned units'
+    ``dispatch_context`` (the `decision`/`winner_unit_id` channel — findings[]
+    is normalized to {severity, note}, so role/phase tags survive only here).
+
+    A unit's ``dispatch_context.cluster_findings`` (when present) is a list of
+    ``{"role": str, "phase": str, ...}`` records the review-op producer wrote
+    (the producer is OUT OF SCOPE for U9 — until it exists this list is empty
+    and detection never fires). Degrade-safe: any non-dict unit, missing/
+    non-list cluster_findings, etc. contributes nothing rather than raising.
+    """
+    collected = []
+    for u in ledger_dict.get("units", []) or []:
+        if not isinstance(u, dict) or u.get("state") != "verdict-returned":
+            continue
+        dc = u.get("dispatch_context")
+        if not isinstance(dc, dict):
+            continue
+        records = dc.get("cluster_findings")
+        if isinstance(records, list):
+            collected.extend(records)
+    return collected
+
+
+def detect_upstream_cluster(ledger_dict):
+    """Read-only: classify whether this run's review findings cluster on a single
+    UPSTREAM spine phase (KTD-6, role-diversity-weighted). Returns the classifier
+    result dict (always five keys). Degrade-safe: ANY failure collapses to a
+    not-detected result so a torn verdict can never raise out of the work-loop
+    (where _dispatch_phase_advance would mis-record it as a unit stall).
+
+    NEVER reads the loop_phase literal — current phase + order come from
+    phase_grammar (the one sanctioned accessor), then are passed to the pure
+    classifier as args.
+    """
+    try:
+        current = phase_grammar.current_phase(ledger_dict)
+        order = phase_grammar.phase_order(ledger_dict)
+        findings = _collect_upstream_findings(ledger_dict)
+        return upstream_cluster.classify(findings, current, order)
+    except Exception:  # noqa: BLE001 — detection must never break a write path.
+        return {
+            "detected": False, "target_phase": None, "distinct_roles": [],
+            "finding_count": 0, "reason": "classifier degraded (malformed input)",
+        }
+
+
+def _escalate_upstream_cluster(repo_root, run_id, result):
+    """Escalate a detected upstream cluster to the operator via the EXISTING
+    pause seam — driver=manual + a blocked_on message naming the upstream phase
+    and the converging findings. This is the SAME mechanism auto-resume.py's
+    `pause` uses (ledger.set_loop direct, mirroring advance_iteration_loop's
+    bound-exit), so on-stop.py's manual carve-out lets the session stop and
+    _resumable_runs surfaces the run for `/auto-resume continue`.
+
+    Crucially this does NOT move loop_phase backward and writes NO new persisted
+    field (driver + blocked_on already exist) — autonomous rebound is v0.7.0
+    (KTD-6). The returned dict carries ``seam_pause: True`` so tick.py's
+    _try_seam_pause short-circuits BEFORE the standard driver="self" re-stamp +
+    rearm (which would otherwise immediately undo this pause).
+    """
+    message = upstream_cluster.escalation_message(result) or "upstream-cluster detected"
+    ledger.set_loop(repo_root, run_id, driver="manual", blocked_on=message)
+    return {
+        "advanced": "upstream-cluster-escalation",
+        "seam_pause": True,
+        "upstream_cluster": {
+            "target_phase": result.get("target_phase"),
+            "distinct_roles": result.get("distinct_roles"),
+            "finding_count": result.get("finding_count"),
+        },
+        "blocked_on": message,
+    }
+
+
 def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     """Work-loop advance: apply ONE fix, OR re-enqueue ONE fixed-stale unit.
 
@@ -230,7 +311,18 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     hatch is FENCED via ``test_hatch_enabled`` (task #31): only honored
     when ``CLAUDE_AUTO_TEST_HARNESS=1`` is ALSO set, so a stray production
     export of NO_REENQUEUE alone has no effect.
+
+    v0.6.0 U9 — UPSTREAM-CLUSTER GATE (early, mirrors advance_iteration_loop's
+    gate-then-route shape but routes to PAUSE, not a mutator): BEFORE picking a
+    fix, check whether the converged review findings cluster on an upstream
+    spine phase (role-diversity-weighted). If so, escalate to the operator via
+    the pause seam and return — do NOT ratchet a fix pass against a flaw the
+    current phase cannot close (KTD-6). The check is read-only + degrade-safe;
+    on a recipe-blind / non-spine run upstream_phases is empty so it never fires.
     """
+    cluster = detect_upstream_cluster(ledger_dict)
+    if cluster.get("detected"):
+        return _escalate_upstream_cluster(repo_root, run_id, cluster)
     fix_uid = _ready_fix_unit(ledger_dict, halted_ids)
     if fix_uid is not None:
         ledger.transition(repo_root, run_id, fix_uid, "fixed")
@@ -573,6 +665,54 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
         return
     emitter_fn = emitters.resolve(emitter_name)
     ledger.transition_and_emit(repo_root, run_id, to_phase, emitter_fn)
+
+
+def _brainstorm_unit_ready(led) -> bool:
+    """True iff the spine's brainstorm unit is complete AND has recorded its
+    requirements-doc output — the precondition for firing the U8
+    ``brainstorm_output_to_plan_unit`` emitter.
+
+    Gating on BOTH conditions is load-bearing: if we advanced to plan before the
+    doc path is recorded, the U8 emitter raises ``RecipeError``, which
+    ``_dispatch_phase_advance``'s try/except would mis-record as a unit stall
+    (feedback_plan_documents_transition_code_doesnt_wire_it — the emitter must
+    only fire when its input is present). Until both hold the brainstorm tick
+    re-arms (the unit is still being worked by the model).
+    """
+    for u in led.get("units", []) or []:
+        if not isinstance(u, dict) or u.get("id") != "brainstorm":
+            continue
+        if u.get("state") != "verdict-returned":
+            return False
+        dc = u.get("dispatch_context") or {}
+        return bool(dc.get("requirements_doc"))
+    return False
+
+
+def advance_brainstorm_loop(repo_root, run_id, led):
+    """Brainstorm-phase advance for the spine recipe (v0.6.0 / U7 — the forward
+    brainstorm→plan trigger that mirrors ``_maybe_seam``'s plan→work auto-flip).
+
+    The brainstorm phase has NO predicate-met exit (KTD-3 / U7 technical design:
+    ``eval_phase == terminal_phase`` is False at brainstorm, so ``met`` stays
+    False) — it leaves ONLY via emitter-driven forward advance. Without this
+    branch a brainstorm-phase tick falls into ``_dispatch_phase_advance``'s
+    ``else`` ({"advanced":"none"}) and re-arms forever (the livelock the U7
+    success criterion forbids; feedback_plan_documents_transition_code_doesnt_wire_it
+    — the U8 emitter existed but nothing CALLED it on a brainstorm tick).
+
+    When the brainstorm unit is complete + has its requirements-doc, advance to
+    ``plan`` through ``advance_to_phase`` (the single phase-advance chokepoint),
+    which resolves the recipe's {to: plan} transition and fires the registered
+    ``brainstorm_output_to_plan_unit`` emitter atomically. Otherwise return
+    ``{"advanced":"none"}`` so the tick re-arms while the model still works the
+    brainstorm step. Pairs with the plan→work emitter exactly as plan→work pairs
+    with seam.
+    """
+    if not _brainstorm_unit_ready(led):
+        return {"advanced": "none", "reason": "brainstorm-pending"}
+    advance_to_phase(repo_root, run_id, led, to_phase="plan")
+    return {"advanced": "brainstorm-done", "seam": "auto-advance-to-plan"}
 
 
 def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):

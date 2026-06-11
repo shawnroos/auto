@@ -89,6 +89,11 @@ IS the wake signal. Per wave:
 2. Decide cap for THIS wave (16 idle / 3 grinding / 1 to serialize —
    no fixed constant).
 3. `orchestrator.dispatch_batch(repo, run, units, cap, launch_fn=...)`.
+   `launch_fn` maps each unit's `invokes.adapter_op` to the skill it
+   launches: `do_unit` → `/ce-work <unit-id>` (the default — `a1`/`w`/
+   `pipeline`); `review` → `/ce-code-review` (the `review.json`
+   off-spine unit, U11). `dispatch_batch` never consults the adapter, so
+   THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
 4. YIELD silently — end the turn. Do NOT ScheduleWakeup.
@@ -121,6 +126,58 @@ When you hit such a wall:
    say so — it must be cleared with `/goal clear`; auto cannot.
 3. **Stop.** Do not re-arm, do not yield again.
 
+### 4.6 Advisor gate — a denied AskUserQuestion (v0.6.0)
+
+While a self-driven run owns this session, a PreToolUse hook
+(`lib/on-pretooluse-askuser.py`) **denies** any `AskUserQuestion` you fire
+and redirects you here. Do NOT stop to ask the operator. Instead:
+
+1. **Consult the `advisor` tool** with the question's context. It returns
+   free-form PROSE advice (not a verdict — `docs/research/advisor-contract-spike.md`);
+   the advice is an INPUT to your judgment, not an oracle.
+2. **Classify the question yourself** using that advice:
+   - **Mechanical clarification** (which file, formatting, an unambiguous
+     default) → **resolve autonomously** and proceed.
+   - **Substantive design/architecture fork** (which architecture, "is this
+     scope right?", a premise/positioning call) → **escalate via the pause
+     seam** (§4.5): `bash lib/auto-resume.py pause <run> "<the fork>"`, one
+     line, then **stop** — not a yield. This composes with §4.5: pause is the
+     ONLY sanctioned human-wall stop.
+   - **When unsure between the two, treat it as a fork and escalate** — the
+     default for substantive choices is escalate, not auto-resolve.
+3. **Audit every cycle.** Append a record via
+   `ledger.append_advisor_audit(repo, run, kind="advisor", subject="<the
+   question>", classification="<mechanical|design-fork>", resolution="<resolved-
+   autonomously|escalated-via-pause>")`. The destructive-action backstop
+   (`lib/on-pretooluse-action.py`, §4.5 wall) appends its own `kind="action"`
+   record when it pauses the run. Both go through the LOCKED atomic-write
+   chokepoint, so concurrent fan-out denials cannot clobber the list. Surface
+   the audit list in the exit report next to the P3 findings (§5).
+
+This gate composes with §1: the deterministic Stop-hook predicate stays the
+single source of truth — the advisor gate only routes *clarifications*, never
+re-derives the exit predicate. The gate fires ONLY for THIS driving session
+(matched by `driving_session_id`, recorded at arm time); a concurrent
+standalone ce-skill in the same worktree is never intercepted.
+
+**Two-seam split — fan-out units (KTD-5).** Work-loop `do_unit` agents get
+their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
+destructive backstop) can reach them. When you construct a fan-out unit prompt
+(§4 step 3), bake in BOTH constraints:
+  - **(i) question routing:** "Do not call `AskUserQuestion`. For a mechanical
+    clarification, consult the advisor and resolve it yourself; for a
+    substantive design/architecture fork, pause-escalate via
+    `auto-resume.py pause <run> \"<the fork>\"` — do not stop to ask the
+    operator directly."
+  - **(ii) destructive-action avoidance:** "Do not run irreversible/destructive
+    operations (the CLAUDE.md-anchored set: `push --force`/`-f`/`--force-with-lease`
+    in ANY flag position, `reset --hard`, `checkout .` / `restore .`,
+    `clean -f`/`-fdx`, `branch -D`, `rm -rf`, `npm publish`, `gh release create`,
+    `gh repo delete`, `gh release delete`, `gh pr merge --admin`). If one is
+    needed, pause-escalate instead." `do_unit` is the MOST likely locus of
+    destructive Bash (branch cleanup, file delete, force-push), and the action
+    hook cannot gate it — so the constraint MUST ride in the prompt.
+
 ## 5. Exit
 
 Loop exits when tick returns `stop` with `predicate-met` reason and
@@ -130,6 +187,14 @@ stop intent; surface it (lists remaining minor findings for operator
 promotion). If `exit_reason` is non-null the loop did NOT exit
 cleanly — surface kind + error. Full taxonomy:
 `driver-reference.md` §8.
+
+**Surface the advisor/action audit (v0.6.0).** Alongside the P3 findings,
+list the ledger's `advisor_audit` records — every advisor-resolved question
+(`kind=advisor`) AND every destructive-action backstop denial (`kind=action`),
+each with its `subject` / `classification` / `resolution` / `at`. A wrong
+autonomous call or a fired backstop must be diagnosable at exit (KTD-5
+visibility — trust is earned by surfacing the gate's decisions, not hiding
+them).
 
 ## 6. Multi-plan batches (v0.4.0)
 

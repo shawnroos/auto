@@ -1,5 +1,5 @@
 {
-  "description": "auto plugin hooks (U7). SessionStart surfaces resumable runs (orphaned tick chains + seam pauses) so the operator can /auto-resume them — surfacing only, never auto-runs. Stop is the engine's OWN deliberate-stop guard: per the U9 spike (docs/research/native-goal-mechanism-spike.md) native /goal is a closed model-judged loop with no external predicate seam, so auto ships its own thin Stop hook that BLOCKS via {\"decision\":\"block\"} (exit 0) while the I-1-fresh ledger predicate is unmet. Both hooks presence-gate (walk up for <repo>/.claude/auto) and always exit 0 (rel-001). Stop arrays merge additively, so this composes with cmux's Stop entries and any native /goal.",
+  "description": "auto plugin hooks. SessionStart surfaces resumable runs (orphaned tick chains + seam pauses) so the operator can /auto-resume them — surfacing only, never auto-runs. Stop is the engine's OWN deliberate-stop guard: per the U9 spike (docs/research/native-goal-mechanism-spike.md) native /goal is a closed model-judged loop with no external predicate seam, so auto ships its own thin Stop hook that BLOCKS via {\"decision\":\"block\"} (exit 0) while the I-1-fresh ledger predicate is unmet. PreToolUse adds the v0.6.0 advisor gate (KTD-4/5): on AskUserQuestion, on-pretooluse-askuser.sh DENIES + redirects to the advisor when a LIVE self-driven run owns this session (session_id == ledger.driving_session_id) — fail-OPEN; on Bash|Write, on-pretooluse-action.sh deterministically escalates the CLAUDE.md-anchored destructive set via the pause seam — fail-CLOSED (pauses the run even if deny is unavailable). All hooks presence-gate (walk up for <repo>/.claude/auto) and always exit 0 (rel-001). Hook arrays merge additively, so this composes with cmux's entries and any native /goal.",
   "hooks": {
     "SessionStart": [
       {
@@ -18,6 +18,28 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/.claude/hooks/on-stop.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/.claude/hooks/on-pretooluse-askuser.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/.claude/hooks/on-pretooluse-action.sh",
             "timeout": 10
           }
         ]

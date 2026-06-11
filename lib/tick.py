@@ -99,6 +99,8 @@ TickError = tick_advance.TickError
 advance_iteration_loop = tick_advance.advance_iteration_loop
 advance_plan_loop = tick_advance.advance_plan_loop
 advance_work_loop = tick_advance.advance_work_loop
+# v0.6.0 U7: the spine's brainstorm→plan forward trigger (emitter-driven).
+advance_brainstorm_loop = tick_advance.advance_brainstorm_loop
 detect_and_halt_stalled = tick_advance.detect_and_halt_stalled
 _maybe_seam = tick_advance._maybe_seam
 # advance_to_phase is a PRODUCTION re-export: lib/auto-resume.py calls
@@ -567,6 +569,19 @@ def _dispatch_phase_advance(
             advance_result = tick_advance._maybe_seam(
                 repo_root, run_id, led, auto=auto, advance_result=advance_result
             )
+        elif phase == "brainstorm":
+            # Spine forward trigger (v0.6.0 / U7): the brainstorm phase has no
+            # predicate-met exit (KTD-3); it advances to plan ONLY via the U8
+            # emitter. advance_brainstorm_loop fires that emitter when the
+            # brainstorm unit is complete + has its requirements-doc, else
+            # returns {"advanced":"none"} so this tick re-arms (the model is
+            # still working the brainstorm step). Mirrors the plan→work flip.
+            advance_result = tick_advance.advance_brainstorm_loop(
+                repo_root, run_id, led
+            )
+            # The emitter just (re)wrote loop_phase + plan unit; re-read so the
+            # downstream beat re-stamp + rearm intent see the advanced state.
+            led = ledger.read_ledger(repo_root, run_id)
         elif phase == "work":
             advance_result = tick_advance.advance_work_loop(
                 repo_root, run_id, led, halted_ids

@@ -760,6 +760,7 @@ def init_ledger(
     iteration=None,
     emit_templates=None,
     goal_intent=None,
+    driving_session_id=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -820,6 +821,14 @@ def init_ledger(
     # on-disk shape clean.
     if goal_intent is not None and not isinstance(goal_intent, str):
         raise LedgerError(f"goal_intent must be a string or None: {goal_intent!r}")
+
+    # v0.6.0 U5 (KTD-5, additive): the DRIVING session_id, recorded at arm time so
+    # the advisor-gate hooks match a question/action to this run by session-id
+    # equality. None on legacy/non-conversation init (gate reads absent → fail-open).
+    if driving_session_id is not None and not isinstance(driving_session_id, str):
+        raise LedgerError(
+            f"driving_session_id must be a string or None: {driving_session_id!r}"
+        )
 
     # phase_transitions defaults to []; basic shape check (the recipe validator
     # does the full check, but we don't trust that the caller already validated).
@@ -949,6 +958,11 @@ def init_ledger(
             # in-flight runs so an operator picking between two runs sees what
             # each was started for, not just a slug.
             "goal_intent": goal_intent,
+            # v0.6.0 U5 (KTD-5): driving session_id (lib/auto.py reads
+            # CLAUDE_CODE_SESSION_ID, not-a-child asserted). Hooks read it
+            # top-level (run-identity, not liveness) + match on equality. Always
+            # present at init (None included); the mutator's clear path pops it.
+            "driving_session_id": driving_session_id,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},

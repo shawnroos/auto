@@ -55,14 +55,24 @@ V1_EMITTER_NAMES = frozenset(
         # Added atomically with the REGISTRY entry in lib/emitters.py so the
         # symmetry test stays green; U5 reserved this name but deferred the add.
         "iterate_template",
+        # v0.6.0 (U8): brainstorm_output_to_plan_unit fires on arrival at `plan`
+        # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
+        # the brainstorm unit's requirements-doc output and emitting the single
+        # plan unit. Added atomically with the emitters.REGISTRY entry so the
+        # symmetry test (set(REGISTRY) == V1_EMITTER_NAMES) stays green.
+        "brainstorm_output_to_plan_unit",
     }
 )
 
-# The default (v0.1.x) phase grammar, and the ONE non-default phase_order V1
-# accepts: work-only (KTD-15). A3's multi-phase grammar is rejected until v0.2.1.
+# The default (v0.1.x) phase grammar and the work-only grammar. v0.6.0 (U6)
+# dropped the literal allow-list (`_V1_ALLOWED_PHASE_ORDERS`) — phase_order is
+# now validated structurally (every element a non-empty string, members cross-
+# checked downstream), so arbitrary spines like
+# ["brainstorm","plan","seam","work"] validate. These two constants survive:
+# `_DEFAULT_PHASE_ORDER` is the recipe-blind default, `_WORK_ONLY_PHASE_ORDER`
+# still anchors the work-only empty-units guard below.
 _DEFAULT_PHASE_ORDER = ["plan", "seam", "work"]
 _WORK_ONLY_PHASE_ORDER = ["work"]
-_V1_ALLOWED_PHASE_ORDERS = (_DEFAULT_PHASE_ORDER, _WORK_ONLY_PHASE_ORDER)
 
 # Only this top-level key is reserved-but-ignored (R3). Every other unknown
 # top-level key is rejected.
@@ -194,16 +204,16 @@ def validate(recipe: dict) -> None:
     if not isinstance(recipe["units"], list):
         _bad("units must be a list")
 
-    # phase_order: default if absent; V1 accepts ONLY the default or work-only.
+    # phase_order: default if absent. v0.6.0 (U6) replaced the literal allow-list
+    # gate with a STRUCTURAL rule (every element a non-empty string); the
+    # phase-membership invariants are enforced downstream, unlocking arbitrary
+    # spines like ["brainstorm","plan","seam","work"] (KTD-2/3).
     phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
     if not isinstance(phase_order, list) or not phase_order:
         _bad(f"phase_order must be a non-empty list: {phase_order!r}")
-    if phase_order not in _V1_ALLOWED_PHASE_ORDERS:
-        _bad(
-            "non-default phase_order not yet supported (v0.2.1): "
-            f"{phase_order!r} — V1 accepts only {_DEFAULT_PHASE_ORDER} or "
-            f"{_WORK_ONLY_PHASE_ORDER}"
-        )
+    for ph in phase_order:
+        if not isinstance(ph, str) or not ph:
+            _bad(f"phase_order entries must be non-empty strings; got {ph!r}")
 
     # terminal_phase: default "work"; must be a member of phase_order.
     terminal_phase = recipe.get("terminal_phase", "work")

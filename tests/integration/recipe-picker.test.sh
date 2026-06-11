@@ -30,11 +30,13 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# ─── AE1: fresh repo → 4 built-ins ──────────────────────────────────────────
-it "AE1: picker data lists exactly the 4 built-ins, all tier=built-in"
+# ─── AE1: fresh repo → built-ins ────────────────────────────────────────────
+# v0.6.0 U7/U11 added two built-ins: pipeline (brainstorm-rooted spine) and
+# review (off-spine single-phase). The picker data lists all six, sorted.
+it "AE1: picker data lists exactly the 6 built-ins, all tier=built-in"
 fresh="$(mktemp -d)"; mkdir -p "$fresh/.claude/auto"
 rows="$(CLAUDE_AUTO_REPO="$fresh" bash "$LIST_SH" | awk -F'\t' '{print $1":"$2}' | paste -sd, -)"
-assert_eq "a1:built-in,a2:built-in,a4:built-in,w:built-in" "$rows"
+assert_eq "a1:built-in,a2:built-in,a4:built-in,pipeline:built-in,review:built-in,w:built-in" "$rows"
 
 # ─── AE2: workspace shadows built-in ────────────────────────────────────────
 it "AE2: a workspace recipe named a1 shadows the built-in (workspace, one row)"
