@@ -203,6 +203,7 @@ def set_loop(
     beat=False,
     plan_step=ledger_core._UNSET,
     blocked_on=ledger_core._UNSET,
+    backstop_latched=ledger_core._UNSET,
 ):
     """Update loop-level phase / liveness / plan-step fields (U4's tick uses this).
 
@@ -250,6 +251,20 @@ def set_loop(
                 loop.pop("blocked_on", None)
             else:
                 loop["blocked_on"] = str(blocked_on)
+        # backstop_latched (P3-b): a STICKY marker set ONLY by the destructive-
+        # action backstop when it pauses a run (lib/on-pretooluse-action.py). It
+        # is what lets that hook tell its OWN pause (latched => keep gating, no
+        # self-disarm) apart from an OPERATOR pause (`auto-resume pause`, NOT
+        # latched => allow the operator's own cleanup). Set ATOMICALLY in the same
+        # write as driver="manual" so the latch exists iff the backstop pause does
+        # (no split-brain). UNSET sentinel => leave unchanged; truthy => set True;
+        # falsy => clear (the resume `continue` path clears it on a clean resume).
+        # Not part of the predicate — the recompute is a no-op (like blocked_on).
+        if backstop_latched is not ledger_core._UNSET:
+            if backstop_latched:
+                loop["backstop_latched"] = True
+            else:
+                loop.pop("backstop_latched", None)
         if beat:
             loop["last_beat_at"] = ledger_core._now_iso()
         return ledger["loop_phase"]

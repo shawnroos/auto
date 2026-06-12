@@ -81,6 +81,9 @@ REQUIRED=(
   "advisor_audit"
   "set_driving_session_id"
   "append_advisor_audit"
+  # v0.6.0 P3-b: the destructive-backstop pause latch (loop.backstop_latched)
+  # that distinguishes a backstop pause from an operator pause.
+  "backstop_latched"
 )
 
 # ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────
