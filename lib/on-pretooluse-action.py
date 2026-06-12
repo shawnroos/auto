@@ -172,16 +172,17 @@ def _owns_session(led, *, session_id):
     """True iff this run is a LIVE auto run owned by ``session_id`` that the
     destructive backstop must still gate.
 
-    Matches on ``current phase != "done" AND session_id == driving_session_id``
-    — and DELIBERATELY OMITS BOTH the ``driver == "self"`` conjunct AND the
-    ``last_beat_at`` staleness conjunct that the question gate keeps. Both
-    omissions exist because this hook fails CLOSED and a denied tool call does
-    NOT end the agent's turn:
+    Base match: ``current phase != "done" AND session_id == driving_session_id``
+    — DELIBERATELY OMITTING the ``last_beat_at`` staleness conjunct the question
+    gate keeps, and NOT requiring ``driver == "self"`` (with ONE precise
+    operator-pause exemption, below). Both choices exist because this hook fails
+    CLOSED and a denied tool call does NOT end the agent's turn:
 
       * driver: THIS hook's own ``_pause_run`` flips the owned run to
         ``driver="manual"`` the instant it blocks the first destructive command.
-        Keeping the conjunct would make every SUBSEQUENT destructive command see
-        ``driver=="manual"`` → no match → ALLOW (self-disarm after one fire).
+        A plain ``driver=="self"`` requirement would make every SUBSEQUENT
+        destructive command see ``driver=="manual"`` → no match → ALLOW
+        (self-disarm after one fire). So we do NOT key on ``driver=="self"``.
       * staleness (round-2 P2 fix): ``_pause_run`` calls ``set_loop`` WITHOUT
         ``beat=True``, so it does NOT re-stamp ``last_beat_at``. If the operator
         deliberates past ``DRIVER_SELF_STALE_SECONDS`` (3900s) after the backstop
@@ -193,6 +194,22 @@ def _owns_session(led, *, session_id):
         is harmless (fail-safe). So staleness lives ONLY in the question hook
         (where stale→allow is a benign fail-OPEN), never here.
 
+    OPERATOR-PAUSE EXEMPTION (P3-b): a run the OPERATOR manually paused
+    (``driver=="manual"`` WITHOUT ``loop.backstop_latched``) is under human
+    control — the autonomous tick loop is dormant, so the only actor issuing tool
+    calls is the operator, and we must NOT gate their own cleanup (``rm`` etc.).
+    The ONE ``driver=="manual"`` state we KEEP gating is a pause THIS backstop
+    caused: ``_pause_run`` sets ``backstop_latched=True`` atomically with the
+    pause, so a second destructive command in the same autonomous turn still
+    matches (no self-disarm). The latch is STICKY across an agent-run
+    ``auto-resume pause`` (that path does not clear it), so a self-driven agent
+    cannot reach the exempt state with one benign command — only an operator
+    ``continue``/``abort`` clears it (continue clears the latch; abort ends the
+    run). Trade-off (documented, surfaced to the operator in the deny reason): a
+    run that ALREADY tripped the backstop keeps blocking the operator's own
+    destructive commands during a *pause* — they must ``continue`` or ``abort``
+    first; ``abort`` → ``phase=done`` is the clean full-release cleanup path.
+
     Dimension #2 (a concurrent STANDALONE ce-skill is not gated) is preserved by
     the ``session_id`` equality conjunct alone — a standalone skill has a
     different session_id and never matches. Still NOT on-stop's `_is_blocking`
@@ -203,7 +220,12 @@ def _owns_session(led, *, session_id):
     if phase_grammar.current_phase(led) == "done":
         return False
     driving = led.get(_DRIVING_SESSION_KEY)
-    return bool(driving) and driving == session_id
+    if not (bool(driving) and driving == session_id):
+        return False
+    loop = led.get("loop") or {}
+    if loop.get("driver") == "manual" and not loop.get("backstop_latched"):
+        return False  # operator-controlled pause => allow the operator's own actions
+    return True
 
 
 def _owning_run_id(repo_root: str, session_id):
@@ -237,7 +259,17 @@ def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
     """
     try:
         ledger = load_ledger()
-        ledger.set_loop(repo_root, run_id, driver="manual", blocked_on=reason)
+        # backstop_latched=True in the SAME atomic write as driver="manual" (P3-b):
+        # it marks this pause as backstop-initiated so the gate keeps firing on a
+        # second destructive command in the same autonomous turn (no self-disarm),
+        # while an OPERATOR pause (auto-resume.py pause, NOT latched) is exempt so
+        # the operator can run their own cleanup. Set atomically => the latch
+        # exists iff the pause does. NOT a separate best-effort write (the audit
+        # record below is separate; a latch derived from it could split-brain).
+        ledger.set_loop(
+            repo_root, run_id, driver="manual", blocked_on=reason,
+            backstop_latched=True,
+        )
     except Exception:
         pass
 
@@ -284,8 +316,10 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
     reason = (
         f"auto destructive-action backstop: blocked `{label}` and PAUSED run "
         f"{run_id!r}. This is an irreversible/destructive operation auto will not "
-        "run autonomously. Consult the operator; `/auto-resume continue` once "
-        "they approve."
+        "run autonomously. Do NOT attempt to disarm or retry it — consult the "
+        f"operator, then `/auto-resume continue {run_id}` once they approve. "
+        f"(Operator: to run your OWN cleanup, take manual control first with "
+        f"`/auto-resume abort {run_id}` — abort fully releases the gate.)"
     )
     _pause_run(repo_root, run_id, reason)
     _audit_action(repo_root, run_id, command=command, label=label)
@@ -302,11 +336,22 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
             )
         }
     return {
+        # P3-a: a top-level `systemMessage` is a LOUD operator-facing signal
+        # surfaced in the transcript ALONGSIDE the deny (confirmed against the CC
+        # hooks contract: systemMessage is a universal field, not suppressed by a
+        # permissionDecision). Without it the production deny only surfaced the
+        # agent-facing permissionDecisionReason + a ledger pause — silent to an
+        # operator not watching the ledger. The deny-unsupported path already
+        # emitted a systemMessage; this gives the normal path parity.
+        "systemMessage": (
+            f"auto: RUN PAUSED — destructive-action backstop blocked `{label}` "
+            f"on run {run_id!r} (driver=manual). {reason}"
+        ),
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
-        }
+        },
     }
 
 

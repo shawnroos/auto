@@ -381,6 +381,64 @@ it "action: SECOND destructive command on the now-paused owned run -> STILL deny
 ev2="$(EVENT sess-AAA Bash 'git push --force origin main')"
 out2="$(printf '%s' "$ev2" | "$PY" "$ACTION_PY" "$REPO")"
 assert_eq "deny" "$(perm_decision "$out2")"
+it "action: the backstop-induced pause armed loop.backstop_latched=True (P3-b mechanism)"
+assert_eq "True" "$(rd_loop "$REPO" actrun backstop_latched)"
+
+# ─── action P3-a: the PRODUCTION deny ALSO emits a loud operator systemMessage ─
+# Parity with the deny-unsupported path: a normal (deny-supported) destructive
+# match must surface a top-level `systemMessage` (a transcript-visible operator
+# signal) ALONGSIDE the deny — confirmed against the CC hooks contract that
+# systemMessage is not suppressed by a permissionDecision. Without it the deny
+# only surfaced the agent-facing reason + a ledger pause (silent to an operator
+# not watching the ledger — the P3-a finding).
+it "action P3-a: production destructive deny emits a top-level systemMessage"
+REPO="$(mk_live_owned action-sysmsg actrun sess-AAA)"
+ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
+out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out")"
+it "action P3-a: the systemMessage coexists with the deny and says RUN PAUSED"
+case "$out" in *systemMessage*RUN\ PAUSED*) pass ;; *) fail "no loud systemMessage alongside deny: $out" ;; esac
+
+# ═══════════════════════════════════════════════════════════════════════════
+# action P3-b: the latch distinguishes a BACKSTOP pause from an OPERATOR pause
+# ═══════════════════════════════════════════════════════════════════════════
+# A backstop pause sets driver=manual + backstop_latched (sticky); an OPERATOR
+# pause (auto-resume.py pause) sets driver=manual WITHOUT the latch. The action
+# gate EXEMPTS the latter (the operator's own cleanup) but keeps firing on the
+# former (no self-disarm) — and the latch is sticky even across an agent-run
+# `auto-resume pause`, which is the door a text-only marker would have left open.
+RESUME_PY="${AUTO_ROOT}/lib/auto-resume.py"
+
+# (1) Operator pauses a HEALTHY run (no prior backstop fire) -> destructive ALLOWED.
+it "action P3-b: operator pause of a healthy run -> driver=manual, NOT latched"
+REPO="$(mk_live_owned action-oppause actrun sess-AAA)"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$RESUME_PY" pause actrun "operator cleanup" >/dev/null 2>&1
+assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
+it "action P3-b: operator pause did NOT arm the backstop latch"
+assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
+it "action P3-b: destructive cmd during an OPERATOR pause -> ALLOW (operator's own cleanup)"
+ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
+out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+
+# (2) Backstop fires -> agent runs `auto-resume pause` -> destructive STILL denied.
+it "action P3-b: agent-run \`auto-resume pause\` after a backstop fire keeps the latch"
+REPO="$(mk_live_owned action-stickylatch actrun sess-AAA)"
+ev1="$(EVENT sess-AAA Bash 'rm -rf build/')"
+printf '%s' "$ev1" | "$PY" "$ACTION_PY" "$REPO" >/dev/null
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$RESUME_PY" pause actrun "sneaky disarm attempt" >/dev/null 2>&1
+assert_eq "True" "$(rd_loop "$REPO" actrun backstop_latched)"
+it "action P3-b: destructive cmd after that pause -> STILL deny (latch closed the self-disarm door)"
+ev2="$(EVENT sess-AAA Bash 'git push --force origin main')"
+out2="$(printf '%s' "$ev2" | "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out2")"
+
+# (3) A clean `auto-resume continue` clears the latch (forgiveness) so a LATER
+# operator pause on the same run again allows the operator's own cleanup.
+it "action P3-b: a clean \`auto-resume continue\` clears the latch"
+CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-AAA" CLAUDE_CODE_CHILD_SESSION="" \
+  "$PY" "$RESUME_PY" continue actrun >/dev/null 2>&1
+assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
 
 # ─── action: a STALE owned run + destructive -> STILL deny+pause (round-2 P2) ──
 # The fail-CLOSED invariant: the action hook must NOT couple to last_beat_at

@@ -169,8 +169,14 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
         return _emit_rearm(run_id, "seam -> work; arm a fresh tick chain")
     # Orphaned, or resuming a blocked-pause: re-arm cleanly off the durable
     # ledger. driver -> "self" reactivates the Stop hook; clear blocked_on (the
-    # human acted, so the pause reason no longer applies).
-    ledger.set_loop(repo_root, run_id, driver="self", blocked_on=None)
+    # human acted, so the pause reason no longer applies). Clear backstop_latched
+    # too (P3-b): a clean resume "forgives" any backstop pause, so a LATER
+    # operator pause on this run again allows the operator's own cleanup. If the
+    # agent immediately re-issues the same destructive command, the backstop just
+    # re-fires (driver=self -> gated) and re-latches — safe.
+    ledger.set_loop(
+        repo_root, run_id, driver="self", blocked_on=None, backstop_latched=False
+    )
     return _emit_rearm(run_id, "resume run; arm a fresh tick chain")
 
 
