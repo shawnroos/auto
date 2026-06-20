@@ -84,13 +84,19 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         run_id = os.path.basename(f).rsplit(".json", 1)[0]
         break
 
-# Step 2: prime the plan unit's enumerated_units (or leave it empty for the
-# deliberate-fail scenario). The emitter passes these through as plan_items on
-# each builder's dispatch_context (per emitters.py lines 119-126).
+# Step 2: prime the plan unit's enumerated_units. The emitter passes these
+# through as plan_items on each builder's dispatch_context (per emitters.py
+# lines 119-126). For the deliberate-fail scenario we set an EXPLICIT EMPTY list
+# (not absent): v0.4.3's producer handshake distinguishes "model ran enumerate
+# and found zero" (key present, []) — which transitions, emitter returns [] — from
+# "model hasn't enumerated yet" (key absent) — which waits. The empty-emission
+# property under test is the former, so we set [].
 if not empty_plan:
     ledger.set_enumerated_units(repo, run_id, "plan",
         [{"id": "task-1", "invokes": {"adapter_op": "do_unit"}},
          {"id": "task-2", "invokes": {"adapter_op": "do_unit"}}])
+else:
+    ledger.set_enumerated_units(repo, run_id, "plan", [])
 
 # Set gaps_open=0 + plan_step=review_plan so plan-met fires.
 ledger.set_gaps_open(repo, run_id, 0)

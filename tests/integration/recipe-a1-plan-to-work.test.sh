@@ -54,11 +54,13 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 drive_plan_to_work() {
   emitter_off="${1:-0}"
   legacy_no_recipe="${2:-0}"
-  "$PY" - "$AUTO_ROOT" "$emitter_off" "$legacy_no_recipe" <<'PYEOF'
+  no_stash="${3:-0}"
+  "$PY" - "$AUTO_ROOT" "$emitter_off" "$legacy_no_recipe" "$no_stash" <<'PYEOF'
 import sys, os, importlib.util, tempfile, glob, json, io, contextlib
 auto_root = sys.argv[1]
 emitter_off = sys.argv[2] == "1"
 legacy_no_recipe = sys.argv[3] == "1"
+no_stash = sys.argv[4] == "1"
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 
 def load(name, path):
@@ -90,7 +92,12 @@ enumerated = [
     {"id": "u-alpha", "invokes": {"adapter_op": "do_unit"}},
     {"id": "u-beta",  "invokes": {"adapter_op": "do_unit"}},
 ]
-ledger.set_enumerated_units(repo, run_id, "plan", enumerated)
+# v0.6.2 producer handshake: with no_stash we SKIP set_enumerated_units to model
+# the production reality (the model hasn't run the enumerate prepare op yet). The
+# handshake must then KEEP the run in the plan phase (enumerate-pending) instead
+# of flipping to a work phase with zero units.
+if not no_stash:
+    ledger.set_enumerated_units(repo, run_id, "plan", enumerated)
 ledger.set_gaps_open(repo, run_id, 0)
 # Force plan_step=review_plan so plan-met fires (the predicate requires it).
 ledger.set_loop(repo, run_id, plan_step="review_plan")
@@ -157,6 +164,18 @@ res_legacy="$(drive_plan_to_work 0 1)"
 case "$res_legacy" in
   "work|") pass ;;
   *) fail "expected 'work|' (no work units; legacy fallback), got '$res_legacy'" ;;
+esac
+
+# v0.6.2 PRODUCER HANDSHAKE: plan-done with NO enumerated_units yet (the model
+# hasn't run the enumerate prepare op) must NOT flip to a work phase with zero
+# units (vacuous-exit → wedged run). The handshake keeps it in the plan phase
+# until units are persisted. Without this, a1's plan→work producer is unrunnable
+# end-to-end (the bug the missing /auto-tick had masked).
+it "producer handshake: plan-done with no enumerated units stays in plan (no empty work flip)"
+res_nostash="$(drive_plan_to_work 0 0 1)"
+case "$res_nostash" in
+  "plan|") pass ;;
+  *) fail "expected 'plan|' (enumerate-pending, no transition), got '$res_nostash'" ;;
 esac
 
 printf "%s: %d passed, %d failed\n" "$(basename "$0")" "$PASS" "$FAIL"

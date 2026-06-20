@@ -53,6 +53,28 @@ def _operator_guidance_for(phase, advance_result, led):
     """
     iteration_prefix = _iteration_guidance_prefix(led)
 
+    # v0.4.3 producer handshake: the plan is complete but the work-loop has no
+    # units yet. The rearm must tell the model to EXECUTE the enumerate prepare
+    # op (read the plan → produce work units → set_enumerated_units), else the
+    # run sits in the plan phase forever. Named explicitly so the generic
+    # plan-step message ("Just-prepared step: None") doesn't mislead.
+    if isinstance(advance_result, dict) and (
+        advance_result.get("advanced") == "plan-enumerate-pending"
+    ):
+        envelope = advance_result.get("enumerate_envelope") or {}
+        plan_path = envelope.get("plan_path")
+        whence = f" from {plan_path}" if plan_path else ""
+        body = (
+            "plan complete — ENUMERATE its work units. Read the reviewed plan"
+            f"{whence}, produce the work-unit list, then PERSIST it via Bash: "
+            "`bash \"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-enumerated-units "
+            "<run> <plan-unit-id> '[{\"id\":\"...\",\"invokes\":{...}}]'`. The "
+            "NEXT tick transitions to the work-loop. Re-ticking WITHOUT "
+            "persisting leaves the run in the plan phase with no units to "
+            "dispatch."
+        )
+        return iteration_prefix + body if iteration_prefix else body
+
     if phase == "plan":
         step = None
         if isinstance(advance_result, dict):
@@ -62,7 +84,9 @@ def _operator_guidance_for(phase, advance_result, led):
             "prepare/execute contract: I PREPARED a plan-loop invocation; "
             "YOU must run it. I do NOT dispatch the work — my role is to "
             "advance the state machine AFTER you feed structured results back "
-            "(set_gaps_open for review_plan, etc.). Re-ticking without running "
+            "(after /ce-doc-review, persist gaps via `bash "
+            "\"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-gaps-open <run> <N>`). "
+            "Re-ticking without running "
             f"the invocation is a NO-OP — units will stay []. Just-prepared "
             f"step: {step!r}; expected invocation: {invocation}."
         )

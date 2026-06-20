@@ -42,7 +42,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module  # noqa: E402
+from _bootstrap import load_lib_module, resolve_repo  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
 ledger_mutators = load_lib_module("ledger_mutators")
@@ -147,6 +147,30 @@ def _cli(argv):
         if cmd == "is-orphaned":
             repo, run = argv[1], argv[2]
             print("true" if is_orphaned(read_ledger(repo, run)) else "false")
+            return 0
+        # v0.4.3: the plan-loop FEEDBACK channel — the surface the model uses to
+        # report structured results back through Bash (its only ledger-write tool
+        # is this CLI; it cannot call the Python mutators directly). Repo is
+        # auto-resolved from cwd/$CLAUDE_AUTO_REPO (resolve_repo) so the model
+        # passes only the run-id it already has from the tick intent — matching
+        # auto.sh / auto-resume.sh ergonomics. Without these, the plan-loop's
+        # set_gaps_open guidance and the v0.4.3 enumerate handshake surface
+        # instructions the model literally cannot execute (the run would spin).
+        if cmd == "set-gaps-open":
+            run, n = argv[1], argv[2]
+            set_gaps_open(resolve_repo(), run, int(n))
+            return 0
+        if cmd == "set-enumerated-units":
+            # set-enumerated-units <run> <plan-unit-id> <json-array>
+            # json-array: [{"id": "...", "invokes": {...}, "dispatch_context"?: {...}}, ...]
+            run, unit, payload = argv[1], argv[2], argv[3]
+            units = json.loads(payload)
+            if not isinstance(units, list):
+                sys.stderr.write(
+                    "ledger.py: set-enumerated-units payload must be a JSON array\n"
+                )
+                return 2
+            set_enumerated_units(resolve_repo(), run, unit, units)
             return 0
         sys.stderr.write(f"ledger.py: unknown subcommand {cmd!r}\n")
         return 2

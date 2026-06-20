@@ -365,6 +365,11 @@ ledger.init_ledger(repo, run, adapter="native",
                    units=[{"id":"U1","state":"verdict-returned","findings":[]}],
                    loop_phase="plan", plan_step="review_plan")
 ledger.set_gaps_open(repo, run, 0)  # a real review ran and found zero gaps.
+# v0.4.3 producer handshake: the model must have ENUMERATED the plan's work units
+# before plan→work transitions (else it'd flip to a work phase with no units).
+# This test exercises seam ROUTING (auto-flip vs manual-pause), so stash the
+# units the model would have produced; the gate then lets the auto-flip proceed.
+ledger.set_enumerated_units(repo, run, "U1", [{"id":"w1","invokes":{}}])
 L=ledger.read_ledger(repo, run)
 met_plan=L.get("exit_predicate_result",{}).get("met")
 # Exercise the auto seam branch directly (the engine function), as the tick would.

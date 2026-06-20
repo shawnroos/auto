@@ -403,16 +403,24 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
         # is available; a freshly-prepared envelope with no "units" key leaves the
         # field untouched (same no-premature-default discipline as gaps_open).
         enum_op = getattr(adapter, "enumerate_plan_units", None)
+        enum_envelope = None
         if callable(enum_op):
             enum_result = enum_op(ledger_dict)
             enumerated = None
             if isinstance(enum_result, list):
                 enumerated = enum_result
-            elif isinstance(enum_result, dict) and isinstance(enum_result.get("units"), list):
-                enumerated = enum_result["units"]
+            elif isinstance(enum_result, dict):
+                if isinstance(enum_result.get("units"), list):
+                    enumerated = enum_result["units"]
+                else:
+                    # A PREPARE envelope (the live adapter): the model fills the
+                    # units out-of-band via set_enumerated_units. Carry it so the
+                    # caller can surface it as the rearm intent (producer
+                    # handshake — see _maybe_seam). NOT a synchronous result.
+                    enum_envelope = enum_result
             if enumerated is not None:
                 _persist_enumerated_units(repo_root, run_id, enumerated)
-        return {"advanced": "plan-done"}, None
+        return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}, None
     if step not in _PLAN_STEP_OPS:
         raise TickError(f"adapter returned unknown plan step: {step!r}")
     op = getattr(adapter, step, None)
@@ -610,6 +618,22 @@ def _build_bound_exit_report(led, gate_unit_id):
 # Seam handling.
 
 
+def _plan_has_enumerated_units(led) -> bool:
+    """True iff some plan-phase unit has had enumerated_units SET — the producer
+    handshake gate. We test KEY PRESENCE, not truthiness: an explicit empty list
+    means the model RAN the enumerate prepare op and legitimately found zero work
+    units (a valid terminal — the emitter returns [] and any structural units
+    remain), so we must transition. A MISSING key means the model hasn't run
+    enumerate yet, so we surface the prepare and wait. The plan→work emitters read
+    enumerated_units off the plan unit."""
+    for u in led.get("units", []):
+        if u.get("phase") == "plan" and "enumerated_units" in (
+            u.get("dispatch_context") or {}
+        ):
+            return True
+    return False
+
+
 def _is_auto(auto_flag) -> bool:
     """Auto mode: the explicit --auto flag. The tick honors only the flag the
     driver passes; there is no ledger-driven auto marker (the schema has no slot
@@ -745,6 +769,23 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     )
     if not pred.get("met") and not plan_done:
         return advance_result  # gaps still open; keep ticking the plan loop.
+    # PRODUCER HANDSHAKE (v0.4.3): the plan is complete, but the work-loop needs
+    # units to dispatch. enumerate_plan_units is a PREPARE op the MODEL executes
+    # (adapter-contract §2.2) — it returns an envelope, then calls
+    # set_enumerated_units out-of-band. If the plan unit has no enumerated_units
+    # yet, the model hasn't run it; transitioning now would flip to a work phase
+    # with ZERO units (vacuous-exit guard keeps it un-met → the run wedges with
+    # nothing to dispatch). So surface the enumerate prepare and do NOT transition
+    # — the next tick, once units are stashed, passes this guard and flips to
+    # work. This closes the latent producer gap for a1 too (every other plan op is
+    # surfaced+executed across a tick boundary; enumerate must be as well). Tests
+    # / synchronous adapters that pre-persist enumerated_units pass straight
+    # through. The plan-presatisfied (W) path lands here on its very first tick.
+    if not _plan_has_enumerated_units(led):
+        out = dict(advance_result or {})
+        out["advanced"] = "plan-enumerate-pending"
+        out["seam"] = "enumerate-pending"
+        return out
     if _is_auto(auto):
         advance_to_phase(repo_root, run_id, led, to_phase="work")
         out = dict(advance_result or {})

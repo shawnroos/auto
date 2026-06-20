@@ -21,6 +21,9 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 #   path <repo> <run>                   -> ledger file path on stdout
 #   transition <repo> <run> <unit> <st> -> grammar-checked state change
 #   is-orphaned <repo> <run>            -> "true" | "false"
+#   # Plan-loop FEEDBACK (v0.4.3) — repo auto-resolved from cwd, pass only <run>:
+#   set-gaps-open <run> <N>                       -> after /ce-doc-review
+#   set-enumerated-units <run> <plan-unit> <json> -> after enumerate (plan-done)
 auto::ledger() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
