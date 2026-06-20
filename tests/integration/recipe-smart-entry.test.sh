@@ -76,8 +76,11 @@ setup_two_runs() {
   echo '{"run_id":"r1","exit_predicate_result":{"met":false}}' > "$1/.claude/auto/r1.json"
   echo '{"run_id":"r2","exit_predicate_result":{"met":false}}' > "$1/.claude/auto/r2.json"
 }
-# v0.4.0 RENAME: v0.2.x's `ambiguous-plans` → `multi-plan`. Multiple plans is a
-# fanout SIGNAL under v0.4.0, not an ambiguity to resolve.
+# v0.4.0 RENAME: v0.2.x's `ambiguous-plans` → `multi-plan`. v0.4.0 treated >1
+# plan as a SILENT fanout signal; the 2026-06 misfire fix made multi-plan
+# always carry `ambiguity` so the driver CONFIRMS before spawning worktrees
+# (situation stays `multi-plan`). This test asserts situation only, so the
+# confirm-gate change does not affect it.
 setup_three_plans() {
   mkdir -p "$1/docs/plans"
   echo "# p1" > "$1/docs/plans/alpha-plan.md"

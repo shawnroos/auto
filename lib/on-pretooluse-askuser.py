@@ -26,7 +26,8 @@ OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     predicate so the gate is not coupled to whether the run is done-eligible.
 
 LOCK-FREE READ: the atomic-rename invariant gives a consistent snapshot; we
-copy on-stop.py's `_load_ledger_safe` model (plain open + json.load, no flock).
+read via the shared `_bootstrap.load_ledger_safe` / `iter_worktree_ledgers`
+model (plain open + json.load, no flock).
 
 FAIL-OPEN (KTD-4 asymmetry): the question gate degrades to allow on ANY
 uncertainty — a malformed ledger, an absent driving_session_id, an internal
@@ -42,14 +43,18 @@ rel-001: ALWAYS exit 0; never let a bad ledger break the tool flow.
 from __future__ import annotations
 
 import datetime
-import glob
 import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402
+from _bootstrap import (  # noqa: E402
+    iter_worktree_ledgers,
+    load_ledger,
+    load_lib_module,
+    test_hatch_enabled,
+)
 
 # Read the phase via the ONE phase-decision module so the AST lint can forbid a
 # raw phase literal anywhere else in lib/ (KTD-3).
@@ -71,15 +76,6 @@ def _read_session_id(raw: str):
         return None
     sid = data.get("session_id")
     return sid if isinstance(sid, str) and sid else None
-
-
-def _load_ledger_safe(path):
-    """Read a ledger JSON; return None on any read/parse failure (rel-001)."""
-    try:
-        with open(path, "r") as fh:
-            return json.load(fh)
-    except Exception:
-        return None
 
 
 def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, now):
@@ -122,11 +118,7 @@ def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
     stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        led = _load_ledger_safe(path)
-        if led is None:
-            continue
+    for _run_id, led in iter_worktree_ledgers(repo_root):
         if _owns_session(
             led, ledger=ledger, session_id=session_id,
             skip_staleness=skip_staleness, stale_threshold=stale_threshold, now=now,

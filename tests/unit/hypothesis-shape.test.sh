@@ -92,6 +92,39 @@ else:
 PYEOF
 }
 
+# Same as json_field but exports one extra env var (KEY=VALUE) for the detect
+# call — used to exercise CLAUDE_AUTO_INFLIGHT_TTL_SECONDS knob/floor.
+json_field_env() {
+  local kv="$1" setup_fn="$2" expr="$3"
+  local repo; repo="$(mktemp -d -t hyp-repo.XXXXXX)"
+  (
+    cd "$repo"
+    git init -q .
+    git config user.email test@test
+    git config user.name test
+    printf '.claude/\ndocs/\n' > .gitignore
+    git add .gitignore
+    git -c commit.gpgsign=false commit -q -m init
+  ) >/dev/null 2>&1
+  mkdir -p "$repo/.claude/auto"
+  "$setup_fn" "$repo"
+  local raw
+  raw="$(env "$kv" CLAUDE_AUTO_REPO="$repo" bash "$DET")"
+  rm -rf "$repo"
+  "$PY" - "$raw" "$expr" <<'PYEOF'
+import json, sys
+raw, expr = sys.argv[1], sys.argv[2]
+H = json.loads(raw)
+val = eval(expr)
+if isinstance(val, bool):
+    print("True" if val else "False")
+elif val is None:
+    print("None")
+else:
+    print(val)
+PYEOF
+}
+
 # ── Scenario setups ────────────────────────────────────────────────────────
 setup_raw() { :; }
 
@@ -128,6 +161,36 @@ setup_inflight_no_goal() {
   cat > "$1/.claude/auto/runX.json" <<'EOF'
 {"run_id":"runX","exit_predicate_result":{"met":false}}
 EOF
+}
+
+setup_inflight_stale() {
+  # A single not-met run whose ledger has not been touched in months — well
+  # beyond the default staleness TTL (1 day). Backdating mtime exercises the
+  # real default, not a test-only env knob.
+  cat > "$1/.claude/auto/runStale.json" <<'EOF'
+{"run_id":"runStale","exit_predicate_result":{"met":false},"goal_intent":"Abandoned weeks ago"}
+EOF
+  touch -t 202601010000 "$1/.claude/auto/runStale.json"
+}
+
+setup_inflight_future() {
+  # A not-met run with a FUTURE mtime (clock skew / restored backup). The gate
+  # must treat this as anomalous → ask, NOT clamp-to-fresh → silent resume
+  # (the adversarial-review P1 regression).
+  cat > "$1/.claude/auto/runFuture.json" <<'EOF'
+{"run_id":"runFuture","exit_predicate_result":{"met":false}}
+EOF
+  touch -t 203001010000 "$1/.claude/auto/runFuture.json"
+}
+
+setup_inflight_90min() {
+  # A not-met run aged ~90 minutes — used with TTL=0 to exercise the _fmt_age
+  # hours branch ("1h") in the operator-facing summary.
+  cat > "$1/.claude/auto/run90.json" <<'EOF'
+{"run_id":"run90","exit_predicate_result":{"met":false}}
+EOF
+  touch -t "$(date -v-90M +%Y%m%d%H%M 2>/dev/null || date -d '90 minutes ago' +%Y%m%d%H%M)" \
+    "$1/.claude/auto/run90.json"
 }
 
 setup_done_run() {
@@ -178,8 +241,26 @@ assert_eq "multi-plan" "$(json_field setup_three_plans 'H["situation"]')"
 it "multi-plan: multi_plan.paths has all three plans"
 assert_eq "3" "$(json_field setup_three_plans 'len(H["multi_plan"]["paths"])')"
 
-it "multi-plan: ambiguity is null — fanout, not question"
-assert_eq "None" "$(json_field setup_three_plans 'H["ambiguity"]')"
+# B2 (2026-06 misfire fix): multi-plan must NOT auto-dispatch a worktree fanout
+# on scraped docs. The detector now sets ambiguity so the driver CONFIRMS first
+# (the highest-blast-radius path — fanout spawns worktrees + ports).
+it "multi-plan: ambiguity is NON-null — confirm before spawning worktrees"
+assert_eq "False" "$(json_field setup_three_plans 'H["ambiguity"] is None')"
+
+it "multi-plan: ambiguity.kind == choice"
+assert_eq "choice" "$(json_field setup_three_plans 'H["ambiguity"]["kind"]')"
+
+it "multi-plan: options = one per plan + a fan-out-all option (3 + 1)"
+assert_eq "4" "$(json_field setup_three_plans 'len(H["ambiguity"]["options"])')"
+
+it "multi-plan: each per-plan option carries its path"
+assert_eq "3" "$(json_field setup_three_plans 'len([o for o in H["ambiguity"]["options"] if o.get("path")])')"
+
+it "multi-plan: the fan-out-all option has a null path (uses multi_plan.paths)"
+assert_eq "1" "$(json_field setup_three_plans 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
+
+it "multi-plan: multi_plan.paths is still populated (fanout target preserved)"
+assert_eq "3" "$(json_field setup_three_plans 'len(H["multi_plan"]["paths"])')"
 
 # ── Scenario 4: in-flight single + goal_intent feeds summary ───────────────
 it "in-flight: situation=in-flight when one not-met run present"
@@ -192,8 +273,53 @@ it "in-flight: summary surfaces the goal_intent from the ledger"
 # The exact phrasing is operator-friendly — we just assert goal_intent appears.
 assert_eq "True" "$(json_field setup_inflight_one '"Ship the login fix" in H["summary"]')"
 
-it "in-flight: ambiguity is null when there's exactly one run"
+it "in-flight: ambiguity is null when there's exactly one FRESH run"
+# A recently-active run is high-confidence → silent resume (unchanged behavior).
 assert_eq "None" "$(json_field setup_inflight_one 'H["ambiguity"]')"
+
+# B1 (2026-06 misfire fix): a STALE single run (idle beyond the TTL) is
+# low-confidence — the detector keeps situation=in-flight but sets ambiguity so
+# the driver ASKS (resume vs start-fresh) instead of silently auto-resuming a
+# 15-day-old, possibly-unrelated run.
+it "stale in-flight: situation is still in-flight"
+assert_eq "in-flight" "$(json_field setup_inflight_stale 'H["situation"]')"
+
+it "stale in-flight: ambiguity is NON-null — ask, do not silent-resume"
+assert_eq "False" "$(json_field setup_inflight_stale 'H["ambiguity"] is None')"
+
+it "stale in-flight: ambiguity.kind == choice"
+assert_eq "choice" "$(json_field setup_inflight_stale 'H["ambiguity"]["kind"]')"
+
+it "stale in-flight: a resume option still carries the run_id"
+assert_eq "True" "$(json_field setup_inflight_stale 'any(o.get("run_id")=="runStale" for o in H["ambiguity"]["options"])')"
+
+it "stale in-flight: a start-fresh option exists (run_id null)"
+assert_eq "True" "$(json_field setup_inflight_stale 'any(o.get("run_id") is None for o in H["ambiguity"]["options"])')"
+
+it "stale in-flight: in_flight.run_id still set so the driver can resume on confirm"
+assert_eq "runStale" "$(json_field setup_inflight_stale 'H["in_flight"]["run_id"]')"
+
+# B1 regression (adversarial review P1): a FUTURE-dated mtime (clock skew) must
+# NOT be clamped to "fresh" and silently resumed — it must ask.
+it "future-mtime in-flight: ambiguity is NON-null — anomalous clock does not silent-resume"
+assert_eq "False" "$(json_field setup_inflight_future 'H["ambiguity"] is None')"
+
+it "future-mtime in-flight: situation is still in-flight"
+assert_eq "in-flight" "$(json_field setup_inflight_future 'H["situation"]')"
+
+# CLAUDE_AUTO_INFLIGHT_TTL_SECONDS knob + floor (testing/standards review).
+it "TTL=0 forces ask even on a run created this instant (always-ask floor)"
+assert_eq "False" "$(json_field_env CLAUDE_AUTO_INFLIGHT_TTL_SECONDS=0 setup_inflight_one 'H["ambiguity"] is None')"
+
+it "TTL negative is floored to 0 (still asks on a fresh run)"
+assert_eq "False" "$(json_field_env CLAUDE_AUTO_INFLIGHT_TTL_SECONDS=-5 setup_inflight_one 'H["ambiguity"] is None')"
+
+it "large TTL keeps a day-old run silent (knob raises the staleness threshold)"
+# 1 year TTL → the months-old stale run is now within window → silent resume.
+assert_eq "None" "$(json_field_env CLAUDE_AUTO_INFLIGHT_TTL_SECONDS=31536000 setup_inflight_stale 'H["ambiguity"]')"
+
+it "_fmt_age hours branch: a 90-min-old run renders idle '1h' in the summary"
+assert_eq "True" "$(json_field_env CLAUDE_AUTO_INFLIGHT_TTL_SECONDS=0 setup_inflight_90min '"1h" in H["summary"]')"
 
 # ── Scenario 5: ambiguous-runs with options carrying goal_intent ───────────
 it "ambiguous-runs: situation when more than one in-flight run"

@@ -47,6 +47,25 @@ from _bootstrap import is_iteration_disabled  # noqa: E402
 # unit-side reads MUST go through `read_decision()` so the AST lint can hold.
 DECISIONS = ("advance", "iterate", "exit")
 
+# ── Deliberate bound-check duplication (do NOT naively merge) ────────────────
+# The iterate-bound comparison (attempts vs max_attempts, active_wall vs
+# max_wall) is written twice in this module: `evaluate_decision` (engine
+# decision path) and `compute_pending_state` (the recompute path called from
+# `_atomic_write` on EVERY write). They are kept separate on purpose because
+# both policies are load-bearing and genuinely differ:
+#   • Coercion — evaluate_decision uses raw int()/float() that RAISE on a
+#     corrupt bound (→ an operator-visible ITERATION_CHECK_FAILED F2 stop);
+#     compute_pending_state uses _try_int/_try_float that DEGRADE to False so
+#     the recompute never raises and never locks the ledger. A shared
+#     never-raise helper would silently convert F2's diagnostic stop into
+#     continuation on a torn bound.
+#   • Cap applicability — evaluate_decision treats max_attempts == 0 as "no
+#     cap" (the `max_attempts > 0` guard); compute_pending_state treats a
+#     PRESENT max_attempts (incl. explicit 0) as a real cap. Preserved, not
+#     reconciled.
+# Merging the comparison would require collapsing these — so the duplication is
+# a documented trade, not an open "close the dimension" TODO.
+
 
 def read_decision(unit: dict):
     """Return the gate unit's verdict.decision, or None if not set.
@@ -228,12 +247,11 @@ def compute_pending_state(ledger: dict) -> bool:
     EVERY write.
 
     Why this lives here and not in ``ledger.py``: the AST lint says
-    iteration.py is THE iteration-decision module; the bound-check
-    duplicated between ``evaluate_decision`` (lines 130-152 in this file)
-    and ``ledger._compute_iteration_pending`` was the NEXT dimension of
-    the recurring "rule the prose describes that the code enforces in
-    some sites but not its siblings" class — close a dimension, not a
-    sibling. Centralizing it here closes the dimension.
+    iteration.py is THE iteration-decision module; the bound check
+    ``ledger._compute_iteration_pending`` used to open-code was lifted here so
+    the recompute path and the engine path live in one module. The comparison
+    is still deliberately written twice (here + ``evaluate_decision``) — see the
+    module-level "Deliberate bound-check duplication" note for why not to merge.
 
     Kill-switch parity (G1 / rel-r2-1): when ``CLAUDE_AUTO_DISABLE_ITERATION=1``
     is set, return False unconditionally — symmetric with the write-side

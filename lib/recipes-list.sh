@@ -8,8 +8,9 @@
 # card for one recipe (the picker's preview surface, KTD-10).
 #
 # READ-ONLY: resolves + reads recipe files; never writes. Repo root is resolved
-# by the Python (CLAUDE_AUTO_REPO or a walk-up from cwd), parity with the other
-# shims.
+# by the shared _bootstrap.resolve_repo (CLAUDE_AUTO_REPO, else a git-worktree-
+# bounded walk-up), parity with the other shims — NOT an inlined copy, so it
+# can't drift from the 2026-06 mis-root fix the way an inlined walk-up did.
 #
 # $ARGUMENTS-safe: all arg logic lives HERE; the .md body never string-interpolates.
 
@@ -25,27 +26,19 @@ auto::recipes_list() {
     set -- $1
   fi
   "$CLAUDE_AUTO_PYTHON3" - "$script_dir" "$@" <<'PYEOF'
-import sys, os, json
+import sys
 script_dir = sys.argv[1]
 args = sys.argv[2:]
 sys.path.insert(0, script_dir)
-from _bootstrap import load_lib_module
+# Use the canonical bounded resolver — `_bootstrap` is already imported here, so
+# (unlike auto-detect.sh's pre-import single-quoted heredoc) there is no
+# dependency-free-core reason to inline a copy. An inlined walk-up here silently
+# escaped to $HOME/.claude/auto from a fresh worktree, mislabeling the user's
+# global recipes as tier `workspace` (the 2026-06 mis-root bug, third copy).
+from _bootstrap import load_lib_module, resolve_repo
 recipes = load_lib_module("recipes")
 
-
-def _repo_root():
-    env = os.environ.get("CLAUDE_AUTO_REPO")
-    if env:
-        return env
-    d = os.getcwd()
-    while d and d != os.path.dirname(d):
-        if os.path.isdir(os.path.join(d, ".claude", "auto")):
-            return d
-        d = os.path.dirname(d)
-    return os.getcwd()
-
-
-repo = _repo_root()
+repo = resolve_repo()
 
 if args and args[0] == "--render" and len(args) > 1:
     tr = load_lib_module("topology-render")

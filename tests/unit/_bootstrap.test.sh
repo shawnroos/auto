@@ -107,6 +107,104 @@ result="$(unset CLAUDE_AUTO_TEST_NO_TICK_LOCK; CLAUDE_AUTO_TEST_HARNESS=1 \
   probe test_hatch CLAUDE_AUTO_TEST_NO_TICK_LOCK)"
 assert_eq "False" "$result"
 
+# ─── load_ledger_safe / iter_worktree_ledgers (the shared ledger-scan home) ──
+# These two helpers replaced 3 byte-identical _load_ledger_safe copies + ~5
+# inline glob-scan scaffolds across the hooks. Two contracts are LOAD-BEARING
+# and were previously only exercised indirectly:
+#   1. load_ledger_safe folds in a dict-guard — a valid-JSON NON-dict value
+#      (array/scalar) returns None, NOT the raw value. The 3 former copies
+#      returned the raw value and let each caller isinstance-check it. This
+#      guard is what keeps a non-dict ledger from disarming the fail-closed
+#      destructive backstop (it reaches `_owns_session`/`_is_blocking` as a
+#      skip, never as an AttributeError-or-truthy-match). rel-001.
+#   2. iter_worktree_ledgers never raises (missing dispatch dir → empty),
+#      yields (run_id, led) SORTED by path, skips unparseable/non-dict files,
+#      and derives run_id as led["run_id"] or the filename stem.
+# Self-contained driver: creates a fresh tempdir, writes ledger files, calls
+# the helper, prints a comparable token, cleans up.
+probe_scan() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json, tempfile, shutil
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+import _bootstrap as b
+scenario = sys.argv[2]
+
+def write(path, raw):
+    with open(path, "w") as fh:
+        fh.write(raw)
+
+def shape(r):
+    return "dict" if isinstance(r, dict) else ("None" if r is None else "other")
+
+tmp = tempfile.mkdtemp(prefix="bootstrap-scan-")
+try:
+    if scenario == "safe_missing":
+        print(shape(b.load_ledger_safe(os.path.join(tmp, "nope.json"))))
+    elif scenario in ("safe_dict", "safe_array", "safe_scalar", "safe_badjson"):
+        raw = {"safe_dict": '{"a": 1}', "safe_array": "[]",
+               "safe_scalar": "42", "safe_badjson": "{bad"}[scenario]
+        p = os.path.join(tmp, "l.json")
+        write(p, raw)
+        print(shape(b.load_ledger_safe(p)))
+    elif scenario == "iter_missing_dir":
+        # No .claude/auto dir exists at all — must yield nothing, never raise.
+        got = list(b.iter_worktree_ledgers(tmp))
+        print("NORAISE:%d" % len(got))
+    else:
+        adir = os.path.join(tmp, ".claude", "auto")
+        os.makedirs(adir)
+        if scenario == "iter_order":
+            # Written out of order; iteration must be sorted by PATH (a,b,c).
+            write(os.path.join(adir, "c.json"), '{"run_id": "c-run"}')
+            write(os.path.join(adir, "a.json"), '{"run_id": "a-run"}')
+            write(os.path.join(adir, "b.json"), '{"run_id": "b-run"}')
+            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+        elif scenario == "iter_skip":
+            # One valid dict + one non-dict array + one unparseable → only the
+            # valid dict is yielded (the others are skipped, scan continues).
+            write(os.path.join(adir, "good.json"), '{"run_id": "good-run"}')
+            write(os.path.join(adir, "arr.json"), "[]")
+            write(os.path.join(adir, "bad.json"), "{bad")
+            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+        elif scenario == "iter_runid_fallback":
+            # A dict ledger with no run_id key → run_id falls back to the stem.
+            write(os.path.join(adir, "stemname.json"), '{"loop_phase": "work"}')
+            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+        else:
+            sys.exit("unknown scan scenario: %s" % scenario)
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+PYEOF
+}
+
+it "load_ledger_safe: valid JSON object → returns the dict"
+assert_eq "dict" "$(probe_scan safe_dict)"
+
+it "load_ledger_safe: valid JSON array (non-dict) → None (folded dict-guard, the deliberate behavior change)"
+assert_eq "None" "$(probe_scan safe_array)"
+
+it "load_ledger_safe: valid JSON scalar (non-dict) → None (folded dict-guard)"
+assert_eq "None" "$(probe_scan safe_scalar)"
+
+it "load_ledger_safe: unparseable JSON → None (rel-001 never raises)"
+assert_eq "None" "$(probe_scan safe_badjson)"
+
+it "load_ledger_safe: missing file → None (rel-001 never raises)"
+assert_eq "None" "$(probe_scan safe_missing)"
+
+it "iter_worktree_ledgers: missing dispatch dir → yields nothing, never raises"
+assert_eq "NORAISE:0" "$(probe_scan iter_missing_dir)"
+
+it "iter_worktree_ledgers: yields (run_id, led) SORTED by path"
+assert_eq "a-run b-run c-run" "$(probe_scan iter_order)"
+
+it "iter_worktree_ledgers: skips unparseable + non-dict files, keeps scanning siblings"
+assert_eq "good-run" "$(probe_scan iter_skip)"
+
+it "iter_worktree_ledgers: run_id falls back to the filename stem when ledger has no run_id"
+assert_eq "stemname" "$(probe_scan iter_runid_fallback)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "_bootstrap.test.sh: ${PASS} passed, ${FAIL} failed"

@@ -34,18 +34,11 @@ RUBRIC PROBE OUTCOME (gates this adapter — contract §3.1, plan U6b "FIRST"):
   native majors as advisory rather than gating.
 ══════════════════════════════════════════════════════════════════════════════
 
-CONTRACT GAP (raise-it-don't-guess) — BLOCKS INTEGRATION, not the U6b deliverable:
-
-  `next_plan_step` needs the last plan step ran. The LOCKED ledger schema
-  (ledger-schema.md §2.1) exposes NO such field, and tick.py:337-347 calls
-  `next_plan_step(ledger)` then `getattr(adapter, step)(ledger)` but never
-  PERSISTS the chosen step back. So a fresh-process tick always reads no
-  step-state -> always returns "plan" -> the plan-loop LIVELOCKS at integration.
-  This is a SEAM break with U3/U4; resolution is upstream (add a `plan_step`
-  schema field + persist it, OR pass the prior step as a hint). The state
-  machine below is correct against the contract; it has no field to read from.
-  We do NOT derive a step from loop_phase/gaps_open (those three plan states
-  are indistinguishable from schema fields — guessing is the violation).
+PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
+sub-state, schema §3.1); the tick persists the executed step via
+`set_loop(plan_step=step)` after each plan-loop advance (tick_advance.py), so a
+fresh-process tick reads the real sub-state and the loop advances rather than
+livelocking. (Native never emits "deepen": plan → review_plan → done.)
 
 DECLARED SEVERITY MAPPING (contract §3.1): native reviewers self-tag directly on
 the shared scale (no foreign vocabulary), so the "mapping" is the injected
@@ -212,15 +205,6 @@ def _cli(argv):
             # Native deepen is a verbatim no-op; emit the plan unchanged (no
             # trailing newline — mirrors the bash printf '%s' it replaces).
             sys.stdout.write(a.deepen(rest[0] if rest else ""))
-            return 0
-        if sub == "prepare-plan":
-            json.dump(a.plan(rest[0] if rest else None), sys.stdout)
-            return 0
-        if sub == "prepare-review-plan":
-            json.dump(a.review_plan(rest[0] if rest else None), sys.stdout)
-            return 0
-        if sub == "prepare-do-unit":
-            json.dump(a.do_unit(rest[0] if rest else None), sys.stdout)
             return 0
         sys.stderr.write("adapter-native: unknown subcommand %r\n" % sub)
         return 2

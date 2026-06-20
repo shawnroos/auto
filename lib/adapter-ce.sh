@@ -54,8 +54,6 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 #
 # Subcommands (forwarded verbatim to adapter-ce.py):
 #   adapter-scale | map-level <lvl> | map-findings <json> | next-plan-step <json>
-#   prepare-plan <scope> | prepare-deepen <plan> | prepare-review-plan <plan>
-#   prepare-do-unit <unit-id>
 
 auto::adapter_ce() {
   local script_dir

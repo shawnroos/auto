@@ -39,7 +39,12 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    iter_worktree_ledgers,
+    load_ledger,
+    load_lib_module,
+    resolve_repo,
+)
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -63,19 +68,10 @@ _resolve_repo = resolve_repo
 
 def _resumable_runs(ledger, repo_root: str):
     """Run-ids that are resumable (seam-paused OR blocked-paused OR is_orphaned)."""
-    import glob
-
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     runs = []
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        try:
-            with open(path, "r") as fh:
-                led = json.load(fh)
-        except Exception:
+    for run_id, led in iter_worktree_ledgers(repo_root):
+        if phase_grammar.current_phase(led) == "done":
             continue
-        if not isinstance(led, dict) or phase_grammar.current_phase(led) == "done":
-            continue
-        run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
         seam_paused = phase_grammar.current_phase(led) == "seam" and led.get("seam_paused")
         # Blocked-paused: a manual-driver run that is NOT at a seam and NOT done
         # (set by `pause`). Without this, a run paused on a human blocker would
@@ -257,19 +253,11 @@ def _active_runs(ledger, repo_root: str):
     `pause` targets a LIVE run, not a resumable one, so it disambiguates over a
     different set than continue/abort (which use `_resumable_runs`).
     """
-    import glob
-
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     runs = []
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        try:
-            with open(path, "r") as fh:
-                led = json.load(fh)
-        except Exception:
+    for run_id, led in iter_worktree_ledgers(repo_root):
+        if phase_grammar.current_phase(led) == "done":
             continue
-        if not isinstance(led, dict) or phase_grammar.current_phase(led) == "done":
-            continue
-        runs.append(led.get("run_id") or os.path.splitext(os.path.basename(path))[0])
+        runs.append(run_id)
     return runs
 
 

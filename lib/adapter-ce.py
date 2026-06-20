@@ -14,34 +14,13 @@ testing / scripting; the two are intentional mirrors.
 An adapter is a PURE PROVIDER OF OPERATIONS — it NEVER writes the ledger
 (contract §1). Ops return data; the engine persists it through ledger.py.
 
-══════════════════════════════════════════════════════════════════════════════
-CONTRACT GAP (raise-it-don't-guess, per adapter-contract.md header) — BLOCKS
-INTEGRATION, does NOT block the U6b pure deliverable.
-
-  `next_plan_step` needs to know which plan step last ran (plan -> deepen ->
-  review_plan). The LOCKED ledger schema (ledger-schema.md §2.1) exposes NO
-  field carrying this: its top-level fields are run_id, loop_phase, seam_paused,
-  adapter, adapter_scale, exit_predicate_result, units, loop. And tick.py:337
-  calls `adapter.next_plan_step(ledger)` then `getattr(adapter, step)(ledger)`
-  (tick.py:342-347) but NEVER persists the chosen step back to the ledger.
-
-  Consequence: a fresh-process tick always reads no step-state -> the state
-  machine below always returns "plan" -> the plan-loop LIVELOCKS at integration.
-
-  This is a SEAM break between U6b and U3/U4, not a bug in the logic below. The
-  state machine + coherence guard are correct against the contract; they just
-  have no schema field to read from. Resolution is UPSTREAM — U3/U4 must either:
-    (a) add a `plan_step` field to the ledger schema (re-lock), and have tick.py
-        persist the executed step after each plan-loop advance, OR
-    (b) change the calling convention so tick.py passes the prior step as a hint.
-
-  We read a tolerated `ledger["plan_step"]` IF a future schema adds it (so this
-  adapter is correct the moment the gap closes), and degrade safely otherwise.
-  We do NOT invent a derivation from loop_phase/gaps_open — those three states
-  (not-yet-planned / planned-awaiting-deepen / deepened-awaiting-review) are
-  indistinguishable from schema fields, so guessing would be the contract
-  violation the header forbids.
-══════════════════════════════════════════════════════════════════════════════
+PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
+sub-state, schema §3.1) to compute the next step. The tick persists the executed
+step via `set_loop(plan_step=step)` after each plan-loop advance
+(tick_advance.py), so a fresh-process tick reads the real sub-state — the loop
+advances plan → deepen → review_plan → done and does not livelock. (Historical
+note: an earlier U6b/U3 seam had no schema field for this; the gap was closed
+when `plan_step` became a validated field — see ledger_core.py's PLAN_STEPS.)
 
 DECLARED SEVERITY MAPPING (contract §3.1, fixed property):
     P0 -> blocker;  P1 -> major;  P2 -> major;  P3 -> minor
@@ -88,7 +67,7 @@ def _next_plan_step(ledger):
     plan_step == "review_plan" specifically — gaps_open is 0 by default before
     any review has run, so the guard must only fire AFTER a real review pass.
 
-    See the CONTRACT GAP block: `plan_step` is not yet a schema field.
+    `plan_step` is a real validated ledger field (schema §3.1) the tick persists.
     """
     epr = ledger.get("exit_predicate_result") or {}
     plan_step = ledger.get("plan_step")
@@ -220,7 +199,6 @@ def _cli(argv):
         sys.stderr.write("usage: adapter-ce.py <subcommand> [args...]\n")
         return 2
     sub, rest = argv[0], argv[1:]
-    a = Adapter()
     try:
         if sub == "adapter-scale":
             sys.stdout.write(ADAPTER_SCALE + "\n")
@@ -233,18 +211,6 @@ def _cli(argv):
             return 0
         if sub == "next-plan-step":
             sys.stdout.write(_next_plan_step(json.loads(rest[0])) + "\n")
-            return 0
-        if sub == "prepare-plan":
-            json.dump(a.plan(rest[0] if rest else None), sys.stdout)
-            return 0
-        if sub == "prepare-deepen":
-            json.dump(a.deepen(rest[0] if rest else None), sys.stdout)
-            return 0
-        if sub == "prepare-review-plan":
-            json.dump(a.review_plan(rest[0] if rest else None), sys.stdout)
-            return 0
-        if sub == "prepare-do-unit":
-            json.dump(a.do_unit(rest[0] if rest else None), sys.stdout)
             return 0
         sys.stderr.write("adapter-ce: unknown subcommand %r\n" % sub)
         return 2

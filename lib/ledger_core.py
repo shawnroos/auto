@@ -590,12 +590,12 @@ def _compute_iteration_pending(ledger: dict) -> bool:
     purely so ``recompute_predicate`` has a single in-file callable and the
     lazy-load idiom stays localized.
 
-    Previously this function open-coded the bound check, byte-equivalent to
-    ``iteration.evaluate_decision``'s lines 130-152. That was the NEXT
-    dimension of the recurring "one rule lives in two places" class — the AST
-    lint catches the literal ``"decision"`` but not duplicated bound math
-    (close a dimension, not a sibling). Centralizing the math in
-    ``iteration.compute_pending_state`` closes that dimension.
+    Previously this function open-coded the bound check; that copy was lifted
+    into ``iteration.compute_pending_state`` so this file holds only the thin
+    wrapper. The comparison is still deliberately duplicated INSIDE iteration.py
+    (``evaluate_decision`` + ``compute_pending_state``) because their coercion +
+    cap policies diverge and both are load-bearing — see that module's
+    "Deliberate bound-check duplication" note; not an open TODO.
 
     Brittleness contract (rel-2): ``compute_pending_state`` swallows
     coercion errors on the numeric bound fields and returns ``False`` on

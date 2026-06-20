@@ -48,7 +48,6 @@ rel-001: ALWAYS exit 0 at the process level.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -56,7 +55,12 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, test_hatch_enabled  # noqa: E402
+from _bootstrap import (  # noqa: E402
+    iter_worktree_ledgers,
+    load_ledger,
+    load_lib_module,
+    test_hatch_enabled,
+)
 
 phase_grammar = load_lib_module("phase-grammar")
 
@@ -159,15 +163,6 @@ def _read_stdin(raw: str):
     return sid, _command_text(data)
 
 
-def _load_ledger_safe(path):
-    """Read a ledger JSON; return None on any read/parse failure (rel-001)."""
-    try:
-        with open(path, "r") as fh:
-            return json.load(fh)
-    except Exception:
-        return None
-
-
 def _owns_session(led, *, session_id):
     """True iff this run is a LIVE auto run owned by ``session_id`` that the
     destructive backstop must still gate.
@@ -231,20 +226,17 @@ def _owns_session(led, *, session_id):
 def _owning_run_id(repo_root: str, session_id):
     """Return the run_id of the live auto run owning ``session_id``, or None.
 
-    Per-worktree glob only (fan-out sub-runs are out of hook scope — KTD-5).
-    Unlike the question hook we need the RUN ID, not just a bool, so we can pause
-    it. No staleness/driver coupling — see ``_owns_session`` (round-2 P2: a stale
-    or driver=manual conjunct would self-disarm the fail-closed backstop).
+    Scans the per-worktree ledgers (``iter_worktree_ledgers`` — fan-out sub-runs
+    are out of hook scope by design, KTD-5). Unlike the question hook we need the
+    RUN ID, not just a bool, so we can pause it. No staleness/driver coupling —
+    see ``_owns_session`` (round-2 P2: a stale or driver=manual conjunct would
+    self-disarm the fail-closed backstop).
     """
     if not session_id:
         return None
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        led = _load_ledger_safe(path)
-        if led is None:
-            continue
+    for run_id, led in iter_worktree_ledgers(repo_root):
         if _owns_session(led, session_id=session_id):
-            return led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
+            return run_id
     return None
 
 

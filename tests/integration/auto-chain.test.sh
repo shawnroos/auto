@@ -108,7 +108,7 @@ ledger.init_ledger(repo, run, adapter="native",
                            "findings":[{"severity":"minor","note":"nit on U1"}]}],
                    loop_phase="work")
 
-def launch_fn(uid):
+def launch_fn(uid, attempt=0):
     ledger.record_verdict(repo, run, uid, [])
 
 # The driver arms the tick chain (it does NOT pre-decide done — the tick reads
@@ -172,7 +172,7 @@ ledger.init_ledger(repo, run, adapter="native",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
 
-def launch_fn(uid):
+def launch_fn(uid, attempt=0):
     ledger.record_verdict(repo, run, uid, [])  # re-dispatched agent self-writes CLEAN
 
 BUDGET=30; no_stale_exit=True; n=0
@@ -268,7 +268,7 @@ ledger.init_ledger(repo, run, adapter="native",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
 
-def launch_fn(uid):
+def launch_fn(uid, attempt=0):
     ledger.record_verdict(repo, run, uid, [])  # re-dispatched agent self-writes CLEAN
 
 BUDGET=12; exited=False

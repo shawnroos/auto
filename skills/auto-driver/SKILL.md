@@ -27,10 +27,10 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 
 | situation         | ambiguity null → dispatch                                                    | ambiguity non-null → AskUserQuestion |
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
-| `in-flight`       | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"`        | (n/a — single run unambiguous)       |
+| `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
 | `reviewed-plan`   | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path>"`                          | (n/a — single plan unambiguous)      |
-| `multi-plan`      | `python "${CLAUDE_PLUGIN_ROOT}/lib/auto-spawn.py" fanout <plan...>` then surface manifest | (n/a — confirm-only in `summary`)    |
+| `multi-plan`      | (n/a — multi-plan ALWAYS asks now; never auto-fans-out)                       | options = each plan (carries `path` → `auto.sh "<path>"`, runs just that one) + a "Fan out all N" option (`path` null → `auto-spawn.py fanout <multi_plan.paths>`) |
 | `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 

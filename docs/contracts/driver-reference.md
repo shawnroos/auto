@@ -340,10 +340,33 @@ additional `kind` values; the constant tuple is the contract.
 
 ---
 
-## 9. Multi-plan batch fanout (v0.4.0)
+## 9. Multi-plan batch fanout (v0.4.0; confirm-gated 2026-06)
 
-When the hypothesis is `multi-plan`, the driver invokes
-`lib/auto-spawn.py` which:
+The `multi-plan` hypothesis no longer auto-dispatches a fanout. After the
+2026-06 misfire (a fresh session silently fanned out two stale, unrelated
+plans found in `docs/plans/`), the detector sets `ambiguity` on every
+`multi-plan` envelope, so the driver **asks first** (auto-driver SKILL.md
+routing table): the operator either picks one plan (`auto.sh "<path>"`) or
+confirms "Fan out all N". Only on a confirmed fan-out-all does the driver
+invoke `lib/auto-spawn.py` with `multi_plan.paths`.
+
+### Ambiguity option shape (discriminated union — read the payload key by situation)
+
+`ambiguity.options[]` carries a **situation-specific** payload key. Branch on
+`situation` before reading it:
+
+| situation | payload key | sentinel | meaning |
+|-----------|-------------|----------|---------|
+| `ambiguous-runs` | `run_id` (always set) | — | resume the chosen run |
+| `in-flight` (stale) | `run_id` | `run_id: null` → "Start fresh" | resume the run, or `null` ⇒ drop to `raw` (ask what to work on) |
+| `multi-plan` | `path` (repo-relative) | `path: null` → "Fan out all N" | run just that plan via `auto.sh "<path>"`, or `null` ⇒ fan out `multi_plan.paths` |
+
+A null payload value is the **action sentinel** for that surface, not missing
+data — `run_id: null` means start-fresh, `path: null` means fan-out-all. The
+detector header (auto-detect.sh) and the auto-driver routing table both encode
+this; this table is the authoritative schema.
+
+When fanout IS confirmed, the driver invokes `lib/auto-spawn.py` which:
 
 1. Creates one worktree per plan under `<host-repo>/worktrees/<slug>`
    (slug = full plan-file stem; `resolve_host_repo_root()` resolves

@@ -80,8 +80,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 #
 # Subcommands (forwarded verbatim to adapter-native.py):
 #   adapter-scale | review-rubric | validate-findings <json> | next-plan-step <json>
-#   deepen <plan> | prepare-plan <scope> | prepare-review-plan <plan>
-#   prepare-do-unit <unit-id>
+#   deepen <plan>
 
 auto::adapter_native() {
   local script_dir

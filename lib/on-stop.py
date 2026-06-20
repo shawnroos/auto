@@ -75,7 +75,14 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, resolve_shared_dir, test_hatch_enabled  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    iter_worktree_ledgers,
+    load_ledger,
+    load_ledger_safe,
+    load_lib_module,
+    resolve_shared_dir,
+    test_hatch_enabled,
+)
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -155,15 +162,6 @@ def _is_worktree_or_host(git_path: str) -> bool:
     return False
 
 
-def _load_ledger_safe(path):
-    """Read a ledger JSON; return None on any read/parse failure (rel-001)."""
-    try:
-        with open(path, "r") as fh:
-            return json.load(fh)
-    except Exception:
-        return None
-
-
 def _blocking_runs(repo_root: str, now=None):
     """Return [(run_id, predicate_dict)] for every ACTIVE run that is NOT met.
 
@@ -186,18 +184,13 @@ def _blocking_runs(repo_root: str, now=None):
 
     blocking = []
 
-    # Per-worktree ledgers (the main glob).
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        led = _load_ledger_safe(path)
-        if led is None:
-            continue
+    # Per-worktree ledgers (the main scan) — iter_worktree_ledgers owns the glob.
+    for run_id, led in iter_worktree_ledgers(repo_root):
         predicate = _is_blocking(
             led, ledger=ledger, skip_staleness=skip_staleness,
             stale_threshold=stale_threshold, now=now,
         )
         if predicate is not None:
-            run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
             blocking.append((run_id, predicate))
 
     # Multi-plan batches (committed sidecars only). Fast-path guard: skip
@@ -208,7 +201,7 @@ def _blocking_runs(repo_root: str, now=None):
     # R3-1 — submodules ALSO have gitlink files but their target is
     # `.git/modules/...`, NOT `.git/worktrees/...`, so reading the
     # gitlink content distinguishes the two cases cheaply).
-    local_batches = os.path.join(dispatch_dir, "batches")
+    local_batches = os.path.join(repo_root, ".claude", "auto", "batches")
     git_path = os.path.join(repo_root, ".git")
     if not os.path.isdir(local_batches) and not _is_worktree_or_host(git_path):
         return blocking
@@ -219,8 +212,8 @@ def _blocking_runs(repo_root: str, now=None):
     if not os.path.isdir(batches_dir):
         return blocking
     for sidecar_path in sorted(glob.glob(os.path.join(batches_dir, "*.json"))):
-        sidecar = _load_ledger_safe(sidecar_path)
-        if sidecar is None or not isinstance(sidecar, dict):
+        sidecar = load_ledger_safe(sidecar_path)
+        if sidecar is None:  # load_ledger_safe returns None for non-dict too.
             continue
         if sidecar.get("status") != "committed":
             continue
@@ -235,7 +228,7 @@ def _blocking_runs(repo_root: str, now=None):
             for sub_path in sorted(glob.glob(
                 os.path.join(wt_ledger_dir, f"{run_id_hint}*.json")
             )):
-                sub = _load_ledger_safe(sub_path)
+                sub = load_ledger_safe(sub_path)
                 if sub is None:
                     continue
                 predicate = _is_blocking(

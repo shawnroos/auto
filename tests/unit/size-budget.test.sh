@@ -83,12 +83,9 @@ ALLOWED_FUNCTIONS=(
   # validation, +4-line ledger-dict field. A ledger field's only home is
   # this chokepoint; the split stays the right move, kept off U5.
   "lib/ledger_core.py:init_ledger:229"
-  # _try_iteration_check came in at 143 LOC out of B6's flat-dispatcher
-  # decomposition. B6's design target was 30-60 LOC per _try_* helper;
-  # this one is the iteration-check branch which carries both the recipe-
-  # bug + iteration-crash try/except blocks plus the led-refresh contract.
-  # Drift from design; candidate for further decomposition.
-  "lib/tick.py:_try_iteration_check:143"
+  # (_try_iteration_check waiver retired: the recipe-bug + iteration-crash
+  # except branches were collapsed into the shared `_wedge_done_stop` helper,
+  # bringing the function back under the 120-LOC budget — decompose, don't bump.)
   # advance_iteration_loop is the v0.3.0 U4 entry point — bound check,
   # decision-effective routing (advance / iterate-under-bound /
   # iterate-over-bound / exit), atomic_iterate_step dispatch. The branches
@@ -111,15 +108,12 @@ ALLOWED_FUNCTIONS=(
   # 2-3 private helpers (validate-shape, validate-emit-count, build-units).
   # Tracked as v0.3.2 candidate.
   "lib/emitters.py:iterate_template:127"
-  # validate is the canonical V1 recipe validator. 324 LOC — well over
-  # budget — because it grew across v0.1.x → v0.3.x adding per-field
-  # checks each version (units, phase_order, phase_transitions, iteration,
-  # emit_templates, expected_emit_outputs, depends_on carve-outs, etc.).
-  # The natural decomposition is per-field-check helpers (_validate_units,
-  # _validate_iteration_block, _validate_emit_templates, ...) — a real
-  # refactor, larger than B7's recompute_predicate decomposition.
-  # HIGHEST-PRIORITY structural-debt candidate for v0.3.2.
-  "lib/recipes.py:validate:324"
+  # (recipes.py:validate waiver retired: decomposed into per-concern
+  # validators — _validate_toplevel / _validate_phase_order / _validate_units /
+  # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on
+  # / _validate_phase_transitions / _validate_emit_templates / _validate_iteration
+  # / _validate_work_only_gap — with validate() now a ~30-line ordered orchestrator.
+  # Each helper is under budget; decompose, don't bump.)
   # _next_plan_step is the LAST top-level def before `class Adapter` in
   # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
   # `class`) attributes the ENTIRE ~106-line Adapter class body to it. The

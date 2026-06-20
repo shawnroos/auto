@@ -215,6 +215,7 @@ def _cli(argv):
     via _coerce_confidence (so the CLI never crashes on a bad arg either).
     """
     import json
+    import sys
     state = argv[0] if argv else None
     confidence = 1.0
     if len(argv) > 1:
@@ -222,8 +223,8 @@ def _cli(argv):
             confidence = float(argv[1])
         except (TypeError, ValueError):
             confidence = -1.0  # forces low -> escalate (coerced to 0.0).
-    json.dump(recommend(state, confidence), __import__("sys").stdout)
-    __import__("sys").stdout.write("\n")
+    json.dump(recommend(state, confidence), sys.stdout)
+    sys.stdout.write("\n")
     return 0
 
 

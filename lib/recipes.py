@@ -177,11 +177,10 @@ def _check_prompt_template(value, where: str):
         _bad(f"{where}: prompt_template must not contain '..' (path traversal): {value!r}")
 
 
-def validate(recipe: dict) -> None:
-    """Validate a recipe dict against the V1 format. Raises RecipeError on any
-    violation; returns None on success. The hard contract — both the engine and
-    the authoring skill call this; skill output that passes here is engine-OK.
-    """
+def _validate_toplevel(recipe: dict) -> None:
+    """Top-level shape: object, no unknown fields, required name/version/units,
+    a safe filename name, units-is-list. Order-preserving extract — the
+    first-violation message must not change."""
     if not isinstance(recipe, dict):
         _bad("recipe must be a JSON object")
 
@@ -204,6 +203,10 @@ def validate(recipe: dict) -> None:
     if not isinstance(recipe["units"], list):
         _bad("units must be a list")
 
+
+def _validate_phase_order(recipe: dict) -> list:
+    """phase_order (default if absent; non-empty list of non-empty strings) +
+    terminal_phase membership. Returns the resolved phase_order."""
     # phase_order: default if absent. v0.6.0 (U6) replaced the literal allow-list
     # gate with a STRUCTURAL rule (every element a non-empty string); the
     # phase-membership invariants are enforced downstream, unlocking arbitrary
@@ -219,7 +222,13 @@ def validate(recipe: dict) -> None:
     terminal_phase = recipe.get("terminal_phase", "work")
     if terminal_phase not in phase_order:
         _bad(f"terminal_phase {terminal_phase!r} not in phase_order {phase_order!r}")
+    return phase_order
 
+
+def _validate_units(recipe: dict, phase_order: list) -> set:
+    """Per-unit shape: known keys, non-empty unique id, phase ∈ phase_order,
+    depends_on/invokes shape, prompt_template path-bounded. Returns the set of
+    unit ids — the depends_on integrity pass needs ALL ids known first."""
     # Units: each must have id + phase ∈ phase_order; depends_on references
     # existing unit ids; invokes well-formed; prompt_template path-bounded.
     unit_ids = set()
@@ -245,38 +254,25 @@ def validate(recipe: dict) -> None:
             _bad(f"unit {u['id']!r}: invokes must be an object")
         if "prompt_template" in inv:
             _check_prompt_template(inv["prompt_template"], f"unit {u['id']!r}")
+    return unit_ids
 
-    # v0.3.0 (U6): emit_template id_prefixes are forward-reference targets. A
-    # structurally-declared unit (e.g., A4's `compare` after U6) may name a
-    # builder id like `build-clarity` in its `depends_on` even though no
-    # `units[]` entry has that exact id yet — the matching builder is materialized
-    # at run time by an emitter. Two emit-shapes are legitimate:
-    #
-    #   (a) `iterate_template` materializes `{id_prefix}{N}` where N is a
-    #       positive int derived from `iteration_emit_count`. ANY id whose
-    #       suffix-after-prefix is a positive int is plausibly produced by
-    #       iterate; that's the exact id math from `lib/emitters.py:iterate_template`.
-    #
-    #   (b) A non-iterate emitter (e.g., `plan_output_to_paired_builders`)
-    #       produces explicitly-named ids (`build-clarity`, `build-perf`). The
-    #       prior carve-out matched these solely because the literal string
-    #       starts with `"build-"`, which would equally accept the non-producible
-    #       `"build-typo"` (F4: ADV-2 + maint-4). The fix requires the recipe to
-    #       DECLARE these ids via the top-level `expected_emit_outputs` list, so
-    #       the validator's acceptance is grounded in the author's stated
-    #       producer-output contract, not a literal-prefix coincidence.
-    #
-    # Symmetric with the `gate_unit` carve-out below: that one's looser
-    # semantics (gate_unit MAY equal an id_prefix) are documented in place and
-    # specific to gate-eligibility, not depends_on integrity.
-    emit_templates_dict = recipe.get("emit_templates") or {}
-    emit_prefixes_for_deps = set()
-    if isinstance(emit_templates_dict, dict):
-        for _tmpl in emit_templates_dict.values():
-            if isinstance(_tmpl, dict) and isinstance(_tmpl.get("id_prefix"), str):
-                emit_prefixes_for_deps.add(_tmpl["id_prefix"])
 
-    # F4: validate expected_emit_outputs shape (list of non-empty strings).
+def _gather_emit_prefixes(emit_templates) -> set:
+    """The id_prefix set declared by emit_templates. Computed ONCE and threaded
+    to BOTH the depends_on integrity pass and the iteration gate_unit check —
+    these were two byte-identical gathers (recipe-format §6 calls them
+    symmetric), so a single shared set is behavior-preserving."""
+    prefixes = set()
+    if isinstance(emit_templates, dict):
+        for tmpl in emit_templates.values():
+            if isinstance(tmpl, dict) and isinstance(tmpl.get("id_prefix"), str):
+                prefixes.add(tmpl["id_prefix"])
+    return prefixes
+
+
+def _validate_expected_emit_outputs(recipe: dict) -> set:
+    """F4: validate expected_emit_outputs shape (list of non-empty strings).
+    Returns the set used by the depends_on carve-out."""
     expected_emit_outputs = recipe.get("expected_emit_outputs")
     if expected_emit_outputs is not None:
         if not isinstance(expected_emit_outputs, list):
@@ -287,7 +283,24 @@ def validate(recipe: dict) -> None:
                     f"expected_emit_outputs entries must be non-empty strings; "
                     f"got {eeo!r}"
                 )
-    expected_emit_outputs_set = set(expected_emit_outputs or [])
+    return set(expected_emit_outputs or [])
+
+
+def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
+                         expected_emit_outputs_set: set) -> None:
+    """depends_on integrity — a second pass once all ids are known. Each dep is
+    a known unit id, an iterate-shaped emit id (`{id_prefix}{positive_int}`), or
+    a declared expected_emit_output.
+
+    v0.3.0 (U6): emit_template id_prefixes are forward-reference targets. A
+    structurally-declared unit (e.g., A4's `compare` after U6) may name a
+    builder id like `build-clarity` in its `depends_on` even though no `units[]`
+    entry has that exact id yet — the matching builder is materialized at run
+    time by an emitter. Two emit-shapes are legitimate: (a) iterate_template
+    materializes `{id_prefix}{N}`; (b) a non-iterate emitter produces
+    explicitly-named ids declared via top-level `expected_emit_outputs` (F4:
+    ADV-2 + maint-4 — grounds acceptance in the author's stated producer-output
+    contract, not a literal-prefix coincidence)."""
 
     def _matches_iterate_shape(dep_id: str) -> bool:
         """Is ``dep_id`` plausibly an `iterate_template` output?
@@ -304,7 +317,7 @@ def validate(recipe: dict) -> None:
         validator instead of being rejected as not-iterate-shaped.
         ``isdecimal()`` matches exactly the base-10 digits ``int()`` accepts.
         """
-        for p in emit_prefixes_for_deps:
+        for p in emit_prefixes:
             if not dep_id.startswith(p) or dep_id == p:
                 continue
             suffix = dep_id[len(p):]
@@ -312,7 +325,6 @@ def validate(recipe: dict) -> None:
                 return True
         return False
 
-    # depends_on integrity — a second pass once all ids are known.
     for u in recipe["units"]:
         for d in u.get("depends_on", []):
             if d in unit_ids:
@@ -326,9 +338,11 @@ def validate(recipe: dict) -> None:
                 continue
             _bad(f"unit {u['id']!r}: depends_on references unknown unit {d!r}")
 
-    # phase_transitions: optional; each entry {from, to, emitter}; emitter must be
-    # a registered V1 emitter name (Gap B disambiguation — A1 vs A4 at the shared
-    # (plan, work) boundary each name their own emitter).
+
+def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
+    """phase_transitions: optional; each entry {from, to, emitter}; emitter must
+    be a registered V1 emitter name (Gap B disambiguation — A1 vs A4 at the
+    shared (plan, work) boundary each name their own emitter)."""
     pts = recipe.get("phase_transitions", [])
     if not isinstance(pts, list):
         _bad("phase_transitions must be a list")
@@ -348,14 +362,12 @@ def validate(recipe: dict) -> None:
                 f"one of {sorted(V1_EMITTER_NAMES)}"
             )
 
-    # ────────────────────────────────────────────────────────────────────
-    # v0.3.0 (U5): iteration + emit_templates validation. Both fields are
-    # OPTIONAL — a v0.2.x recipe declares neither and validates as before
-    # (R7 backward compat). When either is present, validate shape, the
-    # cross-references between them, and the pairing rule below.
-    iteration = recipe.get("iteration")
-    emit_templates = recipe.get("emit_templates")
 
+def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
+    """v0.3.0 (U5): emit_templates shape validation (OPTIONAL field — a v0.2.x
+    recipe omits it and validates unchanged, R7 backward compat). Runs BEFORE
+    iteration validation to preserve first-violation order."""
+    emit_templates = recipe.get("emit_templates")
     if emit_templates is not None:
         if not isinstance(emit_templates, dict):
             _bad("emit_templates must be a JSON object")
@@ -378,11 +390,10 @@ def validate(recipe: dict) -> None:
                     f"phase_order {phase_order!r}"
                 )
             tinv = tmpl["invokes"]
-            # Mirror existing `units[].invokes` validation depth (line 206-210):
-            # invokes must be a dict; prompt_template path-bounded if present.
-            # We don't constrain inner keys (no whitelist) — `_KNOWN_UNIT_KEYS`
-            # doesn't constrain `invokes`'s inner keys either, so we don't add
-            # a stricter contract here. The adapter contract bounds those.
+            # Mirror existing `units[].invokes` validation depth: invokes must be
+            # a dict; prompt_template path-bounded if present. We don't constrain
+            # inner keys (no whitelist) — `_KNOWN_UNIT_KEYS` doesn't constrain
+            # `invokes`'s inner keys either. The adapter contract bounds those.
             if not isinstance(tinv, dict):
                 _bad(f"emit_templates[{tmpl_name!r}]: invokes must be an object")
             if "prompt_template" in tinv:
@@ -391,7 +402,15 @@ def validate(recipe: dict) -> None:
             if not isinstance(tprefix, str) or not tprefix:
                 _bad(f"emit_templates[{tmpl_name!r}]: id_prefix must be a non-empty string")
 
+
+def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
+                        emit_prefixes: set) -> None:
+    """v0.3.0 (U5): iteration block validation (OPTIONAL field). Cross-refs
+    emit_templates (the pairing rule) + emit_prefixes (the gate_unit carve-out —
+    the shared id_prefix set also used by depends_on integrity)."""
+    iteration = recipe.get("iteration")
     if iteration is not None:
+        emit_templates = recipe.get("emit_templates")
         if not isinstance(iteration, dict):
             _bad("iteration must be a JSON object")
         for ik in iteration:
@@ -409,11 +428,6 @@ def validate(recipe: dict) -> None:
         gate = iteration["gate_unit"]
         if not isinstance(gate, str) or not gate:
             _bad("iteration.gate_unit must be a non-empty string")
-        emit_prefixes = set()
-        if isinstance(emit_templates, dict):
-            for tmpl in emit_templates.values():
-                if isinstance(tmpl, dict) and isinstance(tmpl.get("id_prefix"), str):
-                    emit_prefixes.add(tmpl["id_prefix"])
         if gate not in unit_ids and gate not in emit_prefixes:
             _bad(
                 f"iteration.gate_unit {gate!r} not in units[] (ids: "
@@ -475,17 +489,17 @@ def validate(recipe: dict) -> None:
                     f"keys: {sorted(emit_templates)!r}"
                 )
 
-    # Work-only init-time gap (P1 #6, fix-pass D). A recipe with
-    # phase_order: ["work"] and units: [] is UNRUNNABLE in v0.2.0 — at
-    # init_ledger time the engine creates a ledger with zero units, the
-    # work-loop predicate's has_units_in_phase guard is vacuous so met never
-    # fires, and the engine re-arms forever while the operator sees nothing.
-    # The intended runtime path (init-time enumeration via the adapter's
-    # enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
-    # (KTD-15). The recipe format also has no field to declare init-time
-    # enumeration, so an empty work-only units list IS the unrunnable case.
-    # Reject mechanically here rather than ship a recipe whose only failure
-    # mode is silent re-arming.
+
+def _validate_work_only_gap(recipe: dict, phase_order: list) -> None:
+    """Work-only init-time gap (P1 #6, fix-pass D). A recipe with
+    phase_order: ["work"] and units: [] is UNRUNNABLE in v0.2.0 — at
+    init_ledger time the engine creates a ledger with zero units, the
+    work-loop predicate's has_units_in_phase guard is vacuous so met never
+    fires, and the engine re-arms forever while the operator sees nothing.
+    The intended runtime path (init-time enumeration via the adapter's
+    enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
+    (KTD-15). Reject mechanically here rather than ship a recipe whose only
+    failure mode is silent re-arming."""
     if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["units"]:
         _bad(
             "v0.2.0 work-only recipes require pre-declared units; init-time "
@@ -493,6 +507,31 @@ def validate(recipe: dict) -> None:
             "phase_order: ['work'] and units: [] would create a ledger with "
             "zero units and the engine would re-arm forever without dispatching."
         )
+
+
+def validate(recipe: dict) -> None:
+    """Validate a recipe dict against the V1 format. Raises RecipeError on any
+    violation; returns None on success. The hard contract — both the engine and
+    the authoring skill call this; skill output that passes here is engine-OK.
+
+    An ordered orchestrator over per-concern validators (extracted from the
+    former 315-line monolith). ORDER IS LOAD-BEARING: the first violation a
+    malformed recipe hits must stay the same, so these run in the original
+    sequence. Shared state (phase_order, unit_ids, the single emit_prefixes set)
+    is computed once and threaded explicitly.
+    """
+    _validate_toplevel(recipe)
+    phase_order = _validate_phase_order(recipe)
+    unit_ids = _validate_units(recipe, phase_order)
+    # One id_prefix gather, shared by depends_on integrity AND the iteration
+    # gate_unit check (formerly computed twice, ~140 lines apart).
+    emit_prefixes = _gather_emit_prefixes(recipe.get("emit_templates") or {})
+    expected_emit_outputs_set = _validate_expected_emit_outputs(recipe)
+    _validate_depends_on(recipe, unit_ids, emit_prefixes, expected_emit_outputs_set)
+    _validate_phase_transitions(recipe, phase_order)
+    _validate_emit_templates(recipe, phase_order)
+    _validate_iteration(recipe, phase_order, unit_ids, emit_prefixes)
+    _validate_work_only_gap(recipe, phase_order)
 
 
 # ──────────────────────────────────────────────────────────────────────────

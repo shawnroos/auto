@@ -8,12 +8,13 @@ emit/validate/append helper (``_emit_units_core``), the phase-transition primiti
 ``_apply_emit``), and the gate-unit re-engagement combo (``reset_for_iteration`` +
 ``_reset_gate_for_iteration`` + ``atomic_iterate_step``).
 
-Sits ABOVE ledger_core and ledger_mutators in the acyclic DAG
-(core ← mutators ← emitters ← facade). All write paths route through
-``ledger_core._with_locked_ledger``; the composite paths inline their sub-step
-bodies inside ONE outer locked body (the F3 deadlock guard — calling a public
-mutator from inside a locked mutate() would re-acquire the flock on a fresh fd
-and deadlock).
+Sits ABOVE ledger_core in the acyclic DAG (dependency order:
+core ← mutators ← emitters ← facade). It imports ONLY ledger_core — NOT
+ledger_mutators: the composite paths deliberately inline their sub-step bodies
+inside ONE outer locked body (the F3 deadlock guard — calling a public mutator
+from inside a locked mutate() would re-acquire the flock on a fresh fd and
+deadlock), so there is no reason to hold a ledger_mutators handle here, and
+holding one would be an attractive nuisance inviting exactly that deadlock.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
-ledger_mutators = load_lib_module("ledger_mutators")  # DAG sibling (kept for layering)
 
 
 def _emit_units_core(ledger: dict, to_phase: str, emitter) -> list:

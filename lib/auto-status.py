@@ -25,8 +25,6 @@ atomically on every write; consumers read, they do not recompute).
 from __future__ import annotations
 
 import datetime
-import glob
-import json
 import os
 import sys
 
@@ -34,6 +32,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     is_iteration_disabled,
+    iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
     resolve_repo,
@@ -49,26 +48,10 @@ phase_grammar = load_lib_module("phase-grammar")
 _resolve_repo = resolve_repo
 
 
-def _all_runs(repo_root: str):
-    """(run_id, ledger_dict) for every parseable ledger in the repo, sorted."""
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
-    out = []
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        try:
-            with open(path, "r") as fh:
-                led = json.load(fh)
-        except Exception:
-            continue
-        if not isinstance(led, dict):
-            continue
-        run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
-        out.append((run_id, led))
-    return out
-
-
 def _active_runs(repo_root: str):
-    """Runs whose loop_phase is not 'done'."""
-    return [(r, led) for (r, led) in _all_runs(repo_root) if phase_grammar.current_phase(led) != "done"]
+    """Runs whose loop_phase is not 'done'. Scans the shared per-worktree ledger
+    iterator (``_bootstrap`` owns the glob + safe-load + run_id derivation)."""
+    return [(r, led) for (r, led) in iter_worktree_ledgers(repo_root) if phase_grammar.current_phase(led) != "done"]
 
 
 def _should_render_iteration(led: dict) -> bool:
@@ -389,7 +372,7 @@ def run(argv) -> int:
     # No run-id: resolve the active run, or list if ambiguous / report none.
     active = _active_runs(repo_root)
     if not active:
-        all_runs = _all_runs(repo_root)
+        all_runs = list(iter_worktree_ledgers(repo_root))
         if not all_runs:
             sys.stdout.write("status: no auto run found in this repo.\n")
             return 0

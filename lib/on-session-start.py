@@ -21,14 +21,16 @@ A single bad ledger never aborts the scan of its siblings.
 
 from __future__ import annotations
 
-import glob
-import json
 import os
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    iter_worktree_ledgers,
+    load_ledger,
+    load_lib_module,
+)
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -38,22 +40,11 @@ phase_grammar = load_lib_module("phase-grammar")
 def surfacing_lines(repo_root: str):
     """Return the list of resume-hint lines for the repo's ledgers."""
     ledger = load_ledger()
-    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     lines = []
-    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        try:
-            with open(path, "r") as fh:
-                led = json.load(fh)
-        except Exception:
-            continue  # malformed ledger -> skip, keep scanning siblings.
-        if not isinstance(led, dict):
-            continue
-
+    for run_id, led in iter_worktree_ledgers(repo_root):
         phase = phase_grammar.current_phase(led)
         if phase == "done":
             continue
-
-        run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
 
         # Seam pause is the INTENTIONAL orphan — check it BEFORE the time-based
         # orphan branch (schema §5 I-3).

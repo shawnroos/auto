@@ -122,20 +122,15 @@ PYEOF
 auto::resumable_orphans() {
   local repo="$1" script_dir
   script_dir="$(_cmux_socket::script_dir)"
-  "$CLAUDE_AUTO_PYTHON3" - "$repo" "${script_dir}/ledger.py" <<'PYEOF'
-import glob, importlib.util, json, os, sys
-repo, ledger_py = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
-L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
-dispatch_dir = os.path.join(repo, ".claude", "auto")
-for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-    try:
-        with open(path) as fh:
-            led = json.load(fh)
-    except Exception:
-        continue  # malformed -> skip, keep scanning siblings.
-    if not isinstance(led, dict):
-        continue
+  "$CLAUDE_AUTO_PYTHON3" - "$repo" "${script_dir}" <<'PYEOF'
+import os, sys
+repo, lib_dir = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib_dir)
+from _bootstrap import iter_worktree_ledgers, load_ledger  # the shared per-worktree scan.
+L = load_ledger()
+# iter_worktree_ledgers owns the glob + safe-load + non-dict skip + run_id
+# derivation (the scan scaffold that was copy-pasted across the hooks).
+for run_id, led in iter_worktree_ledgers(repo):
     # Seam-paused is the INTENTIONAL orphan (awaiting human confirmation) — never
     # auto-resume it (parity with on-session-start.py seam-before-orphan order).
     if led.get("loop_phase") == "seam" and led.get("seam_paused"):
@@ -145,7 +140,6 @@ for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
             continue
     except Exception:
         continue
-    run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
     print(run_id)
 PYEOF
 }

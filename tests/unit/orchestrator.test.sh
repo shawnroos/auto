@@ -272,7 +272,7 @@ spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 
 launches = []
-def counting_launch(uid):
+def counting_launch(uid, attempt=0):
     launches.append(uid)
 
 # First dispatch: pending -> dispatched, one launch.

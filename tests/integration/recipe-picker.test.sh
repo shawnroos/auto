@@ -49,6 +49,24 @@ a1row="$(CLAUDE_AUTO_REPO="$ws" bash "$LIST_SH" | awk -F'\t' '$1=="a1"{print $1"
 assert_eq "a1:workspace
 count=1" "$a1row"
 
+# ─── AE3: no CLAUDE_AUTO_REPO → shim roots to the git worktree (walk-up path) ──
+# AE1/AE2 pin CLAUDE_AUTO_REPO explicitly, so they never exercise the shim's
+# fresh-worktree resolution — exactly the path the 2026-06 mis-root bug lived in
+# (an inlined walk-up escaped to $HOME, mislabeling the worktree's own recipe as
+# the wrong tier). recipes-list.sh now defers to the shared _bootstrap.resolve_repo;
+# this runs the shim from a nested subdir with CLAUDE_AUTO_REPO UNSET and asserts a
+# recipe sitting in the worktree surfaces as tier=workspace — i.e. resolve_repo
+# bounded the root to the git toplevel rather than escaping upward.
+it "AE3: no CLAUDE_AUTO_REPO -> shim roots to the git worktree (worktree recipe tagged workspace)"
+wt="$(mktemp -d)"
+( cd "$wt" && git init -q && git config user.email t@t && git config user.name t )
+mkdir -p "$wt/.claude/auto/recipes" "$wt/sub/deep"
+cat > "$wt/.claude/auto/recipes/wtonly.json" <<'JSON'
+{"name":"wtonly","version":"1","phase_order":["work"],"terminal_phase":"work","units":[{"id":"u","phase":"work","invokes":{}}],"description":"worktree recipe"}
+JSON
+tier="$(cd "$wt/sub/deep" && unset CLAUDE_AUTO_REPO && bash "$LIST_SH" | awk -F'\t' '$1=="wtonly"{print $2}')"
+assert_eq "workspace" "$tier"
+
 # ─── preview surface ────────────────────────────────────────────────────────
 it "picker preview: --render a4 produces a topology card naming the emitter"
 card="$(CLAUDE_AUTO_REPO="$(mktemp -d)" bash "$LIST_SH" --render a4)"

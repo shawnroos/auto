@@ -128,6 +128,53 @@ assert_eq "None" "$(probe "$nongit" 'b.resolve_host_repo_root()')"
 it "non-git dir: resolve_shared_dir() returns None"
 assert_eq "None" "$(probe "$nongit" 'b.resolve_shared_dir()')"
 
+# ── Scenario 5: resolve_repo() must NOT escape the git worktree to $HOME ──
+# Field bug (2026-06): resolve_repo()'s walk-up for `.claude/auto` had no upper
+# bound, so from a fresh worktree under $HOME it escaped to $HOME/.claude/auto
+# and bound runs against $HOME. The fix bounds the walk at the git worktree top
+# (git rev-parse --show-toplevel); no-git => cwd, never $HOME.
+#
+# We plant the junk drawer at $HOME (== SANDBOX) and probe from a git repo
+# nested under it that has NO .claude/auto of its own.
+mkdir -p "$HOME/.claude/auto"
+rr_repo="$HOME/projects/rr-widget"
+mkdir -p "$rr_repo/src/deep"
+(
+  cd "$rr_repo"
+  git init -q .
+  git config user.email t@t
+  git config user.name t
+) >/dev/null 2>&1
+
+it "resolve_repo: fresh worktree subdir resolves to the worktree root, not \$HOME"
+expected_rr="$(cd "$rr_repo" && pwd -P)"
+got_rr="$(probe "$rr_repo/src/deep" 'b.resolve_repo()')"
+got_rr_real="$(cd "$got_rr" && pwd -P)"
+assert_eq "$expected_rr" "$got_rr_real"
+
+it "resolve_repo: an existing .claude/auto inside the worktree is still found"
+mkdir -p "$rr_repo/.claude/auto"
+got_rr2="$(probe "$rr_repo/src/deep" 'b.resolve_repo()')"
+got_rr2_real="$(cd "$got_rr2" && pwd -P)"
+assert_eq "$expected_rr" "$got_rr2_real"
+
+it "resolve_repo: CLAUDE_AUTO_REPO override is honored verbatim (sub-run pin)"
+assert_eq "/pinned/sub/run" "$(cd "$rr_repo" && CLAUDE_AUTO_REPO="/pinned/sub/run" "$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import _bootstrap as b
+print(b.resolve_repo())
+PYEOF
+)"
+
+it "resolve_repo: non-git dir under \$HOME returns cwd, does NOT escape to \$HOME"
+rr_nongit="$HOME/loose/scratch"
+mkdir -p "$rr_nongit"
+expected_ng="$(cd "$rr_nongit" && pwd -P)"
+got_ng="$(probe "$rr_nongit" 'b.resolve_repo()')"
+got_ng_real="$(cd "$got_ng" && pwd -P)"
+assert_eq "$expected_ng" "$got_ng_real"
+
 # ── Cleanup the worktree (so subsequent test runs don't accumulate) ───────
 (
   cd "$main_repo"

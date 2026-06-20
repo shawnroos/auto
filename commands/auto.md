@@ -37,6 +37,15 @@ lives in the `auto-driver` skill; theory + edge cases live in
   sidecars during fanout (default 600s). Discovery-time sweep drops
   older ones, recovering ports leaked by a crash between worktree
   creation and sidecar commit.
+- `CLAUDE_AUTO_INFLIGHT_TTL_SECONDS=<seconds>` — staleness threshold for a
+  single in-flight run on bare `/auto` (default 86400 / 1 day; floored at 0 =
+  "always ask"). A run idle within the window auto-resumes silently; an older
+  (or future-dated) run prompts resume-vs-start-fresh instead. Raise it to make
+  long-lived runs keep silent-resuming.
+- `CLAUDE_AUTO_GIT_TIMEOUT_SECONDS=<seconds>` — timeout for the detector's
+  per-invocation `git rev-parse` worktree-root probe (default 5). On timeout the
+  resolver degrades to cwd so a sick filesystem can't wedge the read-only
+  detector.
 
 ## Conversation-driven entry (v0.6.0)
 

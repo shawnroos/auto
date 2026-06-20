@@ -73,7 +73,6 @@ than the unit's current attempt (a stale verdict from a superseded retry).
 
 from __future__ import annotations
 
-import inspect
 import os
 import sys
 
@@ -274,46 +273,14 @@ def _default_launch_fn(unit_id: str, attempt: int = 0) -> None:
     this default does nothing observable; the dispatch_batch return value is what
     tests assert against.
 
-    Signature note (RAISED as a contract change): ``launch_fn`` now takes
-    ``(unit_id, attempt)`` so the agent can carry its attempt into the verdict.
-    ``_invoke_launch`` below calls back-compat-safely via ``inspect.signature`` so
-    a legacy single-arg ``launch_fn(unit_id)`` still works.
+    Signature note (contract): ``launch_fn`` takes ``(unit_id, attempt)`` so the
+    agent can carry its attempt generation into the verdict (Bug #6). This is the
+    ONE signature — ``dispatch_batch`` calls ``launch_fn(uid, next_attempt)``
+    directly. (A prior ``_invoke_launch`` inspect.signature shim tolerated a
+    legacy single-arg launcher; it was deleted because the single-arg branch
+    silently dropped the attempt tag, weakening attempt-identity.)
     """
     return None
-
-
-def _invoke_launch(launch_fn, unit_id: str, attempt: int) -> None:
-    """Call ``launch_fn`` tolerating BOTH the new ``(unit_id, attempt)`` signature
-    and a legacy single-arg ``(unit_id)`` one (back-compat for any U5 wiring
-    written against the old contract). Defensive, not load-bearing — the canonical
-    signature is two-arg.
-    """
-    try:
-        params = inspect.signature(launch_fn).parameters
-        # A *args launcher, or one accepting >=2 positional params, gets attempt.
-        accepts_attempt = (
-            any(
-                p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()
-            )
-            or len(
-                [
-                    p
-                    for p in params.values()
-                    if p.kind
-                    in (
-                        inspect.Parameter.POSITIONAL_ONLY,
-                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    )
-                ]
-            )
-            >= 2
-        )
-    except (TypeError, ValueError):
-        accepts_attempt = True  # builtins / C funcs: assume the new signature.
-    if accepts_attempt:
-        launch_fn(unit_id, attempt)
-    else:
-        launch_fn(unit_id)
 
 
 def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
@@ -413,7 +380,7 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
         # CONTINUE. The operator can /auto-resume retry it; the burnt attempt
         # is already recorded in the attempt counter.
         try:
-            _invoke_launch(launch_fn, uid, next_attempt)
+            launch_fn(uid, next_attempt)
         except Exception as exc:  # noqa: BLE001 — any launch raise is recorded.
             err = {
                 "call": "launch",

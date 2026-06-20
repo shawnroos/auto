@@ -328,7 +328,7 @@ def _tick_body_inner(
         repo_root, run_id, led, now
     )
 
-    advance_result, advance_intent, led = _dispatch_phase_advance(
+    advance_result, advance_intent = _dispatch_phase_advance(
         repo_root, run_id, led, adapter, halted_ids, phase=phase,
         auto=auto, now_iso=now_iso,
     )
@@ -351,6 +351,46 @@ def _tick_body_inner(
         repo_root, run_id, advance_result, halted_ids, newly_stalled,
         phase=phase, delay=delay, rearm_prompt=rearm_prompt,
     )
+
+
+def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
+                     message, now_iso):
+    """Mark a crashed iteration check done+manual and build its stop intent.
+
+    The shared body of ``_try_iteration_check``'s two crash branches (recipe-bug
+    and iteration-check-failed): persist ``exit_reason`` FIRST (so /auto-status
+    can tell a wedge-marked-done from a clean exit), then flip
+    ``loop_phase=done`` + ``driver=manual`` (so liveness checks don't treat the
+    wedged run as orphaned), then return a stop intent carrying the diagnostic.
+    Both ledger writes are individually guarded — never bury the original crash.
+    The caller keeps the except-clause ORDER (the subclass branches before the
+    bare ``LedgerError`` re-raise); this helper holds NO catch logic, only the
+    wedge-and-report body the two branches share verbatim modulo two values.
+    """
+    try:
+        ledger.set_exit_reason(
+            repo_root, run_id, exit_reason,
+            {"type": exc.__class__.__name__, "message": str(exc),
+             "call": "advance_iteration_loop"},
+        )
+    except Exception:  # noqa: BLE001 — never bury the original.
+        pass
+    try:
+        ledger.set_loop(
+            repo_root, run_id, loop_phase="done", driver="manual", beat=True,
+        )
+    except Exception:  # noqa: BLE001 — never bury the original.
+        pass
+    return {
+        "action": "stop",
+        "reason": reason_value,
+        "run": run_id,
+        "error": {
+            "call": "advance_iteration_loop",
+            "message": message,
+            "at": now_iso,
+        },
+    }
 
 
 def _try_iteration_check(
@@ -399,30 +439,13 @@ def _try_iteration_check(
         # raise with no JSON. ORDER MATTERS: this branch MUST precede the
         # bare LedgerError catch below (these classes are subclasses of
         # LedgerError; Python matches the first parent in source order).
-        try:
-            ledger.set_exit_reason(
-                repo_root, run_id, ledger.ExitReason.RECIPE_BUG,
-                {"type": exc.__class__.__name__, "message": str(exc),
-                 "call": "advance_iteration_loop"},
-            )
-        except Exception:  # noqa: BLE001 — never bury the original.
-            pass
-        try:
-            ledger.set_loop(
-                repo_root, run_id, loop_phase="done", driver="manual", beat=True,
-            )
-        except Exception:  # noqa: BLE001 — never bury the original.
-            pass
-        return {
-            "action": "stop",
-            "reason": ledger.ExitReason.RECIPE_BUG.value,
-            "run": run_id,
-            "error": {
-                "call": "advance_iteration_loop",
-                "message": f"recipe-bug: {type(exc).__name__}: {exc}",
-                "at": now_iso,
-            },
-        }, led
+        return _wedge_done_stop(
+            repo_root, run_id, exc,
+            exit_reason=ledger.ExitReason.RECIPE_BUG,
+            reason_value=ledger.ExitReason.RECIPE_BUG.value,
+            message=f"recipe-bug: {type(exc).__name__}: {exc}",
+            now_iso=now_iso,
+        ), led
     except ledger.LedgerError:
         # Ledger-level failures are NOT recoverable here — the inconsistent-
         # ledger signal must propagate to _cli (which records the error and
@@ -432,33 +455,16 @@ def _try_iteration_check(
         # Mark the loop finished + manual so liveness checks don't treat the
         # wedged run as orphaned, then surface the crash in a stop intent so
         # the harness gets the natural signal (rather than _cli exiting with
-        # no JSON on stdout). v0.3.0 G2 / AN-W1: persist the exit_reason FIRST
-        # so /auto-status of the crashed run can distinguish wedge-marked-done
-        # from a clean exit.
-        try:
-            ledger.set_exit_reason(
-                repo_root, run_id, ledger.ExitReason.ITERATION_CHECK_FAILED,
-                {"type": exc.__class__.__name__, "message": str(exc),
-                 "call": "advance_iteration_loop"},
-            )
-        except Exception:  # noqa: BLE001 — never bury the original.
-            pass
-        try:
-            ledger.set_loop(
-                repo_root, run_id, loop_phase="done", driver="manual", beat=True,
-            )
-        except Exception:  # noqa: BLE001 — never bury the original.
-            pass
-        return {
-            "action": "stop",
-            "reason": ledger.ExitReason.ITERATION_CHECK_FAILED.value,
-            "run": run_id,
-            "error": {
-                "call": "advance_iteration_loop",
-                "message": f"iteration check failed: {type(exc).__name__}: {exc}",
-                "at": now_iso,
-            },
-        }, led
+        # no JSON on stdout). v0.3.0 G2 / AN-W1: the helper persists the
+        # exit_reason FIRST so /auto-status of the crashed run can distinguish
+        # wedge-marked-done from a clean exit.
+        return _wedge_done_stop(
+            repo_root, run_id, exc,
+            exit_reason=ledger.ExitReason.ITERATION_CHECK_FAILED,
+            reason_value=ledger.ExitReason.ITERATION_CHECK_FAILED.value,
+            message=f"iteration check failed: {type(exc).__name__}: {exc}",
+            now_iso=now_iso,
+        ), led
     if iteration_result is not None:
         action = iteration_result.get("action")
         if action == "stop":
@@ -546,11 +552,13 @@ def _dispatch_phase_advance(
 ):
     """Step 3 — the ONE advance, inside try/except.
 
-    Returns (advance_result, terminal_intent_or_None, led). A seam-phase tick
+    Returns (advance_result, terminal_intent_or_None). A seam-phase tick
     short-circuits with a terminal intent; every other phase returns an
-    advance_result for the dispatcher to carry forward. The `led` return
-    captures the re-read after the plan-loop advance (the plan predicate just
-    recomputed on the prior write).
+    advance_result for the dispatcher to carry forward. No refreshed `led` is
+    returned: the caller's downstream steps (beat re-stamp, post-advance
+    predicate, rearm intent) all re-read the ledger by (repo_root, run_id)
+    themselves, so a passed-out snapshot was never consumed. The plan branch
+    still re-reads `led` for its OWN `_maybe_seam` call below.
 
     On a raise: atomically record last_error + mark stalled; the ledger is
     never half-written (each ledger.py mutation is its own atomic RMW).
@@ -579,9 +587,9 @@ def _dispatch_phase_advance(
             advance_result = tick_advance.advance_brainstorm_loop(
                 repo_root, run_id, led
             )
-            # The emitter just (re)wrote loop_phase + plan unit; re-read so the
-            # downstream beat re-stamp + rearm intent see the advanced state.
-            led = ledger.read_ledger(repo_root, run_id)
+            # The emitter (re)wrote loop_phase + plan unit; the caller's
+            # downstream beat re-stamp + rearm intent re-read by (repo, run),
+            # so no led refresh is needed here.
         elif phase == "work":
             advance_result = tick_advance.advance_work_loop(
                 repo_root, run_id, led, halted_ids
@@ -601,7 +609,7 @@ def _dispatch_phase_advance(
                 "action": "stop",
                 "reason": "seam-pause",
                 "run": run_id,
-            }, led
+            }
         else:
             advance_result = {"advanced": "none", "reason": f"phase={phase}"}
     except Exception as exc:  # noqa: BLE001 — convert ANY raise into a recorded stall.
@@ -624,7 +632,7 @@ def _dispatch_phase_advance(
             "recorded_unit_stall": recorded,
         }
         advance_result = {"advanced": "error", "error": advance_error}
-    return advance_result, None, led
+    return advance_result, None
 
 
 def _try_seam_pause(advance_result, run_id):

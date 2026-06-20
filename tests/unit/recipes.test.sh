@@ -107,6 +107,28 @@ elif op == "review-vs-w-distinct":
     rev_op = rev["units"][0]["invokes"].get("adapter_op")
     w_op = w["units"][0]["invokes"].get("adapter_op")
     print("review:%s|w:%s|distinct:%s" % (rev_op, w_op, rev_op != w_op))
+elif op == "validate-firsterr":
+    # Pin the LOAD-BEARING first-error-wins order across the validate()
+    # decomposition (was one 324-LOC function, now a ~30-line ordered
+    # orchestrator over per-concern sub-validators). A doubly-malformed recipe
+    # must surface the EARLIER block's error. Classify the first RecipeError
+    # message into a stable token so the order is assertable.
+    try:
+        recipes.validate(json.loads(sys.argv[3]))
+        print("valid")
+    except recipes.RecipeError as e:
+        m = str(e)
+        if "unknown top-level field" in m:
+            print("toplevel-unknown")
+        elif "missing required field" in m or "must be a non-empty string" in m \
+                or "units must be a list" in m:
+            print("toplevel-shape")
+        elif "phase_order" in m or "terminal_phase" in m:
+            print("phase_order")
+        elif "unit" in m:
+            print("units")
+        else:
+            print("other:" + m)
 PYEOF
 }
 
@@ -121,6 +143,17 @@ assert_eq "True,valid" "$(rec a1-no-drift)"
 # ─── Scenario 3: validate rejections ────────────────────────────────────────
 it "unknown top-level field rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[],"bogus":1}')"
+
+# Order-preserving decomposition (M-? regression): a doubly-malformed recipe
+# must surface the EARLIER sub-validator's error. validate() runs
+# _validate_toplevel → _validate_phase_order → _validate_units → … in a fixed
+# order; the 58 single-violation tests below cannot catch a transposition, so
+# pin two cross-block boundaries explicitly.
+it "validate order: unknown top-level field + bad phase_order -> top-level error wins (toplevel before phase_order)"
+assert_eq "toplevel-unknown" "$(rec validate-firsterr '{"name":"x","version":"1","units":[],"bogus":1,"phase_order":[]}')"
+
+it "validate order: bad terminal_phase + malformed unit -> phase_order error wins (phase_order before units)"
+assert_eq "phase_order" "$(rec validate-firsterr '{"name":"x","version":"1","phase_order":["work"],"terminal_phase":"nope","units":[{"bad":"unit"}]}')"
 
 it "reserved python_hook accepted (R3)"
 assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[],"python_hook":"x"}')"

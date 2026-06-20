@@ -18,9 +18,12 @@
 #     "summary":   "one-line operator-facing description",
 #     "ambiguity": null | { "kind": "choice"|"open",
 #                           "question": "...",
-#                           "options": [ {"label":"…","run_id":"…","description":"…"}* ] },
-#       * "choice" — N-option pick-one (ambiguous-runs surface). Maps to
-#         AskUserQuestion's options array. NOT necessarily 2 — N may be 2..N.
+#                           "options": [ {"label":"…", ...payload, "description":"…"}* ] },
+#       * "choice" — N-option pick-one. Maps to AskUserQuestion's options array.
+#         NOT necessarily 2 — N may be 2..N. Surfaces: ambiguous-runs +
+#         stale in-flight (options carry `run_id`); multi-plan (per-plan options
+#         carry `path`, plus a null-`path` fan-out-all option). The payload key
+#         per option is situation-specific — the driver table says which.
 #       * "open"   — freeform text (raw surface). Maps to AskUserQuestion's
 #         open-question shape; `options` is the empty array.
 #     "single_plan": { "path": "...", "run_id_hint": "..." } | null,
@@ -35,18 +38,25 @@
 #
 # Situations:
 #   in-flight       — exactly ONE run with exit_predicate_result.met == false.
-#                     `single_plan` carries the run via in_flight.run_id;
-#                     ambiguity null → driver resumes silently.
+#                     `in_flight.run_id` carries the run. FRESH run (ledger
+#                     touched within CLAUDE_AUTO_INFLIGHT_TTL_SECONDS, default
+#                     1 day) → ambiguity null → driver resumes silently. STALE
+#                     run (idle past the TTL) → ambiguity is a choice (resume vs
+#                     start-fresh) so the driver ASKS rather than silently
+#                     auto-resuming an abandoned run (2026-06 misfire fix).
 #   ambiguous-runs  — MORE THAN ONE in-flight run; ambiguity carries a binary
 #                     options array of run-ids + their goal_intent strings so
 #                     AskUserQuestion shows what each run was started for.
 #   reviewed-plan   — no in-flight run; exactly one reviewed plan present.
 #                     single_plan.path filled; ambiguity null.
-#   multi-plan      — no run, MORE THAN ONE plan. multi_plan.paths filled;
-#                     ambiguity null (the driver fans out via auto-spawn.py).
-#                     v0.4.0 RENAME of v0.2.x's `ambiguous-plans` — under the
-#                     v0.4.0 fanout model, multiple plans is a fanout signal,
-#                     not an ambiguity to resolve. (KTD-1.)
+#   multi-plan      — no run, MORE THAN ONE plan. multi_plan.paths filled.
+#                     v0.4.0 made this a SILENT fanout (ambiguity null, one
+#                     worktree per plan via auto-spawn.py). The 2026-06 misfire
+#                     showed auto-spawning N worktrees on whatever plans sit in
+#                     docs/plans/ is the highest-blast-radius path — so it now
+#                     sets `ambiguity` (a choice: run one plan, or fan out all)
+#                     and the driver CONFIRMS before spawning. situation stays
+#                     multi-plan and paths are preserved for a confirmed fanout.
 #   conversation-context (v0.6.0 U1) — no in-flight run AND no plan, but the
 #                     DRIVER has signalled a rich current conversation worth
 #                     routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL set).
@@ -88,21 +98,103 @@ auto::detect() {
   local _det_dir
   _det_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   "$CLAUDE_AUTO_PYTHON3" - "$_det_dir" <<'PYEOF'
-import sys, os, json, glob, subprocess
+import sys, os, json, glob, subprocess, time
 
 script_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
 
+# Staleness TTL for a SINGLE in-flight run. A run whose ledger has not been
+# touched within this window is low-confidence: the detector keeps
+# situation=in-flight but sets `ambiguity` so the driver ASKS (resume vs start
+# fresh) instead of silently auto-resuming (2026-06 misfire: a 15-day-old,
+# unrelated run resumed with no confirmation). Tunable; default 1 day.
+try:
+    INFLIGHT_TTL_SECONDS = int(os.environ.get("CLAUDE_AUTO_INFLIGHT_TTL_SECONDS", "86400"))
+except (TypeError, ValueError):
+    INFLIGHT_TTL_SECONDS = 86400
+# Floor at 0: a negative TTL would make `age <= TTL` ~never true and force a
+# confirm on EVERY single-run resume (gate stuck open). 0 means "always ask".
+if INFLIGHT_TTL_SECONDS < 0:
+    INFLIGHT_TTL_SECONDS = 0
+
+# Bound for the per-detect `git rev-parse` so a hung filesystem can't wedge the
+# read-only detector (degrade-safe contract: never block the hook caller).
+try:
+    _GIT_TIMEOUT_SECONDS = float(os.environ.get("CLAUDE_AUTO_GIT_TIMEOUT_SECONDS", "5"))
+except (TypeError, ValueError):
+    _GIT_TIMEOUT_SECONDS = 5.0
+if _GIT_TIMEOUT_SECONDS <= 0:
+    _GIT_TIMEOUT_SECONDS = 5.0
+
+
+def _fmt_age(seconds):
+    """Coarse human age string for an operator-facing prompt (e.g. '15d')."""
+    s = int(seconds)
+    if s >= 86400:
+        return "%dd" % (s // 86400)
+    if s >= 3600:
+        return "%dh" % (s // 3600)
+    if s >= 60:
+        return "%dm" % (s // 60)
+    return "%ds" % s
+
+
+def _git_worktree_root(start):
+    """The git worktree top for ``start``, or None when not in a git tree.
+
+    ``git rev-parse --show-toplevel`` returns the WORKTREE's own root (a
+    worktree reports itself, not the host repo) — exactly the upper bound we
+    want for the per-worktree ledger + plan scan.
+
+    This runs on the hot path of every detect, so it carries a timeout: a hung
+    git (sick NFS/autofs mount mid-unmount) must NOT wedge the detector — a hang
+    precedes any Python exception, so the outer degrade-safe handler can't fire.
+    On timeout/spawn-failure we return None → the caller falls back to cwd.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False, cwd=start,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # OSError: git absent / cwd gone. SubprocessError covers TimeoutExpired.
+        return None
+    if r.returncode != 0:
+        return None
+    top = r.stdout.strip()
+    return top or None
+
 
 def _repo_root():
+    # NOTE: logic mirrors lib/_bootstrap.py::resolve_repo() — keep the two in
+    # sync. The detector deliberately INLINES its own copy (dependency-free,
+    # only os/subprocess) so this load-bearing core resolver can't be broken by
+    # a sick _bootstrap import; the embedded heredoc otherwise wraps every
+    # _bootstrap-backed call (e.g. _detect_workspace_safe) in a degrade-safe
+    # try/except.
+    # CLAUDE_AUTO_REPO is the explicit pin (sub-runs set it); honor it verbatim.
     env = os.environ.get("CLAUDE_AUTO_REPO")
     if env:
         return env
-    d = os.getcwd()
+    # Walk up for an existing ``.claude/auto``, but NEVER above the git
+    # worktree root. A fresh worktree has no ``.claude/auto`` yet — without this
+    # bound the walk-up escapes to ``$HOME/.claude/auto`` and the detector
+    # scans the user's global junk drawer (the 2026-06 mis-root field bug: a
+    # stale 15-day $HOME run surfaced as `in-flight`, $HOME/docs/plans as a
+    # `multi-plan` fanout, and the worktree's own plan was never in scope).
+    # With no git tree, cwd is the answer — we do not walk up at all.
+    start = os.getcwd()
+    boundary = _git_worktree_root(start)
+    d = start
     while d and d != os.path.dirname(d):
         if os.path.isdir(os.path.join(d, ".claude", "auto")):
             return d
+        if boundary is None:
+            break
+        if os.path.abspath(d) == os.path.abspath(boundary):
+            break
         d = os.path.dirname(d)
-    return os.getcwd()
+    return boundary or os.getcwd()
 
 
 def _emit(hyp):
@@ -215,15 +307,29 @@ def _workspace_action(workspace, situation):
 
 
 def _read_in_flight(ledger_dir):
-    """Return [(run_id, goal_intent_str_or_None)] for not-met runs.
+    """Return [(run_id, goal_intent_str_or_None, mtime)] for not-met runs.
 
     Mtime-desc so the freshest run comes first — the in-flight branch picks
     [0] when there's exactly one, and the ambiguous-runs branch lists them.
+    The mtime rides along so the single-run branch can gate on staleness
+    (2026-06 misfire fix) without re-stat-ing the file.
     Malformed ledgers are skipped with a stderr note (parity with v0.2.x).
     """
+    # Stat each candidate ONCE behind its own guard, BEFORE sorting. A ledger
+    # deleted mid-scan (concurrent run / cleanup sweep) would otherwise raise
+    # OSError from the `sorted(key=os.path.getmtime)` callback and degrade the
+    # WHOLE detector to `raw` — hiding every in-flight run over a transient
+    # race. Skipping the vanished file is the correct, local degrade.
+    pairs = []
+    for path in glob.glob(os.path.join(ledger_dir, "*.json")):
+        try:
+            pairs.append((path, os.path.getmtime(path)))
+        except OSError:
+            continue
+    pairs.sort(key=lambda pm: pm[1], reverse=True)  # mtime-desc: freshest first
+
     out = []
-    for path in sorted(glob.glob(os.path.join(ledger_dir, "*.json")),
-                       key=os.path.getmtime, reverse=True):
+    for path, mtime in pairs:
         try:
             with open(path) as f:
                 led = json.load(f)
@@ -240,8 +346,8 @@ def _read_in_flight(ledger_dir):
         # v0.4.0 KTD-2: surface goal_intent so the ambiguous-runs options
         # carry "what was this started for" rather than just a slug. None on
         # legacy ledgers (pre-v0.4.0) is fine — the renderer falls back to
-        # run_id.
-        out.append((run_id, led.get("goal_intent")))
+        # run_id. mtime was captured above (single stat, no TOCTOU re-stat).
+        out.append((run_id, led.get("goal_intent"), mtime))
     return out
 
 
@@ -320,18 +426,52 @@ try:
     in_flight = _read_in_flight(ledger_dir)
 
     if len(in_flight) == 1:
-        run_id, goal_intent = in_flight[0]
-        summary = "resuming `%s`" % run_id
-        if goal_intent:
-            summary = "resuming `%s` — %s" % (run_id, goal_intent)
-        _emit(_safe_envelope(
-            "in-flight", summary,
-            in_flight={"run_id": run_id, "run_ids": [run_id]},
-        ))
+        run_id, goal_intent, mtime = in_flight[0]
+        in_flight_block = {"run_id": run_id, "run_ids": [run_id]}
+        # Fresh iff the ledger was last touched within [now-TTL, now]. A delta
+        # OUTSIDE that window — too old (stale) OR negative (future mtime: clock
+        # skew, restored backup, cross-machine sync) — is low-confidence and
+        # must ASK. Treating a future mtime as "fresh" would silently auto-resume
+        # on a skewed clock, the exact misfire the gate prevents (fail-safe ⇒
+        # ask). `else` makes the branches mutually exclusive independent of
+        # _emit's SystemExit so a future refactor can't double-emit.
+        delta = time.time() - mtime
+        if 0 <= delta <= INFLIGHT_TTL_SECONDS:
+            # Fresh, high-confidence: silent resume (unchanged behavior).
+            summary = "resuming `%s`" % run_id
+            if goal_intent:
+                summary = "resuming `%s` — %s" % (run_id, goal_intent)
+            _emit(_safe_envelope(
+                "in-flight", summary,
+                in_flight=in_flight_block,
+            ))
+        else:
+            # Stale/anomalous, low-confidence: keep situation=in-flight but ASK
+            # (resume vs start-fresh) instead of silently auto-resuming.
+            # ambiguity non-null routes the driver to AskUserQuestion.
+            age_str = _fmt_age(max(0.0, delta))
+            label_desc = goal_intent if goal_intent else run_id
+            _emit(_safe_envelope(
+                "in-flight",
+                "stale in-flight run `%s` (idle %s) — resume it, or start fresh?"
+                % (run_id, age_str),
+                ambiguity={
+                    "kind": "choice",
+                    "question": "Found a stale in-flight run (idle %s) — resume "
+                                "it, or start fresh?" % age_str,
+                    "options": [
+                        {"label": "Resume %s" % run_id, "run_id": run_id,
+                         "description": "%s — idle %s" % (label_desc, age_str)},
+                        {"label": "Start fresh", "run_id": None,
+                         "description": "Ignore the stale run; pick new work"},
+                    ],
+                },
+                in_flight=in_flight_block,
+            ))
 
     if len(in_flight) > 1:
         options = []
-        for run_id, goal_intent in in_flight:
+        for run_id, goal_intent, _mtime in in_flight:
             description = goal_intent if goal_intent else run_id
             options.append({
                 "label": run_id,
@@ -346,7 +486,7 @@ try:
                 "question": "Multiple in-flight runs — which do you want to resume?",
                 "options": options,
             },
-            in_flight={"run_id": None, "run_ids": [r for r, _ in in_flight]},
+            in_flight={"run_id": None, "run_ids": [r for r, _g, _m in in_flight]},
         ))
 
     # ── Step 2: plan discovery. ────────────────────────────────────────────
@@ -368,14 +508,36 @@ try:
         ))
 
     if len(plans) > 1:
-        # v0.4.0 RENAME of v0.2.x's `ambiguous-plans` → `multi-plan`. Multiple
-        # plans is a fanout SIGNAL (the v0.4.0 driver dispatches one run per
-        # plan via auto-spawn.py), not an ambiguity for the operator to
-        # resolve. `ambiguity` stays null.
+        # v0.4.0 made multiple plans a silent fanout signal (one worktree per
+        # plan via auto-spawn.py, `ambiguity` null). The 2026-06 misfire showed
+        # that auto-spawning N worktrees on whatever plans happen to sit in
+        # docs/plans/ is the highest-blast-radius path in the detector (a fresh
+        # session fanned out two stale, unrelated plans). So multi-plan now sets
+        # `ambiguity` — the driver CONFIRMS before fanning out. `situation`
+        # stays multi-plan and `multi_plan.paths` is preserved so a confirmed
+        # fan-out-all still has its targets; per-plan options let the operator
+        # run just one instead.
         rel_paths = [os.path.relpath(p, repo) for p in plans]
+        options = [
+            {"label": os.path.basename(p), "path": p,
+             "description": "run only this plan"}
+            for p in rel_paths
+        ]
+        options.append({
+            "label": "Fan out all %d" % len(rel_paths),
+            "path": None,  # null path → fan out, using multi_plan.paths
+            "description": "create %d worktrees, one per plan" % len(rel_paths),
+        })
         _emit(_safe_envelope(
             "multi-plan",
-            "%d plans — fanning out to %d worktrees" % (len(plans), len(plans)),
+            "%d plans found — confirm fanout to %d worktrees, or run just one"
+            % (len(rel_paths), len(rel_paths)),
+            ambiguity={
+                "kind": "choice",
+                "question": "%d plans found — fan out to %d worktrees, or run "
+                            "just one?" % (len(rel_paths), len(rel_paths)),
+                "options": options,
+            },
             multi_plan={"paths": rel_paths, "batch_id_hint": None},
         ))
 

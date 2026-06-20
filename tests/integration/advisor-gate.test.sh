@@ -500,6 +500,23 @@ it "action.sh shim: malformed ledger -> exit 0 (rel-001)"
 ( cd "$REPO" && printf '%s' "$ev" | bash "$ACTION_SH" >/dev/null 2>&1 )
 assert_eq "0" "$?"
 
+# ─── action: a sibling NON-DICT ledger does NOT disarm the backstop ───────────
+# load_ledger_safe folds in a dict-guard: a valid-JSON-but-non-dict ledger file
+# (array/scalar) returns None and is SKIPPED by iter_worktree_ledgers — it must
+# NOT abort the scan that finds the real owning ledger sitting beside it. If the
+# scan ever propagated a non-dict through to `_owns_session` (AttributeError on
+# `led.get(...)`) or stopped early on it, a single junk file in .claude/auto/
+# would silently disarm the fail-closed destructive backstop. Pins the
+# deliberate dict-guard behavior change at the security-load-bearing site.
+it "action: a sibling non-dict ledger file does NOT disarm the destructive backstop -> still deny"
+REPO="$(mk_live_owned action-nondict actrun sess-AAA)"
+printf '[]' > "${REPO}/.claude/auto/junk.json"   # valid JSON, non-dict
+ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
+out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out")"
+it "action: non-dict sibling present -> the real owned run is STILL paused"
+assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
+
 # ─── action: Write content is NOT scanned (round-4 P2) ────────────────────────
 # Write `content` is deliberately NOT classified: a driving-session ce-skill doc
 # Write (a plan/review markdown quoting `rm -rf` as an example — this repo's
