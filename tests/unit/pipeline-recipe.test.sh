@@ -165,8 +165,12 @@ assert_eq "work|False" "$(pl predicate-not-met-at-brainstorm)"
 it "U7: plan-entry still routes to a1 (loop_phase=plan, default grammar)"
 assert_eq "plan|plan,seam,work" "$(pl plan-entry-a1)"
 
-it "U7: work-entry still routes to w (loop_phase=work, work-only grammar)"
-assert_eq "work|work" "$(pl work-entry-w)"
+# v0.4.3 KTD-15: w is no longer a work-only ["work"] stub — it's plan_presatisfied,
+# entering at an already-satisfied plan phase that enumerates straight to work
+# (the work-only stub could never enumerate a reviewed plan's tasks). Same
+# functional outcome (reviewed plan -> work), real producer path.
+it "U7: w routes through a pre-satisfied plan phase (plan_presatisfied grammar)"
+assert_eq "plan|plan,seam,work" "$(pl work-entry-w)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

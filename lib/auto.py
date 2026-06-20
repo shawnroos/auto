@@ -264,6 +264,29 @@ def _make_run_id(ledger, repo_root: str, plan: str) -> str:
     return candidate
 
 
+def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
+    """v0.4.3 KTD-15: wire a plan_presatisfied run's init state. Returns the
+    plan_step to pass to init_ledger ("review_plan" when presatisfied, else None).
+
+    A plan_presatisfied recipe (W) declares its plan phase already done. The
+    engine inits plan_step="review_plan" (here) and gaps_open=0 (post-init, in
+    run()) so the FIRST tick's next_plan_step returns "done" → enumerate_plan_units
+    → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
+    "auto re-plans a finished plan" bug). The plan doc path has no top-level
+    ledger slot (schema §2), so we bind it to the single plan unit's
+    dispatch_context.plan_path — the durable home the adapter's
+    enumerate_plan_units reads to tell the model WHICH plan to enumerate. The
+    validator guarantees exactly one plan unit when presatisfied is true.
+    """
+    if not presatisfied:
+        return None
+    for u in init_units:
+        if u.get("phase") == "plan":
+            u.setdefault("dispatch_context", {})["plan_path"] = plan
+            break
+    return "review_plan"
+
+
 def _emit_arm(
     run_id: str, *, auto: bool, goal, adapter: str, plan: str, loop_phase: str = "plan"
 ) -> int:
@@ -350,12 +373,14 @@ def run(argv) -> int:
     # Build the initial ledger topology FROM the recipe (KTD-4). The recipe's
     # declared units become the initial ledger units; phase_order / terminal_phase
     # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan unit,
-    # default grammar — R13 regression). For work-only (W) the recipe declares no
-    # units and phase_order ["work"]; init-time enumeration is a v0.2.0 follow-on
-    # (KTD-15) — for now W starts in the work phase with whatever units it carries.
+    # default grammar — R13 regression).
     init_units = [recipes.unit_for(u, recipe) for u in recipe.get("units", [])]
     phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
+
+    # v0.4.3 KTD-15: plan_presatisfied (W) — init the plan phase already-done.
+    presatisfied = bool(recipe.get("plan_presatisfied"))
+    init_plan_step = _bind_presatisfied_plan(presatisfied, init_units, plan)
 
     # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
     # Frozen on the ledger so the bare-/auto hypothesis funnel can render it
@@ -391,6 +416,8 @@ def run(argv) -> int:
             # advisor-gate PreToolUse hooks can own this run by session_id equality.
             # Computed + null-warned above (security-review fix).
             driving_session_id=driving_sid,
+            # v0.4.3 KTD-15: plan_presatisfied (W) inits the plan phase done.
+            plan_step=init_plan_step,
         )
     except ledger.LedgerExists as exc:
         sys.stderr.write(f"auto: {exc}\n")
@@ -398,6 +425,11 @@ def run(argv) -> int:
     except ledger.LedgerError as exc:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
+
+    # v0.4.3 KTD-15: finish the pre-satisfied state — plan-met also needs a
+    # non-null gaps_open=0 (init_ledger set plan_step; see _bind_presatisfied_plan).
+    if presatisfied:
+        ledger.set_gaps_open(repo_root, run_id, 0)
 
     return _emit_arm(
         run_id,

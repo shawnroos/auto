@@ -494,15 +494,18 @@ try:
 
     if len(plans) == 1:
         plan_path = os.path.relpath(plans[0], repo)
-        # Operator-facing summary names the recipe + seam policy explicitly
-        # (review round 1 finding C-5: v0.4.0 silently runs full a1 on
-        # already-reviewed plans where v0.3.x required a confirm. Surface
-        # the action in the one-line summary so the operator can interrupt
-        # if the inference is wrong, rather than discovering it after the
-        # plan-loop has already begun deepening).
+        # Operator-facing summary names the recipe + policy explicitly. v0.4.3
+        # KTD-15: a reviewed plan now routes to the W (work-only) recipe — its
+        # plan phase starts already-satisfied so the run enumerates straight to
+        # the work-loop instead of re-running the plan-loop on finished work
+        # (review round 1 finding C-5 / project_auto_v042_stuck_root_causes ③:
+        # the old path silently ran full a1 and re-derived the green plan).
+        # Surfacing the action lets the operator interrupt if the inference is
+        # wrong (the plan ISN'T review-ready) and pass `--recipe a1` to re-plan.
         _emit(_safe_envelope(
             "reviewed-plan",
-            "starting `%s` (recipe a1, auto-through seam — pass `--review-plan` to pause)"
+            "starting `%s` (recipe w, work-only — reviewed plan goes straight "
+            "to the work-loop; pass `--recipe a1` to re-plan from scratch)"
             % plan_path,
             single_plan={"path": plan_path, "run_id_hint": None},
         ))

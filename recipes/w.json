@@ -1,16 +1,15 @@
 {
   "name": "w",
   "version": "1",
-  "description": "Work-only — I already have a reviewed plan; skip the plan-loop and run its units directly. v0.2.0 stub — replace with real work units; init-time enumeration from a plan ships in v0.2.1 (KTD-15).",
+  "description": "Work-only — I already have a reviewed plan. Starts the plan phase ALREADY SATISFIED (plan_presatisfied), so the first tick skips /ce-plan + /ce-doc-review, enumerates the reviewed plan's work units, and runs them straight through. Smart-entry routes the reviewed-plan situation here; pass --recipe a1 to force a fresh plan-loop instead.",
   "default_adapter": "ce",
-  "phase_order": ["work"],
+  "phase_order": ["plan", "seam", "work"],
   "terminal_phase": "work",
+  "phase_transitions": [
+    {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+  ],
+  "plan_presatisfied": true,
   "units": [
-    {
-      "id": "w-stub",
-      "phase": "work",
-      "depends_on": [],
-      "invokes": {"adapter_op": "do_unit"}
-    }
+    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
   ]
 }

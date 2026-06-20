@@ -1,5 +1,5 @@
 ---
-argument-hint: "[continue|abort|retry|skip] [<run>] [<unit>] | freeform sentence"
+argument-hint: "[continue|advance|pause|abort|retry|skip] [<run>] [<unit>] | freeform sentence"
 allowed-tools: Bash, AskUserQuestion
 ---
 
@@ -21,6 +21,8 @@ then invoke the script with exactly that form:
 | Canonical                  | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
 | `continue [<run>]`         | Re-acquire, arm a fresh tick chain, flip paused seam to `work`.     |
+| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a tick to enumerate work units. At a seam: same as `continue`. In the work phase: no-op. |
+| `pause <run> [why]`        | Blocked on a human/external action — flip to manual, record why, stay resumable. NOT a cancellation. |
 | `abort <run>`              | Flip the run to `done` with a cancellation marker. **Destructive.** |
 | `retry <run> <unit>`       | Reset stalled unit to pending, clear `last_error`.                  |
 | `skip <run> <unit>`        | Mark stalled unit `terminal-skip`, skip its transitive dependents.  |
@@ -37,6 +39,7 @@ Routing rules:
 3. **Freeform sentence** — interpret intent into one of the four canonical
    forms:
    - "keep going" / "resume" / "pick up where we left off" → `continue`
+   - "the plan's done, move on" / "stop re-planning, it's ready" / "skip to the work" → `advance <run>`
    - "stop it" / "kill the run" / "cancel" → `abort <run>` (DESTRUCTIVE — must confirm via AskUserQuestion, see below)
    - "retry the failing one" / "try unit X again" → `retry <run> <unit>`
    - "skip the broken one" / "give up on that unit" → `skip <run> <unit>`

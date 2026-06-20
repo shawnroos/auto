@@ -103,6 +103,22 @@ _KNOWN_TOPLEVEL = frozenset(
         # emit_template id_prefix — `"build-typo"` would pass against
         # id_prefix `"build-"` even though no emitter would ever produce it.
         "expected_emit_outputs",
+        # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe for
+        # "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go straight
+        # to enumerating its work units" sets this true. The engine inits
+        # plan_step="review_plan" + gaps_open=0 so the first tick's next_plan_step
+        # returns "done" → enumerate_plan_units → plan→work, never re-deriving the
+        # finished plan. W is the shipped recipe that uses it. ADDITIVE — absent/
+        # false validates as before. Coherence checked by _validate_plan_presatisfied.
+        "plan_presatisfied",
+        # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe
+        # for "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go
+        # straight to enumerating its work units" sets this true. The engine
+        # inits plan_step="review_plan" + gaps_open=0 so the first tick's
+        # next_plan_step returns "done" → enumerate_plan_units → plan→work,
+        # never re-deriving the finished plan. W is the shipped recipe that
+        # uses it. ADDITIVE — absent/false validates as before (a1, a2, a4).
+        "plan_presatisfied",
     }
 )
 _KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes"})
@@ -175,6 +191,45 @@ def _check_prompt_template(value, where: str):
     parts = value.replace("\\", "/").split("/")
     if ".." in parts:
         _bad(f"{where}: prompt_template must not contain '..' (path traversal): {value!r}")
+
+
+def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> None:
+    """v0.4.3 (KTD-15): validate the optional ``plan_presatisfied`` flag.
+
+    When a recipe declares its plan phase already-satisfied (W), the engine must
+    have a coherent path FROM the plan phase TO work — otherwise "skip the
+    plan-loop" would strand the run with no way to enumerate units. So if the
+    flag is true we require:
+      (a) a "plan" phase in phase_order (the satisfied state lives there),
+      (b) exactly one plan-phase unit (the enumerate carrier — the emitters read
+          enumerated_units off the single plan unit, lib/emitters.py), and
+      (c) a phase_transition {from: plan, to: work} (the enumerate→emit edge).
+    Mechanical so a malformed work-only recipe can't ship a dead end. Absent or
+    false validates as before (a1, a2, a4).
+    """
+    presat = recipe.get("plan_presatisfied")
+    if presat is None:
+        return
+    if not isinstance(presat, bool):
+        _bad(f"plan_presatisfied must be a boolean; got {presat!r}")
+    if not presat:
+        return
+    if "plan" not in phase_order:
+        _bad(
+            "plan_presatisfied requires a 'plan' phase in phase_order "
+            f"(the satisfied state lives there); got {phase_order!r}"
+        )
+    plan_unit_count = sum(1 for u in recipe["units"] if u.get("phase") == "plan")
+    if plan_unit_count != 1:
+        _bad(
+            "plan_presatisfied requires exactly one plan-phase unit (the "
+            f"enumerate carrier the plan→work emitter reads); got {plan_unit_count}"
+        )
+    if not any(pt.get("from") == "plan" and pt.get("to") == "work" for pt in pts):
+        _bad(
+            "plan_presatisfied requires a phase_transition {from: plan, to: "
+            "work} so enumerated units can be emitted into the work phase"
+        )
 
 
 def _validate_toplevel(recipe: dict) -> None:
@@ -529,6 +584,9 @@ def validate(recipe: dict) -> None:
     expected_emit_outputs_set = _validate_expected_emit_outputs(recipe)
     _validate_depends_on(recipe, unit_ids, emit_prefixes, expected_emit_outputs_set)
     _validate_phase_transitions(recipe, phase_order)
+    # v0.4.3 KTD-15: plan_presatisfied coherence (needs phase_order + the
+    # phase_transitions list; runs after the transitions are shape-validated).
+    _validate_plan_presatisfied(recipe, phase_order, recipe.get("phase_transitions", []))
     _validate_emit_templates(recipe, phase_order)
     _validate_iteration(recipe, phase_order, unit_ids, emit_prefixes)
     _validate_work_only_gap(recipe, phase_order)

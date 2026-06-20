@@ -96,10 +96,12 @@ elif op == "resolve-recipe-file":
     except recipes.RecipeError as e:
         print("ERROR:%s" % e)
 elif op == "review-vs-w-distinct":
-    # U11: review.json must be MEANINGFULLY distinct from w.json — same single
-    # ["work"] phase shape, but its unit invokes the `review` adapter op (one
-    # review/fix loop to P3), NOT `do_unit` (build work). Surface both ops so a
-    # silent convergence (review collapsing into a w-clone) trips this.
+    # U11: review.json must be MEANINGFULLY distinct from w.json. review is a
+    # genuine work-only ["work"] recipe whose single unit invokes the `review`
+    # adapter op (one review/fix loop to P3). w (v0.4.3 KTD-15) is no longer its
+    # work-only twin — it's plan_presatisfied, so its plan unit invokes
+    # `next_plan_step` (the plan-loop sequencer) and it enumerates a reviewed plan
+    # into work. Surface both ops so a silent convergence still trips this.
     with open(os.path.join(auto_root, "recipes", "review.json")) as f:
         rev = json.load(f)
     with open(os.path.join(auto_root, "recipes", "w.json")) as f:
@@ -238,7 +240,7 @@ it "U11: review.json resolves through the three-tier registry (built-in)"
 assert_eq "review:built-in:valid" "$(rec resolve-recipe-file review)"
 
 it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_unit)"
-assert_eq "review:review|w:do_unit|distinct:True" "$(rec review-vs-w-distinct)"
+assert_eq "review:review|w:next_plan_step|distinct:True" "$(rec review-vs-w-distinct)"
 
 # ─── Scenario 5: topology-render ────────────────────────────────────────────
 it "topology-render: a1 card names recipe + has PLAN + names emitter"

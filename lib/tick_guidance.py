@@ -88,7 +88,10 @@ def _operator_guidance_for(phase, advance_result, led):
             "\"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-gaps-open <run> <N>`). "
             "Re-ticking without running "
             f"the invocation is a NO-OP — units will stay []. Just-prepared "
-            f"step: {step!r}; expected invocation: {invocation}."
+            f"step: {step!r}; expected invocation: {invocation}. "
+            "If this plan is ALREADY reviewed and you're re-deriving finished "
+            "work, run `/auto-resume advance <run>` to declare it satisfied and "
+            "skip straight to the work-loop (v0.4.3)."
         )
         return iteration_prefix + body if iteration_prefix else body
     if phase == "brainstorm":

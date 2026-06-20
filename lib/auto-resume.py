@@ -15,6 +15,13 @@ Subcommands:
                        stops blocking and the driver stops yielding, record the
                        reason, and stay resumable. Resume with `continue` once
                        the human acts. NOT a cancellation (use abort for that).
+    advance <run>      declare the CURRENT phase already satisfied and move on
+                       (v0.4.3 KTD-15). The "the plan is done — stop re-planning
+                       it" tool: in the plan phase it marks the plan satisfied
+                       (plan_step=review_plan, gaps_open=0) so the next tick goes
+                       straight to enumerate -> work; at a seam it behaves like
+                       continue; in the work phase it is a no-op (work advances by
+                       unit verdicts, not by fiat).
     abort <run>        loop_phase -> "done" (cancellation marker).
     retry <run> <unit> stalled unit -> pending (clears last_error via ledger.py).
     skip <run> <unit>  stalled unit -> terminal-skip (terminal for I-2).
@@ -211,6 +218,64 @@ def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
     return 0
 
 
+def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
+    """Declare the current phase satisfied and route to the next phase.
+
+    v0.4.3 KTD-15 — the general "the plan is done, move on" tool. auto's gap was
+    that it had no concept of phase-satisfaction: armed at the plan phase it would
+    re-run /ce-plan even when a reviewed plan already existed, because nothing let
+    the driving agent SAY "this phase is satisfied" (project_auto_v042_stuck_root_causes
+    ③). This verb is that affordance, phase-aware:
+
+      * plan  — mark the plan satisfied: plan_step="review_plan" + gaps_open=0,
+        the exact pre-satisfied state W inits with. The next tick's next_plan_step
+        returns "done" → enumerate_plan_units → plan→work, no re-derivation. We
+        arm a tick so the model enumerates the (already-in-context) plan's units.
+      * seam  — identical to `continue` (seam→work); delegate so there's one
+        code path for the seam advance.
+      * work  — no-op: the work-loop advances by unit verdicts, not by fiat;
+        forcing it would skip unfinished units. Point the operator at the real
+        levers (let units land, or `abort`).
+      * done  — already terminal.
+    """
+    try:
+        led = ledger.read_ledger(repo_root, run_id)
+    except ledger.LedgerNotFound as exc:
+        sys.stderr.write(f"resume: {exc}\n")
+        return 1
+    phase = phase_grammar.current_phase(led)
+    if phase == "done":
+        sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to advance.\n")
+        return 0
+    if phase == "seam":
+        # The seam advance IS continue (seam→work). One code path.
+        return _cmd_continue(ledger, repo_root, run_id)
+    if phase == "work":
+        sys.stdout.write(
+            f"resume: run {run_id!r} is in the work phase — nothing to force-"
+            "advance. The work-loop exits when its units reach terminal verdicts "
+            "(only P3 remaining). Let the units land, or `/auto-resume abort "
+            f"{run_id}` to stop.\n"
+        )
+        return 0
+    # phase == "plan": advance re-arms a now-self-driven run, so re-record the
+    # driving session FIRST (same guard as continue) — else the advisor-gate
+    # destructive backstop would be dark on the re-armed run. Refuse (leave the
+    # run untouched) if the session can't be determined (fix-round-6 P1 parity).
+    rc = _rearm_owns_session(ledger, repo_root, run_id)
+    if rc != 0:
+        return rc
+    # Mark the plan satisfied. Two atomic writes (set_loop has no gaps_open kwarg);
+    # plan-met = gaps_open==0 AND plan_step=="review_plan", and gaps_open must be
+    # NON-NULL, so set BOTH or plan-met won't fire.
+    ledger.set_loop(repo_root, run_id, plan_step="review_plan", driver="self")
+    ledger.set_gaps_open(repo_root, run_id, 0)
+    return _emit_rearm(
+        run_id,
+        "plan declared satisfied (advance); arm a tick to enumerate work units",
+    )
+
+
 def _cmd_abort(ledger, repo_root: str, run_id: str) -> int:
     try:
         ledger.set_loop(repo_root, run_id, loop_phase="done", driver="manual")
@@ -286,7 +351,7 @@ def run(argv) -> int:
     ledger = load_ledger()
     repo_root = _resolve_repo()
 
-    SUBCOMMANDS = ("continue", "pause", "abort", "retry", "skip")
+    SUBCOMMANDS = ("continue", "pause", "advance", "abort", "retry", "skip")
     sub = None
     rest = list(argv)
     if rest and rest[0] in SUBCOMMANDS:
@@ -311,6 +376,17 @@ def run(argv) -> int:
         # Everything after <run> is the free-text reason.
         reason = " ".join(rest[1:]) if len(rest) >= 2 else ""
         return _cmd_pause(ledger, repo_root, run_id, reason)
+
+    if sub == "advance":
+        # advance targets a LIVE run (like pause), not a resumable one — you
+        # advance a run that is mid-phase, not one parked at a seam.
+        run_id = _resolve_run_or_disambiguate(
+            ledger, repo_root, run_arg,
+            candidates=_active_runs(ledger, repo_root), label="active",
+        )
+        if run_id is None:
+            return 0
+        return _cmd_advance(ledger, repo_root, run_id)
 
     if sub == "abort":
         run_id = _resolve_run_or_disambiguate(ledger, repo_root, run_arg)

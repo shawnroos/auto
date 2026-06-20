@@ -116,12 +116,19 @@ ALLOWED_FUNCTIONS=(
   # Each helper is under budget; decompose, don't bump.)
   # _next_plan_step is the LAST top-level def before `class Adapter` in
   # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
-  # `class`) attributes the ENTIRE ~106-line Adapter class body to it. The
-  # real _next_plan_step is ~27 LOC — this is a MEASUREMENT ARTIFACT, not a
-  # complex function. v0.6.0 U7 added the prepare-only `brainstorm` adapter
-  # op (mirrors do_unit) inside the class, growing the absorbed span past
-  # the budget. Waived (not decomposed) because the function itself is small.
-  "lib/adapter-ce.py:_next_plan_step:133"
+  # `class`) attributes the ENTIRE Adapter class body to it. The real
+  # _next_plan_step is ~27 LOC — a MEASUREMENT ARTIFACT, not a complex function.
+  # v0.6.0 U7 added the prepare-only `brainstorm` op; v0.4.3 KTD-15 added the
+  # enumerate plan_path surface (+ a sibling _bound_plan_path helper). Waived
+  # (not decomposed) because the function itself is small.
+  "lib/adapter-ce.py:_next_plan_step:139"
+  # run() is auto.py's linear run-creation orchestrator (parse → validate recipe
+  # → build units → init ledger → emit arm intent). Already partially decomposed
+  # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,
+  # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in
+  # _bind_presatisfied_plan, off-budget; the residual is glue). Further splitting
+  # the linear glue into micro-helpers would hurt readability, not help it.
+  "lib/auto.py:run:125"
 )
 
 # ── Test harness ───────────────────────────────────────────────────────────

@@ -58,6 +58,19 @@ def map_findings(ce_findings):
     ]
 
 
+def _bound_plan_path(ledger):
+    """The plan doc path bound to the run's plan unit (plan_presatisfied / W).
+
+    lib/auto.py binds the reviewed plan's path to the single plan-phase unit's
+    dispatch_context.plan_path at init (the schema has no top-level slot for it).
+    Returns it, or None for a1-style runs where the plan was produced in-session.
+    """
+    for u in ledger.get("units", []):
+        if u.get("phase") == "plan":
+            return (u.get("dispatch_context") or {}).get("plan_path")
+    return None
+
+
 def _next_plan_step(ledger):
     """Pure CE plan-loop sequencer (contract §4): plan -> deepen -> review_plan
     -> (loop deepen/review while gaps remain) -> done.
@@ -106,21 +119,27 @@ class Adapter:
         return _next_plan_step(ledger)
 
     def enumerate_plan_units(self, ledger):
-        """PREPARE the plan→work-units enumeration (v0.2.0 contract re-lock, KTD-4).
+        """PREPARE the plan→work-units enumeration (v0.2.0 re-lock, KTD-4).
 
-        The producer the emitters read. When a plan unit reaches `plan-done`, the
-        engine calls this to turn the reviewed plan into a concrete work-unit list.
-        Prepare-only (like the other plan-loop ops): returns an invocation envelope
-        the MODEL executes — it reads the reviewed plan and returns a list of
-        unit dicts `[{id, invokes, dispatch_context?}, ...]`. The engine persists
-        that list onto the plan unit's `dispatch_context.enumerated_units` (U6);
-        the emitters (U5b) then shape it into ledger units at the phase boundary.
-        Resolves the F4 producer gap: v0.1.x had no in-code work-unit producer."""
-        return {
+        The producer the emitters read. At plan-done the engine calls this to turn
+        the reviewed plan into a work-unit list. Prepare-only: returns an envelope
+        the MODEL executes (reads the plan, returns `[{id, invokes, ...}]`); the
+        engine persists it onto the plan unit's `dispatch_context.enumerated_units`
+        (U6) and the emitters (U5b) shape it into ledger units. v0.4.3 (KTD-15):
+        for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
+        is surfaced so the envelope names WHICH plan; omitted for a1."""
+        envelope = {
             "adapter": ADAPTER_NAME,
             "op": "enumerate_plan_units",
             "invocation": "enumerate the reviewed plan's work units",
         }
+        plan_path = _bound_plan_path(ledger)
+        if plan_path:
+            envelope["plan_path"] = plan_path
+            envelope["invocation"] = (
+                f"enumerate the reviewed plan's work units from {plan_path}"
+            )
+        return envelope
 
     def plan(self, ledger):
         """PREPARE /ce-plan. Returns an opaque invocation envelope the engine

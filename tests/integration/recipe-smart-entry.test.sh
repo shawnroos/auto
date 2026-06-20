@@ -61,6 +61,27 @@ detect_situation() {
   "$PY" -c "import json,sys; print(json.loads(sys.argv[1])['situation'])" "$raw"
 }
 
+# detect_summary <setup-fn> — like detect_situation but prints `.summary`.
+# Used to assert the routing intent encoded in the operator-facing summary
+# (the actual dispatch is model-driven off the auto-driver SKILL table).
+detect_summary() {
+  local repo; repo="$(mktemp -d)"
+  mkdir -p "$repo/.claude/auto"
+  (
+    cd "$repo"
+    git init -q .
+    git config user.email t@t
+    git config user.name t
+    printf '.claude/\ndocs/\n' > .gitignore
+    git add .gitignore
+    git -c commit.gpgsign=false commit -q -m init
+  ) >/dev/null 2>&1
+  "$1" "$repo"
+  local raw; raw="$(CLAUDE_AUTO_REPO="$repo" bash "$DET")"
+  rm -rf "$repo"
+  "$PY" -c "import json,sys; print(json.loads(sys.argv[1])['summary'])" "$raw"
+}
+
 setup_raw() { :; }
 setup_plan() {
   mkdir -p "$1/docs/plans"
@@ -103,6 +124,16 @@ assert_eq "raw" "$(detect_situation setup_raw)"
 
 it "smart-entry detect: one plan + no run → situation=reviewed-plan"
 assert_eq "reviewed-plan" "$(detect_situation setup_plan)"
+
+# v0.4.3 KTD-15: a reviewed plan routes to the W (work-only) recipe, not a1 —
+# the summary must name recipe w so the driver dispatches `--recipe w` (skips
+# re-planning a finished plan; project_auto_v042_stuck_root_causes ③).
+it "smart-entry reviewed-plan summary routes to recipe w (not a1)"
+summary="$(detect_summary setup_plan)"
+case "$summary" in
+  *"recipe w"*) pass ;;
+  *) fail "reviewed-plan summary should name 'recipe w', got: ${summary}" ;;
+esac
 
 it "smart-entry detect: one not-met run → situation=in-flight"
 assert_eq "in-flight" "$(detect_situation setup_inflight)"
