@@ -3,13 +3,15 @@
 #
 # The advisor-gate destructive-action backstop (lib/on-pretooluse-action.py) owns a
 # run by session-id EQUALITY (PreToolUse stdin.session_id == ledger.driving_session_id).
-# If the driving session can't be determined at arm (CLAUDE_CODE_SESSION_ID unset, or
-# a spawned child), the recorded id is null and the backstop is DARK for the whole run
-# (gates fail open with no owning session). The RESUME path refuses on a null id; the
-# ARM path PROCEEDS (a hard refuse would break headless / env-var-less contexts) but
-# must NEVER be SILENT. This test pins: (1) null id -> loud "DARK" warning + the run is
-# still armed with a null driving_session_id; (2) a spawned child -> same warning;
-# (3) a real id -> no warning + the id is persisted on the ledger.
+# If the driving session can't be determined at arm (CLAUDE_CODE_SESSION_ID unset —
+# a truly headless context), the recorded id is null and the backstop is DARK for the
+# whole run (gates fail open with no owning session). The RESUME path refuses on a null
+# id; the ARM path PROCEEDS (a hard refuse would break headless contexts) but must
+# NEVER be SILENT. v0.6.4 removed the bogus CLAUDE_CODE_CHILD_SESSION guard (the harness
+# sets that in every Bash-tool subprocess, where arm runs — it darkened the backstop on
+# every run). This test pins: (1) unset id -> loud "DARK" warning + still armed with a
+# null id; (2) CHILD_SESSION set WITH a real id (the normal case) -> backstop ARMS;
+# (3) a real id -> no warning + the id is persisted.
 #
 # SELF-CONTAINED harness (inline it/pass/fail), mirroring the run.sh summary-line
 # format ("<name>.test.sh: N passed, M failed").
@@ -57,12 +59,17 @@ sid="$(_ledger_sid "$repo")"
 if echo "$err" | grep -q "DARK" && [ "$sid" = "null" ]; then pass; else fail "err=[$err] sid=[$sid]"; fi
 rm -rf "$repo"
 
-# Scenario 2 — spawned child (CHILD_SESSION truthy even with a session id): warns DARK.
-it "spawned child session: warns DARK"
+# Scenario 2 (v0.6.4) — CHILD_SESSION truthy is the NORMAL case: the harness sets
+# it in every Bash-tool subprocess, which is where auto.sh runs. With a real
+# session id present, the backstop must ARM (record the id, NO DARK warning), not
+# go dark. This is the regression guard for the bug where the old CHILD_SESSION
+# guard darkened the backstop on every run.
+it "CHILD_SESSION set with a real id: backstop ARMS (no DARK warning, id persisted)"
 repo="$(_mkrepo)"
 err="$(CLAUDE_AUTO_REPO="$repo" CLAUDE_CODE_SESSION_ID="sess-xyz" CLAUDE_CODE_CHILD_SESSION="1" \
   bash "$AUTO_SH" "$repo/docs/plans/p.md" 2>&1 >/dev/null)"
-if echo "$err" | grep -q "DARK"; then pass; else fail "err=[$err]"; fi
+sid="$(_ledger_sid "$repo")"
+if ! echo "$err" | grep -q "DARK" && [ "$sid" = "sess-xyz" ]; then pass; else fail "err=[$err] sid=[$sid]"; fi
 rm -rf "$repo"
 
 # Scenario 3 — real driving session: NO warning + the id is persisted on the ledger.

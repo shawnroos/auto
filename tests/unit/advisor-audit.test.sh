@@ -235,10 +235,12 @@ it "commands/auto.md documents the advisor gate"
 has "$CMD_MD" "advisor gate"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Scenario 8: lib/auto.py::_driving_session_id() — the arm-time read + the
-# CLAUDE_CODE_CHILD_SESSION falsey-guard (KTD-5, the task-specified assertion).
-# Drive the REAL function under controlled env (the env IS the seam). The Python
-# driver reads the two env vars itself, so the harness only sets/unsets them.
+# Scenario 8: lib/auto.py::_driving_session_id() — the arm-time read. v0.6.4
+# REMOVED the CLAUDE_CODE_CHILD_SESSION guard: the harness sets that var in EVERY
+# Bash-tool subprocess (where arm/resume always run), so the old guard returned
+# None unconditionally — the backstop was dark on every run and resume refused.
+# The session id (CLAUDE_CODE_SESSION_ID) is now trusted directly; it equals the
+# PreToolUse hook's stdin session_id. Drive the REAL function under controlled env.
 DSID_PY="
 import sys, os
 sys.path.insert(0, os.path.join('$AUTO_ROOT', 'lib'))
@@ -252,9 +254,9 @@ it "_driving_session_id: CLAUDE_CODE_SESSION_ID set, no child -> returns the id"
 out_sid="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID="sess-LIVE" "$PY" -c "$DSID_PY")"
 assert_eq "sess-LIVE" "$out_sid"
 
-it "_driving_session_id: CLAUDE_CODE_CHILD_SESSION truthy -> returns None (the guard)"
+it "_driving_session_id: CLAUDE_CODE_CHILD_SESSION truthy STILL returns the id (v0.6.4 — guard removed)"
 out_child="$(env CLAUDE_CODE_SESSION_ID="sess-LIVE" CLAUDE_CODE_CHILD_SESSION="1" "$PY" -c "$DSID_PY")"
-assert_eq "NONE" "$out_child"
+assert_eq "sess-LIVE" "$out_child"
 
 it "_driving_session_id: env unset -> returns None"
 out_unset="$(env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID "$PY" -c "$DSID_PY")"

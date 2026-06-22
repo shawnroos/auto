@@ -22,13 +22,16 @@ including the destructive-action backstop, which would then let a live
 self-driven run execute ``rm -rf`` / force-push unintercepted. Re-recording the
 session at re-arm time closes that hole.
 
-Read from ``CLAUDE_CODE_SESSION_ID``. Both the arm path and the resume path run
-INSIDE the live interactive session (there is no spawn — the model fires
-ScheduleWakeup / runs the slash command), so this env var IS the driving
-session at both call sites. Belt-and-suspenders on the spawn-free path: if
-``CLAUDE_CODE_CHILD_SESSION`` is truthy we are (somehow) in a spawned child, so
-the env id is NOT the interactive driver — return None rather than record a
-wrong id. An empty/unset id is also None.
+Read from ``CLAUDE_CODE_SESSION_ID`` — the session identity, guaranteed by the
+harness to equal the ``session_id`` the PreToolUse hooks receive on stdin. An
+empty/unset id returns None.
+
+NOTE (v0.6.4): this used to ALSO return None when ``CLAUDE_CODE_CHILD_SESSION``
+was truthy. That was a bug — the harness sets that var in EVERY Bash-tool
+subprocess (not just spawned sub-agents), and auto's CLIs always run inside the
+Bash tool, so the guard fired on every call and left the backstop dark + made
+resume refuse. ``CLAUDE_CODE_CHILD_SESSION`` is not a driver-vs-sub-agent signal;
+see ``driving_session_id``.
 
 CRITICAL for the resume path: a None return must NEVER be passed to
 ``ledger.set_driving_session_id`` — that setter treats None as "clear the
@@ -44,15 +47,31 @@ import os
 
 
 def driving_session_id() -> str | None:
-    """The interactive driver's session_id, or None if it cannot be trusted.
+    """The interactive driver's session_id (``CLAUDE_CODE_SESSION_ID``), or None
+    if it is unset/empty.
 
-    Returns ``CLAUDE_CODE_SESSION_ID`` unless ``CLAUDE_CODE_CHILD_SESSION`` is
-    truthy (a spawned child — not the interactive driver) or the id is
-    empty/unset, in which cases it returns None. Callers MUST guard on None (see
-    the module docstring): record only a real string; never clear or re-arm on
-    None.
+    v0.6.4 — the CLAUDE_CODE_CHILD_SESSION guard was REMOVED (it was a bug). The
+    prior version returned None whenever ``CLAUDE_CODE_CHILD_SESSION`` was truthy,
+    on the assumption that meant "a spawned sub-agent, not the interactive driver."
+    That misread the harness: Claude Code sets ``CLAUDE_CODE_CHILD_SESSION=1`` in
+    EVERY subprocess it spawns via the Bash tool (it marks Claude-spawned
+    subprocesses — e.g. so a nested ``claude`` TUI is excluded from --resume).
+    auto's CLIs (auto.sh / auto-resume.sh) ALWAYS run inside the Bash tool, so the
+    var was ALWAYS set at arm AND resume time → the guard fired unconditionally and
+    this returned None on every call. Consequences: the advisor-gate destructive
+    backstop was dark on EVERY run (arm recorded a null driving_session_id, which
+    the PreToolUse hooks can never match), and ``/auto-resume continue`` / ``advance``
+    refused to re-arm (None → refuse). Neither worked in production since v0.6.0.
+
+    The harness contract (env-vars docs): ``CLAUDE_CODE_SESSION_ID`` identifies the
+    session and EQUALS the ``session_id`` the PreToolUse hooks receive on stdin;
+    ``CLAUDE_CODE_CHILD_SESSION`` is NOT a driver-vs-sub-agent signal. So we trust
+    the session id directly. A non-driver sub-agent (Agent tool) that arms its OWN
+    run records its OWN session_id, which its OWN hook calls match — correct, no leak.
+
+    Callers MUST still guard on None (record only a real string; never clear or
+    re-arm on None). None now means the id is genuinely absent — a truly headless /
+    env-less context — which is exactly what the arm warning + resume refusal cover.
     """
-    if os.environ.get("CLAUDE_CODE_CHILD_SESSION"):
-        return None
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     return sid or None

@@ -131,12 +131,12 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
     sid = driver_session.driving_session_id()
     if not sid:
         sys.stderr.write(
-            f"resume: refusing to re-arm run {run_id!r} — cannot determine the "
-            "driving session id (CLAUDE_CODE_SESSION_ID unset, or a spawned "
-            "child). Re-arming now would leave the advisor-gate destructive "
-            "backstop dark (no owning session => gates fail open). The run stays "
-            "paused. Re-run `/auto-resume continue` from the interactive driver "
-            "session.\n"
+            f"resume: refusing to re-arm run {run_id!r} — CLAUDE_CODE_SESSION_ID "
+            "is unset (a truly headless/env-less context). Re-arming now would "
+            "leave the advisor-gate destructive backstop dark (no owning session "
+            "=> gates fail open). The run stays paused. Re-run `/auto-resume "
+            "continue` from an interactive Claude Code session (where the id is "
+            "present).\n"
         )
         return 1
     ledger.set_driving_session_id(repo_root, run_id, sid)

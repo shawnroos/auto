@@ -521,7 +521,10 @@ builds the unit prompt).
 > The whole gate is load-bearing on the PreToolUse stdin `session_id` being the
 > SAME string the run recorded as `driving_session_id` at arm time. The arm-time
 > source is confirmed in-tree: `lib/auto.py::_driving_session_id()` reads
-> `CLAUDE_CODE_SESSION_ID` (asserting `CLAUDE_CODE_CHILD_SESSION` is falsey first).
+> `CLAUDE_CODE_SESSION_ID` directly. (v0.6.4 removed an earlier
+> `CLAUDE_CODE_CHILD_SESSION`-falsey assertion — the harness sets that var in
+> every Bash-tool subprocess, where arm/resume run, so it darkened the backstop
+> on every run; it is not a driver-vs-sub-agent signal.)
 > The PreToolUse-stdin half CANNOT be verified by any in-tree test — no live
 > Claude Code harness runs in CI, and a synthetic test that constructs both id
 > strings equal passes BY CONSTRUCTION (`advisor-gate.test.sh` injects matching

@@ -492,10 +492,11 @@ def set_driving_session_id(repo_root, run_id, session_id):
     is what lets a concurrent STANDALONE ce-skill in the same worktree be
     correctly ignored (different session_id → no match → allow).
 
-    ``session_id`` is the interactive driver's id (``CLAUDE_CODE_SESSION_ID``,
-    asserted NOT a spawned child via ``driver_session.driving_session_id`` at the
-    call sites). ``None`` clears the field (and the hooks then fail-open /
-    fail-safe — they read it defensively). Stored top-level, alongside
+    ``session_id`` is the interactive driver's id (``CLAUDE_CODE_SESSION_ID`` via
+    ``driver_session.driving_session_id`` at the call sites; v0.6.4 dropped the
+    bogus CLAUDE_CODE_CHILD_SESSION guard that made it always-None in the Bash-tool
+    context where arm/resume run). ``None`` clears the field (and the hooks then
+    fail-open / fail-safe — they read it defensively). Stored top-level, alongside
     ``exit_reason`` / ``goal_intent``; NOT inside ``loop`` (it is run-identity,
     not liveness). Atomic (the predicate recompute is a no-op here, but the write
     stays on the I-1 locked path).

@@ -631,13 +631,16 @@ it "resume: refusal leaves the run PAUSED (driver=manual, not flipped to self)"
 assert_eq "manual" "$(rd_loop "$REPO" rrun driver)"
 it "resume: refusal does NOT clear driving_session_id (no fail-open)"
 assert_eq "sess-AAA" "$(rd_driving "$REPO" rrun)"
-it "resume: refusal in a child session (CHILD_SESSION truthy) also refuses + stays paused"
-REPO="$(mk_paused_owned resume-childrefuse rrun sess-AAA)"
+# v0.6.4: CHILD_SESSION truthy is the NORMAL case (the harness sets it in every
+# Bash-tool subprocess, where auto-resume.sh runs). With a real session id present,
+# resume must PROCEED and re-record THIS session as the owner — not refuse.
+it "resume: CHILD_SESSION set WITH a real id re-arms (exit 0), re-records the new owner"
+REPO="$(mk_paused_owned resume-childproceed rrun sess-AAA)"
 CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" CLAUDE_CODE_CHILD_SESSION="1" \
   "$PY" "$RESUME_PY" continue rrun >/dev/null 2>&1
-assert_eq "1" "$?"
-it "resume: child-session refusal keeps the arm-time driving_session_id"
-assert_eq "sess-AAA" "$(rd_driving "$REPO" rrun)"
+assert_eq "0" "$?"
+it "resume: re-arm re-records driving_session_id to the resuming session"
+assert_eq "sess-BBB" "$(rd_driving "$REPO" rrun)"
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""

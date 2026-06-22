@@ -198,20 +198,23 @@ def _driving_session_id() -> str | None:
 def _warn_if_backstop_dark(run_id: str) -> None:
     """Loud stderr warning that the advisor-gate destructive backstop is DARK.
 
-    Emitted at arm time when the driving session id is unavailable (env unset or a
-    spawned child). The backstop (lib/on-pretooluse-action.py) owns a run by
-    session-id EQUALITY, so a null id can never match — the run is armed with no
-    destructive-action gate. Unlike the resume path (which REFUSES on a null id — a
-    paused run staying paused is a safe default), arm PROCEEDS (a hard refuse would
-    break headless / env-var-less contexts) but NEVER silently. (security-review fix.)
+    Emitted at arm time when the driving session id is genuinely unavailable —
+    ``CLAUDE_CODE_SESSION_ID`` unset/empty (a truly headless / env-less context).
+    v0.6.4: this NO LONGER fires merely because ``CLAUDE_CODE_CHILD_SESSION`` is set
+    (the harness sets that in every Bash-tool subprocess, which is exactly where arm
+    runs — the old guard mistook it for "spawned sub-agent" and went dark on every
+    run). The backstop (lib/on-pretooluse-action.py) owns a run by session-id
+    EQUALITY, so a null id can never match. Unlike the resume path (which REFUSES on
+    a null id — a paused run staying paused is a safe default), arm PROCEEDS (a hard
+    refuse would break headless contexts) but NEVER silently. (security-review fix.)
     """
     sys.stderr.write(
-        f"auto: WARNING — cannot determine the driving session id for run "
-        f"{run_id!r} (CLAUDE_CODE_SESSION_ID unset, or a spawned child). The "
-        "advisor-gate destructive-action backstop will be DARK for this run (it "
-        "matches a live run by session-id equality, and there is no owning session "
-        "to match). Run /auto from the interactive driver session, or abort with "
-        "/auto-resume abort if the backstop is required.\n"
+        f"auto: WARNING — CLAUDE_CODE_SESSION_ID is unset for run {run_id!r}, so "
+        "the advisor-gate destructive-action backstop will be DARK (it matches a "
+        "live run by session-id equality, and there is no owning session to match). "
+        "This is normal in a truly headless/env-less context; from an interactive "
+        "Claude Code session the id is present and the backstop arms automatically. "
+        "Abort with /auto-resume abort if the backstop is required.\n"
     )
 
 
