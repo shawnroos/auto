@@ -399,6 +399,8 @@ phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$
 assert_eq "work" "$phase"
 it "resume continue: emits an arm-tick intent for the model to fire /auto:auto-tick"
 assert_eq "arm-tick" "$(jget "$out" action)"
+it "resume continue: the arm-tick prompt is NAMESPACED (/auto:auto-tick, not bare)"
+assert_eq "/auto:auto-tick contrun" "$(jget "$out" prompt)"
 it "resume continue: clears seam_paused on the seam->work flip"
 sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['seam_paused'])")"
 assert_eq "False" "$sp"

@@ -301,7 +301,7 @@ def _emit_arm(
     hardcoded ``plan``.
     """
     # NAMESPACED (v0.6.5): a programmatically-fired plugin command must be
-    # `/<plugin>:<command>` (bare `/auto:auto-tick` is "Unknown command" via
+    # `/<plugin>:<command>` (the bare `/auto-tick` is "Unknown command" via
     # ScheduleWakeup/loop). Plugin name is `auto` → `/auto:auto-tick`.
     prompt = f"/auto:auto-tick {run_id}"
     if auto:

@@ -122,7 +122,8 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
     deterministic backstop dark. Re-recording closes that hole.
 
     Returns 0 on success. Refuses (returns 1, leaves the run paused, prints a loud
-    warning) when the driving session cannot be determined — a child/unset env. We
+    warning) when CLAUDE_CODE_SESSION_ID is unset/empty (a truly headless context;
+    v0.6.4 dropped the CHILD_SESSION guard, so a child env no longer refuses). We
     must NOT pass None to ``set_driving_session_id`` (None CLEARS the field, which
     fails BOTH gates OPEN), and we must NOT re-arm a self-driven run whose backstop
     is dark. Resume runs INSIDE the live interactive session, so this is normally

@@ -70,6 +70,23 @@ EOF
   printf '%s' "$missing"
 }
 
+# BARE `claude '/auto...'` startup-args in the spawn/orphan-resume paths
+# (lib/cmux-socket.sh, lib/auto-spawn.py). These launch a fresh `claude` with a
+# slash command as its initial prompt — the SAME namespacing requirement as
+# ScheduleWakeup re-injection (empirically: `claude -p '/auto-status'` → "Unknown
+# command"; `/auto:auto-status` → runs). A bare form silently breaks fanout and
+# orphan-resume. Match the `claude` BINARY invoked with a bare `/auto` command:
+# `claude`, whitespace, optional opening quote, then `/auto` followed by `-`,
+# space, or quote. The namespaced `/auto:` form has a colon there and never
+# matches. The required whitespace after `claude` avoids matching the
+# `.claude/auto` PATH (no space between `claude` and `/auto`).
+collect_bare_startup_args() {
+  ( cd "$AUTO_ROOT" && \
+    grep -rnE "claude +'?/auto[- ']" lib/ \
+      --include='*.py' --include='*.sh' --exclude-dir='__pycache__' 2>/dev/null \
+    || true )
+}
+
 # ─── Scenario 1: the loop fires NAMESPACED commands (scraper finds them) ─────
 it "loop fires namespaced /auto:<command> prompts (at least /auto:auto-tick)"
 fired="$(collect_fired_namespaced)"
@@ -100,7 +117,20 @@ it "commands/auto-tick.md exists (the self-pacing heartbeat command)"
 [ -f "${AUTO_ROOT}/commands/auto-tick.md" ] && pass \
   || fail "commands/auto-tick.md missing — /auto:auto-tick can't resolve, loop stalls"
 
-# ─── Scenario 5: deliberate-fail — a bare emission is caught ─────────────────
+# ─── Scenario 5: no bare `claude '/auto...'` startup-args in spawn paths ──────
+# Twin of the rearm bug: fanout (auto-spawn.py) + orphan-resume (cmux-socket.sh)
+# launch `claude '/auto...'` as a startup-arg, which needs the same namespacing.
+it "no bare claude '/auto...' startup-args in lib/ (fanout/orphan-resume must use /auto:auto...)"
+bare_startup="$(collect_bare_startup_args)"
+if [ -z "$bare_startup" ]; then
+  pass
+else
+  fail "bare claude '/auto...' startup-args found — these won't resolve when launched
+(empirically confirmed); namespace them as /auto:auto / /auto:auto-resume:
+${bare_startup}"
+fi
+
+# ─── Scenario 6: deliberate-fail — a bare emission is caught ─────────────────
 it "deliberate-fail: a bare /auto-tick prompt emission trips the namespacing check"
 tmpfile="${AUTO_ROOT}/lib/__rearm_probe__.py"
 printf '%s\n' 'rearm_prompt = "/auto-tick {run_id}"  # prompt' > "$tmpfile"
@@ -109,6 +139,17 @@ rm -f "$tmpfile"
 case "$probe" in
   */auto-tick*) pass ;;
   *) fail "planted bare emission NOT caught: ${probe:-<empty>}" ;;
+esac
+
+# ─── Scenario 7: deliberate-fail — a bare startup-arg is caught ──────────────
+it "deliberate-fail: a bare claude '/auto...' startup-arg trips the check"
+tmpfile="${AUTO_ROOT}/lib/__startup_probe__.sh"
+printf '%s\n' "cmd=\"claude '/auto-resume \${run}'\"" > "$tmpfile"
+probe2="$(collect_bare_startup_args)"
+rm -f "$tmpfile"
+case "$probe2" in
+  *__startup_probe__*) pass ;;
+  *) fail "planted bare startup-arg NOT caught: ${probe2:-<empty>}" ;;
 esac
 
 echo ""

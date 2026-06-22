@@ -23,7 +23,7 @@ Why a separate lib (not a .sh shim):
 
 Why the cmux primitive (round-4 R4-001):
   The harness's native Agent tool does NOT expose `cwd` or `env`
-  parameters. A naive ``bash -lc "claude '/auto <plan>' &"`` fails: the
+  parameters. A naive ``bash -lc "claude '/auto:auto <plan>' &"`` fails: the
   claude CLI defaults to an interactive tty-bound session and ``-p``
   exits after the first response, terminating before a multi-tick
   /auto loop can drive. The cmux app-owned workspace is the ONLY
@@ -333,13 +333,13 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
       cmux new-workspace
         --name "auto-fanout-<slug>"
         --cwd  "<worktree>"
-        --command "sleep 1; CLAUDE_AUTO_REPO=<worktree> claude '/auto <plan>'"
+        --command "sleep 1; CLAUDE_AUTO_REPO=<worktree> claude '/auto:auto <plan>'"
         --focus false
 
     v0.4.1 (plan 004) KTD-4 mechanism (project workspace present):
       cmux new-surface --pane <marker.left_pane_id> --focus false
       cmux send --surface <captured> "sleep 1; cd <worktree> &&
-        CLAUDE_AUTO_REPO=<worktree> claude '/auto <plan>'"
+        CLAUDE_AUTO_REPO=<worktree> claude '/auto:auto <plan>'"
 
     The CLAUDE_AUTO_REPO env-pin (round-2 R2-001) ensures the sub-run's
     ledger writes land at <worktree>/.claude/auto/.
@@ -348,9 +348,13 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
         {"mode": "workspace"|"tab", "tab_surface_id": "<surface-uuid>"|None}
     """
     plan_esc = plan_rel.replace("'", "'\\''")
+    # NAMESPACED (v0.6.5): a plugin slash command fired as a `claude` startup-arg
+    # (like ScheduleWakeup/loop re-injection) only resolves as `/<plugin>:<command>`
+    # — the bare `/auto` is "Unknown command" (empirically confirmed: `claude -p
+    # '/auto-status'` → Unknown, `/auto:auto-status` → runs). Plugin name is `auto`.
     inner_cmd = (
         f"CLAUDE_AUTO_REPO='{worktree}' "
-        f"claude '/auto {plan_esc}'"
+        f"claude '/auto:auto {plan_esc}'"
     )
     script = os.path.join(_LIB_DIR, "cmux-socket.sh")
 

@@ -265,7 +265,7 @@ def dispatch_tick(
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     # NAMESPACED (v0.6.5): plugin slash commands resolve as `/<plugin>:<command>`
     # when fired programmatically (ScheduleWakeup / loop re-injection). The bare
-    # `/auto:auto-tick` is "Unknown command" there — every re-arm hit that and the loop
+    # `/auto-tick` is "Unknown command" there — every re-arm hit that and the loop
     # never self-paced. The plugin name is `auto`, so the command is `/auto:auto-tick`.
     rearm_prompt = f"/auto:auto-tick {run_id}"
     now = _now_dt()

@@ -5,12 +5,12 @@
 # goes through ledger.py's I-1 atomic chokepoint). The cmux binary is the ONLY
 # mock: a shim on PATH that RECORDS its argv to a log file — we assert the
 # spawn-command STRING is well-formed (with the mandatory `sleep 1;` lead-in,
-# `/auto-resume <run>`, and `--focus false`) WITHOUT spawning a real cmux
+# `/auto:auto-resume <run>`, and `--focus false`) WITHOUT spawning a real cmux
 # workspace (per U8 constraints — never touch Shawn's cmux layout).
 #
 # Scenarios (U8 plan / task spec):
 #   - orphaned run -> issues the correct `cmux new-workspace` command
-#     (sleep lead-in + /auto-resume <run> + --focus false), and the
+#     (sleep lead-in + /auto:auto-resume <run> + --focus false), and the
 #     standalone `command` builder produces the same well-formed string.
 #   - DOUBLE-DRIVE: a run whose tick lock is held by a LIVE tick -> auto-resume
 #     NO-OPS (no spawn). This is the load-bearing guard.
@@ -99,7 +99,7 @@ log_text()  { cat "$CMUX_LOG" 2>/dev/null; }
 echo "cmux-resume.test.sh"
 
 # ─── orphaned run -> issues the correct cmux new-workspace command ────────────
-it "orphaned run: scan spawns a /auto-resume workspace via cmux new-workspace"
+it "orphaned run: scan spawns a /auto:auto-resume workspace via cmux new-workspace"
 REPO="$(mkrepo orphan)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
@@ -113,9 +113,9 @@ CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
 out="$(log_text)"
 assert_contains "$out" "new-workspace"
 it "orphaned run: command carries the mandatory sleep lead-in (spike timing caveat)"
-assert_contains "$out" "sleep 1; claude '/auto-resume orphanrun'"
-it "orphaned run: command invokes /auto-resume for the orphaned run"
-assert_contains "$out" "/auto-resume orphanrun"
+assert_contains "$out" "sleep 1; claude '/auto:auto-resume orphanrun'"
+it "orphaned run: command invokes /auto:auto-resume for the orphaned run"
+assert_contains "$out" "/auto:auto-resume orphanrun"
 it "orphaned run: command keeps --focus false (does not steal Shawn's focus)"
 # argv entries land on separate log lines; assert the flag is immediately
 # followed by its `false` value (i.e. `--focus false` was passed as a pair).
@@ -125,8 +125,8 @@ assert_contains "$(printf '%s' "$out" | grep -A1 -x -- '--focus')" "false"
 it "command builder: produces a well-formed spawn string (no real spawn)"
 cmd="$(bash "$CMUX_SOCKET_SH" command "$REPO" "orphanrun")"
 assert_contains "$cmd" "cmux new-workspace"
-it "command builder: includes sleep lead-in + claude '/auto-resume <run>'"
-assert_contains "$cmd" "sleep 1; claude '/auto-resume orphanrun'"
+it "command builder: includes sleep lead-in + claude '/auto:auto-resume <run>'"
+assert_contains "$cmd" "sleep 1; claude '/auto:auto-resume orphanrun'"
 it "command builder: includes --focus false"
 assert_contains "$cmd" "--focus false"
 
@@ -179,7 +179,7 @@ it "double-drive control: once the lock is released, the same run DOES spawn"
 reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
 out="$(log_text)"
-assert_contains "$out" "/auto-resume liverun"
+assert_contains "$out" "/auto:auto-resume liverun"
 
 # ─── non-orphaned run (driver==self, fresh beat) -> no spawn ──────────────────
 it "non-orphaned run (driver==self, fresh last_beat_at): no spawn"
@@ -241,7 +241,7 @@ assert_empty "$(log_text)"
 it "opt-in control: the SAME run DOES spawn with CLAUDE_AUTO_RESUME_ENABLE=1"
 reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
-assert_contains "$(log_text)" "/auto-resume optinrun"
+assert_contains "$(log_text)" "/auto:auto-resume optinrun"
 
 # ─── runaway guard: a fresh in-flight sentinel -> no second spawn ─────────────
 it "runaway guard: a fresh spawn-in-flight sentinel suppresses a second spawn"
@@ -264,7 +264,7 @@ assert_eq "1" "$spawn_count"
 it "runaway guard control: a long-expired sentinel (TTL=0) allows a re-spawn"
 reset_log
 CLAUDE_AUTO_SPAWN_TTL=0 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
-assert_contains "$(log_text)" "/auto-resume runawayrun"
+assert_contains "$(log_text)" "/auto:auto-resume runawayrun"
 
 # ════════════════════════════════════════════════════════════════════════════
 printf "\ncmux-resume.test.sh: %d passed, %d failed\n" "$PASS" "$FAIL"

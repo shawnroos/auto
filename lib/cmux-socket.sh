@@ -7,7 +7,7 @@
 # on-session-start.py only SURFACES a resume hint; U8 makes resume AUTOMATIC.
 #
 # MECHANISM (verified by the U1 spike — docs/research/cmux-socket-spike.md):
-#   cmux new-workspace --command "sleep 1; claude '/auto-resume <run>'" \
+#   cmux new-workspace --command "sleep 1; claude '/auto:auto-resume <run>'" \
 #     --focus false
 #   * The spawned workspace is APP-OWNED, so it survives the parent Claude
 #     session exiting — exactly the U8 use case.
@@ -154,7 +154,7 @@ auto::build_spawn_command() {
     "$CLAUDE_AUTO_CMUX" \
     "auto-resume-${run}" \
     "$repo" \
-    "sleep 1; claude '/auto-resume ${run}'"
+    "sleep 1; claude '/auto:auto-resume ${run}'"
 }
 
 # auto::cmux_spawn_workspace <name> <cwd> <command>
@@ -165,7 +165,7 @@ auto::build_spawn_command() {
 #
 #   Shape verified by docs/research/cmux-socket-spike.md and locked by the
 #   round-4 finding R4-001 (the harness's native Agent tool does NOT expose
-#   cwd/env, and `bash -lc "claude /auto <plan> &"` exits before the loop can
+#   cwd/env, and `bash -lc "claude /auto:auto <plan> &"` exits before the loop can
 #   drive — so the cmux primitive is the ONLY working dispatch).
 #
 #   Mechanism (per the spike):
@@ -293,7 +293,7 @@ PYEOF
   auto::cmux_spawn_workspace \
     "auto-resume-${run}" \
     "$repo" \
-    "sleep 1; claude '/auto-resume ${run}'"
+    "sleep 1; claude '/auto:auto-resume ${run}'"
   return 0
 }
 
