@@ -7,7 +7,7 @@ Advance an auto run by ONE tick — the self-pacing entry the loop re-arms
 into.
 
 This command is fired by a `ScheduleWakeup`-armed prompt (`prompt:
-"/auto-tick <run>"`), emitted as the `rearm` intent by every prior tick
+"/auto:auto-tick <run>"`), emitted as the `rearm` intent by every prior tick
 (`lib/tick.py`), by `/auto` at arm time (`lib/auto.py`), and by
 `/auto-resume continue` (`lib/auto-resume.py`). It is the durable
 heartbeat of the loop: one tick = one smallest-useful advance of the
@@ -37,5 +37,5 @@ dispatch table. The contract in brief:
 | `noop`   | any   | another live tick holds the lock — do nothing |
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop. The
-`prompt` field of a `rearm` intent is itself `/auto-tick <run>` — that is
+`prompt` field of a `rearm` intent is itself `/auto:auto-tick <run>` — that is
 how the loop sustains itself.

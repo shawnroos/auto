@@ -49,10 +49,12 @@ auto still never runs `/goal` itself.
 
 ## 2. Arm the tick chain
 
-Fire the first tick:
+Fire the first tick. The command is NAMESPACED (`/auto:auto-tick`) — a plugin
+slash command fired programmatically (ScheduleWakeup / loop) only resolves in
+its `/<plugin>:<command>` form; the bare `/auto-tick` is "Unknown command":
 
 ```
-ScheduleWakeup(delay=60, prompt="/auto-tick <run>")
+ScheduleWakeup(delay=60, prompt="/auto:auto-tick <run>")
 ```
 
 `ScheduleWakeup` clamps delay to `[60, 3600]s`. Each tick returns a

@@ -397,7 +397,7 @@ PYEOF
 out="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue contrun)"
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['loop_phase'])")"
 assert_eq "work" "$phase"
-it "resume continue: emits an arm-tick intent for the model to fire /auto-tick"
+it "resume continue: emits an arm-tick intent for the model to fire /auto:auto-tick"
 assert_eq "arm-tick" "$(jget "$out" action)"
 it "resume continue: clears seam_paused on the seam->work flip"
 sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['seam_paused'])")"

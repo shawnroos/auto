@@ -27,7 +27,7 @@ The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
 no slot for any of them, and ledger.py is the locked contract). They ride in the
 EMITTED INTENT as payload the model consumes — the same intent-shape extension
 resume.py uses. The model issues `/goal <text>` and `ScheduleWakeup(60,
-"/auto-tick <run>[ --auto]")`.
+"/auto:auto-tick <run>[ --auto]")`.
 
 DOUBLE-DRIVE: init_ledger holds the per-run init flock across the
 existence-check + write; the arm-first-tick path emits intent only — the tick's
@@ -300,7 +300,10 @@ def _emit_arm(
     which enters at ``brainstorm``) reports the true starting phase rather than a
     hardcoded ``plan``.
     """
-    prompt = f"/auto-tick {run_id}"
+    # NAMESPACED (v0.6.5): a programmatically-fired plugin command must be
+    # `/<plugin>:<command>` (bare `/auto:auto-tick` is "Unknown command" via
+    # ScheduleWakeup/loop). Plugin name is `auto` → `/auto:auto-tick`.
+    prompt = f"/auto:auto-tick {run_id}"
     if auto:
         prompt += " --auto"
     intent = {

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# auto U4: thin bash shim around tick.py — the `/auto-tick <run>`
+# auto U4: thin bash shim around tick.py — the `/auto:auto-tick <run>`
 # entry, fired by a ScheduleWakeup-armed prompt.
 #
 # THE RE-ARM BOUNDARY (read before wiring this into a command):
 #   tick.py CANNOT call ScheduleWakeup — that is a MODEL tool, not a CLI. This
 #   shim runs the tick (one advance + atomic ledger write) and prints the
 #   re-arm INTENT as JSON on stdout:
-#       {"action":"rearm","delay":60,"prompt":"/auto-tick <run>", ...}
+#       {"action":"rearm","delay":60,"prompt":"/auto:auto-tick <run>", ...}
 #       {"action":"stop", ...}    {"action":"noop", ...}
 #   The MODEL driving the tick reads that JSON and, when action=="rearm",
 #   issues the actual `ScheduleWakeup(delay, prompt)` tool call. Do NOT add a
@@ -26,7 +26,7 @@ set -uo pipefail
 CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # auto::tick "<run> [--auto] [--delay N] [--repo PATH]"
-#   The /auto-tick command passes the raw "$ARGUMENTS" string as $1; we
+#   The /auto:auto-tick command passes the raw "$ARGUMENTS" string as $1; we
 #   re-split it into argv with `set --` so flags and the run-id are parsed by
 #   tick.py's argparse. Empty args -> usage (exit 2).
 auto::tick() {

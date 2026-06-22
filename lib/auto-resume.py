@@ -8,7 +8,7 @@ Subcommands:
     [<run>]            default continue: re-record the driving session (so the
                        advisor gates own the re-armed run — fix-round-6 P1),
                        flip a paused seam -> work, then emit a re-arm INTENT
-                       (the model fires /auto-tick).
+                       (the model fires /auto:auto-tick).
     continue <run>     explicit continue (same as default with a run-id).
     pause <run> [why]  blocked on a human/external action (auth, approval,
                        missing creds): flip driver -> "manual" so the Stop hook
@@ -95,12 +95,12 @@ def _resumable_runs(ledger, repo_root: str):
 
 
 def _emit_rearm(run_id: str, note: str) -> int:
-    """Emit the re-arm INTENT — the model fires the actual /auto-tick."""
+    """Emit the re-arm INTENT — the model fires the actual /auto:auto-tick."""
     json.dump(
         {
             "action": "arm-tick",
             "run": run_id,
-            "prompt": f"/auto-tick {run_id}",
+            "prompt": f"/auto:auto-tick {run_id}",
             "note": note,
         },
         sys.stdout,

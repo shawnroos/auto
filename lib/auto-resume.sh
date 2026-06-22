@@ -20,7 +20,7 @@
 # sentinel file): this script ADDS NO NEW FLOCK. State transitions route through
 # ledger.py (set_loop / transition), which holds the per-run RMW flock for the
 # whole read-modify-write. The "arm a tick" path emits a re-arm INTENT (JSON)
-# that the MODEL acts on by firing /auto-tick; the tick then acquires its
+# that the MODEL acts on by firing /auto:auto-tick; the tick then acquires its
 # OWN non-blocking _tick_lock (lib/tick.py::_tick_lock — process-held, released
 # on exit) which is the actual double-drive guard. Adding a third flock here
 # would deadlock against the tick. So: transitions inherit the RMW lock;

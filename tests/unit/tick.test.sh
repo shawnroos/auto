@@ -148,7 +148,7 @@ delay="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['delay'])" "$re
 prompt="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['prompt'])" "$res1")"
 advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res1")"
 st1="$(ledger_field "rearm-run" 'L["units"][0]["state"]')"
-if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto-tick rearm-run" ] \
+if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto:auto-tick rearm-run" ] \
    && [ "$advanced" = "fix-applied" ] && [ "$st1" = "fixed" ]; then
   pass
 else

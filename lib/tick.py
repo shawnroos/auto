@@ -13,7 +13,7 @@ THE RE-ARM BOUNDARY (read this — it is the load-bearing seam):
     Instead, tick.py COMPUTES the re-arm intent and emits it on stdout as a
     JSON object:
 
-        {"action": "rearm",  "delay": 60, "prompt": "/auto-tick <run>", ...}
+        {"action": "rearm",  "delay": 60, "prompt": "/auto:auto-tick <run>", ...}
         {"action": "stop",   "reason": "predicate-met" | "seam-pause", ...}
         {"action": "noop",   "reason": "lock-held-by-live-tick"}
 
@@ -263,7 +263,11 @@ def dispatch_tick(
 
 
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
-    rearm_prompt = f"/auto-tick {run_id}"
+    # NAMESPACED (v0.6.5): plugin slash commands resolve as `/<plugin>:<command>`
+    # when fired programmatically (ScheduleWakeup / loop re-injection). The bare
+    # `/auto:auto-tick` is "Unknown command" there — every re-arm hit that and the loop
+    # never self-paced. The plugin name is `auto`, so the command is `/auto:auto-tick`.
+    rearm_prompt = f"/auto:auto-tick {run_id}"
     now = _now_dt()
     now_iso = ledger._now_iso()
     # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of

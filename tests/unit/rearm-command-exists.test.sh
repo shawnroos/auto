@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# auto unit test: every slash command the loop FIRES must be a real command.
+# auto unit test: the slash command the loop FIRES must (a) exist as a command
+# file AND (b) be NAMESPACED so it actually resolves when fired programmatically.
 #
-# Regression guard for the class of bug where the engine re-arms into a
-# slash command that was never registered. The loop self-paces by emitting
-# a `rearm` intent whose `prompt` is `/auto-tick <run>` and by telling the
-# model (SKILL.md §2) to `ScheduleWakeup(prompt="/auto-tick <run>")`. For a
-# long time `commands/auto-tick.md` did not exist — so every re-arm fired
-# `/auto-tick`, the harness reported "Unknown command: /auto-tick", the tick
-# never ran, and the run stalled by construction. The full engine test suite
-# was 572/0 GREEN the whole time because it asserts the rearm STRING is
-# `/auto-tick` (tick.test.sh) but never that the string RESOLVES to a command.
+# Two-layer regression guard for the self-pacing loop:
 #
-# This test IS that missing check: it scrapes every `/auto-*` slash-command
-# token that appears on a prompt-bearing or ScheduleWakeup-bearing line in
-# the shipped engine (lib/) and driver docs (skills/), and asserts each one
-# maps to a `commands/<name>.md` file. A new re-arm target cannot ship
-# without its command, or this lint trips.
+#   v0.6.2 bug: commands/auto-tick.md did not exist → every re-arm fired
+#   `/auto-tick`, the harness said "Unknown command", the tick never ran.
+#
+#   v0.6.5 bug: the command file existed, but the loop fired the BARE `/auto-tick`.
+#   Plugin slash commands fired PROGRAMMATICALLY (ScheduleWakeup / loop
+#   re-injection) only resolve in their NAMESPACED `/<plugin>:<command>` form —
+#   the bare token is still "Unknown command". So the loop STILL never self-paced
+#   even with the file present. The fix: emit `/auto:auto-tick` (plugin name is
+#   `auto`).
+#
+# This test pins BOTH: the programmatic emissions use `/auto:<command>` (never a
+# bare `/auto-<sub>`), and each fired `/auto:<command>` has a commands/<command>.md.
 
 set -uo pipefail
 
@@ -34,83 +34,83 @@ fail() {
   return 0
 }
 
-# Collect the distinct /auto-* command tokens the loop instructs the model to
-# FIRE. We scope to lines that mention `prompt` or `ScheduleWakeup` so prose
-# references (e.g. "see /auto-status") don't count — only commands the engine
-# actually submits as a prompt are load-bearing for self-pacing.
-#
-# `|| true` so a no-match (would be a surprise) doesn't trip set -e.
-collect_fired_commands() {
+# NAMESPACED tokens (/auto:<command>) the loop instructs the model to FIRE,
+# scraped from prompt/ScheduleWakeup lines in the engine (lib/) + driver skill.
+collect_fired_namespaced() {
   ( cd "$AUTO_ROOT" && \
     grep -rhnE 'prompt|ScheduleWakeup' lib/ skills/ \
       --include='*.py' --include='*.sh' --include='*.md' \
-      --exclude-dir='__pycache__' \
-      2>/dev/null \
-    | grep -oE '/auto(-[a-z]+)*' \
-    | sort -u \
-    || true \
-  )
+      --exclude-dir='__pycache__' 2>/dev/null \
+    | grep -oE '/auto:[a-z-]+' \
+    | sort -u || true )
 }
 
-# Map a fired command token (e.g. "/auto-tick") to its expected command file
-# and report any that are missing.
+# BARE auto sub-command tokens (/auto-<sub>) on a prompt-EMISSION line in lib/.
+# These are the bug: a programmatic prompt that fires an un-namespaced plugin
+# command, which the harness can't resolve. Scoped to lib/ (the f-string
+# emissions) so prose that documents the bare form as WRONG doesn't false-trip.
+collect_bare_emissions() {
+  ( cd "$AUTO_ROOT" && \
+    grep -rhnE 'prompt' lib/ --include='*.py' --exclude-dir='__pycache__' 2>/dev/null \
+    | grep -oE '/auto-[a-z]+' \
+    | sort -u || true )
+}
+
 missing_command_files() {
-  local missing=""
-  local token name file
+  local missing="" token name file
   while IFS= read -r token; do
     [ -z "$token" ] && continue
-    name="${token#/}"                      # strip leading slash
+    name="${token#/auto:}"                 # /auto:auto-tick -> auto-tick
     file="${AUTO_ROOT}/commands/${name}.md"
-    if [ ! -f "$file" ]; then
-      missing="${missing}${token} -> commands/${name}.md (MISSING)
+    [ -f "$file" ] || missing="${missing}${token} -> commands/${name}.md (MISSING)
 "
-    fi
   done <<EOF
-$(collect_fired_commands)
+$(collect_fired_namespaced)
 EOF
   printf '%s' "$missing"
 }
 
-# ─── Scenario 1: every fired /auto-* command resolves to a command file ─────
-it "every /auto-* command the loop fires has a commands/<name>.md"
-fired="$(collect_fired_commands)"
-if [ -z "$fired" ]; then
-  fail "no /auto-* fired-command tokens found — the scraper is broken (it should at least find /auto-tick)"
-else
-  missing="$(missing_command_files)"
-  if [ -z "$missing" ]; then
-    pass
-  else
-    fail "fired commands with no command file:
-${missing}"
-  fi
-fi
-
-# ─── Scenario 2: the load-bearing case, named explicitly ────────────────────
-# /auto-tick is the heartbeat; assert its file directly so a regression names
-# the exact symptom Shawn saw ("Unknown command: /auto-tick").
-it "commands/auto-tick.md exists (the self-pacing heartbeat command)"
-if [ -f "${AUTO_ROOT}/commands/auto-tick.md" ]; then
-  pass
-else
-  fail "commands/auto-tick.md is missing — every re-arm will report 'Unknown command: /auto-tick' and the run will stall"
-fi
-
-# ─── Scenario 3: deliberate-fail control — a fired-but-missing command trips ─
-# Plant a temp lib file that fires a command with no command file, run the
-# missing-file check, confirm it catches the plant. Proves the lint actually
-# detects the gap (a 0-assertion test would report green while testing nothing).
-it "deliberate-fail: a rearm into a nonexistent command is caught"
-tmpfile="${AUTO_ROOT}/lib/__rearm_probe__.py"
-printf '%s\n' 'rearm_prompt = "/auto-nonexistent-probe {run_id}"  # prompt' > "$tmpfile"
-probe_result="$(missing_command_files)"
-rm -f "$tmpfile"
-case "$probe_result" in
-  *auto-nonexistent-probe*) pass ;;
-  *) fail "planted rearm into a missing command NOT caught: ${probe_result:-<empty>}" ;;
+# ─── Scenario 1: the loop fires NAMESPACED commands (scraper finds them) ─────
+it "loop fires namespaced /auto:<command> prompts (at least /auto:auto-tick)"
+fired="$(collect_fired_namespaced)"
+case "$fired" in
+  */auto:auto-tick*) pass ;;
+  *) fail "no /auto:auto-tick emission found; scraped: ${fired:-<none>}" ;;
 esac
 
-# ── summary ─────────────────────────────────────────────────────────────────
+# ─── Scenario 2: NO bare un-namespaced /auto-<sub> emissions (the v0.6.5 bug) ─
+it "no bare un-namespaced /auto-<command> in programmatic prompt emissions"
+bare="$(collect_bare_emissions)"
+if [ -z "$bare" ]; then
+  pass
+else
+  fail "bare (un-namespaced) command emissions found — these won't resolve when
+fired via ScheduleWakeup/loop; namespace them as /auto:<command>:
+${bare}"
+fi
+
+# ─── Scenario 3: every fired /auto:<command> has a commands/<command>.md ─────
+it "every fired /auto:<command> maps to a commands/<command>.md"
+missing="$(missing_command_files)"
+[ -z "$missing" ] && pass || fail "fired commands with no file:
+${missing}"
+
+# ─── Scenario 4: the heartbeat, named explicitly ────────────────────────────
+it "commands/auto-tick.md exists (the self-pacing heartbeat command)"
+[ -f "${AUTO_ROOT}/commands/auto-tick.md" ] && pass \
+  || fail "commands/auto-tick.md missing — /auto:auto-tick can't resolve, loop stalls"
+
+# ─── Scenario 5: deliberate-fail — a bare emission is caught ─────────────────
+it "deliberate-fail: a bare /auto-tick prompt emission trips the namespacing check"
+tmpfile="${AUTO_ROOT}/lib/__rearm_probe__.py"
+printf '%s\n' 'rearm_prompt = "/auto-tick {run_id}"  # prompt' > "$tmpfile"
+probe="$(collect_bare_emissions)"
+rm -f "$tmpfile"
+case "$probe" in
+  */auto-tick*) pass ;;
+  *) fail "planted bare emission NOT caught: ${probe:-<empty>}" ;;
+esac
+
 echo ""
 echo "rearm-command-exists.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

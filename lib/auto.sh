@@ -6,7 +6,7 @@
 # ledger at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
 # units — the plan-loop populates work units later via the adapter), and emits
 # an arm-first-tick INTENT (JSON) that the MODEL acts on by setting the
-# deliberate-stop /goal and firing the first ScheduleWakeup /auto-tick.
+# deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-tick.
 #
 # Subcommands / flags (Claude Code does not dispatch space-separated
 # subcommands, so the argument string is PARSED HERE — never in the .md body,
@@ -21,7 +21,7 @@
 # holds the per-run init flock across the existence-check + atomic write (two
 # concurrent inits cannot both win — one raises LedgerExists). The "arm first
 # tick" path emits a re-arm INTENT (JSON) that the MODEL acts on by firing
-# /auto-tick; the tick then acquires its OWN non-blocking process-held
+# /auto:auto-tick; the tick then acquires its OWN non-blocking process-held
 # _tick_lock (lib/tick.py::_tick_lock) which is the actual double-drive guard.
 # Adding a flock here would deadlock against the tick. So: init inherits the
 # init flock; arm-first-tick defers to the tick's process-held lock. Both are
