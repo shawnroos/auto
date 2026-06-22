@@ -642,6 +642,31 @@ assert_eq "0" "$?"
 it "resume: re-arm re-records driving_session_id to the resuming session"
 assert_eq "sess-BBB" "$(rd_driving "$REPO" rrun)"
 
+# ─── ownership-steal guard (review #5) ───────────────────────────────────────
+# A run that is LIVE (driver=self, fresh beat, not seam-paused) and owned by
+# session AAA must NOT be silently stolen by a `continue`/`advance` from session
+# BBB — that would dark the ORIGINAL driver's destructive backstop mid-run.
+REPO="$(mkrepo resume-steal)"
+"$PY" - "$REPO" stealrun "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
+s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_ledger(repo,run,adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.set_loop(repo,run,driver="self",beat=True)   # LIVE: self-driven + fresh heartbeat
+PYEOF
+set_driving_session "$REPO" stealrun sess-AAA
+it "resume: refuses to steal a LIVE run owned by another session -> exit non-zero"
+CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" CLAUDE_CODE_CHILD_SESSION="1" \
+  "$PY" "$RESUME_PY" continue stealrun >/dev/null 2>&1
+assert_eq "1" "$?"
+it "resume: steal-refusal leaves the original owner (sess-AAA) intact"
+assert_eq "sess-AAA" "$(rd_driving "$REPO" stealrun)"
+# Same-session re-continue of its OWN live run is idempotent, not a steal -> allowed.
+it "resume: the OWNING session continuing its own live run is allowed (not a steal)"
+CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-AAA" CLAUDE_CODE_CHILD_SESSION="1" \
+  "$PY" "$RESUME_PY" continue stealrun >/dev/null 2>&1
+assert_eq "0" "$?"
+
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
 echo "advisor-gate.test.sh: ${PASS} passed, ${FAIL} failed"

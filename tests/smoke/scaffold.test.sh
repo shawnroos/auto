@@ -112,6 +112,7 @@ check_command() {
 check_command "auto.md" "auto.sh"
 check_command "auto-status.md" "auto-status.sh"
 check_command "auto-resume.md" "auto-resume.sh"
+check_command "auto-tick.md" "tick.sh"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 auto_test::summary

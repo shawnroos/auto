@@ -24,14 +24,9 @@ session at re-arm time closes that hole.
 
 Read from ``CLAUDE_CODE_SESSION_ID`` — the session identity, guaranteed by the
 harness to equal the ``session_id`` the PreToolUse hooks receive on stdin. An
-empty/unset id returns None.
-
-NOTE (v0.6.4): this used to ALSO return None when ``CLAUDE_CODE_CHILD_SESSION``
-was truthy. That was a bug — the harness sets that var in EVERY Bash-tool
-subprocess (not just spawned sub-agents), and auto's CLIs always run inside the
-Bash tool, so the guard fired on every call and left the backstop dark + made
-resume refuse. ``CLAUDE_CODE_CHILD_SESSION`` is not a driver-vs-sub-agent signal;
-see ``driving_session_id``.
+empty/unset id returns None. (v0.6.4 removed a bogus ``CLAUDE_CODE_CHILD_SESSION``
+guard — the canonical explanation lives on ``driving_session_id`` below; don't
+re-tell it here.)
 
 CRITICAL for the resume path: a None return must NEVER be passed to
 ``ledger.set_driving_session_id`` — that setter treats None as "clear the

@@ -189,8 +189,8 @@ def _driving_session_id() -> str | None:
     truth shared with the resume re-arm path (lib/auto-resume.py, fix-round-6
     P1), so arm and re-arm record ownership identically. See that module's
     docstring for the full rationale (session-id EQUALITY is the load-bearing
-    fact for both advisor-gate hooks; a child/unset env returns None and MUST
-    NOT be recorded as a cleared field).
+    fact for both advisor-gate hooks; an unset env returns None and MUST NOT be
+    recorded as a cleared field).
     """
     return driver_session.driving_session_id()
 

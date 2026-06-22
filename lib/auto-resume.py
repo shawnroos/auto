@@ -109,7 +109,7 @@ def _emit_rearm(run_id: str, note: str) -> int:
     return 0
 
 
-def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
+def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
     """Re-record THIS interactive session as the run's driving session, or refuse.
 
     fix-round-6 P1. A re-armed run becomes self-driven again, so the advisor-gate
@@ -122,12 +122,20 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
     deterministic backstop dark. Re-recording closes that hole.
 
     Returns 0 on success. Refuses (returns 1, leaves the run paused, prints a loud
-    warning) when CLAUDE_CODE_SESSION_ID is unset/empty (a truly headless context;
-    v0.6.4 dropped the CHILD_SESSION guard, so a child env no longer refuses). We
-    must NOT pass None to ``set_driving_session_id`` (None CLEARS the field, which
-    fails BOTH gates OPEN), and we must NOT re-arm a self-driven run whose backstop
-    is dark. Resume runs INSIDE the live interactive session, so this is normally
-    a real id; None here means an unsupported environment, not a routine case.
+    warning) in two cases:
+
+    1. CLAUDE_CODE_SESSION_ID is unset/empty (a truly headless context; v0.6.4
+       dropped the CHILD_SESSION guard, so a child env no longer refuses). We must
+       NOT pass None to ``set_driving_session_id`` (None CLEARS the field, failing
+       BOTH gates OPEN), and must NOT re-arm a self-driven run whose backstop is dark.
+
+    2. OWNERSHIP-STEAL guard (review #5): the run is currently LIVE and self-driven
+       by a DIFFERENT session (driver=="self", not seam-paused, beat fresh enough
+       that ``is_orphaned`` is False). Re-recording would silently hand the backstop
+       to THIS session while the ORIGINAL driver keeps running — going its backstop
+       dark mid-run. Legitimate cross-session handoff (a paused / orphaned / stale
+       run) is NOT live and passes; a same-session re-record is idempotent and passes;
+       a run with no recorded owner passes (nothing to steal).
     """
     sid = driver_session.driving_session_id()
     if not sid:
@@ -140,7 +148,33 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
             "present).\n"
         )
         return 1
-    ledger.set_driving_session_id(repo_root, run_id, sid)
+    existing = led.get("driving_session_id")
+    loop = led.get("loop") or {}
+    run_is_live = (
+        loop.get("driver") == "self"
+        and not led.get("seam_paused")
+        and not ledger.is_orphaned(led)
+    )
+    if existing and existing != sid and run_is_live:
+        sys.stderr.write(
+            f"resume: refusing to re-arm run {run_id!r} — it is LIVE and owned by "
+            "another session (driver=self, recent heartbeat). Re-arming from this "
+            "session would steal ownership and leave the ORIGINAL driver's "
+            "destructive-action backstop dark mid-run. If the other session is "
+            "actually dead, wait for the orphan grace window (then it becomes "
+            "resumable), or `/auto-resume abort` it.\n"
+        )
+        return 1
+    try:
+        ledger.set_driving_session_id(repo_root, run_id, sid)
+    except ledger.LedgerError as exc:
+        # A torn/locked ledger on the write: surface a structured message and
+        # leave the run paused (safe) rather than a raw traceback (REL-001).
+        sys.stderr.write(
+            f"resume: could not record the driving session for run {run_id!r} "
+            f"({exc}); the run stays paused. Retry `/auto-resume continue`.\n"
+        )
+        return 1
     return 0
 
 
@@ -158,7 +192,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     # Re-record the driving session BEFORE either re-arm branch (both make the
     # run self-driven). On refusal, leave the run paused and DO NOT re-arm — a
     # dark backstop is worse than a not-resumed run (fix-round-6 P1).
-    rc = _rearm_owns_session(ledger, repo_root, run_id)
+    rc = _rearm_owns_session(ledger, repo_root, run_id, led)
     if rc != 0:
         return rc
     if phase == "seam":
@@ -263,7 +297,7 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     # driving session FIRST (same guard as continue) — else the advisor-gate
     # destructive backstop would be dark on the re-armed run. Refuse (leave the
     # run untouched) if the session can't be determined (fix-round-6 P1 parity).
-    rc = _rearm_owns_session(ledger, repo_root, run_id)
+    rc = _rearm_owns_session(ledger, repo_root, run_id, led)
     if rc != 0:
         return rc
     # Mark the plan satisfied. Two atomic writes (set_loop has no gaps_open kwarg);
