@@ -43,6 +43,17 @@ interception change beyond v0.6.0's detect-and-escalate scope; fan-out units car
 the prompt-embedded two-seam instruction instead. The classifier is a
 deterministic minimum-set backstop, not a comprehensive sandbox.
 
+PATH-SCOPING (drive-friction fix — narrows the rm family ONLY): the `rm -rf`/
+`rm -fr` matches are exempted when EVERY path target provably resolves under a
+known-ephemeral root ($TMPDIR / /tmp / /private/tmp / /var/folders) — see
+``_rm_targets_all_ephemeral`` / ``_EPHEMERAL_PREFIXES``. Benign teardown of
+fan-out agents' scratch dirs and the operator's finalize cleanup was
+false-firing the fail-closed backstop and LATCHING the run. This is an allowlist
+(anything not provably ephemeral — relative repo paths, $HOME, the temp ROOT
+itself, `..` traversal, unparseable commands — STILL gates), it does NOT widen
+the residual set above (it only narrows in-scope rm matches), and it does NOT
+touch the git/gh/npm patterns.
+
 rel-001: ALWAYS exit 0 at the process level.
 """
 
@@ -51,6 +62,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -117,12 +129,92 @@ _DESTRUCTIVE_PATTERNS = [
 ]
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Path-scoping for the rm family (drive-friction fix). The `rm -rf`/`rm -fr`
+# patterns above match the verb+flags with no path awareness, so benign teardown
+# of an EPHEMERAL temp dir (fan-out agents' $TMPDIR scratch, the operator's own
+# finalize cleanup) false-fired the fail-closed backstop and LATCHED the run.
+# We exempt an rm ONLY when EVERY one of its path targets provably resolves under
+# a known-ephemeral root — an allowlist, so anything not provably ephemeral
+# (relative paths under the repo, $HOME, the temp root ITSELF, traversal
+# evasions, unparseable commands) still GATES. This refines the rm matches the
+# classifier already catches; it does NOT widen the documented residual set
+# (flag-reorder long-form, compound `a; rm -rf b`, eval/obfuscation all still
+# bypass — see module docstring) and touches ONLY the rm family (the git/gh/npm
+# patterns have no path-exemption concept).
+_PATH_SCOPED_RM_LABELS = frozenset({"rm -rf", "rm -fr"})
+
+# Each prefix carries a trailing separator so deleting the temp ROOT itself
+# (`rm -rf /tmp`) is NOT auto-exempted — only deletions UNDER it. The literal
+# `$TMPDIR`/`${TMPDIR}` tokens are matched because the hook reads the raw
+# `tool_input.command` string the agent wrote, where the var is unexpanded; the
+# resolved macOS form lands under `/var/folders/`/`/private/var/folders/`.
+_EPHEMERAL_PREFIXES = (
+    "/tmp/",
+    "/private/tmp/",
+    "/var/folders/",
+    "/private/var/folders/",
+    "$TMPDIR/",
+    "${TMPDIR}/",
+)
+
+
+def _rm_targets_all_ephemeral(command: str) -> bool:
+    """True iff ``command`` is an ``rm`` whose every path target resolves under a
+    known-ephemeral root (``_EPHEMERAL_PREFIXES``).
+
+    Fail-closed: returns False (→ the backstop still gates) on anything not
+    provably ephemeral — a relative target (resolves under cwd = repo root), a
+    ``$HOME``/repo path, the temp root itself, a ``..`` traversal evasion, an
+    unparseable command, or zero targets. Requires at least one target.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False  # unbalanced quotes / unparseable -> gate.
+    # Locate the rm invocation (bare `rm` or a `/path/to/rm`); classify only the
+    # tokens after it. A compound command (`cd x && rm -rf y`) is a documented
+    # residual — here it simply means the tokens before `rm` are ignored and the
+    # path classification below still applies fail-closed.
+    idx = next(
+        (i for i, t in enumerate(tokens) if t == "rm" or t.endswith("/rm")),
+        None,
+    )
+    if idx is None:
+        return False
+    targets = []
+    end_of_opts = False
+    for tok in tokens[idx + 1:]:
+        if not end_of_opts and tok == "--":
+            end_of_opts = True
+            continue
+        if not end_of_opts and tok.startswith("-"):
+            continue  # an rm flag (-rf, -r, -f, --verbose, ...).
+        targets.append(tok)
+    if not targets:
+        return False
+    for t in targets:
+        if ".." in t:
+            return False  # traversal evasion -> gate.
+        if not any(t.startswith(p) for p in _EPHEMERAL_PREFIXES):
+            return False  # relative / $HOME / repo / temp-root-itself -> gate.
+    return True
+
+
 def _matched_destructive(command: str):
-    """Return the human label of the first destructive match, or None."""
+    """Return the human label of the first destructive match, or None.
+
+    rm-family matches are PATH-SCOPED: an ``rm -rf``/``rm -fr`` whose targets are
+    all ephemeral-temp (``_rm_targets_all_ephemeral``) is treated as benign and
+    skipped — so a real destructive op spelled differently can still match a
+    LATER pattern, and a genuinely destructive rm still returns its label.
+    """
     if not command:
         return None
     for label, pat in _DESTRUCTIVE_PATTERNS:
         if pat.search(command):
+            if label in _PATH_SCOPED_RM_LABELS and _rm_targets_all_ephemeral(command):
+                continue  # ephemeral-temp teardown -> not gated (path-scoping).
             return label
     return None
 

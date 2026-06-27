@@ -333,6 +333,53 @@ for benign in 'git push origin my-feature' 'git push origin bugfix/foo' 'git pus
   assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 done
 
+# ─── action: rm -rf of an EPHEMERAL temp path -> allow (path-scoping) ──────────
+# The destructive backstop is path-aware for the rm family: a deletion whose
+# targets ALL resolve under a known-ephemeral root ($TMPDIR / /tmp /
+# /private/tmp / /var/folders) is benign teardown (fan-out agents' scratch,
+# operator finalize cleanup) and must NOT pause the run. Everything not provably
+# ephemeral still fails closed (the GATE block below).
+for eph in \
+  'rm -rf $TMPDIR/scratch' \
+  'rm -rf "$TMPDIR/scratch"' \
+  'rm -rf ${TMPDIR}/scratch' \
+  'rm -rf /tmp/auto-test.XXXX' \
+  'rm -rf /private/tmp/auto.XXXX' \
+  'rm -rf /private/var/folders/xx/yy/T/auto.XXXX' \
+  'rm -fr /tmp/scratch' \
+  'rm -rf -- /tmp/a /tmp/b'; do
+  it "action: ephemeral '$eph' on live owned run -> allow (path-scoped)"
+  REPO="$(mk_live_owned "action-eph-$(echo "$eph" | tr -dc 'a-z')" actrun sess-AAA)"
+  ev="$(EVENT sess-AAA Bash "$eph")"
+  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+  assert_empty "$out"
+  it "action: ephemeral '$eph' leaves driver==self (no pause)"
+  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+  it "action: ephemeral '$eph' appends NO advisor_audit record"
+  assert_eq "0" "$(rd_audit "$REPO" actrun count)"
+done
+
+# ─── action: rm -rf of a NON-ephemeral path -> deny + PAUSE (fail-closed) ──────
+# Repo-relative paths (resolve under cwd = repo root), $HOME paths, parent-dir
+# escapes, traversal evasions (/tmp/../etc), and the temp ROOT itself are NOT
+# auto-exempted — the allowlist is conservative and anything not provably under
+# an ephemeral root still gates.
+for danger in \
+  'rm -rf build/' \
+  'rm -rf /tmp' \
+  'rm -rf "$HOME/important"' \
+  'rm -rf ../sibling' \
+  'rm -rf /tmp/../etc' \
+  'rm -rf src /tmp/ok'; do
+  it "action: non-ephemeral '$danger' on live owned run -> deny (fail-closed)"
+  REPO="$(mk_live_owned "action-dang-$(echo "$danger" | tr -dc 'a-z')" actrun sess-AAA)"
+  ev="$(EVENT sess-AAA Bash "$danger")"
+  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+  assert_eq "deny" "$(perm_decision "$out")"
+  it "action: non-ephemeral '$danger' -> run PAUSED (driver=manual)"
+  assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
+done
+
 # ─── action: destructive but MISMATCHED session_id -> allow, untouched (scope) ─
 it "action: destructive command but mismatched session_id -> allow (scope: not our run)"
 REPO="$(mk_live_owned action-mismatch actrun sess-AAA)"
