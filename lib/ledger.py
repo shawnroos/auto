@@ -172,6 +172,39 @@ def _cli(argv):
                 return 2
             set_enumerated_units(resolve_repo(), run, unit, units)
             return 0
+        # v0.6.8: the work-loop VERDICT channel — the surface the model/operator
+        # uses to write a unit's verdict and a gate's advance/iterate/exit
+        # decision back through Bash (its only ledger-write tool is this CLI; it
+        # cannot call the Python mutators directly). Repo auto-resolved from
+        # cwd/$CLAUDE_AUTO_REPO (resolve_repo), matching the set-* feedback verbs
+        # above — without these the work-loop is drivable only via the Python API.
+        if cmd == "record-verdict":
+            # record-verdict <run> <unit> <json-findings> [attempt]
+            # json-findings: [{"severity": "...", "note": "..."}, ...]
+            run, unit, payload = argv[1], argv[2], argv[3]
+            findings = json.loads(payload)
+            if not isinstance(findings, list):
+                sys.stderr.write(
+                    "ledger.py: record-verdict findings must be a JSON array\n"
+                )
+                return 2
+            attempt = int(argv[4]) if len(argv) > 4 else None
+            record_verdict(resolve_repo(), run, unit, findings, attempt=attempt)
+            return 0
+        if cmd == "set-verdict-decision":
+            # set-verdict-decision <run> <gate-unit> <decision> [json-payload]
+            # decision: one of advance | iterate | exit
+            run, gate_unit, decision = argv[1], argv[2], argv[3]
+            decision_payload = json.loads(argv[4]) if len(argv) > 4 else None
+            if decision_payload is not None and not isinstance(decision_payload, dict):
+                sys.stderr.write(
+                    "ledger.py: set-verdict-decision payload must be a JSON object\n"
+                )
+                return 2
+            set_verdict_decision(
+                resolve_repo(), run, gate_unit, decision, payload=decision_payload
+            )
+            return 0
         sys.stderr.write(f"ledger.py: unknown subcommand {cmd!r}\n")
         return 2
     except LedgerError as e:

@@ -90,6 +90,72 @@ else
   pass
 fi
 
+# ════════════════════════════════════════════════════════════════════════════
+# Work-loop VERDICT channel (v0.6.8) — record-verdict / set-verdict-decision.
+# Same uninvokable-instruction bug class as the v0.4.3 feedback verbs: the
+# work-loop drives through Bash, so the verdict + gate-decision mutators must be
+# reachable as CLI verbs, repo auto-resolved from $CLAUDE_AUTO_REPO.
+# ════════════════════════════════════════════════════════════════════════════
+
+# record_verdict only writes from a dispatched/verdict-returned/stalled unit, so
+# move the seed plan unit to dispatched first (transition takes an explicit repo).
+bash "$LEDGER_SH" transition "$REPO" rF plan dispatched >/dev/null 2>&1
+
+# ─── record-verdict round-trips findings into the ledger (run-id only) ───────
+it "ledger.sh record-verdict persists findings + flips the unit to verdict-returned"
+bash "$LEDGER_SH" record-verdict rF plan '[{"severity":"blocker","note":"boom"}]' >/dev/null 2>&1
+got_state="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["state"]')"
+got_note="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["findings"][0]["note"]')"
+if [ "$got_state" = "verdict-returned" ] && [ "$got_note" = "boom" ]; then
+  pass
+else
+  fail "record-verdict did not persist (state=${got_state} note=${got_note})"
+fi
+
+# ─── set-verdict-decision persists the gate decision (run-id only) ───────────
+it "ledger.sh set-verdict-decision persists dispatch_context.decision (run-id only)"
+bash "$LEDGER_SH" set-verdict-decision rF plan advance >/dev/null 2>&1
+got_dec="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["dispatch_context"].get("decision")')"
+[ "$got_dec" = "advance" ] && pass || fail "decision not persisted via CLI: ${got_dec}"
+
+# ─── set-verdict-decision carries an optional JSON payload ───────────────────
+it "ledger.sh set-verdict-decision persists an optional decision_payload"
+bash "$LEDGER_SH" set-verdict-decision rF plan iterate '{"emit_count":2}' >/dev/null 2>&1
+got_pl="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["dispatch_context"]["decision_payload"]["emit_count"]')"
+[ "$got_pl" = "2" ] && pass || fail "decision_payload not persisted: ${got_pl}"
+
+# ─── deliberate-fail: non-array findings rejected (rc != 0) ──────────────────
+it "deliberate-fail: record-verdict with non-array findings is rejected (rc != 0)"
+if bash "$LEDGER_SH" record-verdict rF plan '{"not":"array"}' >/dev/null 2>&1; then
+  fail "non-array findings accepted (should have failed)"
+else
+  pass
+fi
+
+# ─── deliberate-fail: invalid finding severity rejected (rc != 0) ────────────
+it "deliberate-fail: record-verdict with an invalid severity is rejected (rc != 0)"
+if bash "$LEDGER_SH" record-verdict rF plan '[{"severity":"bogus","note":"x"}]' >/dev/null 2>&1; then
+  fail "invalid severity accepted (should have failed)"
+else
+  pass
+fi
+
+# ─── deliberate-fail: decision not in the enum rejected (rc != 0) ────────────
+it "deliberate-fail: set-verdict-decision with a non-enum decision is rejected (rc != 0)"
+if bash "$LEDGER_SH" set-verdict-decision rF plan bogus >/dev/null 2>&1; then
+  fail "non-enum decision accepted (should have failed)"
+else
+  pass
+fi
+
+# ─── deliberate-fail: unknown gate unit rejected (rc != 0) ───────────────────
+it "deliberate-fail: set-verdict-decision on an unknown unit is rejected (rc != 0)"
+if bash "$LEDGER_SH" set-verdict-decision rF nosuchunit advance >/dev/null 2>&1; then
+  fail "unknown unit accepted (should have failed)"
+else
+  pass
+fi
+
 rm -rf "$REPO"
 echo ""
 echo "ledger-cli-feedback.test.sh: ${PASS} passed, ${FAIL} failed"
