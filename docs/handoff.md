@@ -1,103 +1,81 @@
-# Spinoff: auto conversation-driven smart entry
+# Spinoff: fix /auto resume printing non-JSON parse noise on stdout
 
 ## Goal
-
-Make `/auto` runnable from **nothing but a conversation** — no pre-written plan or
-issue. The agent assesses the current session's context (including recent
-compacted logs, ~2 days back), recommends a next ce-family step (brainstorm /
-ideate / verify / optimize / work / review …), spins up an ultracode-style
-workflow for that phase that **always** ends in review→verify→fix-until-only-P3,
-drafts a phase goal, and then offers to auto-advance through subsequent phases.
-Net: automate the review/verify/fix loops Shawn currently types by hand every
-time.
+`/auto:auto-resume continue` (and the seam→work resume path) must emit **only**
+the machine-readable re-arm JSON on stdout. Today a resumed agent reports "the
+resume printed a non-JSON message (parse noise), but set-enumerated-units
+succeeded" — i.e. prose is leaking onto the same stdout stream that carries the
+`{"action":"arm-tick", …}` envelope, so the driving agent can't cleanly parse the
+re-arm intent and starts rationalizing past the ledger step.
 
 ## Why now / context
+Field report from an agent driving an `/auto` resume: the ledger op worked
+(`set-enumerated-units` succeeded) but the resume's stdout was polluted, so the
+agent treated the re-arm as "ceremony" noise and skipped straight to building.
+That's a contract break: `lib/tick.sh` documents stdout as "re-arm INTENT as JSON",
+and `_emit_rearm` honors it — but something else on the resume path is writing
+human prose to stdout in the same invocation, ahead of (or around) the JSON.
 
-This is the unifying ask behind every `/auto` smart-entry piece of feedback (see
-memory `feedback_auto_should_be_context_aware_smart_entry`): bare `/auto` should
-GATHER CONTEXT and DETERMINE WHERE TO PICK UP, not force the operator to pick the
-right verb. The conversation we just had is itself the trigger case — a rich
-discussion with enough context to start automated work, but no plan doc to point
-`/auto` at.
-
-It also lands right after a session that (a) fixed the blocked-loop "Goal not yet
-met… continuing" spam, and (b) shipped the `auto-author-goal` skill (auto 0.4.2)
-that drafts model-judgeable goal docs from plans. This feature reuses that skill
-for its "draft a phase goal" step — and inherits its hard-won constraints.
-
-## Key decisions already made
-
-- **auto is PREPARE/EXECUTE, not self-driving** (`feedback_auto_prepare_execute_operator_traps`).
-  The smart-entry layer prepares intents the model executes; it must not assume a
-  bash-loop tick drives itself. Respect this or re-derive finished work.
-- **Reuse `auto-author-goal` for "draft a phase goal"** — don't build a second
-  goal author. It's at `skills/auto-author-goal/SKILL.md` (shipped 0.4.2).
-- **Goals must be AGENT-COMPLETABLE, and auto's own Stop hook owns the verdict —
-  NOT native `/goal`.** Native `/goal` is a bystander auto can neither arm nor
-  clear (only `/goal clear` stops it); a goal whose criteria the agent can't
-  reach loops forever ("never-met loop"). The phase goal here should bind to
-  auto's deterministic exit predicate (all units terminal, only P3 remain), which
-  is exactly the "fix-until-only-low-priority" the spec wants. See memories
-  `project_auto_blocked_loop_goal_spam_fix`, `reference_native_goal_is_model_judged_not_externally_settable_predicate`.
-- **The "fix-until-only-P3" loop already exists** — it's auto's core exit
-  predicate. The smart-entry just needs to wrap a chosen ce phase in it.
-- **There's already a `W` work-only recipe** (`phase_order: ['work']`) and the
-  DX7-style recipe picker (U8). Phase auto-advance (plan→work→review…) likely
-  extends recipe `phase_order` / composes recipes rather than inventing a new
-  engine. A3 (build-first feedback, two work-phases) was deferred to v0.2.1 and is
-  the closest prior art for multi-phase chaining.
-- **Orientation already has a home:** `skills/auto-driver/SKILL.md` +
-  `lib/auto-detect.sh` (hypothesis former) + `commands/auto.md` (NL routing). The
-  conversation-context-aware recommendation is an extension of auto-driver, not a
-  new surface.
+## Key decisions / facts already established (verified in the code, 2026-06-27)
+- **The JSON emitter is correct.** `lib/auto-resume.py:_emit_rearm` (line 97)
+  `json.dump({"action":"arm-tick","run":…,"prompt":"/auto:auto-tick …","note":…},
+  sys.stdout)` + a trailing newline. Clean. Don't change this.
+- **The obvious suspects are already clean** (so the bug is NOT here):
+  - `_rearm_owns_session` (called before `_emit_rearm`) writes **only to stderr**
+    on refusal and returns 0 silently on success.
+  - `ledger.py set-enumerated-units` returns 0 **silently**; all errors → stderr.
+  - The early-return prose lines in `auto-resume.py` (e.g. line 190 "already done")
+    go to stdout but only on terminal no-op paths, not the continue→rearm path.
+- **Prime suspect: the seam→work path.** `_cmd_continue` (line 181) on
+  `phase == "seam"` calls `tick.advance_to_phase(repo_root, run_id, led,
+  to_phase="work")` (line 206) BEFORE `_emit_rearm` (line 207). `advance_to_phase`
+  is where the recipe's **phase-transition emitter** runs and where
+  `set_enumerated_units` is persisted (see `lib/tick_advance.py` ~338-422, the
+  "U5b phase-transition emitter" referenced at line 398). Hypothesis: that emitter
+  (or a helper it calls) prints a human status line to **stdout**, landing ahead of
+  the JSON → exactly the "non-JSON message, but set-enumerated-units succeeded"
+  symptom. **Confirm by tracing every print/sys.stdout.write reachable from
+  `advance_to_phase`.**
+- **Branch base is clean.** `~/projects/auto` local `main` == `origin/main`
+  (`05efed9`), in sync — branch off current HEAD.
 
 ## Open questions / not yet decided
+- **Exact leak site:** which call under `advance_to_phase` writes to stdout? (Could
+  also be an adapter/recipe emitter, or a `logging` handler configured to stdout
+  rather than stderr.) Pin it before fixing.
+- **Fix shape:** enforce a hard "stdout = JSON only, stderr = all human prose"
+  discipline across the resume + tick-advance path. Options: (a) route the emitter's
+  status prose to stderr; (b) capture/suppress emitter stdout inside
+  `advance_to_phase` and re-emit nothing; (c) make the consumer parse only the last
+  stdout line. (a) is the cleanest and matches `tick.sh`'s stated contract — confirm.
+- **Regression guard:** add a test that runs a seam→work resume and asserts stdout
+  is *exactly one* JSON object (json.loads on full stdout succeeds), prose only on
+  stderr. This bug is invisible without it (the JSON is still there, just buried).
+- **Scope:** is `continue` (non-seam, line 218 path) also affected, or only
+  seam→work? The non-seam path skips `advance_to_phase`, so likely seam-only —
+  verify rather than assume.
 
-- **"Route questions to advisor, not the user."** Mechanism is undecided: when
-  auto initializes, the system prompt should make the agent present options to
-  the `advisor` tool instead of firing `AskUserQuestion`. Is this an output-style
-  switch, a UserPromptSubmit/SessionStart hook that injects guidance, or a
-  per-run flag? (Note tension: ce skills use AskUserQuestion heavily; ce-doc-review
-  even pre-loads it. Need a clean override that doesn't break those.)
-- **Reading "recent compacted logs ~2 days back."** What's the source — the
-  `ce-sessions` skill, raw transcript files, or compaction summaries? Define the
-  context-gathering input precisely before building the recommender.
-- **Phase auto-advance UX + mechanism.** After a phase's review/fix converges,
-  auto offers the next phase automatically (debug→fix/review, work→review/fix,
-  plan/review/fix→work/review/fix). Is this a new recipe family, a `phase_order`
-  extension, or recipe chaining? How does the user opt in per-transition vs.
-  fully autonomous?
-- **"ultracode-style workflow"** — does this drive the `Workflow` tool, or auto's
-  existing ledger fan-out, or both? Reconcile auto's loop with ultracode
-  fan-out/verify patterns.
-- **Versioning / cycle fit.** Does this belong in the in-flight v0.5.0
-  workflow-substrate cycle (`docs/plans/2026-05-29-*`)? Check before picking a
-  version line — 0.5.0 is reserved for that work.
-- **ce-family routing taxonomy.** Which ce skills map to which detected context
-  states, and what's the recommendation heuristic?
+## Starting point (concrete)
+- Repo: `~/projects/auto` (origin `shawnroos/auto`), branch from `main` (`05efed9`).
+- `lib/auto-resume.py` — `_emit_rearm` (97), `_cmd_continue` (181), the
+  `advance_to_phase` call (206). 445 lines, small enough to read whole.
+- `lib/tick_advance.py` — `advance_to_phase` + `_persist_enumerated_units` (338) +
+  the U5b emitter (~398-422). **Trace stdout writes from here down.**
+- `lib/tick.sh` — documents the stdout=JSON re-arm contract (top-of-file comment).
+- `lib/ledger.py` set-enumerated-units (163) — already clean, reference only.
+- Consumer side: `skills/auto/SKILL.md` (resume step ~80, 126) and
+  `commands/auto-resume.md` — how the agent is told to parse resume output; the fix
+  may want a one-line contract note here too.
+- Other live `auto` worktrees exist (auto-conversation-entry, auto-plugin-fixes,
+  loop-planning-opt) but none touch `auto-resume.py` — low collision risk.
 
-## Starting point
-
-In `~/projects/auto` (this is the auto plugin repo; HEAD carries the 0.4.2 work):
-- `skills/auto-driver/SKILL.md` — orientation layer to extend.
-- `lib/auto-detect.sh` — hypothesis former (the "assess context" seam).
-- `commands/auto.md` — bare-`/auto` NL routing.
-- `skills/auto/SKILL.md` — the loop driver (§1 goal binding, §4.5 pause).
-- `skills/auto-author-goal/SKILL.md` — reuse for phase-goal drafting.
-- `lib/recipes.py`, `lib/phase-grammar.py`, recipe defs — for phase_order / auto-advance.
-- `docs/contracts/driver-reference.md` — engine theory.
-- `docs/plans/2026-05-29-*` — in-flight v0.5.0 workflow-substrate plan (check overlap).
-
-Memories to read first: `feedback_auto_should_be_context_aware_smart_entry`,
-`feedback_auto_prepare_execute_operator_traps`,
-`project_auto_blocked_loop_goal_spam_fix`,
-`reference_native_goal_is_model_judged_not_externally_settable_predicate`,
-`project_auto_dx7_algorithm_picker`.
-
-Suggested first move: this is exploratory and multi-surface — start with
-`/ce-brainstorm` to lock scope (especially the advisor-routing mechanism and the
-context-source question) before `/ce-plan`.
+## Recommended next step
+`/ce-debug` — this is a localized, well-specified bug with a strong hypothesis and a
+reproducible symptom; debug-trace the stdout leak from `advance_to_phase`, fix the
+channel discipline, add the "stdout is exactly one JSON object" regression test.
+If you'd rather plan first it's small enough to go straight to a fix. Validate the
+hypothesis against the actual `advance_to_phase` code before changing anything.
 
 ## Source session
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos-projects-auto/492b2799-c5c4-4983-abd3-6eaf12c25f1a.jsonl`
-Resume:     `cd /Users/shawnroos/projects/auto && claude -r 492b2799-c5c4-4983-abd3-6eaf12c25f1a`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/dde8ee69-bcee-40bd-a003-27e56020f197.jsonl`
+Resume:     `cd /Users/shawnroos && claude -r dde8ee69-bcee-40bd-a003-27e56020f197`

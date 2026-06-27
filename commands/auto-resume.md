@@ -73,6 +73,13 @@ runs):
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "$ARGUMENTS"`
 
+On the re-arm paths (`continue` / `advance`), the script writes **exactly one
+JSON object** to stdout — the `{"action":"arm-tick", …}` intent. Parse the whole
+of stdout with `json.loads`; there is no prose to strip. All human/diagnostic
+text goes to stderr, never to stdout. (Terminal no-op paths — already-done,
+work-phase advance, abort/retry/skip — print a human status line to stdout
+instead and emit no arm-tick intent.)
+
 If you resolved a freeform sentence into a different canonical form
 (`continue X`, `abort X`, `retry X U`, `skip X U`), invoke the Bash tool
 explicitly with that resolved string rather than going through the

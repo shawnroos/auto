@@ -70,6 +70,30 @@ dispatch:
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop.
 
+**stdout is exactly one JSON object.** Every tick AND every
+`/auto-resume` re-arm path writes a single JSON object to stdout and
+nothing else — parse the WHOLE of stdout with `json.loads`; there is no
+prose to strip and no leading/trailing lines to skip. (The two surfaces
+use different `action` values — a tick emits `action: "rearm"`,
+`/auto-resume` emits `action: "arm-tick"` — but both are exactly one
+JSON object.) All human-readable status, diagnostics, and the prose
+`operator_guidance`/`note` text ride *inside* that object (as fields) or
+on **stderr**, never as loose stdout lines. If you ever see "non-JSON
+noise" on stdout, you are reading stderr merged in — parse stdout alone.
+
+**The `plan-enumerate-pending` handshake is NOT ceremony.** This is a
+*tick* intent (not a resume one): when the plan closes, the tick fires a
+normal `action: "rearm"` intent whose `advance.advanced ==
+"plan-enumerate-pending"` (with a prose `operator_guidance` field
+describing the prepare op). (`/auto-resume advance` on a plan-phase run
+doesn't emit this itself — it emits its own `arm-tick` to arm the tick
+that THEN surfaces the handshake.) The handshake is an instruction, not
+noise: run the enumerate prepare op and stash the work units via
+`ledger.py set-enumerated-units`, **then re-arm the tick**. The NEXT
+tick — once units are stashed — flips `plan → work`. Do NOT read the
+envelope as "done planning, start building" and skip the re-arm: skipping
+it leaves the run at `plan` with the work-loop never armed.
+
 ## 3. Seam
 
 When plan predicate met:
