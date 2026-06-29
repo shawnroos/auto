@@ -95,6 +95,51 @@ def _find_gate_unit(ledger: dict, gate_unit_id: str) -> dict:
     )
 
 
+def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None, judge_verdicts=None) -> dict:
+    """v0.7.0 (U4): run a gate unit's typed ``verification`` criteria and fold
+    them into an advance/iterate SIGNAL via ``verification.aggregate`` (KTD-6).
+
+    Pure of ledger WRITES (so it is unit-testable without a live run): it runs
+    the gate's ``programmatic`` criteria in-process
+    (``verification.evaluate_programmatic``), folds in any already-supplied judge
+    verdicts (``advisor_judge`` / ``model_judge`` / ``human`` — passed in, or
+    previously persisted on ``dispatch_context.judge_verdicts`` by the driver in
+    U5), and returns ``{"signal", "pending_judges", "programmatic_results"}``.
+
+    The CALLER (tick/driver) commits a non-None ``signal`` as the gate's decision
+    via ``ledger_mutators.set_verdict_decision`` — keeping the decision write
+    centralized (``tests/unit/iteration-ast-lint.test.sh``). When
+    ``pending_judges`` is non-empty the signal is None: the gate cannot decide
+    until the driver supplies those verdicts.
+
+    A gate unit with no ``verification`` block returns ``signal=None`` and no
+    pending judges — legacy gates (a1/a2/a4) are unaffected (the field is
+    additive and they never carry it).
+    """
+    gate = _find_gate_unit(ledger, gate_unit_id)
+    crits = gate.get("verification") or []
+    if not crits:
+        return {"signal": None, "pending_judges": [], "programmatic_results": {}}
+    from _bootstrap import load_lib_module  # lazy: avoid import-order coupling
+
+    verification = load_lib_module("verification")
+    programmatic_results = {}
+    for c in crits:
+        if c.get("type") == "programmatic":
+            res = verification.evaluate_programmatic(c, cwd=repo_root)
+            programmatic_results[res["criterion_id"]] = res["status"]
+    jv = dict(judge_verdicts or {})
+    existing = (gate.get("dispatch_context") or {}).get("judge_verdicts") or {}
+    for k, val in existing.items():
+        jv.setdefault(k, val)
+    agg = verification.aggregate(crits, programmatic_results, jv)
+    return {
+        "signal": agg["signal"],
+        "pending_judges": agg["pending_judges"],
+        "programmatic_results": programmatic_results,
+    }
+
+
 def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> dict:
     """Compute the iteration decision the engine should honor THIS tick.
 
