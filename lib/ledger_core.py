@@ -983,7 +983,7 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
     # any pre-declared unit is a work unit. Recipes set `phase` explicitly.
     default_phase = "plan" if loop_phase == "plan" else "work"
     phase = u.get("phase", default_phase)
-    return {
+    nu = {
         "id": u["id"],
         "state": state,
         "phase": phase,
@@ -1021,6 +1021,15 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
         "dispatch_context": dict(u.get("dispatch_context") or {}),
         "last_advanced_at": u.get("last_advanced_at"),
     }
+    # v0.7.0 (verification-gate-hardening, KTD-1): preserve a recipe gate unit's
+    # `verification` block — CONDITIONALLY, only when the source carries it. NOT
+    # defaulted like `dispatch_context`/`attempt`: an unconditional copy would
+    # stamp `[]` onto every legacy unit and change their on-disk shape. This is
+    # the only unit-rebuild point, so preserving here is what lets the runtime
+    # gate (resolve_gate_verification) see the criteria on a real run.
+    if u.get("verification"):
+        nu["verification"] = list(u["verification"])
+    return nu
 
 
 def read_ledger(repo_root: str, run_id: str) -> dict:

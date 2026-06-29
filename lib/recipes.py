@@ -840,6 +840,39 @@ def unit_for(recipe_unit: dict, recipe: dict) -> dict:
     }
 
 
+def _lint_verification_placement(recipe: dict, units: list) -> list:
+    """v0.7.0 (U2/R3): warn when a `verification` block can never be evaluated.
+
+    validate() accepts the block on ANY unit (additive, shape-checked there), but
+    only the iteration.gate_unit's block is ever evaluated (resolve_gate_verification
+    reads the gate unit). So a non-empty block on a non-gate unit — or anywhere when
+    the recipe declares no iteration block at all — is dead config. Warn, don't
+    reject (KTD-2): the field loads fine; this is editorial.
+    """
+    out = []
+    iteration = recipe.get("iteration")
+    if isinstance(iteration, dict):
+        gate_unit = iteration.get("gate_unit")
+        for u in units:
+            if u.get("verification") and u.get("id") != gate_unit:
+                out.append(
+                    f"unit {u.get('id')!r} carries a verification block but is not "
+                    f"the iteration.gate_unit ({gate_unit!r}) — only the gate unit's "
+                    f"verification is evaluated, so these criteria never run; move "
+                    f"them onto {gate_unit!r} or make {u.get('id')!r} the gate"
+                )
+    else:
+        for u in units:
+            if u.get("verification"):
+                out.append(
+                    f"unit {u.get('id')!r} carries a verification block but the "
+                    f"recipe declares no 'iteration' block — verification is only "
+                    f"evaluated at the iteration gate, so these criteria never run; "
+                    f"add an iteration block with gate_unit {u.get('id')!r}"
+                )
+    return out
+
+
 def validate_and_lint(recipe: dict, *, filename: str | None = None):
     """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
     ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
@@ -916,6 +949,8 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                     f"a single wave can take longer than this, in which case "
                     f"the bound will fire before any iteration completes"
                 )
+
+    warnings.extend(_lint_verification_placement(recipe, units))
 
     # description-spoofing: a non-built-in recipe copying a built-in's description.
     desc = (recipe.get("description") or "").strip()

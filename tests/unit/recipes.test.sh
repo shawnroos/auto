@@ -534,6 +534,20 @@ def a2_v030():
         },
     }
 
+def _verif():
+    # A minimal, validate()-passing verification criterion.
+    return {"id": "c1", "type": "programmatic", "argv": ["true"], "check": "exit_zero"}
+
+def lint_verif(r):
+    # "valid:N" where N = # warnings mentioning verification ("rejected" if
+    # validate_and_lint's internal validate() raised). The "valid:" prefix proves
+    # validate() passed (R3: load must still succeed); N isolates the U2 warning.
+    try:
+        warns = recipes.validate_and_lint(r)
+    except recipes.RecipeError:
+        return "rejected"
+    return "valid:%d" % sum(1 for w in warns if "verification" in w)
+
 if op == "a2-v030-happy":
     print(vresult(a2_v030()))
 
@@ -823,6 +837,40 @@ elif op == "g1-isdigit-unicode-superscript":
             "id_prefix": "build-"}}
     }
     print(vresult(r))
+
+elif op == "verif-on-gate":
+    # R3: verification on the iteration.gate_unit ("judge") → no warning.
+    r = a2_v030()
+    r["units"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate unit
+    print(lint_verif(r))
+
+elif op == "verif-off-gate":
+    # R3: verification on a non-gate unit (iteration present) → exactly one warning
+    # naming the unit + the gate.
+    r = a2_v030()
+    r["units"][0]["verification"] = [_verif()]  # plan-1 is not the gate unit
+    print(lint_verif(r))
+
+elif op == "verif-no-iteration":
+    # R3: verification present but NO iteration block at all → one warning
+    # (criteria can never be evaluated). Drop iteration (emit_templates may stay —
+    # the pairing rule is one-directional).
+    r = a2_v030()
+    del r["iteration"]
+    r["units"][3]["verification"] = [_verif()]
+    print(lint_verif(r))
+
+elif op == "verif-two-off-gate":
+    # R3: two non-gate units each carrying verification → one warning each.
+    r = a2_v030()
+    r["units"][0]["verification"] = [_verif()]  # plan-1
+    r["units"][1]["verification"] = [_verif()]  # plan-2
+    print(lint_verif(r))
+
+elif op == "verif-none":
+    # R3 control: no verification anywhere → no new warning. Proves the U2 block
+    # is silent on the common (verification-free) recipe.
+    print(lint_verif(a2_v030()))
 PYEOF
 }
 
@@ -933,6 +981,27 @@ assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 # ValueError, which vresult only handles for RecipeError.
 it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
 assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
+
+# ── v0.7.0 U2 (R3): verification must live on the iteration.gate_unit ────────
+# validate() accepts `verification` on any unit (additive, load must still
+# succeed), but only the gate unit's block is evaluated. validate_and_lint warns
+# when a non-empty block sits off the gate, or when there's no iteration block at
+# all (criteria can never be evaluated). The "valid:N" prefix on each case also
+# asserts validate() still passes (R3).
+it "U2: verification on the gate unit (iteration present) → no warning"
+assert_eq "valid:0" "$(itr verif-on-gate)"
+
+it "U2: verification on a non-gate unit (iteration present) → one warning"
+assert_eq "valid:1" "$(itr verif-off-gate)"
+
+it "U2: verification present but no iteration block → one warning (never evaluated)"
+assert_eq "valid:1" "$(itr verif-no-iteration)"
+
+it "U2: two non-gate units with verification → one warning each"
+assert_eq "valid:2" "$(itr verif-two-off-gate)"
+
+it "U2: no verification anywhere → no new warning"
+assert_eq "valid:0" "$(itr verif-none)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

@@ -227,10 +227,21 @@ the §4.6 pattern:
    non-None `signal`.
 4. **Commit** the signal as the gate's decision via
    `ledger_mutators.set_verdict_decision(repo, run, gate_unit_id, signal)` — the
-   single, centralized decision write.
-5. **Audit** via `ledger.append_advisor_audit(repo, run, kind="advisor",
-   subject="<criterion + gate>", classification="advisor-judge",
-   resolution="<advance|iterate>")`, surfaced in the exit report (§5).
+   single, centralized decision write. A `None` signal means judges are still
+   pending (`pending_judges` non-empty): commit nothing, audit nothing.
+5. **Audit — only when a judge verdict resolved the gate.** When the resolved
+   gate carries a judge-type criterion (`advisor_judge` / `model_judge` /
+   `human`) — i.e. the signal is non-None, so `pending_judges` is empty and every
+   judge criterion contributed a verdict — log one record per judge criterion via
+   `ledger.append_advisor_audit(repo, run, kind="advisor",
+   subject="<gate_unit_id>: <criterion id>",
+   classification="<the criterion's `type`>", resolution="<advance|iterate>")`,
+   surfaced in the exit report (§5). A **programmatic-only** gate (no judge
+   criterion) commits the signal in step 4 with **no** audit record — no judge
+   weighed in. `kind` stays `"advisor"` for every judge type: the audit `kind`
+   enum is intentionally coarse (only `"advisor"`/`"action"` exist), so judge
+   audits reuse `"advisor"` and `classification` carries the specific judge
+   `type`. `subject` is required non-empty.
 
 No model registry, no CLI shell-out, no cross-vendor egress — `advisor` is the
 whole cross-model surface (R10). This composes with §1: the deterministic exit

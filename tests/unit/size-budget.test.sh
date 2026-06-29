@@ -67,7 +67,12 @@ ALLOWED_FILES=(
   # 1 init_ledger arg + 1 type check + a 4-line ledger-dict field comment.
   # A ledger field has no home but init_ledger (the construction chokepoint);
   # the init_ledger split is still the right decomposition, kept off U5.
-  "lib/ledger_core.py:1046"
+  # v0.7.0 KTD-1 (verification-gate-hardening) added the conditional
+  # `verification` preserve in _normalize_unit: a 6-line comment + the
+  # if/assign/return = 9 LOC growth. _normalize_unit is the only unit-rebuild
+  # point, so the preserve has no other home; the init_ledger split remains the
+  # load-bearing decomposition, kept off this fix.
+  "lib/ledger_core.py:1055"
 )
 
 ALLOWED_FUNCTIONS=(

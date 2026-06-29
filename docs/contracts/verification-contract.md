@@ -66,6 +66,13 @@ caller commits a non-None signal as the gate decision via **exactly one**
 `ledger_mutators.set_verdict_decision` call. Driver-side advisor-judging is
 `skills/auto/SKILL.md` §4.7.
 
+The driver writes an `append_advisor_audit` record **only when a judge-type
+criterion (`advisor_judge` / `model_judge` / `human`) resolved the gate** — one
+record per judge criterion, with `classification` carrying that criterion's
+`type`. A programmatic-only gate commits the signal with **no** audit record (no
+judge weighed in); a pending gate (signal `None`) commits nothing and audits
+nothing.
+
 ## 5. Invariants
 
 - The `verification` block is additive; absent → pre-v0.7.0 behavior.
