@@ -74,6 +74,11 @@ def evaluate_programmatic(criterion: dict, cwd: Optional[str] = None) -> dict:
     argv = criterion.get("argv") or []
     check = criterion.get("check")
     timeout = criterion.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)
+    if not argv:
+        # Unreachable via a validated recipe (the validator requires a non-empty
+        # argv), but keep the "never raises" contract honest for the debug CLI
+        # and any unvalidated caller — subprocess.run([]) would raise IndexError.
+        return {"criterion_id": cid, "status": "fail", "evidence": "empty argv (nothing to run)"}
     try:
         proc = subprocess.run(
             list(argv),
