@@ -24,6 +24,9 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 #   # Plan-loop FEEDBACK (v0.4.3) — repo auto-resolved from cwd, pass only <run>:
 #   set-gaps-open <run> <N>                       -> after /ce-doc-review
 #   set-enumerated-units <run> <plan-unit> <json> -> after enumerate (plan-done)
+#   # Work-loop VERDICT channel (v0.6.8) — repo auto-resolved, pass only <run>:
+#   record-verdict <run> <unit> <json-findings> [attempt] -> write a unit verdict
+#   set-verdict-decision <run> <gate> <decision> [json]    -> advance|iterate|exit
 auto::ledger() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
