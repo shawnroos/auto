@@ -204,6 +204,42 @@ destructive backstop) can reach them. When you construct a fan-out unit prompt
     destructive Bash (branch cleanup, file delete, force-push), and the action
     hook cannot gate it — so the constraint MUST ride in the prompt.
 
+### 4.7 Gate advisor-judging — typed verification (v0.7.0, U5)
+
+A recipe gate unit may carry a typed `verification` block (kinds
+`programmatic` / `model_judge` / `advisor_judge` / `human` — see
+`docs/contracts/recipe-format.md` and
+`skills/auto-design/references/verification-taxonomy.md`). At convergence,
+resolve such a gate via `lib/iteration.py::resolve_gate_verification`, which runs
+the `programmatic` criteria in-process and returns a `{signal, pending_judges}`.
+
+When `pending_judges` is non-empty and contains an `advisor_judge` criterion,
+the DRIVER (this session — not the fan-out `do_unit` agent) renders it, reusing
+the §4.6 pattern:
+
+1. **Consult the `advisor`** with the deliverable + the criterion's `rubric_ref`
+   in context. It returns PROSE, not a verdict (`advisor-contract-spike.md`).
+2. **Map the prose to a per-criterion `pass`/`fail`** yourself — the advice is an
+   input to your judgment, exactly as in §4.6.
+3. **Re-resolve** by calling `resolve_gate_verification(... judge_verdicts={...})`
+   with the verdicts you rendered (a `human` criterion routes through the §4.5
+   pause seam instead). When no judges remain pending the call yields a
+   non-None `signal`.
+4. **Commit** the signal as the gate's decision via
+   `ledger_mutators.set_verdict_decision(repo, run, gate_unit_id, signal)` — the
+   single, centralized decision write.
+5. **Audit** via `ledger.append_advisor_audit(repo, run, kind="advisor",
+   subject="<criterion + gate>", classification="advisor-judge",
+   resolution="<advance|iterate>")`, surfaced in the exit report (§5).
+
+No model registry, no CLI shell-out, no cross-vendor egress — `advisor` is the
+whole cross-model surface (R10). This composes with §1: the deterministic exit
+predicate stays the single source of truth; the gate signal only steers
+advance/iterate, never the run's done-state. The decision math lives in
+`lib/verification.py::aggregate` (pure → unit-tested with injected verdicts);
+only this live `advisor` consultation is integration-only (the bash+Python test
+harness cannot stub the `advisor` tool).
+
 ## 5. Exit
 
 Loop exits when tick returns `stop` with `predicate-met` reason and
