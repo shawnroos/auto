@@ -44,15 +44,17 @@ the prompt-embedded two-seam instruction instead. The classifier is a
 deterministic minimum-set backstop, not a comprehensive sandbox.
 
 PATH-SCOPING (drive-friction fix — narrows the rm family ONLY): the `rm -rf`/
-`rm -fr` matches are exempted when EVERY path target provably resolves under a
-known-ephemeral root ($TMPDIR / /tmp / /private/tmp / /var/folders) — see
-``_rm_targets_all_ephemeral`` / ``_EPHEMERAL_PREFIXES``. Benign teardown of
-fan-out agents' scratch dirs and the operator's finalize cleanup was
-false-firing the fail-closed backstop and LATCHING the run. This is an allowlist
-(anything not provably ephemeral — relative repo paths, $HOME, the temp ROOT
-itself, `..` traversal, unparseable commands — STILL gates), it does NOT widen
-the residual set above (it only narrows in-scope rm matches), and it does NOT
-touch the git/gh/npm patterns.
+`rm -fr` matches are exempted when EVERY path target provably resolves to a real
+child under a known-ephemeral root (/tmp / /private/tmp / /var/folders) — see
+``_rm_targets_all_ephemeral``. Benign teardown of fan-out agents' scratch dirs
+and the operator's finalize cleanup was false-firing the fail-closed backstop
+and LATCHING the run. Exemption (unlike gating) is CONSERVATIVE about runtime
+expansion: a target with a glob / command-substitution / brace / unresolved
+`$`-var gates, the temp ROOT itself gates, `..` traversal gates, and `$TMPDIR` is
+RESOLVED from the hook env (unset/empty -> gate, so `rm -rf "$TMPDIR/"` can't
+expand to `rm -rf /`). This is an allowlist that only narrows in-scope rm
+matches; it does NOT widen the residual set above and does NOT touch the
+git/gh/npm patterns.
 
 rel-001: ALWAYS exit 0 at the process level.
 """
@@ -86,6 +88,14 @@ _DRIVING_SESSION_KEY = "driving_session_id"
 # record (never the raw regex source — that would be opaque to the agent reading
 # permissionDecisionReason). The set is the documented minimum; residual bypasses
 # (see module docstring) are out of scope.
+# The two rm labels are named constants because the path-scoping exemption keys
+# off them by value (``_PATH_SCOPED_RM_LABELS`` below): if a label string here
+# and there ever drift apart, path-scoping silently becomes a dead no-op and
+# every ephemeral rm starts false-pausing again. Sharing the constant makes that
+# impossible.
+_RM_RF_LABEL = "rm -rf"
+_RM_FR_LABEL = "rm -fr"
+
 _DESTRUCTIVE_PATTERNS = [
     # Force-push in ANY flag position (fix-round-5 P1). `push` always precedes
     # its force flag in real git, so match by ORDER (`push` ... force flag), not
@@ -111,8 +121,8 @@ _DESTRUCTIVE_PATTERNS = [
     ("git restore . (discard working tree)", re.compile(r"restore\b[^\n]*\s\.(?:\s|$)")),
     ("git clean -f / -fdx", re.compile(r"clean\s+-[a-z]*f")),
     ("git branch -D (force-delete)", re.compile(r"branch\s+-D\b")),
-    ("rm -rf", re.compile(r"\brm\s+-rf\b")),
-    ("rm -fr", re.compile(r"\brm\s+-fr\b")),  # the one flag-reorder residual we DO catch
+    (_RM_RF_LABEL, re.compile(r"\brm\s+-rf\b")),
+    (_RM_FR_LABEL, re.compile(r"\brm\s+-fr\b")),  # the one flag-reorder residual we DO catch
     # Known external-publish / irreversible-GitHub endpoints (KTD-4). Minimal,
     # explicit set — extend deliberately, not speculatively. `npm publish` /
     # `gh release create` are the concrete irreversible publishes in this
@@ -142,40 +152,99 @@ _DESTRUCTIVE_PATTERNS = [
 # (flag-reorder long-form, compound `a; rm -rf b`, eval/obfuscation all still
 # bypass — see module docstring) and touches ONLY the rm family (the git/gh/npm
 # patterns have no path-exemption concept).
-_PATH_SCOPED_RM_LABELS = frozenset({"rm -rf", "rm -fr"})
+_PATH_SCOPED_RM_LABELS = frozenset({_RM_RF_LABEL, _RM_FR_LABEL})
 
-# Each prefix carries a trailing separator so deleting the temp ROOT itself
-# (`rm -rf /tmp`) is NOT auto-exempted — only deletions UNDER it. The literal
-# `$TMPDIR`/`${TMPDIR}` tokens are matched because the hook reads the raw
-# `tool_input.command` string the agent wrote, where the var is unexpanded; the
-# resolved macOS form lands under `/var/folders/`/`/private/var/folders/`.
-_EPHEMERAL_PREFIXES = (
+# Drift guard: every rm-family pattern MUST participate in path-scoping. Without
+# this, adding a third `rm ` variant to _DESTRUCTIVE_PATTERNS but forgetting to
+# list its label here would make that variant gate ALL ephemeral teardown again
+# (a silent regression of the fix). Enforced at import, so the test suite catches
+# it immediately.
+assert all(
+    label in _PATH_SCOPED_RM_LABELS
+    for label, _ in _DESTRUCTIVE_PATTERNS
+    if label.startswith("rm ")
+), "every 'rm ' label in _DESTRUCTIVE_PATTERNS must be in _PATH_SCOPED_RM_LABELS"
+
+# Ephemeral roots are ABSOLUTE, literal prefixes. Each carries a trailing
+# separator AND ``_under_ephemeral_root`` additionally requires the target to be
+# a real child (``norm != rootdir``), so deleting the temp ROOT itself
+# (`rm -rf /tmp` / `rm -rf /tmp/`) is NOT exempted — only deletions UNDER it.
+# `$TMPDIR` is handled separately (``_resolve_tmpdir_target``), NOT as a literal
+# prefix: matching the literal token would exempt a string whose RUNTIME value
+# the classifier cannot see — and exemption (unlike gating) must be conservative
+# about expansion, or `rm -rf "$TMPDIR/"` with TMPDIR unset (the common case in a
+# hook subprocess / CI) expands to `rm -rf /`.
+_EPHEMERAL_ABS_PREFIXES = (
     "/tmp/",
     "/private/tmp/",
-    "/var/folders/",
-    "/private/var/folders/",
-    "$TMPDIR/",
-    "${TMPDIR}/",
+    "/var/folders/",          # full macOS user-temp tree: T/ (temp) AND C/
+    "/private/var/folders/",  # (regenerable caches) — both ephemeral-safe for rm.
 )
+_TMPDIR_TOKENS = ("$TMPDIR/", "${TMPDIR}/")
+# Metacharacters whose runtime expansion the classifier cannot resolve — a target
+# containing any of these is NEVER provably ephemeral, so it gates: command
+# substitution (`$(`, backtick), globs (`*`, `?`, `[`), brace expansion (`{`).
+# (`$`-variables are handled separately: only an exact $TMPDIR/ prefix resolves.)
+_UNRESOLVABLE_METACHARS = ("$(", "`", "*", "?", "[", "{")
+
+
+def _under_ephemeral_root(path: str) -> bool:
+    """True iff a FULLY-LITERAL path is a real child strictly UNDER an ephemeral
+    root — never the root itself, never via a ``..`` segment."""
+    if ".." in path.split("/"):
+        return False  # traversal evasion (e.g. /tmp/../etc) -> gate.
+    norm = os.path.normpath(path)
+    for root in _EPHEMERAL_ABS_PREFIXES:
+        rootdir = root.rstrip("/")
+        if norm != rootdir and norm.startswith(rootdir + "/"):
+            return True
+    return False
+
+
+def _resolve_tmpdir_target(t: str):
+    """Resolve a ``$TMPDIR/<rest>`` / ``${TMPDIR}/<rest>`` token to its literal
+    runtime path, or None when it cannot be SAFELY resolved (→ gate).
+
+    Gates (returns None) on: a bare-root token (`$TMPDIR/` with empty remainder,
+    which expands to the temp root or — if TMPDIR is unset — to `/`), a nested
+    variable in the remainder, or an unset/empty TMPDIR (the `rm -rf /` hole).
+    The resolved path is still subject to ``_under_ephemeral_root`` by the caller,
+    so a `$TMPDIR/../x` remainder is caught there.
+    """
+    for tok in _TMPDIR_TOKENS:
+        if t.startswith(tok):
+            rest = t[len(tok):]
+            if not rest or "$" in rest:
+                return None  # bare temp root, or a further unresolvable var.
+            base = os.environ.get("TMPDIR")
+            if not base:
+                return None  # unset/empty -> `$TMPDIR/x` expands to `/x` -> gate.
+            return base.rstrip("/") + "/" + rest
+    return None
 
 
 def _rm_targets_all_ephemeral(command: str) -> bool:
-    """True iff ``command`` is an ``rm`` whose every path target resolves under a
-    known-ephemeral root (``_EPHEMERAL_PREFIXES``).
+    """True iff ``command`` is an ``rm`` whose EVERY path target provably resolves
+    to a real child under an ephemeral-temp root.
 
     Fail-closed: returns False (→ the backstop still gates) on anything not
     provably ephemeral — a relative target (resolves under cwd = repo root), a
-    ``$HOME``/repo path, the temp root itself, a ``..`` traversal evasion, an
-    unparseable command, or zero targets. Requires at least one target.
+    ``$HOME``/repo path, the temp root itself, a ``..`` traversal, a glob /
+    command-substitution / brace target whose expansion is unknowable, an
+    unresolvable ``$TMPDIR``, an unparseable command, or zero targets. Requires at
+    least one target. Documented residual (NOT chased): an inline
+    ``TMPDIR=/repo rm -rf "$TMPDIR/x"`` resolves against the hook's outer TMPDIR —
+    this is the eval/obfuscation residual class (see module docstring).
     """
     try:
         tokens = shlex.split(command)
     except ValueError:
         return False  # unbalanced quotes / unparseable -> gate.
     # Locate the rm invocation (bare `rm` or a `/path/to/rm`); classify only the
-    # tokens after it. A compound command (`cd x && rm -rf y`) is a documented
-    # residual — here it simply means the tokens before `rm` are ignored and the
-    # path classification below still applies fail-closed.
+    # tokens after it. A compound command (`rm -rf /tmp/a && rm -rf /repo`) is a
+    # documented residual that still gates here: the shell operators (`&&`, `;`)
+    # and the second command's tokens are collected as non-ephemeral targets and
+    # fail the check below — fail-closed, not exempt.
     idx = next(
         (i for i, t in enumerate(tokens) if t == "rm" or t.endswith("/rm")),
         None,
@@ -194,9 +263,16 @@ def _rm_targets_all_ephemeral(command: str) -> bool:
     if not targets:
         return False
     for t in targets:
-        if ".." in t:
-            return False  # traversal evasion -> gate.
-        if not any(t.startswith(p) for p in _EPHEMERAL_PREFIXES):
+        # Resolve a leading $TMPDIR FIRST (its `${...}` braces are not brace
+        # EXPANSION), then run the metachar + root checks on the literal result.
+        # Any other `$`-var is unresolvable -> gate.
+        if "$" in t:
+            t = _resolve_tmpdir_target(t)
+            if t is None:
+                return False  # unresolvable $-var (incl. $HOME, $(...), /tmp/$X).
+        if any(m in t for m in _UNRESOLVABLE_METACHARS):
+            return False  # glob / command-subst / brace -> unknowable -> gate.
+        if not _under_ephemeral_root(t):
             return False  # relative / $HOME / repo / temp-root-itself -> gate.
     return True
 

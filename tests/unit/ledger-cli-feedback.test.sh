@@ -156,6 +156,22 @@ else
   pass
 fi
 
+# ─── deliberate-fail: non-dict decision payload rejected (rc != 0) ───────────
+it "deliberate-fail: set-verdict-decision with a non-object payload is rejected (rc != 0)"
+if bash "$LEDGER_SH" set-verdict-decision rF plan advance '[1,2]' >/dev/null 2>&1; then
+  fail "non-object decision payload accepted (should have failed)"
+else
+  pass
+fi
+
+# ─── deliberate-fail: non-integer record-verdict attempt rejected (rc != 0) ──
+it "deliberate-fail: record-verdict with a non-integer attempt is rejected (rc != 0)"
+if bash "$LEDGER_SH" record-verdict rF plan '[{"severity":"minor","note":"x"}]' notanint >/dev/null 2>&1; then
+  fail "non-integer attempt accepted (should have failed)"
+else
+  pass
+fi
+
 rm -rf "$REPO"
 echo ""
 echo "ledger-cli-feedback.test.sh: ${PASS} passed, ${FAIL} failed"

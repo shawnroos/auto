@@ -333,18 +333,16 @@ for benign in 'git push origin my-feature' 'git push origin bugfix/foo' 'git pus
   assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 done
 
-# ─── action: rm -rf of an EPHEMERAL temp path -> allow (path-scoping) ──────────
+# ─── action: rm -rf of an EPHEMERAL LITERAL temp path -> allow (path-scoping) ──
 # The destructive backstop is path-aware for the rm family: a deletion whose
-# targets ALL resolve under a known-ephemeral root ($TMPDIR / /tmp /
-# /private/tmp / /var/folders) is benign teardown (fan-out agents' scratch,
-# operator finalize cleanup) and must NOT pause the run. Everything not provably
-# ephemeral still fails closed (the GATE block below).
+# targets ALL resolve to a real child under a known-ephemeral root (/tmp,
+# /private/tmp, /var/folders, /private/var/folders) is benign teardown (fan-out
+# agents' scratch, operator finalize cleanup) and must NOT pause the run.
+# Everything not provably ephemeral still fails closed (the GATE block below).
 for eph in \
-  'rm -rf $TMPDIR/scratch' \
-  'rm -rf "$TMPDIR/scratch"' \
-  'rm -rf ${TMPDIR}/scratch' \
   'rm -rf /tmp/auto-test.XXXX' \
   'rm -rf /private/tmp/auto.XXXX' \
+  'rm -rf /var/folders/xx/yy/T/auto.XXXX' \
   'rm -rf /private/var/folders/xx/yy/T/auto.XXXX' \
   'rm -fr /tmp/scratch' \
   'rm -rf -- /tmp/a /tmp/b'; do
@@ -359,26 +357,74 @@ for eph in \
   assert_eq "0" "$(rd_audit "$REPO" actrun count)"
 done
 
+# ─── action: $TMPDIR teardown with a RESOLVABLE TMPDIR -> allow ────────────────
+# The field false-positives were `rm -rf "$TMPDIR/..."`. The hook resolves
+# $TMPDIR from its own env: pin it under an ephemeral root so the resolve is
+# deterministic (CI/Linux often leave TMPDIR unset — see the GATE case below).
+PINNED_TMPDIR="/private/var/folders/zz/T"
+for eph in \
+  'rm -rf $TMPDIR/scratch' \
+  'rm -rf "$TMPDIR/scratch"' \
+  'rm -rf ${TMPDIR}/scratch'; do
+  it "action: ephemeral '$eph' (TMPDIR set) on live owned run -> allow"
+  REPO="$(mk_live_owned "action-tmpdir-$(echo "$eph" | tr -dc 'a-z')" actrun sess-AAA)"
+  ev="$(EVENT sess-AAA Bash "$eph")"
+  out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
+  assert_empty "$out"
+  it "action: ephemeral '$eph' (TMPDIR set) leaves driver==self (no pause)"
+  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+done
+
 # ─── action: rm -rf of a NON-ephemeral path -> deny + PAUSE (fail-closed) ──────
 # Repo-relative paths (resolve under cwd = repo root), $HOME paths, parent-dir
-# escapes, traversal evasions (/tmp/../etc), and the temp ROOT itself are NOT
-# auto-exempted — the allowlist is conservative and anything not provably under
-# an ephemeral root still gates.
+# escapes, traversal evasions, the temp ROOT itself (bare OR trailing-slash),
+# globs/command-substitution/brace targets whose runtime expansion is unknowable,
+# and any unresolved $-variable are NOT auto-exempted — the allowlist is
+# conservative and anything not provably under an ephemeral root still gates.
 for danger in \
   'rm -rf build/' \
   'rm -rf /tmp' \
+  'rm -rf /tmp/' \
+  'rm -rf /var/folders/' \
   'rm -rf "$HOME/important"' \
   'rm -rf ../sibling' \
   'rm -rf /tmp/../etc' \
-  'rm -rf src /tmp/ok'; do
+  'rm -rf src /tmp/ok' \
+  'rm -rf /tmp/*' \
+  'rm -rf /tmp/{a,b}' \
+  'rm -rf /tmp/$VAR' \
+  'rm -rf "/tmp/$(echo ..)/etc"'; do
   it "action: non-ephemeral '$danger' on live owned run -> deny (fail-closed)"
   REPO="$(mk_live_owned "action-dang-$(echo "$danger" | tr -dc 'a-z')" actrun sess-AAA)"
   ev="$(EVENT sess-AAA Bash "$danger")"
-  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+  out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
   assert_eq "deny" "$(perm_decision "$out")"
   it "action: non-ephemeral '$danger' -> run PAUSED (driver=manual)"
   assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
 done
+
+# ─── action: $TMPDIR that can't be SAFELY resolved -> deny (fail-closed) ───────
+# The regression guard for the `rm -rf "$TMPDIR/"` -> `rm -rf /` hole: with
+# TMPDIR UNSET (the hook-subprocess / CI default), `$TMPDIR/x` expands to `/x`,
+# so the exemption must gate. And a `$TMPDIR/../x` remainder (traversal) must
+# gate even when TMPDIR IS set.
+it "action: 'rm -rf \$TMPDIR/x' with TMPDIR UNSET -> deny (would expand to /x)"
+REPO="$(mk_live_owned action-tmpdirunset actrun sess-AAA)"
+ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/x')"
+out="$(printf '%s' "$ev" | env -u TMPDIR "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out")"
+
+it "action: 'rm -rf \$TMPDIR/' (bare temp root) -> deny"
+REPO="$(mk_live_owned action-tmpdirroot actrun sess-AAA)"
+ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/')"
+out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out")"
+
+it "action: 'rm -rf \$TMPDIR/../x' (traversal, TMPDIR set) -> deny"
+REPO="$(mk_live_owned action-tmpdirtrav actrun sess-AAA)"
+ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/../x')"
+out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
+assert_eq "deny" "$(perm_decision "$out")"
 
 # ─── action: destructive but MISMATCHED session_id -> allow, untouched (scope) ─
 it "action: destructive command but mismatched session_id -> allow (scope: not our run)"
