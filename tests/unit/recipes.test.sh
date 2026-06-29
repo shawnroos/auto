@@ -131,6 +131,17 @@ elif op == "validate-firsterr":
             print("units")
         else:
             print("other:" + m)
+elif op == "verification-cap":
+    # v0.7.0 (U2): the per-unit `verification` array is capped at 16 criteria to
+    # bound gate-evaluation cost. Build a unit carrying 17 INDIVIDUALLY-VALID
+    # `human` criteria (unique ids) so the ONLY violation is the over-cap length
+    # — proves the cap fires independent of per-criterion validity. Inlining 17
+    # criteria as a shell JSON string is unwieldy, so build it here.
+    crits = [{"id": "c%d" % i, "type": "human"} for i in range(17)]
+    recipe = {"name": "x", "version": "1",
+              "units": [{"id": "g", "phase": "plan", "invokes": {},
+                         "verification": crits}]}
+    print(vresult(recipe))
 PYEOF
 }
 
@@ -197,6 +208,56 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"
 
 it "missing required field (units) rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
+
+# ─── v0.7.0 U2: typed `verification` block on a (gate) unit (KTD-1/2/3) ───────
+# A unit MAY carry an optional `verification` array of typed, checkable done-
+# conditions (programmatic | model_judge | advisor_judge | human), validated at
+# LOAD time in validate() — the SAME gate the skill's write-time
+# validate_and_lint runs (KTD-3). Shape per
+# skills/auto-design/references/verification-taxonomy.md. The base recipe is the
+# minimal valid shape (one plan-phase unit, default phase_order); only the
+# `verification` array varies, so a valid/rejected verdict isolates the criterion
+# validator. Covers AE1 (schema half).
+it "U2: programmatic exit_zero criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"tests-green","type":"programmatic","argv":["bash","tests/run.sh"],"check":"exit_zero","timeout_sec":120}]}]}')"
+
+it "U2: programmatic stdout_contains criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"has-ok","type":"programmatic","argv":["echo","ok"],"check":{"stdout_contains":"ok"}}]}]}')"
+
+it "U2: advisor_judge criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"design-sound","type":"advisor_judge","rubric_ref":"verification-rubric"}]}]}')"
+
+it "U2: model_judge criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"reads-clean","type":"model_judge"}]}]}')"
+
+it "U2: human criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"owner-signoff","type":"human","prompt":"Sign off?"}]}]}')"
+
+it "U2: unknown criterion type → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"telepathic"}]}]}')"
+
+it "U2: programmatic missing argv → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","check":"exit_zero"}]}]}')"
+
+it "U2: programmatic with malformed check (unknown check key) → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","argv":["true"],"check":{"stdout_startswith":"x"}}]}]}')"
+
+it "U2: unknown key for criterion type (human carrying argv) → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"human","prompt":"ok","argv":["true"]}]}]}')"
+
+it "U2: verification over the 16-criteria cap (17 entries) → rejected"
+assert_eq "rejected" "$(rec verification-cap)"
+
+it "U2: criterion missing type → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1"}]}]}')"
+
+it "U2: duplicate criterion id within a unit → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"dup","type":"human"},{"id":"dup","type":"human"}]}]}')"
+
+# Regression anchor: the four built-ins (none carry a `verification` array) MUST
+# still validate after the additive U2 field — proves no regression (AE1).
+it "U2: a1/a2/a4/w still validate after the additive verification field"
+assert_eq "a1:valid,a2:valid,a4:valid,w:valid" "$(rec validate-builtins)"
 
 # ─── v0.6.0 U6: structural phase_order validator (literal allow-list dropped) ─
 # U6 replaced the `phase_order not in _V1_ALLOWED_PHASE_ORDERS` literal gate

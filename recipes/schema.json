@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ce/auto/recipes/schema.json",
+  "title": "auto recipe",
+  "description": "Documentation schema for an auto recipe (the named, file-backed JSON declaration of a workflow topology). The hand-rolled validator lib/recipes.py::validate() is the ENFORCER — it is pure-stdlib (no jsonschema dependency, install-anywhere) and applies cross-field integrity rules this schema only sketches (depends_on integrity, the iteration<->emit_templates pairing rule, phase membership). See docs/contracts/recipe-format.md for the LOCKED prose contract. If this schema and validate() ever disagree, validate() wins.",
+  "type": "object",
+  "required": ["name", "version", "units"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Recipe id; non-empty, matches the filename stem."
+    },
+    "version": {
+      "type": "string",
+      "description": "Format version (currently \"1\")."
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line summary; shown in the picker + rendered card."
+    },
+    "default_adapter": {
+      "enum": ["ce", "native"],
+      "description": "Adapter used when --adapter is not passed."
+    },
+    "phase_order": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "The run's phase sequence. Validated STRUCTURALLY (v0.6.0/U6): every element a non-empty string; terminal_phase, every unit/emit_template phase, and every phase_transition from/to MUST be a member. Default [\"plan\",\"seam\",\"work\"]."
+    },
+    "terminal_phase": {
+      "type": "string",
+      "description": "Phase whose completion ends the run. Default \"work\". MUST be a member of phase_order."
+    },
+    "phase_transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "emitter"],
+        "additionalProperties": false,
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "emitter": {
+            "enum": [
+              "plan_output_to_work_units",
+              "judge_winner_to_work_units",
+              "plan_output_to_paired_builders",
+              "brainstorm_output_to_plan_unit"
+            ],
+            "description": "MUST be a V1-registered phase-boundary emitter name (validate() rejects any other). iterate_template is within-phase and never named here."
+          }
+        }
+      }
+    },
+    "units": {
+      "type": "array",
+      "description": "The declared units. MUST be non-empty for a work-only ([\"work\"]) recipe.",
+      "items": { "$ref": "#/$defs/unit" }
+    },
+    "iteration": {
+      "type": "object",
+      "description": "(v0.3.0, additive) Outcomes-gated iteration block — see recipe-format.md §6.",
+      "required": ["gate_unit", "bound"],
+      "additionalProperties": false,
+      "properties": {
+        "gate_unit": { "type": "string" },
+        "emit_template": { "type": "string" },
+        "bound": {
+          "type": "object",
+          "required": ["max_attempts"],
+          "additionalProperties": false,
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1 },
+            "max_wall_seconds": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "emit_templates": {
+      "type": "object",
+      "description": "(v0.3.0, additive) Map of <template_name> -> partial unit shape materialized by iterate_template — see recipe-format.md §7.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["phase", "invokes", "id_prefix"],
+        "additionalProperties": false,
+        "properties": {
+          "phase": { "type": "string" },
+          "id_prefix": { "type": "string", "minLength": 1 },
+          "invokes": { "type": "object" }
+        }
+      }
+    },
+    "expected_emit_outputs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "(v0.3.0, additive — F4) Unit ids materialized by a phase-boundary emitter, declared so depends_on integrity accepts them — see recipe-format.md §8."
+    },
+    "plan_presatisfied": {
+      "type": "boolean",
+      "description": "(v0.4.3, KTD-15) Declares the plan phase already-satisfied (W). Coherence checked by validate()."
+    },
+    "python_hook": {
+      "description": "RESERVED — parses but the V1 engine ignores it. The ONLY tolerated unknown-ish top-level key."
+    }
+  },
+  "$defs": {
+    "unit": {
+      "type": "object",
+      "required": ["id", "phase"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Unique within the recipe, non-empty." },
+        "phase": { "type": "string", "description": "MUST be a member of phase_order." },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Unit ids this unit waits for. Each member must be in units[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
+        },
+        "invokes": {
+          "type": "object",
+          "description": "What the unit invokes — adapter_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
+        },
+        "verification": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "(v0.7.0, U2 — KTD-1) Optional array of typed, checkable done-conditions layered onto the existing iterate/advance/exit gate decision. Capped at 16 to bound gate-evaluation cost. Criterion ids must be unique within the unit. Shape per skills/auto-design/references/verification-taxonomy.md.",
+          "items": { "$ref": "#/$defs/verification_criterion" }
+        }
+      }
+    },
+    "verification_criterion": {
+      "type": "object",
+      "description": "A single typed verification criterion. `type` selects the allowed key set (NOT a flat union): a programmatic criterion carrying `prompt`, or a human criterion carrying `argv`, is rejected as an unknown field for its type.",
+      "oneOf": [
+        {
+          "title": "programmatic",
+          "description": "A deterministic check the engine runs with no model in the loop.",
+          "type": "object",
+          "required": ["id", "type", "argv", "check"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "programmatic" },
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" },
+              "description": "Non-empty argv list (no shell string)."
+            },
+            "check": { "$ref": "#/$defs/programmatic_check" },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Optional positive int; default 30. Booleans rejected."
+            }
+          }
+        },
+        {
+          "title": "model_judge / advisor_judge",
+          "description": "model_judge = the dispatched work agent's own verdict; advisor_judge = a stronger transcript-aware second opinion from the `advisor` tool (driver-evaluated).",
+          "type": "object",
+          "required": ["id", "type"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "enum": ["model_judge", "advisor_judge"] },
+            "rubric_ref": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional non-empty rubric reference."
+            }
+          }
+        },
+        {
+          "title": "human",
+          "description": "A checkpoint only a human can clear — routes through auto's pause seam.",
+          "type": "object",
+          "required": ["id", "type"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "human" },
+            "prompt": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional non-empty prompt shown at the checkpoint."
+            }
+          }
+        }
+      ]
+    },
+    "programmatic_check": {
+      "description": "The programmatic `check` discriminator: the string \"exit_zero\", or a single-key object {stdout_contains: str} | {stdout_equals: str}.",
+      "oneOf": [
+        { "const": "exit_zero" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "stdout_contains": { "type": "string" },
+            "stdout_equals": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

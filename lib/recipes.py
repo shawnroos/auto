@@ -121,7 +121,25 @@ _KNOWN_TOPLEVEL = frozenset(
         "plan_presatisfied",
     }
 )
-_KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes"})
+_KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes", "verification"})
+# v0.7.0 (U2): typed `verification` block on a (gate) unit. A unit MAY carry an
+# optional `verification` array of typed, checkable done-conditions layered onto
+# the existing iterate/advance/exit gate decision (KTD-1). The validator is
+# hand-rolled (pure stdlib, no jsonschema — see the module docstring); the same
+# `validate()` is the load-time AND write-time gate (KTD-3). Per-type allowed-key
+# sets (NOT a flat union) so a programmatic criterion carrying `prompt`, or a
+# human criterion carrying `argv`, is rejected as an unknown field for its type.
+_KNOWN_VERIFICATION_TYPES = frozenset(
+    {"programmatic", "model_judge", "advisor_judge", "human"}
+)
+_KNOWN_VERIFICATION_KEYS_PROGRAMMATIC = frozenset(
+    {"id", "type", "argv", "check", "timeout_sec"}
+)
+_KNOWN_VERIFICATION_KEYS_JUDGE = frozenset({"id", "type", "rubric_ref"})
+_KNOWN_VERIFICATION_KEYS_HUMAN = frozenset({"id", "type", "prompt"})
+# Cap the array to bound gate-evaluation cost — a gate that runs 100 programmatic
+# subprocesses per tick is a footgun, not a feature.
+_MAX_VERIFICATION_CRITERIA = 16
 # v0.3.0 (U5): the field set an emit_templates ENTRY may carry. Same depth as
 # `_KNOWN_UNIT_KEYS` for `units[]` — mechanical reject of unknown inner keys so
 # a typo in a template ("invoke" vs "invokes") doesn't silently no-op at emit.
@@ -280,6 +298,143 @@ def _validate_phase_order(recipe: dict) -> list:
     return phase_order
 
 
+def _validate_verification_check(uid: str, cid: str, check) -> None:
+    """The programmatic `check` discriminator: a string `"exit_zero"`, or a
+    single-key object `{stdout_contains: str}` | `{stdout_equals: str}`. Reject
+    an empty dict, a multi-key dict, an unknown key, a non-string value, or any
+    other type."""
+    if isinstance(check, str):
+        if check != "exit_zero":
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: string check "
+                f"must be 'exit_zero'; got {check!r}"
+            )
+        return
+    if isinstance(check, dict):
+        if len(check) != 1:
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: object check must "
+                f"have exactly one key (stdout_contains | stdout_equals); got "
+                f"keys {sorted(check)!r}"
+            )
+        ck, cv = next(iter(check.items()))
+        if ck not in ("stdout_contains", "stdout_equals"):
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: unknown check key "
+                f"{ck!r}; known: ['stdout_contains', 'stdout_equals']"
+            )
+        if not isinstance(cv, str):
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: check {ck!r} value "
+                f"must be a string; got {cv!r}"
+            )
+        return
+    _bad(
+        f"unit {uid!r}: verification criterion {cid!r}: check must be 'exit_zero' "
+        f"or an object {{stdout_contains|stdout_equals: str}}; got {check!r}"
+    )
+
+
+def _validate_verification_programmatic(uid: str, cid: str, c: dict) -> None:
+    """type=programmatic type-fields: a non-empty `argv` list[str], a `check`
+    discriminator, and an optional positive-int `timeout_sec`."""
+    argv = c.get("argv")
+    if not isinstance(argv, list) or not argv:
+        _bad(
+            f"unit {uid!r}: verification criterion {cid!r}: programmatic requires "
+            f"a non-empty 'argv' list; got {argv!r}"
+        )
+    for a in argv:
+        if not isinstance(a, str):
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: argv entries must "
+                f"be strings; got {a!r}"
+            )
+    if "check" not in c:
+        _bad(
+            f"unit {uid!r}: verification criterion {cid!r}: programmatic requires "
+            f"a 'check'"
+        )
+    _validate_verification_check(uid, cid, c["check"])
+    if "timeout_sec" in c:
+        ts = c["timeout_sec"]
+        # Reject bool first — bool subclasses int, so a plain isinstance(ts, int)
+        # would accept True/False (the same trap guarded for max_attempts).
+        if isinstance(ts, bool) or not isinstance(ts, int) or ts <= 0:
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: timeout_sec must "
+                f"be a positive int; got {ts!r}"
+            )
+
+
+def _validate_verification(u: dict) -> None:
+    """v0.7.0 (U2): validate the OPTIONAL per-unit `verification` array (KTD-1).
+    A unit that omits it validates exactly as before (additive). Each criterion
+    is `{id: unique non-empty str, type ∈ {programmatic, model_judge,
+    advisor_judge, human}}` plus type-specific fields. Unknown criterion keys are
+    rejected against the PER-TYPE allowed-key set, an unknown `type` value is
+    rejected, and the array is capped at _MAX_VERIFICATION_CRITERIA. Enforced
+    here in validate() so it is load-bearing for BOTH callers (engine load +
+    skill write-time validate_and_lint)."""
+    crits = u.get("verification")
+    if crits is None:
+        return
+    uid = u["id"]
+    if not isinstance(crits, list):
+        _bad(f"unit {uid!r}: verification must be a list; got {crits!r}")
+    if len(crits) > _MAX_VERIFICATION_CRITERIA:
+        _bad(
+            f"unit {uid!r}: verification has {len(crits)} criteria; the cap is "
+            f"{_MAX_VERIFICATION_CRITERIA} (bounds gate-evaluation cost)"
+        )
+    seen_ids = set()
+    for c in crits:
+        if not isinstance(c, dict):
+            _bad(f"unit {uid!r}: each verification criterion must be a JSON object")
+        cid = c.get("id")
+        if not isinstance(cid, str) or not cid:
+            _bad(f"unit {uid!r}: verification criterion missing non-empty 'id'")
+        if cid in seen_ids:
+            _bad(f"unit {uid!r}: duplicate verification criterion id: {cid!r}")
+        seen_ids.add(cid)
+        ctype = c.get("type")
+        if ctype not in _KNOWN_VERIFICATION_TYPES:
+            _bad(
+                f"unit {uid!r}: verification criterion {cid!r}: unknown type "
+                f"{ctype!r}; known: {sorted(_KNOWN_VERIFICATION_TYPES)}"
+            )
+        # Per-type known-keys: reject e.g. a programmatic criterion carrying
+        # `prompt`, or a human criterion carrying `argv`.
+        if ctype == "programmatic":
+            allowed = _KNOWN_VERIFICATION_KEYS_PROGRAMMATIC
+        elif ctype in ("model_judge", "advisor_judge"):
+            allowed = _KNOWN_VERIFICATION_KEYS_JUDGE
+        else:  # human
+            allowed = _KNOWN_VERIFICATION_KEYS_HUMAN
+        for ck in c:
+            if ck not in allowed:
+                _bad(
+                    f"unit {uid!r}: verification criterion {cid!r} (type "
+                    f"{ctype!r}): unknown field {ck!r}; known: {sorted(allowed)}"
+                )
+        if ctype == "programmatic":
+            _validate_verification_programmatic(uid, cid, c)
+        elif ctype in ("model_judge", "advisor_judge"):
+            rr = c.get("rubric_ref")
+            if rr is not None and (not isinstance(rr, str) or not rr):
+                _bad(
+                    f"unit {uid!r}: verification criterion {cid!r}: rubric_ref "
+                    f"must be a non-empty string when present; got {rr!r}"
+                )
+        else:  # human
+            pr = c.get("prompt")
+            if pr is not None and (not isinstance(pr, str) or not pr):
+                _bad(
+                    f"unit {uid!r}: verification criterion {cid!r}: prompt must be "
+                    f"a non-empty string when present; got {pr!r}"
+                )
+
+
 def _validate_units(recipe: dict, phase_order: list) -> set:
     """Per-unit shape: known keys, non-empty unique id, phase ∈ phase_order,
     depends_on/invokes shape, prompt_template path-bounded. Returns the set of
@@ -309,6 +464,7 @@ def _validate_units(recipe: dict, phase_order: list) -> set:
             _bad(f"unit {u['id']!r}: invokes must be an object")
         if "prompt_template" in inv:
             _check_prompt_template(inv["prompt_template"], f"unit {u['id']!r}")
+        _validate_verification(u)
     return unit_ids
 
 
@@ -647,6 +803,8 @@ def list_available(repo_root: str):
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".json"):
                 continue
+            if fn == "schema.json":
+                continue  # the recipe-shape doc (see module docstring), not a recipe
             nm = fn[:-5]
             if nm in seen:
                 continue  # first tier wins
