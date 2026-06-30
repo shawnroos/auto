@@ -131,6 +131,17 @@ elif op == "validate-firsterr":
             print("units")
         else:
             print("other:" + m)
+elif op == "verification-cap":
+    # v0.7.0 (U2): the per-unit `verification` array is capped at 16 criteria to
+    # bound gate-evaluation cost. Build a unit carrying 17 INDIVIDUALLY-VALID
+    # `human` criteria (unique ids) so the ONLY violation is the over-cap length
+    # — proves the cap fires independent of per-criterion validity. Inlining 17
+    # criteria as a shell JSON string is unwieldy, so build it here.
+    crits = [{"id": "c%d" % i, "type": "human"} for i in range(17)]
+    recipe = {"name": "x", "version": "1",
+              "units": [{"id": "g", "phase": "plan", "invokes": {},
+                         "verification": crits}]}
+    print(vresult(recipe))
 PYEOF
 }
 
@@ -197,6 +208,56 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"
 
 it "missing required field (units) rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
+
+# ─── v0.7.0 U2: typed `verification` block on a (gate) unit (KTD-1/2/3) ───────
+# A unit MAY carry an optional `verification` array of typed, checkable done-
+# conditions (programmatic | model_judge | advisor_judge | human), validated at
+# LOAD time in validate() — the SAME gate the skill's write-time
+# validate_and_lint runs (KTD-3). Shape per
+# skills/auto-design/references/verification-taxonomy.md. The base recipe is the
+# minimal valid shape (one plan-phase unit, default phase_order); only the
+# `verification` array varies, so a valid/rejected verdict isolates the criterion
+# validator. Covers AE1 (schema half).
+it "U2: programmatic exit_zero criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"tests-green","type":"programmatic","argv":["bash","tests/run.sh"],"check":"exit_zero","timeout_sec":120}]}]}')"
+
+it "U2: programmatic stdout_contains criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"has-ok","type":"programmatic","argv":["echo","ok"],"check":{"stdout_contains":"ok"}}]}]}')"
+
+it "U2: advisor_judge criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"design-sound","type":"advisor_judge","rubric_ref":"verification-rubric"}]}]}')"
+
+it "U2: model_judge criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"reads-clean","type":"model_judge"}]}]}')"
+
+it "U2: human criterion → valid"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"owner-signoff","type":"human","prompt":"Sign off?"}]}]}')"
+
+it "U2: unknown criterion type → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"telepathic"}]}]}')"
+
+it "U2: programmatic missing argv → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","check":"exit_zero"}]}]}')"
+
+it "U2: programmatic with malformed check (unknown check key) → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","argv":["true"],"check":{"stdout_startswith":"x"}}]}]}')"
+
+it "U2: unknown key for criterion type (human carrying argv) → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"human","prompt":"ok","argv":["true"]}]}]}')"
+
+it "U2: verification over the 16-criteria cap (17 entries) → rejected"
+assert_eq "rejected" "$(rec verification-cap)"
+
+it "U2: criterion missing type → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1"}]}]}')"
+
+it "U2: duplicate criterion id within a unit → rejected"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"dup","type":"human"},{"id":"dup","type":"human"}]}]}')"
+
+# Regression anchor: the four built-ins (none carry a `verification` array) MUST
+# still validate after the additive U2 field — proves no regression (AE1).
+it "U2: a1/a2/a4/w still validate after the additive verification field"
+assert_eq "a1:valid,a2:valid,a4:valid,w:valid" "$(rec validate-builtins)"
 
 # ─── v0.6.0 U6: structural phase_order validator (literal allow-list dropped) ─
 # U6 replaced the `phase_order not in _V1_ALLOWED_PHASE_ORDERS` literal gate
@@ -472,6 +533,20 @@ def a2_v030():
             }
         },
     }
+
+def _verif():
+    # A minimal, validate()-passing verification criterion.
+    return {"id": "c1", "type": "programmatic", "argv": ["true"], "check": "exit_zero"}
+
+def lint_verif(r):
+    # "valid:N" where N = # warnings mentioning verification ("rejected" if
+    # validate_and_lint's internal validate() raised). The "valid:" prefix proves
+    # validate() passed (R3: load must still succeed); N isolates the U2 warning.
+    try:
+        warns = recipes.validate_and_lint(r)
+    except recipes.RecipeError:
+        return "rejected"
+    return "valid:%d" % sum(1 for w in warns if "verification" in w)
 
 if op == "a2-v030-happy":
     print(vresult(a2_v030()))
@@ -762,6 +837,40 @@ elif op == "g1-isdigit-unicode-superscript":
             "id_prefix": "build-"}}
     }
     print(vresult(r))
+
+elif op == "verif-on-gate":
+    # R3: verification on the iteration.gate_unit ("judge") → no warning.
+    r = a2_v030()
+    r["units"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate unit
+    print(lint_verif(r))
+
+elif op == "verif-off-gate":
+    # R3: verification on a non-gate unit (iteration present) → exactly one warning
+    # naming the unit + the gate.
+    r = a2_v030()
+    r["units"][0]["verification"] = [_verif()]  # plan-1 is not the gate unit
+    print(lint_verif(r))
+
+elif op == "verif-no-iteration":
+    # R3: verification present but NO iteration block at all → one warning
+    # (criteria can never be evaluated). Drop iteration (emit_templates may stay —
+    # the pairing rule is one-directional).
+    r = a2_v030()
+    del r["iteration"]
+    r["units"][3]["verification"] = [_verif()]
+    print(lint_verif(r))
+
+elif op == "verif-two-off-gate":
+    # R3: two non-gate units each carrying verification → one warning each.
+    r = a2_v030()
+    r["units"][0]["verification"] = [_verif()]  # plan-1
+    r["units"][1]["verification"] = [_verif()]  # plan-2
+    print(lint_verif(r))
+
+elif op == "verif-none":
+    # R3 control: no verification anywhere → no new warning. Proves the U2 block
+    # is silent on the common (verification-free) recipe.
+    print(lint_verif(a2_v030()))
 PYEOF
 }
 
@@ -872,6 +981,27 @@ assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 # ValueError, which vresult only handles for RecipeError.
 it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
 assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
+
+# ── v0.7.0 U2 (R3): verification must live on the iteration.gate_unit ────────
+# validate() accepts `verification` on any unit (additive, load must still
+# succeed), but only the gate unit's block is evaluated. validate_and_lint warns
+# when a non-empty block sits off the gate, or when there's no iteration block at
+# all (criteria can never be evaluated). The "valid:N" prefix on each case also
+# asserts validate() still passes (R3).
+it "U2: verification on the gate unit (iteration present) → no warning"
+assert_eq "valid:0" "$(itr verif-on-gate)"
+
+it "U2: verification on a non-gate unit (iteration present) → one warning"
+assert_eq "valid:1" "$(itr verif-off-gate)"
+
+it "U2: verification present but no iteration block → one warning (never evaluated)"
+assert_eq "valid:1" "$(itr verif-no-iteration)"
+
+it "U2: two non-gate units with verification → one warning each"
+assert_eq "valid:2" "$(itr verif-two-off-gate)"
+
+it "U2: no verification anywhere → no new warning"
+assert_eq "valid:0" "$(itr verif-none)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

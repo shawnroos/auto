@@ -986,6 +986,60 @@ PYEOF
 )"
 assert_eq "rejected" "$rej"
 
+# ─── Scenario 18 (U3, v0.7.0): _normalize_unit preserves `verification` ───────
+# KTD-1: a recipe gate unit's `verification` block must survive normalization so
+# resolve_gate_verification sees it on a real run. CONDITIONAL preservation —
+# present iff the source carried it; a unit WITHOUT it gets NO key (not None/[]),
+# so legacy ledger unit shapes are unchanged (the regression guard).
+
+it "U3: _normalize_unit preserves a unit's verification block unchanged"
+got="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, json
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+crit = [{"id": "c1", "type": "programmatic", "check": "x"}]
+nu = m.ledger_core._normalize_unit({"id": "G1", "verification": crit})
+print("ok" if nu.get("verification") == crit else "mismatch:%r" % nu.get("verification"))
+PYEOF
+)"
+assert_eq "ok" "$got"
+
+it "U3: _normalize_unit on a unit WITHOUT verification leaves NO key (no shape change)"
+got="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+nu = m.ledger_core._normalize_unit({"id": "U1"})
+# Assert the KEY IS ABSENT — not None, not [] (that would change every ledger's shape).
+print("absent" if "verification" not in nu else "present:%r" % nu.get("verification"))
+PYEOF
+)"
+assert_eq "absent" "$got"
+
+it "U3: round-trip init_ledger -> read_ledger retains the gate unit's verification"
+got="$("$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+run = "vgate"
+crit = [{"id": "c1", "type": "programmatic", "check": "x"},
+        {"id": "c2", "type": "advisor_judge", "prompt": "ok?"}]
+m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+              units=[{"id": "G1", "state": "pending", "verification": crit},
+                     {"id": "U1", "state": "pending"}],
+              iteration={"gate_unit": "G1"})
+L = m.read_ledger(repo, run)
+by = {u["id"]: u for u in L["units"]}
+gate_ok = by["G1"].get("verification") == crit
+# the non-gate unit must NOT have grown a verification key (regression).
+legacy_clean = "verification" not in by["U1"]
+print("ok" if (gate_ok and legacy_clean) else "fail gate=%r legacy=%r" % (
+    by["G1"].get("verification"), "verification" in by["U1"]))
+PYEOF
+)"
+assert_eq "ok" "$got"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger.test.sh: ${PASS} passed, ${FAIL} failed"

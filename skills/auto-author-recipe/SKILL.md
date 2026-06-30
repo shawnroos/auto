@@ -103,6 +103,16 @@ must reference a real unit (or an `emit_templates` id_prefix); when
 `bound.max_attempts` must be a positive int (bool values are rejected, since
 `isinstance(True, int)` is True in Python).
 
+**Typed verification criteria (v0.7.0).** The gate unit may also carry an
+optional `verification` array — typed pass/fail criteria the engine resolves to
+drive the gate's `verdict.decision` (programmatic checks and/or judge criteria).
+It belongs on the unit named by `iteration.gate_unit`; criteria placed on any
+other unit are never evaluated (`validate_and_lint` surfaces that as a warning —
+the same lint layer step 2 above shows). Do not restate the field rules here —
+`skills/auto-design/references/verification-taxonomy.md` and
+`docs/contracts/verification-contract.md` are the authoritative SSOT for the
+criterion shape, types, and aggregation.
+
 See `docs/contracts/recipe-format.md` §6 + §7 for the full field set and
 `skills/auto/SKILL.md` §0.5 for the engine's routing semantics.
 

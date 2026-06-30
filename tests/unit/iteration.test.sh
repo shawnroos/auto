@@ -70,11 +70,53 @@ def make_led(decision, attempts=0, active_wall_seconds=0,
         "active_wall_seconds": active_wall_seconds,
     }
 
+def make_verif_led(crits, dispatch_context=None):
+    """A minimal ledger with one gate unit 'g' carrying a verification block."""
+    return {"units": [{"id": "g", "phase": "work", "state": "verdict-returned",
+                       "dispatch_context": dispatch_context or {},
+                       "verification": crits}]}
+
+_TRUE = {"argv": ["true"], "check": "exit_zero"}
+_FALSE = {"argv": ["false"], "check": "exit_zero"}
+
 if op == "advance":
     led = make_led("advance", attempts=1)
     r = iteration.evaluate_decision(led, "judge")
     print(json.dumps({k: r.get(k) for k in (
         "decision_effective","original_decision","bound_breached","bound_type")}))
+
+elif op == "verif-advance":
+    led = make_verif_led([dict(_TRUE, id="a", type="programmatic"),
+                          dict(_TRUE, id="b", type="programmatic")])
+    print(iteration.resolve_gate_verification(led, "g")["signal"])
+
+elif op == "verif-iterate":
+    led = make_verif_led([dict(_TRUE, id="a", type="programmatic"),
+                          dict(_FALSE, id="b", type="programmatic")])
+    print(iteration.resolve_gate_verification(led, "g")["signal"])
+
+elif op == "verif-pending":
+    led = make_verif_led([dict(_TRUE, id="a", type="programmatic"),
+                          {"id": "j", "type": "advisor_judge"}])
+    r = iteration.resolve_gate_verification(led, "g")
+    print(f'{r["signal"]}|{",".join(r["pending_judges"])}')
+
+elif op == "verif-injected":
+    led = make_verif_led([dict(_TRUE, id="a", type="programmatic"),
+                          {"id": "j", "type": "advisor_judge"}])
+    print(iteration.resolve_gate_verification(led, "g", judge_verdicts={"j": "pass"})["signal"])
+
+elif op == "verif-persisted":
+    # judge verdict already persisted on dispatch_context (the U5 driver path)
+    led = make_verif_led([dict(_TRUE, id="a", type="programmatic"),
+                          {"id": "j", "type": "advisor_judge"}],
+                         dispatch_context={"judge_verdicts": {"j": "fail"}})
+    print(iteration.resolve_gate_verification(led, "g")["signal"])
+
+elif op == "verif-legacy":
+    led = make_verif_led([])  # no criteria → legacy gate, untouched
+    r = iteration.resolve_gate_verification(led, "g")
+    print(f'{r["signal"]}|{len(r["pending_judges"])}')
 
 elif op == "iterate-under":
     led = make_led("iterate", attempts=2, max_attempts=5)
@@ -373,6 +415,25 @@ assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-list)"
 # iteration.py → this test goes RED with "raised:AttributeError".
 it "compute_pending_state: iteration.bound='corrupted-string' (non-dict) → returns False (no raise)"
 assert_eq "returned:False" "$(run_iter pending-bound-non-dict)"
+
+# ── U4: resolve_gate_verification (typed-verification → advance/iterate signal) ─
+it "U4 resolve_gate_verification: all programmatic pass → signal 'advance'"
+assert_eq "advance" "$(run_iter verif-advance)"
+
+it "U4: one programmatic fail → signal 'iterate'"
+assert_eq "iterate" "$(run_iter verif-iterate)"
+
+it "U4: advisor_judge with no verdict → signal None, pending 'j'"
+assert_eq "None|j" "$(run_iter verif-pending)"
+
+it "U4: injected advisor verdict (pass) + programmatic pass → 'advance'"
+assert_eq "advance" "$(run_iter verif-injected)"
+
+it "U4: judge verdict persisted on dispatch_context (fail) → 'iterate'"
+assert_eq "iterate" "$(run_iter verif-persisted)"
+
+it "U4: gate without verification block → signal None, no pending (legacy untouched)"
+assert_eq "None|0" "$(run_iter verif-legacy)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

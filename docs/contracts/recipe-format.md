@@ -16,6 +16,12 @@
 > within the same phase, or stops with an audit trail. A recipe that declares
 > neither validates exactly as a v0.2.0 recipe (R7 backward compatibility).
 >
+> **v0.7.0 additions** (purely additive — see §11 for the typed `verification`
+> block): a `units[]` entry MAY carry an optional `verification` array — typed,
+> checkable done-conditions (programmatic / model_judge / advisor_judge / human)
+> layered onto the existing gate decision. A unit that omits it validates exactly
+> as before.
+>
 > **Reading test:** a recipe author (human or the authoring skill) should be able
 > to write a valid recipe from THIS file alone. If `validate` rejects something
 > this doc says is valid (or vice versa), that is a contract bug — fix the
@@ -60,6 +66,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 | `phase` | yes | string | MUST be a member of `phase_order`. |
 | `depends_on` | no | string[] | unit ids this unit waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `units[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` emitter materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary emitter materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
 | `invokes` | no | object | what the unit invokes — `adapter_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger unit's `dispatch_context` at load (after path-bounding). |
+| `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x recipes — they validate unchanged. |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
 path with no `..` segments and no leading `/`. A traversal or absolute value is
@@ -342,3 +349,77 @@ path), so no malformed topology can ship.
 - `docs/contracts/adapter-contract.md` — the ops a unit's `invokes` references.
   **Unchanged for v0.3.0** — the iteration primitive lives entirely on the
   engine side; no new adapter ops are introduced.
+- `skills/auto-design/references/verification-taxonomy.md` — the canonical shape
+  of a typed `verification` criterion (§11); `recipes/schema.json` documents the
+  same shape as a JSON Schema. `validate()` is the enforcer of both.
+
+## 11. `verification` — typed gate criteria (v0.7.0+)
+
+A `units[]` entry MAY carry an optional `verification` array: typed, checkable
+done-conditions layered onto the existing iterate/advance/exit gate decision
+(KTD-1). It attaches to the gate unit (the `iteration.gate_unit` mechanism); it
+is **not** a new emitter and does **not** add topology grammar. It is also **not**
+a second exit judge — the deterministic Stop predicate
+(`blockers==0 ∧ majors==0 ∧ all_units_terminal`) stays the run's exit spine;
+criteria only steer the gate decision (R11). A unit that omits `verification`
+validates exactly as a pre-v0.7.0 recipe (additive — R7).
+
+The array is capped at **16 criteria** (bounds gate-evaluation cost). Each entry
+is a criterion object `{ "id": <unique non-empty str>, "type": <one of four>, … }`.
+Criterion `id`s MUST be unique within the unit. `type` MUST be one of exactly
+four values; an unknown `type`, an unknown key for the criterion's type, a
+duplicate `id`, or an array longer than 16 is a validation error at recipe
+**load** time (the same `validate()` the skill's write-time `validate_and_lint`
+runs — KTD-3), not only at write time.
+
+**Per-type fields** (the allowed-key set is keyed on `type` — NOT a flat union,
+so a programmatic criterion carrying `prompt`, or a human criterion carrying
+`argv`, is rejected as an unknown field for its type):
+
+| `type` | required type-fields | optional type-fields |
+|--------|----------------------|----------------------|
+| `programmatic` | `argv` (non-empty list of strings — argv only, no shell string) + `check` | `timeout_sec` (positive int; default 30; booleans rejected) |
+| `model_judge` | — | `rubric_ref` (non-empty string) |
+| `advisor_judge` | — | `rubric_ref` (non-empty string) |
+| `human` | — | `prompt` (non-empty string) |
+
+- **programmatic** — a deterministic check the engine runs with no model in the
+  loop. `check` is one of: the string `"exit_zero"` (pass iff the process exits
+  0); the object `{ "stdout_contains": <substr> }` (pass iff stdout contains the
+  substring); or the object `{ "stdout_equals": <string> }` (pass iff stripped
+  stdout equals it). A `check` object MUST carry exactly one of those two keys.
+- **model_judge** — the dispatched work agent's own verdict (auto's existing
+  same-model review).
+- **advisor_judge** — a stronger, transcript-aware second opinion from auto's
+  `advisor` tool (driver-evaluated — the in-house replacement for looper's
+  cross-vendor council; no model registry, no CLI shell-out).
+- **human** — a checkpoint only a human can clear; routes through auto's pause
+  seam.
+
+```json
+{
+  "units": [
+    {
+      "id": "gate", "phase": "work",
+      "invokes": {"adapter_op": "review"},
+      "verification": [
+        {"id": "tests-green", "type": "programmatic",
+         "argv": ["bash", "tests/run.sh"], "check": "exit_zero",
+         "timeout_sec": 120},
+        {"id": "prints-ok", "type": "programmatic",
+         "argv": ["echo", "ok"], "check": {"stdout_contains": "ok"}},
+        {"id": "design-sound", "type": "advisor_judge",
+         "rubric_ref": "verification-rubric"},
+        {"id": "owner-signoff", "type": "human", "prompt": "Ship it?"}
+      ]
+    }
+  ]
+}
+```
+
+The criterion shape is pinned in
+`skills/auto-design/references/verification-taxonomy.md` (the design skill's
+canonical reference) and mirrored as a JSON Schema in `recipes/schema.json`. The
+hand-rolled `lib/recipes.py::validate()` is the enforcer of all three; if the
+doc, the schema, and the validator ever disagree, that is a contract bug —
+`validate()` wins.

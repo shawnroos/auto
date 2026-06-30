@@ -106,6 +106,22 @@ short-circuit at the top of `_tick_body`:
 
 A misbehaving gate agent cannot loop forever.
 
+### Typed verification (v0.7.0, U4)
+
+A gate unit may carry a typed `verification` block (criteria of kind
+`programmatic` / `model_judge` / `advisor_judge` / `human` — see
+`recipe-format.md` and `skills/auto-design/references/verification-taxonomy.md`).
+`lib/iteration.py::resolve_gate_verification` runs the `programmatic` criteria
+in-process (`lib/verification.py`) and folds them with any driver-supplied
+`dispatch_context.judge_verdicts` into an advance/iterate **signal** via the
+pure `verification.aggregate` (KTD-6). When non-programmatic criteria have no
+supplied verdict the signal is None and `pending_judges` names them — the driver
+(§ advisor gate, U5) consults the `advisor` for each `advisor_judge`, supplies
+the verdicts, and the caller commits the resulting signal as the gate's
+`decision` via `set_verdict_decision`. The deterministic exit predicate is
+unchanged — verification only steers the gate; it never becomes a second exit
+judge.
+
 ### Operator kill-switch
 
 `CLAUDE_AUTO_DISABLE_ITERATION=1` makes `advance_iteration_loop`
