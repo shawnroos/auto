@@ -771,6 +771,97 @@ ledger_init "u14-edgeless" \
   >/dev/null 2>&1
 assert_eq "w1,w2,w3" "$(orch_ready "u14-edgeless")"
 
+# ════════════════════════════════════════════════════════════════════════════
+# U14 P2 anti-livelock — the FULL chain proves no silent stall. A bad
+# model-emitted depends_on (dangling / self / cycle) enters via
+# set_enumerated_units, flows through the A1 emitter, materializes onto a work
+# ledger, and ready_units MUST still return a dispatchable unit (never the empty
+# set forever). ledger-mutators.test.sh proves the edge is cleaned; here we
+# prove the readiness engine is actually un-stalled — the real cure for the
+# livelock the finding describes.
+# ════════════════════════════════════════════════════════════════════════════
+livelock_chain() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module, load_ledger
+m = load_ledger()
+e = load_lib_module("unit_emitters")
+o = load_lib_module("orchestrator")
+op = sys.argv[2]
+
+
+def chain(run, batch):
+    """plan ledger → set_enumerated_units(batch) → A1 emitter → work ledger →
+    ready_units. Returns the comma-joined ready ids of the materialized work
+    units. A non-empty result means the livelock is cured."""
+    repo = os.path.join(os.environ["HOME"], "chain-repo")
+    os.makedirs(repo, exist_ok=True)
+    p = m.ledger_path(repo, run)
+    if os.path.exists(p):
+        os.unlink(p)
+    m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  units=[{"id": "plan", "state": "pending", "phase": "plan"}])
+    m.set_enumerated_units(repo, run, "plan", batch)
+    led = m.read_ledger(repo, run)
+    work = e.plan_output_to_work_units(led, "work")
+    wrun = run + "-w"
+    wp = m.ledger_path(repo, wrun)
+    if os.path.exists(wp):
+        os.unlink(wp)
+    units = [{"id": w["id"], "state": "pending", "phase": "work",
+              "depends_on": w["depends_on"]} for w in work]
+    m.init_ledger(repo, wrun, adapter="ce", loop_phase="work",
+                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  units=units)
+    print(",".join(o.ready_units(repo, wrun)))
+
+
+if op == "dangling":
+    chain("ll-dangling", [{"id": "w1", "invokes": {}, "depends_on": ["ghost"]}])
+elif op == "self":
+    chain("ll-self", [{"id": "w1", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "two-cycle":
+    chain("ll-2cyc",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "three-cycle":
+    chain("ll-3cyc",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w3"]},
+           {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "forward-ref":
+    chain("ll-fwd",
+          [{"id": "w1", "invokes": {}, "depends_on": []},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "mixed":
+    chain("ll-mixed",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]},
+           {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+PYEOF
+}
+
+it "U14 no-hang: dangling id edge → work unit materializes ready (NOT permanently pending)"
+assert_eq "w1" "$(livelock_chain dangling)"
+
+it "U14 no-hang: self-edge → work unit materializes ready (a self-dep never satisfies)"
+assert_eq "w1" "$(livelock_chain self)"
+
+it "U14 no-hang: 2-cycle → broken; w2 becomes ready (progress, not a mutual dead-lock)"
+assert_eq "w2" "$(livelock_chain two-cycle)"
+
+it "U14 no-hang: 3-cycle → broken; w3 becomes ready (generalizes past pairwise)"
+assert_eq "w3" "$(livelock_chain three-cycle)"
+
+it "U14 preserved: valid sibling forward-ref survives AND is enforced (only w1 ready; w2 waits)"
+assert_eq "w1" "$(livelock_chain forward-ref)"
+
+it "U14 combined: cycle+forward-ref batch → cycle broken (w2 ready), w3's valid edge still enforced"
+assert_eq "w2" "$(livelock_chain mixed)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"

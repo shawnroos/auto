@@ -298,6 +298,132 @@ def set_gaps_open(repo_root, run_id, gaps_open: int):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
+def _find_depends_on_back_edge(adj):
+    """Return one ``(u, v)`` back edge if the batch-internal graph ``adj`` has a
+    cycle, else ``None``. Iterative colour-DFS in insertion (batch) order so the
+    edge chosen for removal is deterministic.
+
+    ``adj`` maps a batch unit id → its list of batch-internal dep ids. A dep that
+    is NOT itself an ``adj`` key is a leaf (either an edge to an existing ledger
+    unit or a batch unit with no outgoing edge) and cannot continue a cycle — the
+    ``v not in adj`` guard skips it, so ``color[v]`` is never indexed for a
+    non-node (no KeyError).
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in adj}
+    for root in adj:
+        if color[root] != WHITE:
+            continue
+        color[root] = GRAY
+        stack = [(root, iter(adj[root]))]
+        while stack:
+            node, deps = stack[-1]
+            descended = False
+            for v in deps:
+                if v not in adj:            # leaf — not a batch node with edges
+                    continue
+                if color[v] == GRAY:        # back edge → cycle
+                    return (node, v)
+                if color[v] == WHITE:
+                    color[v] = GRAY
+                    stack.append((v, iter(adj[v])))
+                    descended = True
+                    break
+                # BLACK: already fully explored — a forward/cross edge, fine.
+            if not descended:
+                color[node] = BLACK
+                stack.pop()
+    return None
+
+
+def _sanitize_enumerated_depends_on(enumerated, existing_ids):
+    """Strip model-emitted ``depends_on`` edges that would SILENTLY stall the run.
+
+    Returns ``(sanitized, dropped)`` — ``sanitized`` is a fresh list of the same
+    item dicts with cleaned ``depends_on`` lists; ``dropped`` is a list of
+    ``(unit_id, dep_id, reason)`` for the on-ledger forensic marker.
+
+    An edge ``unit -> dep`` is VALID only if ``dep`` names EITHER a sibling
+    enumerated unit in THIS batch (forward-refs allowed — mirrors
+    ``recipes._validate_depends_on`` tolerating emitter-output forward-refs) OR an
+    id already present in the ledger. Three failure classes are dropped, because
+    each leaves ``orchestrator._is_ready`` unable to ever return True:
+      * ``dangling`` — dep names no known id → ``_is_ready`` sees ``dep is None``
+        and returns False forever.
+      * ``self`` — a unit depending on itself is never satisfiable.
+      * ``cycle`` — two-or-more units mutually depending → none ever satisfiable.
+
+    Edges to existing ledger units cannot re-enter the batch, so only
+    batch-internal edges can cycle; cycle-breaking runs over that subgraph alone.
+    """
+    # Batch node ids (string, non-empty), in declaration order.
+    batch_ids = []
+    for it in enumerated:
+        if isinstance(it, dict):
+            i = it.get("id")
+            if isinstance(i, str) and i:
+                batch_ids.append(i)
+    batch_set = set(batch_ids)
+    valid_targets = batch_set | {i for i in existing_ids if isinstance(i, str) and i}
+
+    dropped = []
+
+    # Pass 1: drop self-edges and dangling ids, preserving order.
+    cleaned_deps = {}   # unit_id -> [deps kept after pass 1]
+    for it in enumerated:
+        if not isinstance(it, dict):
+            continue
+        uid = it.get("id")
+        deps = it.get("depends_on")
+        if not (isinstance(uid, str) and uid) or not isinstance(deps, list):
+            continue
+        kept = []
+        for d in deps:
+            if d == uid:
+                dropped.append((uid, d, "self"))
+                continue
+            if d not in valid_targets:
+                dropped.append((uid, d, "dangling"))
+                continue
+            kept.append(d)
+        cleaned_deps[uid] = kept
+
+    # Pass 2: break cycles among batch-internal edges.
+    adj = {
+        uid: [d for d in kept if d in batch_set]
+        for uid, kept in cleaned_deps.items()
+    }
+    while True:
+        back = _find_depends_on_back_edge(adj)
+        if back is None:
+            break
+        u, v = back
+        adj[u] = [x for x in adj[u] if x != v]
+        dropped.append((u, v, "cycle"))
+
+    # Rebuild each item's depends_on: keep external edges (already validated) plus
+    # surviving batch-internal edges, in the original order.
+    sanitized = []
+    for it in enumerated:
+        if not isinstance(it, dict):
+            sanitized.append(it)
+            continue
+        uid = it.get("id")
+        if uid not in cleaned_deps:
+            sanitized.append(it)
+            continue
+        survive_internal = set(adj.get(uid, []))
+        final = [
+            d for d in cleaned_deps[uid]
+            if d not in batch_set or d in survive_internal
+        ]
+        new_it = dict(it)
+        new_it["depends_on"] = final
+        sanitized.append(new_it)
+
+    return sanitized, dropped
+
+
 def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     """Persist a plan unit's ``enumerate_plan_units`` output onto its
     ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
@@ -309,15 +435,51 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     a list of partial unit dicts (each at least an ``id``). Raises if the named
     unit doesn't exist. Atomic (predicate recompute is a no-op here — the plan
     unit's own state is unchanged — but the write stays on the I-1 path).
+
+    depends_on GUARD (U14 P2 anti-livelock): each item's model-emitted
+    ``depends_on`` is sanitized here — the single chokepoint where runtime model
+    output enters the ledger. An edge that names no known id (dangling), a unit's
+    own id (self), or that participates in a cycle would leave the materialized
+    work unit permanently un-``_is_ready`` (``dep is None -> False``, or a
+    mutually-unsatisfiable cycle): never ready, never dispatched, dispatch-timeout
+    never fires, ``all_units_terminal`` false FOREVER → a silent full-run
+    livelock. The recipe-authored path already rejects unknown-id references at
+    author time (``recipes._validate_depends_on``).
+
+    DROP, don't raise (deliberate divergence from ``set_winner_unit_id``, which
+    raises on a bad single reference): this validates a whole BATCH of runtime
+    model output, and a raise would abort the persist → the plan phase
+    materializes ZERO work units → also a stall. So invalid edges are dropped and
+    recorded on ``dispatch_context.dropped_depends_on_edges`` (a durable, testable
+    forensic marker) plus a one-line stderr warning, and the run continues.
+    Valid edges — including forward-refs to sibling enumerated units — are
+    preserved verbatim (behavior-preserving happy path).
     """
     if not isinstance(enumerated, list):
         raise ledger_core.LedgerError("enumerated units must be a list")
 
     def mutate(ledger):
         unit = ledger_core._find_unit(ledger, unit_id)
+        existing_ids = {u.get("id") for u in ledger.get("units", [])}
+        sanitized, dropped = _sanitize_enumerated_depends_on(
+            enumerated, existing_ids
+        )
         dc = unit.setdefault("dispatch_context", {})
-        dc["enumerated_units"] = list(enumerated)
-        return len(enumerated)
+        dc["enumerated_units"] = list(sanitized)
+        if dropped:
+            dc["dropped_depends_on_edges"] = [
+                {"unit": u, "dep": d, "reason": r} for (u, d, r) in dropped
+            ]
+            sys.stderr.write(
+                f"auto: dropped {len(dropped)} invalid model-emitted depends_on "
+                f"edge(s) on unit {unit_id!r} (dangling/self/cycle) to avoid a "
+                f"silent readiness stall; see dispatch_context."
+                f"dropped_depends_on_edges\n"
+            )
+        else:
+            # Idempotent re-persist: clear any stale marker from a prior batch.
+            dc.pop("dropped_depends_on_edges", None)
+        return len(sanitized)
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
