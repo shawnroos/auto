@@ -379,6 +379,13 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
             continue
         kept = []
         for d in deps:
+            if not isinstance(d, str):
+                # malformed model output (a list/dict where a string id belongs):
+                # drop it rather than let `d not in valid_targets` raise TypeError
+                # inside the locked mutate body — a raise here materializes zero
+                # work units, the same stall class this sanitizer exists to prevent.
+                dropped.append((uid, d, "dangling"))
+                continue
             if d == uid:
                 dropped.append((uid, d, "self"))
                 continue

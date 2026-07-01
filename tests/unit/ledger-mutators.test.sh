@@ -567,6 +567,12 @@ elif op == "leaf-dep":
     report("g-leaf",
            [{"id": "w1", "invokes": {}},
             {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "unhashable":
+    # malformed model output: an unhashable (list) element where a string id
+    # belongs — must be DROPPED, not raise TypeError on the `in set` test (which
+    # would abort the persist → zero units → the same stall class, just loud).
+    report("g-unhashable",
+           [{"id": "w1", "invokes": {}, "depends_on": [["nested"]]}])
 PYEOF
 }
 
@@ -579,6 +585,11 @@ it "U14 guard: self-edge → dropped (a unit can never satisfy itself)"
 assert_eq \
   '{"deps": {"w1": []}, "dropped": [["w1", "w1", "self"]]}' \
   "$(enum_driver self)"
+
+it "U14 guard: unhashable (list) dep element → dropped, no TypeError/persist-abort"
+assert_eq \
+  '{"deps": {"w1": []}, "dropped": [["w1", ["nested"], "dangling"]]}' \
+  "$(enum_driver unhashable)"
 
 it "U14 guard: 2-cycle → one edge dropped, graph made acyclic"
 assert_eq \
