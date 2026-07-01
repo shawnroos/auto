@@ -731,6 +731,46 @@ assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"stall
 it "round-robin: no eligible plan unit → None"
 assert_eq "None" "$(rr '{"units":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
 
+# ════════════════════════════════════════════════════════════════════════════
+# U14 — edge-driven ordering of an emitter fan-out (the readiness engine, once
+# fed real depends_on edges, sequences the work units). This is the consumer
+# side of U14: unit-emitters.test.sh proves the edges are materialized; here we
+# prove ready_units ORDERS on them.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ─── Ordering: w3 depends on BOTH w1 and w2; edges gate its readiness ─────────
+# w1,w2,w3 pending; w3.depends_on=[w1,w2]. The gate is edge-driven: w3 becomes
+# ready ONLY after BOTH predecessors are satisfied (per _dependency_satisfied).
+it "U14 ordering: w1 verdict-returned WITH open blocker -> ready is exactly [w2] (w3 gated on both edges)"
+ledger_init "u14-order" \
+  '[{"id":"w1","state":"pending"},{"id":"w2","state":"pending"},{"id":"w3","state":"pending","depends_on":["w1","w2"]}]' \
+  >/dev/null 2>&1
+ledger_transition "u14-order" "w1" "dispatched" >/dev/null 2>&1
+ledger_verdict "u14-order" "w1" '[{"severity":"blocker","note":"open"}]' >/dev/null 2>&1
+# w1 not pending (verdict-returned+blocker); w3 gated by unsatisfied w1 AND pending w2.
+assert_eq "w2" "$(orch_ready "u14-order")"
+
+it "U14 ordering: satisfy w2 only -> w3 STILL gated (w1's open blocker holds the edge)"
+ledger_transition "u14-order" "w2" "dispatched" >/dev/null 2>&1
+ledger_verdict "u14-order" "w2" '[]' >/dev/null 2>&1
+# w2 now verdict-returned+satisfied (not pending); w1 still carries a blocker;
+# w3 remains gated on the unsatisfied w1 edge -> nothing ready.
+assert_eq "" "$(orch_ready "u14-order")"
+
+it "U14 ordering: satisfy w1 too -> w3 appears (edge-driven, not incidental)"
+ledger_verdict "u14-order" "w1" '[]' >/dev/null 2>&1
+# Both edges satisfied -> w3 is the only pending unit and becomes ready.
+assert_eq "w3" "$(orch_ready "u14-order")"
+
+# ─── Regression: an edgeless fan-out (a1/pipeline) — all siblings ready now ───
+# A fan-out that declares no depends_on (Sites 2 & 4, or a1's plain plan->work)
+# materializes depends_on:[] and every sibling is immediately dispatchable.
+it "U14 regression: edgeless fan-out (depends_on:[]) -> all three siblings immediately ready"
+ledger_init "u14-edgeless" \
+  '[{"id":"w1","state":"pending","depends_on":[]},{"id":"w2","state":"pending","depends_on":[]},{"id":"w3","state":"pending","depends_on":[]}]' \
+  >/dev/null 2>&1
+assert_eq "w1,w2,w3" "$(orch_ready "u14-edgeless")"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"

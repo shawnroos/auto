@@ -82,7 +82,8 @@ def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
     # first (A2's multi-plan path uses judge_winner_to_work_units instead).
     items = _enumerated_units(plan_units[0])
     return [
-        {"id": item["id"], "phase": to_phase, "depends_on": [],
+        {"id": item["id"], "phase": to_phase,
+         "depends_on": item.get("depends_on") or [],
          "invokes": item.get("invokes", {}),
          "dispatch_context": item.get("dispatch_context", {})}
         for item in items
@@ -189,7 +190,8 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
         )
     items = _enumerated_units(winner)
     return [
-        {"id": item["id"], "phase": to_phase, "depends_on": [],
+        {"id": item["id"], "phase": to_phase,
+         "depends_on": item.get("depends_on") or [],
          "invokes": item.get("invokes", {}),
          "dispatch_context": item.get("dispatch_context", {})}
         for item in items

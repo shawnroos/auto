@@ -132,7 +132,10 @@ ALLOWED_FUNCTIONS=(
   # `brainstorm` op; v0.4.3 KTD-15 added the enumerate plan_path surface (+ a
   # sibling _bound_plan_path helper). Waived (not decomposed) because the
   # function itself is small; U10 shrank the measured span 139 → 125.
-  "lib/adapter-ce.py:_next_plan_step:125"
+  # U14 (KTD-1) added the enumerate op's per-item `depends_on` edge clause to the
+  # `enumerate_plan_units` method (in the Adapter class body the awk attributes
+  # here) so the readiness engine can order the emitter fan-out — 125 → 137.
+  "lib/adapter-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation orchestrator (parse → validate recipe
   # → build units → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,

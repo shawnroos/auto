@@ -408,6 +408,72 @@ elif op == "iter-tpl-integration":
         ",".join(sorted(appended)),
         ",".join(sorted(new_ids)),
         led["iteration_emit_count"]))
+
+# ─── U14: dependency-engine passthrough + origination ───────────────────────
+elif op == "a1-passthrough":
+    # U14 passthrough (DELIBERATE-FAIL before the Site-1 fix): an enumerated
+    # item carrying a non-empty depends_on must materialize onto the ledger
+    # unit. Driven through the FULL transition_and_emit path so _normalize_unit's
+    # edge preservation is proven end-to-end (not just the emitter's return dict).
+    # Prints "w2.depends_on|w1.depends_on": after the fix "w1|" (w2 depends on
+    # w1; w1 carries none — regression coverage in the same assertion). On
+    # CURRENT code Site 1 hardcodes [], so w2's edge is dropped -> "|" (RED).
+    repo = tempfile.mkdtemp(); run = "pt"
+    ledger.init_ledger(repo, run, adapter="ce",
+        recipe={"name": "a1", "source_tier": "built-in"},
+        phase_order=["plan", "seam", "work"], terminal_phase="work",
+        loop_phase="seam",
+        units=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
+                "dispatch_context": {"enumerated_units": [
+                    {"id": "w1", "invokes": {}},
+                    {"id": "w2", "invokes": {}, "depends_on": ["w1"]}]}}])
+    ledger.transition_and_emit(repo, run, "work", emitters.plan_output_to_work_units)
+    led = ledger.read_ledger(repo, run)
+    w1 = next(u for u in led["units"] if u["id"] == "w1")
+    w2 = next(u for u in led["units"] if u["id"] == "w2")
+    print("%s|%s" % (",".join(w2["depends_on"]), ",".join(w1["depends_on"])))
+
+elif op == "judge-passthrough":
+    # U14 passthrough, Site 3 (judge_winner_to_work_units). The WINNER's
+    # enumerated items carry per-item depends_on; the emitter must propagate
+    # them. Direct emitter-return inspection (Site 3 is symmetric to Site 1;
+    # the normalize-preservation half is proven by a1-passthrough). After the
+    # fix: "wA:;wB:wA". On current code both are edgeless -> "wA:;wB:".
+    led = {"units": [
+        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": [
+            {"id": "wA", "invokes": {}},
+            {"id": "wB", "invokes": {}, "depends_on": ["wA"]}]}},
+        {"id": "judge", "phase": "work", "dispatch_context": {"winner_unit_id": "plan-1"}},
+    ]}
+    out = emitters.judge_winner_to_work_units(led, "work")
+    print(";".join(u["id"] + ":" + ",".join(u["depends_on"]) for u in out))
+
+elif op == "a4-depends-stay-empty":
+    # U14 Site 4 STAYS []: plan_output_to_paired_builders has no per-unit source
+    # (it builds the SAME plan twice, bias-differentiated). Even when a plan item
+    # carries a depends_on, the two builders must materialize with []. Regression
+    # guard that the passthrough change does NOT leak into Sites 2 & 4.
+    led = {"units": [{"id": "plan", "phase": "plan",
+            "dispatch_context": {"enumerated_units": [
+                {"id": "task", "invokes": {}, "depends_on": ["x"]}]}}]}
+    out = emitters.plan_output_to_paired_builders(led, "work")
+    print(";".join(u["id"] + ":" + ",".join(u["depends_on"]) for u in out))
+
+elif op == "origination-ce":
+    # U14 part (i) ORIGINATE: the CE enumerate op's invocation string must
+    # instruct the model to emit a per-item depends_on — otherwise the model is
+    # never told to produce edges and passthrough carries []. Asserts the
+    # contract is real, not just injectable. _bound_plan_path({}) -> None (no
+    # plan unit), so the bare-dict no-plan branch is exercised without a crash.
+    ce = load_lib_module("adapter-ce")
+    env = ce.Adapter().enumerate_plan_units({})
+    print("yes" if "depends_on" in env["invocation"] else "no")
+
+elif op == "origination-native":
+    # U14 part (i), native counterpart — same contract in adapter-native.py.
+    nat = load_lib_module("adapter-native")
+    env = nat.Adapter().enumerate_plan_units({})
+    print("yes" if "depends_on" in env["invocation"] else "no")
 PYEOF
 }
 
@@ -508,6 +574,32 @@ assert_eq "raised" "$(em iter-tpl-bad-template-ref)"
 # green but the composition broken.
 it "iterate_template ⇆ emit_within_phase: 2 emits → counter advances 3→5 atomically"
 assert_eq "plan-4,plan-5|plan-4,plan-5|5" "$(em iter-tpl-integration)"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# U14 — wire the dependency engine through (behavior-changing; deliberate-fail)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── Passthrough (DELIBERATE-FAIL before Site 1): edge survives materialization ─
+# An enumerated item carrying depends_on:["w1"] must land on the materialized
+# ledger unit (full transition_and_emit path, so _normalize_unit preservation is
+# proven too). RED on current code ("|"); GREEN after ("w1|").
+it "U14 Site1: enumerated item's depends_on materializes onto the work unit (deliberate-fail)"
+assert_eq "w1|" "$(em a1-passthrough)"
+
+# ─── Passthrough Site 3 (judge winner) ──────────────────────────────────────
+it "U14 Site3: judge_winner_to_work_units propagates the winner's per-item depends_on"
+assert_eq "wA:;wB:wA" "$(em judge-passthrough)"
+
+# ─── Regression: Sites 2 & 4 have no per-unit source → STAY [] ───────────────
+it "U14 Site4: paired builders stay depends_on:[] (no per-unit source; passthrough must not leak here)"
+assert_eq "build-clarity:;build-perf:" "$(em a4-depends-stay-empty)"
+
+# ─── Origination part (i): the enumerate op instructs per-item depends_on ────
+it "U14 originate: CE enumerate_plan_units invocation instructs per-item depends_on"
+assert_eq "yes" "$(em origination-ce)"
+
+it "U14 originate: native enumerate_plan_units invocation instructs per-item depends_on"
+assert_eq "yes" "$(em origination-native)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

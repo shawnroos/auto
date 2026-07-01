@@ -124,11 +124,20 @@ class Adapter:
         reviewed prose plan and returns a list of unit dicts; the engine persists
         them to the plan unit's dispatch_context.enumerated_units (U6) and the
         emitters (U5b) shape them into ledger units. The producer the emitters
-        read — resolves the F4 gap."""
+        read — resolves the F4 gap.
+
+        U14 (KTD-1): each enumerated item carries a depends_on list (sibling unit
+        ids that must complete first; empty [] when independent) so the readiness
+        engine can order the fan-out. Prepare-only, so this invocation string is
+        where the model is instructed to originate the edges."""
         return {
             "adapter": ADAPTER_NAME,
             "op": "enumerate_plan_units",
-            "invocation": "enumerate-plan-work-units",
+            "invocation": (
+                "enumerate-plan-work-units; each item is {id, invokes, "
+                "depends_on}, where depends_on lists the sibling unit ids that "
+                "must complete first (empty [] if independent)"
+            ),
         }
 
     def plan(self, ledger):

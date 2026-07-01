@@ -127,17 +127,29 @@ class Adapter:
         engine persists it onto the plan unit's `dispatch_context.enumerated_units`
         (U6) and the emitters (U5b) shape it into ledger units. v0.4.3 (KTD-15):
         for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
-        is surfaced so the envelope names WHICH plan; omitted for a1."""
+        is surfaced so the envelope names WHICH plan; omitted for a1.
+
+        U14 (KTD-1): each enumerated item must carry a `depends_on` list naming
+        the sibling unit ids it depends on (empty when independent) so the
+        readiness engine (`orchestrator.ready_units`) can order the fan-out. The
+        op is prepare-only, so the invocation string is the ONLY place the model
+        is told to originate those edges — without it, passthrough carries []."""
+        edge_clause = (
+            " — each item is {id, invokes, depends_on}, where depends_on lists "
+            "the sibling unit ids that must complete first (empty [] if the unit "
+            "is independent)"
+        )
         envelope = {
             "adapter": ADAPTER_NAME,
             "op": "enumerate_plan_units",
-            "invocation": "enumerate the reviewed plan's work units",
+            "invocation": "enumerate the reviewed plan's work units" + edge_clause,
         }
         plan_path = _bound_plan_path(ledger)
         if plan_path:
             envelope["plan_path"] = plan_path
             envelope["invocation"] = (
                 f"enumerate the reviewed plan's work units from {plan_path}"
+                + edge_clause
             )
         return envelope
 
