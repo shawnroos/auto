@@ -48,6 +48,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     DRIVING_SESSION_KEY,
+    build_arm_intent,
+    build_tick_prompt,
     iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
@@ -99,12 +101,7 @@ def _resumable_runs(ledger, repo_root: str):
 def _emit_rearm(run_id: str, note: str) -> int:
     """Emit the re-arm INTENT — the model fires the actual /auto:auto-tick."""
     json.dump(
-        {
-            "action": "arm-tick",
-            "run": run_id,
-            "prompt": f"/auto:auto-tick {run_id}",
-            "note": note,
-        },
+        build_arm_intent(run_id, build_tick_prompt(run_id), note),
         sys.stdout,
     )
     sys.stdout.write("\n")

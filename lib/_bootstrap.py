@@ -260,6 +260,42 @@ CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 DRIVING_SESSION_KEY = "driving_session_id"
 
 
+# The plugin-qualified tick command — the ONE copy of the string AND its hazard
+# note (v0.6.5). A programmatically fired plugin slash command must resolve as
+# `/<plugin>:<command>`: the bare `/auto-tick` is "Unknown command" under
+# ScheduleWakeup / loop re-injection, so every re-arm hit that and the loop never
+# self-paced. The plugin name is `auto`. tick.py / auto.py / auto-resume.py all
+# build their re-arm prompt through build_tick_prompt() so this hazard lives once.
+TICK_COMMAND = "/auto:auto-tick"
+
+
+def build_tick_prompt(run_id) -> str:
+    """The re-arm prompt: the plugin-qualified tick command + the run id.
+
+    The ONE builder of the `/auto:auto-tick <run>` string (was three hand-built
+    copies in tick.py / auto.py / auto-resume.py, each re-explaining the
+    plugin-qualification hazard — see TICK_COMMAND).
+    """
+    return f"{TICK_COMMAND} {run_id}"
+
+
+def build_arm_intent(run_id, prompt, note, extra=None):
+    """The `arm-tick` INTENT envelope emitted by the non-tick arm sites.
+
+    Both auto.py (new run) and auto-resume.py (re-arm) emit an ``arm-tick``
+    intent — "schedule the next tick" — with the same ``action``/``run``/
+    ``prompt`` core and a trailing ``note``. auto.py carries extra keys
+    (``auto``/``adapter``/``plan``/``goal``) between ``prompt`` and ``note``;
+    pass them via ``extra`` (an ordered dict) so the emitted key order stays
+    byte-identical to the hand-built envelopes the stdout-contract tests assert.
+    """
+    intent = {"action": "arm-tick", "run": run_id, "prompt": prompt}
+    if extra:
+        intent.update(extra)
+    intent["note"] = note
+    return intent
+
+
 def cmux_available() -> bool:
     """Probe whether the cmux binary (or its override) is on PATH.
 
