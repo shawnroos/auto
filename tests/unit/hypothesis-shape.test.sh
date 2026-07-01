@@ -125,6 +125,42 @@ else:
 PYEOF
 }
 
+# Variant of json_field that TRACKS docs/ (only .claude/ gitignored) so a setup
+# can commit plans with controlled dates and leave others uncommitted — the only
+# way to exercise the U1/U2 fresh-vs-stale routing at the detector level (the
+# default json_field gitignores docs/, making every plan git-silent → mtime-
+# fresh, which is exactly the backward-compat path the other scenarios pin).
+json_field_tracked() {
+  local setup_fn="$1" expr="$2"
+  local repo; repo="$(mktemp -d -t hyp-repo.XXXXXX)"
+  (
+    cd "$repo"
+    git init -q .
+    git config user.email test@test
+    git config user.name test
+    printf '.claude/\n' > .gitignore   # docs/ IS tracked here
+    git add .gitignore
+    git -c commit.gpgsign=false commit -q -m init
+  ) >/dev/null 2>&1
+  mkdir -p "$repo/.claude/auto"
+  "$setup_fn" "$repo"
+  local raw
+  raw="$(CLAUDE_AUTO_REPO="$repo" bash "$DET")"
+  rm -rf "$repo"
+  "$PY" - "$raw" "$expr" <<'PYEOF'
+import json, sys
+raw, expr = sys.argv[1], sys.argv[2]
+H = json.loads(raw)
+val = eval(expr)
+if isinstance(val, bool):
+    print("True" if val else "False")
+elif val is None:
+    print("None")
+else:
+    print(val)
+PYEOF
+}
+
 # ── Scenario setups ────────────────────────────────────────────────────────
 setup_raw() { :; }
 
@@ -261,6 +297,46 @@ assert_eq "1" "$(json_field setup_three_plans 'len([o for o in H["ambiguity"]["o
 
 it "multi-plan: multi_plan.paths is still populated (fanout target preserved)"
 assert_eq "3" "$(json_field setup_three_plans 'len(H["multi_plan"]["paths"])')"
+
+# ── Scenario 3b: U1/U2 freshness routing (docs/ tracked so git sees fresh/stale)
+# A single FRESH plan (uncommitted this session) among STALE committed siblings
+# is inferred as the reviewed plan — no multi-plan ask (the 2026-06 field case:
+# 6 plans, 1 live). And an all-stale set drops the fan-out-all footgun.
+setup_one_fresh_among_stale() {
+  local repo="$1"
+  mkdir -p "$repo/docs/plans"
+  echo "# s1" > "$repo/docs/plans/s1-plan.md"
+  echo "# s2" > "$repo/docs/plans/s2-plan.md"
+  git -C "$repo" add docs/plans/ >/dev/null 2>&1
+  GIT_AUTHOR_DATE="2026-01-01T00:00:00" GIT_COMMITTER_DATE="2026-01-01T00:00:00" \
+    git -C "$repo" -c commit.gpgsign=false commit -q -m stale >/dev/null 2>&1
+  echo "# live" > "$repo/docs/plans/z-live-plan.md"   # uncommitted → fresh
+}
+it "one-fresh-among-stale: situation=reviewed-plan (live plan inferred)"
+assert_eq "reviewed-plan" "$(json_field_tracked setup_one_fresh_among_stale 'H["situation"]')"
+it "one-fresh-among-stale: single_plan.path is the fresh (uncommitted) plan"
+assert_eq "docs/plans/z-live-plan.md" "$(json_field_tracked setup_one_fresh_among_stale 'H["single_plan"]["path"]')"
+
+setup_all_stale_multi() {
+  local repo="$1"
+  mkdir -p "$repo/docs/plans"
+  echo "# s1" > "$repo/docs/plans/s1-plan.md"
+  echo "# s2" > "$repo/docs/plans/s2-plan.md"
+  echo "# s3" > "$repo/docs/plans/s3-plan.md"
+  git -C "$repo" add docs/plans/ >/dev/null 2>&1
+  GIT_AUTHOR_DATE="2026-01-01T00:00:00" GIT_COMMITTER_DATE="2026-01-01T00:00:00" \
+    git -C "$repo" -c commit.gpgsign=false commit -q -m stale >/dev/null 2>&1
+}
+it "all-stale-multi: situation=multi-plan (no live plan to infer)"
+assert_eq "multi-plan" "$(json_field_tracked setup_all_stale_multi 'H["situation"]')"
+it "all-stale-multi: options = one per plan, NO fan-out-all (footgun suppressed)"
+assert_eq "3" "$(json_field_tracked setup_all_stale_multi 'len(H["ambiguity"]["options"])')"
+it "all-stale-multi: no null-path fan-out option present"
+assert_eq "0" "$(json_field_tracked setup_all_stale_multi 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
+it "all-stale-multi: each option is staleness-marked"
+assert_eq "3" "$(json_field_tracked setup_all_stale_multi 'len([o for o in H["ambiguity"]["options"] if "stale" in o["description"]])')"
+it "all-stale-multi: multi_plan.paths still populated"
+assert_eq "3" "$(json_field_tracked setup_all_stale_multi 'len(H["multi_plan"]["paths"])')"
 
 # ── Scenario 4: in-flight single + goal_intent feeds summary ───────────────
 it "in-flight: situation=in-flight when one not-met run present"
