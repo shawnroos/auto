@@ -269,7 +269,7 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     # never self-paced. The plugin name is `auto`, so the command is `/auto:auto-tick`.
     rearm_prompt = f"/auto:auto-tick {run_id}"
     now = _now_dt()
-    now_iso = ledger._now_iso()
+    now_iso = ledger.now_iso()
     # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of
     # _tick_body so the `finally` clause below can accumulate the delta on
     # EVERY return path INCLUDING the except path (crashed-tick deltas land in

@@ -100,9 +100,9 @@ _gating_severities = ledger.gating_severities
 InvalidTransition = ledger.InvalidTransition
 LedgerError = ledger.LedgerError
 
-# Re-export _now_iso so dispatch_batch can stamp dispatched_at consistently with
+# Re-export now_iso so dispatch_batch can stamp dispatched_at consistently with
 # every other ledger timestamp (same format ledger.py emits).
-_now_iso = ledger._now_iso
+_now_iso = ledger.now_iso
 
 # NOTE: we deliberately do NOT re-export GATING_SEVERITIES here. The gating
 # decision is scale-aware and lives in ONE place — ledger.gating_severities(scale)

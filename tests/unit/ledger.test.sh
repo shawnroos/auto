@@ -1040,6 +1040,27 @@ PYEOF
 )"
 assert_eq "ok" "$got"
 
+# ─── U4: public time helpers round-trip through the facade ──────────────────
+it "ledger.now_iso() / ledger.parse_iso() are public and round-trip an ISO-Z stamp"
+got="$(
+  "$PY" - "$LEDGER_PY" <<'PYEOF'
+import datetime, importlib.util, sys
+ledger_py = sys.argv[1]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# Both must be PUBLIC on the facade (no leading underscore).
+assert hasattr(m, "now_iso") and hasattr(m, "parse_iso"), "public names missing"
+stamp = m.now_iso()
+parsed = m.parse_iso(stamp)
+shape_ok = stamp.endswith("Z") and parsed is not None
+tz_ok = parsed.tzinfo == datetime.timezone.utc and parsed.microsecond == 0
+# Round-trip: re-formatting the parsed value reproduces the stamp exactly.
+roundtrip_ok = parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == stamp
+print("ok" if (shape_ok and tz_ok and roundtrip_ok) else "fail %r %r" % (stamp, parsed))
+PYEOF
+)"
+assert_eq "ok" "$got"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger.test.sh: ${PASS} passed, ${FAIL} failed"

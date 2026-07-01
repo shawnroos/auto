@@ -4,9 +4,10 @@ ledger_core / ledger_mutators / ledger_emitters.
 
 This module was split (B5) for maintainability: the implementation now lives in
 three sibling modules along an acyclic DAG (core ← mutators ← emitters ← this
-facade). This file re-exports the WHOLE surface — every public name PLUS the
-private helpers consumers reach through the ``ledger.`` namespace (``_now_iso``,
-``_parse_iso``, ``_with_locked_ledger``) — so existing callers that do
+facade). This file re-exports the WHOLE surface — every public name (the time helpers
+``now_iso`` / ``parse_iso`` are public here) PLUS the one private helper
+consumers reach through the ``ledger.`` namespace (``_with_locked_ledger``) — so
+existing callers that do
 ``ledger = _bootstrap.load_ledger()`` and reference ``ledger.<name>`` keep
 resolving unchanged. See those three modules for the implementation and
 docs/contracts/ledger-schema.md for the authoritative spec (if they disagree,
@@ -76,11 +77,11 @@ InvalidTransition = ledger_core.InvalidTransition
 StaleVerdict = ledger_core.StaleVerdict
 UnknownUnit = ledger_core.UnknownUnit
 
-# Paths + time helpers (incl. the private time helpers consumers reach for).
+# Paths + time helpers (now_iso / parse_iso are the public time surface).
 ledger_path = ledger_core.ledger_path
 lock_path = ledger_core.lock_path
-_now_iso = ledger_core._now_iso
-_parse_iso = ledger_core._parse_iso
+now_iso = ledger_core.now_iso
+parse_iso = ledger_core.parse_iso
 
 # Pure predicate logic.
 gating_severities = ledger_core.gating_severities

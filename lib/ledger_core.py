@@ -267,7 +267,7 @@ def lock_path(repo_root: str, run_id: str) -> str:
 # Time helpers.
 
 
-def _now_iso() -> str:
+def now_iso() -> str:
     return (
         datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
@@ -275,7 +275,7 @@ def _now_iso() -> str:
     )
 
 
-def _parse_iso(value):
+def parse_iso(value):
     if not value:
         return None
     try:
@@ -629,7 +629,7 @@ def is_orphaned(ledger: dict, now=None) -> bool:
     loop = ledger.get("loop") or {}
     if loop.get("driver") == "manual":
         return True
-    last_beat = _parse_iso(loop.get("last_beat_at"))
+    last_beat = parse_iso(loop.get("last_beat_at"))
     if last_beat is None:
         # No beat ever recorded on a non-done run => treat as resumable.
         return True
@@ -965,7 +965,7 @@ def init_ledger(
             "driving_session_id": driving_session_id,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
-            "loop": {"driver": "self", "last_beat_at": _now_iso()},
+            "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
         _atomic_write(path, ledger)
         return ledger

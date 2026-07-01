@@ -26,7 +26,6 @@ Atomic writes use the same mkstemp+fchmod+rename pattern as ledger_core
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import subprocess
@@ -40,8 +39,13 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import (
     CMUX_REF_CHARS as _CMUX_REF_CHARS,
     cmux_available as _cmux_available,
+    load_ledger,
     resolve_host_repo_root,
 )  # noqa: E402
+
+# The ledger facade owns the canonical ISO-Z time stamp (ledger.now_iso). Load
+# it via the facade so the marker's created_at matches every ledger timestamp.
+ledger = load_ledger()
 
 
 # ── Public API surface ─────────────────────────────────────────────────────
@@ -297,7 +301,7 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
     # Step 4: build + write the marker.
     marker = {
         "workspace_id": workspace_id,
-        "created_at": _now_iso(),
+        "created_at": ledger.now_iso(),
         "layout_version": "v1",
         "left_pane_id": left_pane_id,
         "right_pane_id": right_pane_id,
@@ -327,15 +331,6 @@ def _marker_is_stale(host_repo: str) -> bool:
     marker = read_marker(host_repo)
     ws_id = marker.get("workspace_id") if marker else None
     return bool(ws_id) and not _cmux_workspace_exists(ws_id)
-
-
-def _now_iso() -> str:
-    """UTC ISO-8601 with trailing Z (parity with ledger_core._now_iso)."""
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .replace(microsecond=0)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
 
 
 def _extract_ref(text: str, kind: str) -> str | None:

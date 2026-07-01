@@ -50,10 +50,15 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (
     CMUX_REF_CHARS as _CMUX_REF_CHARS,
     cmux_available as _cmux_available,
+    load_ledger,
     load_lib_module,
     resolve_host_repo_root,
     resolve_shared_dir,
 )  # noqa: E402
+
+# The ledger facade owns the canonical ISO-Z time stamp (ledger.now_iso). Load
+# it via the facade — not ledger_core — to keep facade discipline (U4).
+ledger = load_ledger()
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -107,15 +112,7 @@ def _slugify(name: str) -> str:
     return slug
 
 
-# ── Time helpers (parity with ledger_core::_now_iso) ───────────────────────
-
-
-def _now_iso() -> str:
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .replace(microsecond=0)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+# ── Time helpers ───────────────────────────────────────────────────────────
 
 
 def _now_stamp() -> str:
@@ -502,7 +499,7 @@ def fanout(plan_paths, *, composite_intent=None):
     sidecar_path = os.path.join(_batches_dir(shared), f"{batch_id}.json")
     sidecar = {
         "id": batch_id,
-        "created_at": _now_iso(),
+        "created_at": ledger.now_iso(),
         "status": "provisional",
         "composite_intent": composite_intent or _default_intent(plans),
         "plans": plans,

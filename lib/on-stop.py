@@ -123,7 +123,7 @@ def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
     # last_beat_at is older than DRIVER_SELF_STALE_SECONDS is a DEAD
     # chain — does NOT block (surfaced for resume by SessionStart hook).
     if not skip_staleness and loop.get("driver") == "self":
-        last_beat = ledger._parse_iso(loop.get("last_beat_at"))
+        last_beat = ledger.parse_iso(loop.get("last_beat_at"))
         if last_beat is None:
             return None
         if (now - last_beat).total_seconds() > stale_threshold:

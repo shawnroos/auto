@@ -276,7 +276,7 @@ def _most_recently_dispatched(led):
     for u in led.get("units", []):
         if u.get("state") != "dispatched":
             continue
-        at = ledger._parse_iso(u.get("dispatched_at"))
+        at = ledger.parse_iso(u.get("dispatched_at"))
         if at is None:
             continue
         if best_at is None or at > best_at:

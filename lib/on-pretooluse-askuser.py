@@ -94,7 +94,7 @@ def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, n
     # Dead-chain guard (mirrors on-stop.py): a self-driven run whose beat is
     # older than the stale threshold is a dead chain, not a live owner.
     if not skip_staleness:
-        last_beat = ledger._parse_iso(loop.get("last_beat_at"))
+        last_beat = ledger.parse_iso(loop.get("last_beat_at"))
         if last_beat is None:
             return False
         if (now - last_beat).total_seconds() > stale_threshold:

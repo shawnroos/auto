@@ -69,7 +69,7 @@ _PLAN_STEP_OPS = ("plan", "deepen", "review_plan")
 
 
 def _seconds_since(iso_value, now) -> float:
-    parsed = ledger._parse_iso(iso_value)
+    parsed = ledger.parse_iso(iso_value)
     if parsed is None:
         return -1.0
     return (now - parsed).total_seconds()

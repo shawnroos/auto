@@ -184,7 +184,7 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
 
         unit["state"] = "verdict-returned"
         unit["findings"] = norm
-        unit["verdict_at"] = ledger_core._now_iso()
+        unit["verdict_at"] = ledger_core.now_iso()
         # A recovered late verdict is real work — clear any stale last_error so the
         # unit no longer looks like an unresolved timeout/raise.
         unit["last_error"] = None
@@ -266,7 +266,7 @@ def set_loop(
             else:
                 loop.pop("backstop_latched", None)
         if beat:
-            loop["last_beat_at"] = ledger_core._now_iso()
+            loop["last_beat_at"] = ledger_core.now_iso()
         return ledger["loop_phase"]
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
@@ -475,7 +475,7 @@ def set_bound_override(
         dc["bound_override"] = {
             "bound": bound_type,
             "original_decision": original_decision,
-            "at": ledger_core._now_iso(),
+            "at": ledger_core.now_iso(),
         }
         return bound_type
 
@@ -557,7 +557,7 @@ def append_advisor_audit(
       ``resolution``     — what happened ("resolved-autonomously",
                            "escalated-via-pause", "blocked-and-paused").
 
-    Models ``set_bound_override``'s ENVELOPE (validated inputs, ``_now_iso``
+    Models ``set_bound_override``'s ENVELOPE (validated inputs, ``now_iso``
     timestamp) but is run-scoped and APPENDS to a top-level list rather than
     writing one unit's ``dispatch_context``. The append happens INSIDE the
     ``mutate`` closure, so it runs under the SAME flock as every other write —
@@ -585,7 +585,7 @@ def append_advisor_audit(
         "subject": subject,
         "classification": classification,
         "resolution": resolution,
-        "at": ledger_core._now_iso(),
+        "at": ledger_core.now_iso(),
     }
 
     def mutate(ledger):
@@ -635,7 +635,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
         ledger["exit_reason"] = {
             "kind": kind_value,
             "error": error,
-            "at": ledger_core._now_iso(),
+            "at": ledger_core.now_iso(),
         }
         return kind_value
 
@@ -671,7 +671,7 @@ def accumulate_active_time(repo_root, run_id, delta_seconds: float):
     def mutate(ledger):
         cur = float(ledger.get("active_wall_seconds", 0))
         ledger["active_wall_seconds"] = round(cur + delta, 3)
-        ledger["last_active_at"] = ledger_core._now_iso()
+        ledger["last_active_at"] = ledger_core.now_iso()
         return ledger["active_wall_seconds"]
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
