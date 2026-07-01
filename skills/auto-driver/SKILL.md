@@ -23,6 +23,9 @@ on (a just-built plan / imperative about existing work) so it preempts stale pla
 CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
 
+If the detector yields NO parseable envelope (empty/non-zero — an env hiccup, not
+a normal path; it otherwise always emits + exits 0), don't stall: treat as `raw`.
+
 Returns one JSON object with `situation`, `summary`, `ambiguity`,
 `single_plan`, `multi_plan`, `in_flight`, `workspace`,
 `workspace_action`, `recommendation` (driver-filled, U2). Surface

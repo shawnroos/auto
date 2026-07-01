@@ -35,9 +35,9 @@ auto_test::assert_file_exists "$SKILL"
 auto_test::it "auto-driver SKILL.md frontmatter names the skill"
 auto_test::assert_true "grep -qE '^name:[[:space:]]*auto-driver' '$SKILL'"
 
-auto_test::it "auto-driver SKILL.md is within the 70-line budget (v0.4.0 U4: ≤60; v0.4.1 plan 004 U4 widened to ≤70 for the workspace-handling step)"
+auto_test::it "auto-driver SKILL.md is within the 73-line budget (v0.4.0 U4: ≤60; plan 004 widened to ≤70 for workspace handling; v0.7.x entry-routing widened to ≤73 for the conversation-signal setter + verb-routing + degrade-safe steps)"
 skill_lines="$(wc -l < "$SKILL" | tr -d ' ')"
-auto_test::assert_true "[ \"$skill_lines\" -le 70 ]"
+auto_test::assert_true "[ \"$skill_lines\" -le 73 ]"
 
 auto_test::it "auto-driver SKILL.md cites driver-reference.md (theory lives there)"
 auto_test::assert_true "grep -qF 'driver-reference.md' '$SKILL'"
@@ -67,6 +67,12 @@ auto_test::assert_true "grep -qF 'verb-classify.py' '$SKILL'"
 VC="$ROOT/lib/verb-classify.py"
 auto_test::it "lib/verb-classify.py exists (the args classifier)"
 auto_test::assert_file_exists "$VC"
+
+# ── degrade-safe entry (v0.7.x U5) ────────────────────────────────────────────
+# A detector subprocess that can't run (env hiccup) must not stall the entry;
+# the driver degrades to a raw ask. Pin that the instruction is present.
+auto_test::it "auto-driver SKILL.md degrades a detector failure to raw (U5: no stall on env hiccup)"
+auto_test::assert_true "grep -qiE 'no parseable envelope|treat as .raw.' '$SKILL'"
 
 # ── commands/auto.md delegation surface ──────────────────────────────────────
 auto_test::it "commands/auto.md frontmatter lists the Skill tool"
