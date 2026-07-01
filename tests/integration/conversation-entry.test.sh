@@ -34,6 +34,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DET="${AUTO_ROOT}/lib/auto-detect.sh"
+# U15 split the detector body out of the .sh heredoc into this sibling .py; the
+# catastrophic-error fallback dict now lives there, so the source-inspection
+# assertion below reads the .py. Runtime invocations still go through the shim.
+DET_PY="${AUTO_ROOT}/lib/auto-detect.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
@@ -226,7 +230,7 @@ it "U1: the catastrophic-error fallback dict in the source carries ALL nine keys
 # assert it includes EVERY envelope key — the nine-key contract holds on the
 # error path too (it bypasses _safe_envelope, so it must hand-carry them). The
 # fallback is the ONLY json.dump of a literal dict in the file.
-ERR_BLOCK="$("$PY" - "$DET" <<'PYEOF'
+ERR_BLOCK="$("$PY" - "$DET_PY" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1]).read()
 m = re.search(r'json\.dump\(\{.*?"detector error.*?\}, sys\.stdout\)', src, re.S)
