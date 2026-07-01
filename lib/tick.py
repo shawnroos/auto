@@ -536,8 +536,12 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
     """
     pred = led.get("exit_predicate_result") or {}
     if pred.get("met") and not pred.get("iteration_pending", False) \
-            and phase != "plan" and phase != "seam":
-        # Work predicate met: mark the run done + manual; finished, not orphaned.
+            and phase_grammar.is_terminal_phase(led, phase):
+        # Terminal-phase predicate met: mark the run done + manual; finished, not
+        # orphaned. Route the phase decision through phase_grammar (KTD-3) so a
+        # non-work-terminal recipe stops at ITS terminal phase — the old denylist
+        # (`phase != "plan" and phase != "seam"`) over-fired at any non-plan/seam
+        # phase, which only matched the terminal for work-terminal recipes.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
@@ -660,17 +664,19 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
 
     Re-read to decide the stop-check from the freshly-cached predicate
     (memory feedback_loop_monitor_terminal_state_field — read the cached
-    field, never re-derive). PHASE-AWARE (gap #4): only a WORK predicate
-    routes to `done`. A plan tick already routed through `_maybe_seam`
-    (seam/auto-flip); never let the post-advance met-check turn a met PLAN
-    predicate into `done` (that would skip the seam). After an auto-flip the
-    ledger phase is now "work", but this tick STARTED in plan, so we gate on
-    the start-of-tick `phase` to leave the just-flipped work loop to its own
-    first work tick.
+    field, never re-derive). PHASE-AWARE (gap #4): only a TERMINAL-phase
+    predicate routes to `done`, decided by phase_grammar.is_terminal_phase
+    (KTD-3) so a non-work-terminal recipe stops at ITS terminal phase (the old
+    `phase == "work"` allowlist never stopped a non-work terminal). A plan tick
+    already routed through `_maybe_seam` (seam/auto-flip); never let the
+    post-advance met-check turn a met PLAN predicate into `done` (that would
+    skip the seam). After an auto-flip the ledger phase is now "work", but this
+    tick STARTED in plan, so we gate on the start-of-tick `phase` to leave the
+    just-flipped work loop to its own first work tick.
     """
     led = ledger.read_ledger(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
-    if pred.get("met") and phase == "work":
+    if pred.get("met") and phase_grammar.is_terminal_phase(led, phase):
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )

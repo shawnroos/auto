@@ -791,6 +791,111 @@ PYEOF
 assert_eq "ok" "$guidance_work"
 
 
+# ─── U5: both terminal-phase guards route through phase_grammar.is_terminal_phase ─
+# The two hand-rolled terminal-phase guards in tick.py agreed ONLY because every
+# shipped recipe's terminal_phase == "work":
+#   Guard A (_try_predicate_met_shortcircuit): a DENYLIST — `phase != "plan" and
+#            phase != "seam"` — which stops at ANY phase that isn't plan/seam.
+#   Guard B (_try_post_advance_predicate_met): an ALLOWLIST — `phase == "work"` —
+#            which stops ONLY at work.
+# For a non-work terminal recipe (e.g. terminal_phase == "brainstorm") they
+# DIVERGE: Guard A over-fires (stops at any non-plan/seam phase, even non-terminal
+# ones) while Guard B under-fires (never stops at the real terminal). Routing both
+# through phase_grammar.is_terminal_phase(led, phase) makes them agree on the
+# recipe's ACTUAL terminal phase. This is behavior-changing for non-work recipes
+# and behavior-preserving for the shipped work-terminal ones (the regression case).
+#
+# Verify-RED (against pre-fix tick.py): the main-fixture Guard B assertion goes RED
+# (Guard B returns None because brainstorm != "work") AND the converse Guard A
+# assertion goes RED (Guard A's denylist over-fires and stops at a non-terminal
+# brainstorm). After the fix both flip GREEN. The regression assertions pass on
+# BOTH sides of the fix (the work-terminal path is unchanged).
+
+# u5_guard <run> <units_json> <phase_order_json> <terminal> <loop_phase> <phase> <A|B> <stale_met 0|1>
+#   Inits a fresh ledger, invokes ONE guard, prints "<action>,<loop_phase-on-disk>".
+#   stale_met=1 forces exit_predicate_result.met=true on the IN-MEMORY led (Guard A
+#   reads its led param) to model a stale cached predicate at a NON-terminal phase —
+#   the exact shape that must NOT stop after the fix. Natural-met fixtures (stale=0)
+#   let init_ledger's recompute set met, so they need no hatch and behave identically
+#   whether this file runs standalone or under run.sh.
+u5_guard() {
+  "$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" "$@" <<'PYEOF'
+import sys, importlib.util, json
+repo, tick_py, ledger_py = sys.argv[1:4]
+run, units_json, po_json, terminal, loop_phase, phase, guard, stale = sys.argv[4:12]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+ledg.init_ledger(repo, run, adapter="ce", units=json.loads(units_json),
+                 loop_phase=loop_phase, phase_order=json.loads(po_json),
+                 terminal_phase=terminal)
+led = ledg.read_ledger(repo, run)
+if stale == "1":
+    led["exit_predicate_result"] = {"met": True, "iteration_pending": False}
+if guard == "A":
+    r = t._try_predicate_met_shortcircuit(repo, run, led, phase=phase)
+else:
+    r = t._try_post_advance_predicate_met(repo, run, {"advanced": "x"}, phase=phase)
+action = (r or {}).get("action") or "none"
+disk_phase = ledg.read_ledger(repo, run).get("loop_phase")
+print("%s,%s" % (action, disk_phase))
+PYEOF
+}
+
+BS_UNITS='[{"id":"U1","phase":"brainstorm","state":"verdict-returned","findings":[]}]'
+BS_ORDER='["plan","seam","brainstorm"]'
+
+# Sanity: the brainstorm-terminal fixture genuinely reaches met (so the guard
+# tests below exercise a real met predicate, not a vacuous one).
+it "U5 fixture sanity: brainstorm-terminal ledger with a clean brainstorm unit -> predicate met"
+bs_met="$("$PY" - "$REPO" "$LEDGER_PY" "$BS_UNITS" "$BS_ORDER" <<'PYEOF'
+import sys, importlib.util, json
+repo, ledger_py, units_json, po_json = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.init_ledger(repo, "u5-met", adapter="ce", units=json.loads(units_json),
+              loop_phase="brainstorm", phase_order=json.loads(po_json),
+              terminal_phase="brainstorm")
+print(m.read_ledger(repo, "u5-met")["exit_predicate_result"]["met"])
+PYEOF
+)"
+assert_eq "True" "$bs_met"
+
+# Main fixture — Guard A at the real terminal (brainstorm) stops -> done.
+# (Guard A's denylist already stopped here pre-fix; the fix keeps it stopping,
+#  now for the RIGHT reason: is_terminal_phase(brainstorm)==True.)
+it "U5 Guard A: predicate-met at the recipe's terminal phase (brainstorm) -> stop, loop_phase=done"
+assert_eq "stop,done" "$(u5_guard u5a-main "$BS_UNITS" "$BS_ORDER" brainstorm brainstorm brainstorm A 0)"
+
+# Main fixture — Guard B at the real terminal (brainstorm) stops -> done.
+# DELIBERATE-FAIL: pre-fix Guard B is `phase == "work"`, so brainstorm != work
+# returns None (no stop) -> "none,brainstorm". Post-fix it routes through
+# is_terminal_phase(brainstorm)==True -> "stop,done".
+it "U5 Guard B: predicate-met-after-advance at the terminal phase (brainstorm) -> stop, loop_phase=done"
+assert_eq "stop,done" "$(u5_guard u5b-main "$BS_UNITS" "$BS_ORDER" brainstorm brainstorm brainstorm B 0)"
+
+# Converse — brainstorm is NOT terminal (terminal=work) and a STALE met is cached
+# at the mid-run brainstorm phase. Guard A must NOT stop.
+# DELIBERATE-FAIL: pre-fix Guard A's denylist (`phase != plan and phase != seam`)
+# over-fires and stops at the non-terminal brainstorm -> "stop,done". Post-fix it
+# routes through is_terminal_phase(brainstorm)==False -> "none,brainstorm".
+it "U5 converse: stale met at a NON-terminal phase (brainstorm, terminal=work) -> Guard A does NOT stop"
+assert_eq "none,brainstorm" \
+  "$(u5_guard u5-conv '[{"id":"U1","phase":"brainstorm","state":"dispatched"}]' '["plan","seam","brainstorm","work"]' work brainstorm brainstorm A 1)"
+
+# Regression — a shipped work-terminal recipe still stops exactly as before at the
+# work phase, through BOTH guards. is_terminal_phase(work)==True keeps the default
+# grammar's behavior byte-for-byte.
+it "U5 regression: work-terminal recipe -> Guard A stops at work (unchanged) -> done"
+assert_eq "stop,done" \
+  "$(u5_guard u5-reg-a '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work A 0)"
+
+it "U5 regression: work-terminal recipe -> Guard B stops at work (unchanged) -> done"
+assert_eq "stop,done" \
+  "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work B 0)"
+
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"

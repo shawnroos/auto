@@ -90,6 +90,18 @@ assert_eq "False" "$(pg '{"loop_phase":"plan","phase_order":["plan","seam","work
 it "is_terminal_phase: work (terminal) → True"
 assert_eq "True" "$(pg '{"loop_phase":"work","phase_order":["plan","seam","work"],"terminal_phase":"work"}' is_terminal work)"
 
+# Non-work terminal recipe (the shape tick.py's two guards now route through):
+# is_terminal_phase must key on the recipe's DECLARED terminal, not the literal
+# "work". brainstorm IS terminal here; work is not even in the order.
+it "is_terminal_phase: brainstorm IS terminal for a brainstorm-terminal recipe"
+assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal brainstorm)"
+
+it "is_terminal_phase: a mid-run non-terminal phase (brainstorm, terminal=work) → False"
+assert_eq "False" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm","work"],"terminal_phase":"work"}' is_terminal brainstorm)"
+
+it "is_terminal_phase: phase=None defaults to current_phase (loop_phase) → True at terminal"
+assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal)"
+
 # ─── Scenario 6: next_phase_after_met at terminal ───────────────────────────
 it "next_phase_after_met(work) at terminal → None"
 assert_eq "None" "$(pg '{"loop_phase":"work","phase_order":["plan","seam","work"],"terminal_phase":"work"}' next work)"

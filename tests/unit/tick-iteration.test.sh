@@ -905,9 +905,9 @@ open(pa, "w").write(src_a)
 pt = os.path.join(sys.argv[1], "tick.py")
 src_t = open(pt).read()
 old_sc = ('if pred.get("met") and not pred.get("iteration_pending", False) \\\n'
-          '            and phase != "plan" and phase != "seam":')
+          '            and phase_grammar.is_terminal_phase(led, phase):')
 new_sc = ('if (pred.get("met") or pred.get("iteration_pending")) \\\n'
-          '            and phase != "plan" and phase != "seam":')
+          '            and phase_grammar.is_terminal_phase(led, phase):')
 if old_sc not in src_t:
     sys.exit("DF#2 anchor 2 not found")
 src_t = src_t.replace(old_sc, new_sc)
