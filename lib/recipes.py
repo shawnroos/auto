@@ -746,6 +746,17 @@ def validate(recipe: dict) -> None:
 _BUILTIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "recipes")
 
 
+def _builtin_names():
+    """Every built-in recipe name — the ``recipes/`` dir minus ``schema.json``
+    (the recipe-shape doc, not a recipe). Scanning the dir instead of a hardcoded
+    list means a newly-added built-in (e.g. ``pipeline``/``review``) is covered
+    automatically by consumers like the description-spoofing guard."""
+    return sorted(
+        fn[:-5] for fn in os.listdir(_BUILTIN_DIR)
+        if fn.endswith(".json") and fn != "schema.json"
+    )
+
+
 def _tier_dirs(repo_root: str):
     """The three recipe directories in resolution order: (tier_name, dir)."""
     return [
@@ -957,17 +968,18 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     # description-spoofing: a non-built-in recipe copying a built-in's description.
     desc = (recipe.get("description") or "").strip()
     if desc:
-        for nm in ("a1", "a2", "a4", "w"):
+        # Scan every built-in dynamically — a hardcoded tuple silently misses
+        # newer built-ins (pipeline/review) and lets them be spoofed.
+        for nm in _builtin_names():
             path = os.path.join(_BUILTIN_DIR, f"{nm}.json")
-            if os.path.isfile(path):
-                try:
-                    with open(path) as f:
-                        bdesc = (json.load(f).get("description") or "").strip()
-                except (OSError, ValueError):
-                    continue
-                if desc == bdesc and recipe.get("name") != nm:
-                    warnings.append(
-                        f"description matches built-in {nm!r} verbatim — possible "
-                        f"spoofing; consider a distinct description"
-                    )
+            try:
+                with open(path) as f:
+                    bdesc = (json.load(f).get("description") or "").strip()
+            except (OSError, ValueError):
+                continue
+            if desc == bdesc and recipe.get("name") != nm:
+                warnings.append(
+                    f"description matches built-in {nm!r} verbatim — possible "
+                    f"spoofing; consider a distinct description"
+                )
     return warnings

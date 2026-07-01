@@ -548,6 +548,21 @@ def lint_verif(r):
         return "rejected"
     return "valid:%d" % sum(1 for w in warns if "verification" in w)
 
+def _builtin_desc(name):
+    # The verbatim description of a built-in recipe (read from disk).
+    with open(os.path.join(auto_root, "recipes", name + ".json")) as f:
+        return (json.load(f).get("description") or "").strip()
+
+def spoof_result(r):
+    # "spoof:N" where N = # description-spoofing warnings ("rejected" if
+    # validate_and_lint's internal validate() raised — the "spoof:" prefix keeps a
+    # validate() rejection from silently reading as spoof:0, mirroring lint_verif).
+    try:
+        warns = recipes.validate_and_lint(r)
+    except recipes.RecipeError:
+        return "rejected"
+    return "spoof:%d" % sum(1 for w in warns if "spoofing" in w)
+
 if op == "a2-v030-happy":
     print(vresult(a2_v030()))
 
@@ -871,6 +886,53 @@ elif op == "verif-none":
     # R3 control: no verification anywhere → no new warning. Proves the U2 block
     # is silent on the common (verification-free) recipe.
     print(lint_verif(a2_v030()))
+
+elif op == "spoof-a1":
+    # Regression guard: a workspace recipe copying a1's description verbatim is
+    # flagged (a1 was in the old hardcoded tuple — must stay flagged).
+    r = a2_v030()
+    r["name"] = "a2-run-abc123"
+    r["description"] = _builtin_desc("a1")
+    print(spoof_result(r))
+
+elif op == "spoof-pipeline":
+    # NEW coverage (deliberate-fail on old code): pipeline was NOT in the old
+    # ("a1","a2","a4","w") tuple, so copying its description was silently allowed.
+    # The dynamic scan now flags it.
+    r = a2_v030()
+    r["name"] = "a2-run-abc123"
+    r["description"] = _builtin_desc("pipeline")
+    print(spoof_result(r))
+
+elif op == "spoof-review":
+    # NEW coverage (deliberate-fail on old code): review was also outside the old
+    # tuple — now flagged by the dynamic scan.
+    r = a2_v030()
+    r["name"] = "a2-run-abc123"
+    r["description"] = _builtin_desc("review")
+    print(spoof_result(r))
+
+elif op == "spoof-self-match":
+    # Self-match exemption preserved: a recipe whose name equals the built-in whose
+    # description it carries is NOT flagged (it IS that built-in, not a spoof).
+    # Uses a newly-covered built-in (pipeline) to exercise the exemption on the
+    # new scan path.
+    r = a2_v030()
+    r["name"] = "pipeline"
+    r["description"] = _builtin_desc("pipeline")
+    print(spoof_result(r))
+
+elif op == "spoof-builtins-clean":
+    # R2 regression guard: widening the reference set to all six built-ins must not
+    # make any shipped built-in spoof-warn against another (their descriptions are
+    # distinct). Each built-in validated against itself → spoof:0.
+    bad = []
+    for nm in ("a1", "a2", "a4", "w", "pipeline", "review"):
+        with open(os.path.join(auto_root, "recipes", nm + ".json")) as f:
+            res = spoof_result(json.load(f))
+        if res != "spoof:0":
+            bad.append(nm + "=" + res)
+    print("clean" if not bad else "dirty:" + ",".join(bad))
 PYEOF
 }
 
@@ -1002,6 +1064,26 @@ assert_eq "valid:2" "$(itr verif-two-off-gate)"
 
 it "U2: no verification anywhere → no new warning"
 assert_eq "valid:0" "$(itr verif-none)"
+
+# ── U2 (this unit): description-spoofing guard scans ALL built-ins ────────────
+# The guard used to loop a stale ("a1","a2","a4","w") tuple, silently missing the
+# pipeline/review built-ins. It now scans recipes/ dynamically. The pipeline and
+# review cases below are the deliberate-fail proof: they return spoof:0 (✗) on the
+# pre-change tuple and spoof:1 (✓) after the fix, while spoof-a1 stays ✓ on both.
+it "U2: workspace recipe copying a1's description verbatim → flagged (regression)"
+assert_eq "spoof:1" "$(itr spoof-a1)"
+
+it "U2: workspace recipe copying pipeline's description verbatim → flagged (new)"
+assert_eq "spoof:1" "$(itr spoof-pipeline)"
+
+it "U2: workspace recipe copying review's description verbatim → flagged (new)"
+assert_eq "spoof:1" "$(itr spoof-review)"
+
+it "U2: recipe whose name equals the matched built-in → not flagged (self-match)"
+assert_eq "spoof:0" "$(itr spoof-self-match)"
+
+it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan"
+assert_eq "clean" "$(itr spoof-builtins-clean)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
