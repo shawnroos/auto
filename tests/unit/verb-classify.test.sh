@@ -81,6 +81,22 @@ assert_eq "work" "$(cls "review (the plan)")"
 it "'review team'\''s plan' → work (possessive makes 'plan' a noun)"
 assert_eq "work" "$(cls "review team's plan")"
 
+# ── 's contractions must NOT read as a possessive determiner ───────────────
+# Regression: "let's"/"here's"/… end in 's like a possessive ("team's"), but they
+# are "let us"/"here is" — the next word is a VERB, not a noun. Misreading them
+# dropped the sole verb and collapsed a work imperative to ambiguous.
+it "'let'\''s ship it' → work ('let'\''s' is a contraction, not a possessive)"
+assert_eq "work" "$(cls "let's ship it")"
+
+it "'let'\''s review the plan' → work"
+assert_eq "work" "$(cls "let's review the plan")"
+
+it "'let'\''s plan the feature' → plan ('let'\''s' excluded, 'plan' reads as verb)"
+assert_eq "plan" "$(cls "let's plan the feature")"
+
+it "'here'\''s the deal, ship it' → work (contraction not a determiner)"
+assert_eq "work" "$(cls "here's the deal, ship it")"
+
 # ── ambiguous: no verb signal → model decides ──────────────────────────────
 it "'make it better' → ambiguous (improvement verb, no work/plan intent)"
 assert_eq "ambiguous" "$(cls "make it better")"

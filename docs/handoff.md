@@ -1,88 +1,98 @@
-# Spinoff: /auto drive-friction fixes — backstop false-positives + verdict CLI
+# Spinoff: /auto entry-routing priors — match real usage
 
 > This handoff is directional — author intent and a starting point, enough to orient and begin, not a spec to execute literally. The code and tests are the source of truth: validate against them and expect to refine.
 
-> **Directional handoff.** Verified diagnosis + intent, not a spec. Validate against
-> the auto code before changing; the fix shapes below are starting hypotheses.
+> **Directional handoff.** The agent report below is high-signal; treat its 6 issues +
+> 4 changes as the spine, but validate each against the current `auto-detect.sh` /
+> `auto-driver` code before building — some may already be partly addressed.
 
 ## Goal
-Fix the two things that made `/auto` 0.6.6 high-friction to drive a real feature build:
-1. **Destructive-action backstop false-positives** on benign `rm -rf` (temp/test
-   cleanup) — it pauses & latches the run on non-destructive ops.
-2. **Missing CLI surface** for driving the work-loop — no `record-verdict` CLI, and
-   dispatch is Python-API-only — so an operator must hand-drive and keep the ledger
-   honest by hand.
+Fix `/auto`'s deterministic entry-routing so its priors match how it's actually used.
+The mechanics are sound; the precedence/heuristics are wrong: instruction-style args, a
+freshly-built plan, and a cluttered `docs/plans/` all pointed one way while routing went
+another. An expert agent had to override the router on every entry.
 
-## Why now / context (field report)
-An agent used `/auto` 0.6.6 to build a significant feature and hit both walls:
-- Drove `ce-work` per unit by hand because the plumbing was hard to drive faithfully
-  (no verdict CLI; dispatch harness is a Python API), keeping the ledger honest
-  manually. Serialized the build in dependency order (units shared files / tight
-  interfaces — each agent built on the last's real output), not parallel.
-- The **destructive backstop false-fired 7×** on `rm -rf` in test cleanup (fan-out
-  agents' `$TMPDIR` teardown) **+ once** on the operator's own finalize command — none
-  were real destructive ops. **The ledger is consequently left PAUSED (backstop
-  latched).**
-This reinforces existing memory `auto_v066_drive_gotchas` (backstop pauses on
-incidental rm -rf; record_verdict not in CLI; /auto-resume pause for human walls).
-Treat that memory as corroborating field data.
+## Why now / context
+Field report from an agent driving `/auto` (v0.6.7) to build + ship a feature. Routing
+"worked out" only because the agent overrode it each time. This **reinforces**
+(already folded into) memory `auto_should_be_context_aware_smart_entry` — carries
+forward, not brand-new.
 
-## Key facts established (verified in code 2026-06-27)
-- **Backstop matches `rm -rf` on ANY path.** `lib/on-pretooluse-action.py:102`:
-  `("rm -rf", re.compile(r"\brm\s+-rf\b"))`. The matcher has no path awareness — it
-  fires on `rm -rf "$TMPDIR/foo"`, scratch teardown, and finalize cleanup exactly the
-  same as `rm -rf ~/important`. It IS driver-gated (driver=="self" → gated;
-  "manual" → allow) and fail-closed on confirmed-destructive + confirmed-live-run, but
-  path scope is the gap.
-- **`record_verdict` exists but isn't a CLI verb.** `lib/ledger.py:102`
-  `record_verdict = ledger_mutators.record_verdict` (importable), but the `_cli`
-  dispatch only exposes read / path / transition / is-orphaned / set-gaps-open /
-  set-enumerated-units (lines ~135-174). No `record-verdict`, no dispatch verb. Hence
-  "drove ce-work by hand / kept the ledger honest manually."
-- **Branch base:** `~/projects/auto` `main` in sync with origin (`280329e`) — branch
-  off current HEAD.
+## The 6 issues (verbatim-faithful)
+1. **Freeform/argument rule misroutes imperatives to `/ce-plan`.** Both entries carried
+   NL instructions ("develop and implement a plan…", "execute, code-review and verify
+   the plan, then open a PR"). Neither is a literal plan-file path, so the driver does
+   `/ce-plan <ARGUMENTS>` and ends — wrong both times (#1 wanted plan+implement; #2
+   wanted execute, not re-plan a green plan). The rule can't tell "topic to plan" from
+   "imperative about existing work." Verbs — execute/implement/review/verify/ship/open
+   a PR — are the tell it should key on.
+2. **Multi-plan detection is filesystem-blind and outranks live intent.**
+   `auto-detect.sh` found 6 plans in `docs/plans/` — 5 stale (Mar/May), 1 co-authored
+   to green THIS session. The driver always asks, listing all 6 + a **"Fan out all 6"**
+   option — a footgun (6 worktrees on abandoned plans). No recency/git-status ranking,
+   no notion of "the plan this conversation is about."
+3. **Conversation-context path never fires.** v0.6.0 has a "rich session, act on it"
+   branch, but it only triggers if the driver sets `CLAUDE_AUTO_CONVERSATION_SIGNAL`
+   before loading the hypothesis — and the multi-plan filesystem result short-circuits
+   that. The richest signal (we just designed + adversarially reviewed a plan together)
+   lost to stale files. **Precedence is backwards.**
+4. **Recipe→capability mapping isn't legible at decision time.** Table says
+   reviewed-plan → recipe `w`, but the driver can't tell if `w` opens a PR / runs review
+   / verifies — and memory records `a1` exits without a PR. For "execute, review,
+   verify, open PR" there was no confident recipe pick, so the agent drove CE skills
+   directly. Recipes should advertise capabilities (PRs? review loop? verify gate?).
+5. **Single dispatch line is a SPOF.** Everything hinges on one `bash auto.sh …` call;
+   when the Bash classifier was momentarily unavailable, the whole entry stalled. No
+   graceful fallback. (Env hiccup, not auto's bug — but the design has no resilience.)
+6. **Tension: multi-plan ALWAYS asks vs advisor-gate "never ask, infer/advisor."** The
+   one place the driver hard-asks is exactly where conversation made the answer obvious.
+   Fires in the pre-arm window so it's allowed — but at odds with the stated ethos.
 
-## Open questions / not yet decided
-- **Backstop path-scoping — what's exempt?** Candidates: `$TMPDIR`, `/tmp`,
-  `/private/tmp`, an agent/scratch dir, and any path OUTSIDE the repo root + `$HOME`
-  dotfiles. A `rm -rf` of an ephemeral temp dir is not the irreversible op the backstop
-  exists to catch. Decide the exemption rule precisely — fail-closed must remain for
-  real repo/home deletes (don't over-open the backstop). Consider: only gate `rm -rf`
-  when the target resolves under the repo root or a protected set; allow ephemeral.
-- **Distinguish fan-out-agent cleanup from operator commands?** The 7 false-positives
-  were sub-agent `$TMPDIR` teardown; the 1 was the operator's finalize. Both are
-  benign temp ops — path-scoping likely covers both, but confirm the finalize case.
-- **Verdict CLI shape.** Add `record-verdict <run> <unit> <decision> [json]` (and
-  maybe a dispatch verb) to `ledger.py` `_cli`, mirroring the existing set-* verbs, so
-  the work-loop is drivable without the Python API. What's the minimal verb set to
-  make hand-driving faithful? (record-verdict at least; possibly set-verdict-decision,
-  which also exists as a mutator at `ledger.py:107`.)
-- **Unlatch the currently-paused ledger.** The field run's ledger is paused/latched —
-  is that this workstream's concern (provide a clean unlatch/resume path) or just the
-  operator's `/auto-resume`? At minimum, verify resume works once the backstop is fixed.
-- **Regression tests.** Add cases: `rm -rf $TMPDIR/x` → ALLOW; `rm -rf <repo>/x` →
-  GATE; `record-verdict` CLI round-trips into the ledger.
+## What to change (the agent's recommendations)
+- **Promote conversation-context above the filesystem scan.** A plan created/edited this
+  session, or a clear imperative referencing existing work, beats a `docs/plans/` glob.
+- **Teach the freeform rule to read verbs.** Imperative + existing plan → route to
+  WORK, not `/ce-plan`.
+- **Rank multi-plan by recency/git-status**, mark stale/merged plans, suppress "fan out
+  all" when most are stale.
+- **Make recipe capabilities self-describing** so the right recipe is pickable for a
+  multi-step ask.
+
+## Open questions / design forks
+- Precedence model: exact ordering of (live-session plan) > (imperative+existing) >
+  (single fresh plan) > (multi-plan ask). Where does `CLAUDE_AUTO_CONVERSATION_SIGNAL`
+  get set, and how to stop the filesystem branch short-circuiting it?
+- Verb taxonomy for the freeform rule — which verbs mean "work on existing" vs "plan
+  new"? Edge cases ("plan and implement" wants BOTH).
+- Recency/git-status ranking signal — mtime? git log? a `status:` field in plan
+  frontmatter? How to detect "the plan this conversation is about."
+- Recipe-capability schema — where declared (recipe table / frontmatter) and how the
+  driver surfaces it (PRs/review/verify flags).
+- Dispatch resilience (#5) — fallback when the one bash line can't run.
 
 ## Starting point (concrete)
-- Repo `~/projects/auto` (branch from `main` `280329e`).
-- Backstop: `lib/on-pretooluse-action.py` — the `_DESTRUCTIVE` regex list (~line 102),
-  `_matched_destructive()` (~120), and the driver-gating logic (~168-193). The fix is
-  path-aware exemption inside/around `_matched_destructive`.
-- CLI: `lib/ledger.py` `_cli` dispatch (~135-174) + the imported mutators
-  `record_verdict` (102) / `set_verdict_decision` (107). Add verb(s) mirroring
-  `set-enumerated-units`.
-- Tests: the repo's `tests/` (there are existing `hooks.test.sh`, `advisor-gate`,
-  backstop-related integration tests) — extend them.
-- **Adjacent in-flight auto worktrees:** `resume-stdout-json` (touches
-  `auto-resume.py`/`tick_advance`/**`ledger.py`** — likely CLI-area overlap, coordinate)
-  and `auto-looper-forks`. Rebase on main before landing.
+- Repo `~/projects/auto`. **Branch from `origin/main` (`82ce19c`)** — local `main`
+  (`280329e`) is 1 behind.
+- `lib/auto-detect.sh` — the hypothesis builder + multi-plan scan +
+  `CLAUDE_AUTO_CONVERSATION_SIGNAL` (issues #1/#2/#3).
+- `skills/auto-driver/SKILL.md` — the freeform rule, multi-plan ask, recipe table,
+  precedence (issues #1/#2/#4/#6).
+- `lib/auto.sh` / `lib/auto-spawn.py` — the single dispatch line (issue #5).
+- **Heavy worktree overlap — check before building:** `feature/auto-conversation-entry`
+  (the ORIGINAL v0.6.0 conversation-entry dev branch — likely already shipped into main;
+  read it to see what the conversation-context branch was meant to do), plus in-flight
+  `feature/auto-drive-fixes` (backstop/CLI — touches entry) and `feature/loop-planning-opt`.
+  All touch the entry surface; coordinate landing order to avoid `auto-detect.sh` /
+  driver collisions.
+- Memory: `auto_should_be_context_aware_smart_entry` (already updated with this),
+  `auto_dx7_algorithm_picker` (recipes), `native_goal_is_model_judged...`.
 
 ## Recommended next step
-`/ce-plan` — two concrete, well-scoped fixes (path-scope the backstop; add the verdict
-CLI) plus tests; the only real design call is the exemption rule. A short plan that
-keeps fail-closed for real deletes, then `/ce-code-review`. Could split the backstop
-fix to `/ce-debug` if you want to repro the false-positive first. Validate the
-exemption rule against `on-pretooluse-action.py` before writing.
+`/ce-plan` — the agent's 4 changes are a ready plan spine; the open work is the
+precedence model + verb taxonomy + recipe-capability schema. Phase 0 should diff the
+current `auto-detect.sh`/driver against the 6 issues (some may be partly fixed since the
+report) AND read `auto-conversation-entry` to avoid re-deriving the conversation branch.
+Then `/ce-code-review` (auto's backstop/bash history). Validate against the code first.
 
 ## Source session
 Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/dde8ee69-bcee-40bd-a003-27e56020f197.jsonl`

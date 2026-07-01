@@ -53,6 +53,15 @@ _CREATION = [r"develop", r"create", r"draft", r"write", r"produce",
 _ARTICLES = {"the", "a", "an", "this", "that", "existing", "my", "our",
              "your", "their", "its", "current"}
 
+# Closed class of function-word `'s` contractions ("let's ship" = "let us ship").
+# A possessive `'s` attaches to a NOUN; these attach to pronouns/adverbs/"let" and
+# are followed by a VERB, so they must NOT read as a noun-marking determiner.
+_CONTRACTIONS = {"let's", "here's", "there's", "that's", "what's", "it's",
+                 "he's", "she's", "who's", "where's", "when's", "how's",
+                 "why's", "let’s", "here’s", "there’s", "that’s", "what’s",
+                 "it’s", "he’s", "she’s", "who’s", "where’s", "when’s",
+                 "how’s", "why’s"}
+
 
 def _has_any(text, patterns):
     return any(re.search(r"\b" + p + r"\b", text) for p in patterns)
@@ -73,8 +82,11 @@ def _preceded_by_determiner(text, start):
     prev = before[-1].strip(string.punctuation + "’")
     if prev in _ARTICLES:
         return True
+    if prev in _CONTRACTIONS:
+        # "let's"/"here's"/… is "let us"/"here is" — the next word is a verb.
+        return False
     # Possessive ("team's", "clients'") makes the following word a noun.
-    return prev.endswith("'s") or prev.endswith("'") or prev.endswith("’s")
+    return prev.endswith("'s") or prev.endswith("’s")
 
 
 def _used_as_verb(text, pattern):
