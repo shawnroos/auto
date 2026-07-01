@@ -51,28 +51,12 @@ FUNC_BUDGET=120
 # fires (so growth-of-allowlisted-debt is still caught).
 
 ALLOWED_FILES=(
-  # ledger_core.py is 32 LOC over budget. v0.3.1 B5 split ledger.py
-  # 1746 → core 1014 + mutators + emitters + facade; core is by design the
-  # heaviest of the four (it owns the I-1 recompute chokepoint, init_ledger,
-  # the lock primitives, and all module constants/errors). Decomposing it
-  # further means splitting recompute_predicate's helpers OR init_ledger,
-  # both of which are tracked as separate backlog items (B7 was done; the
-  # init_ledger split is implicit in the function allowlist below).
-  # v0.4.0 U1 added goal_intent: 1 init_ledger arg + 1 type check + 7-line
-  # ledger-dict comment + 1 dict line = 18 LOC growth on the file and on
-  # init_ledger itself. The init_ledger split remains the load-bearing
-  # decomposition; bumping the waiver to keep that work scoped to its own
-  # backlog item rather than dragging it into U1.
-  # v0.6.0 U5 added driving_session_id (KTD-5): same shape as goal_intent —
-  # 1 init_ledger arg + 1 type check + a 4-line ledger-dict field comment.
-  # A ledger field has no home but init_ledger (the construction chokepoint);
-  # the init_ledger split is still the right decomposition, kept off U5.
-  # v0.7.0 KTD-1 (verification-gate-hardening) added the conditional
-  # `verification` preserve in _normalize_unit: a 6-line comment + the
-  # if/assign/return = 9 LOC growth. _normalize_unit is the only unit-rebuild
-  # point, so the preserve has no other home; the init_ledger split remains the
-  # load-bearing decomposition, kept off this fix.
-  "lib/ledger_core.py:1055"
+  # (lib/ledger_core.py:1055 waiver retired — U16 extracted the pure predicate
+  # evaluator (recompute_predicate + B7 helpers, gating_severities,
+  # unit_is_terminal, is_orphaned) into lib/ledger_predicate.py, dropping core
+  # from 1055 to ~710 LOC — back under the 1000 budget. "Decompose below
+  # threshold → remove the waiver": no lib/*.py file is over budget now, so this
+  # array is intentionally empty.)
 )
 
 ALLOWED_FUNCTIONS=(

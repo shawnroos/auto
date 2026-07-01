@@ -13,10 +13,12 @@ resolving unchanged. See those three modules for the implementation and
 docs/contracts/ledger-schema.md for the authoritative spec (if they disagree,
 the contract wins and the code is the bug).
 
-  * ledger_core      — constants, errors, paths, time helpers, the pure predicate
-                       logic (recompute_predicate + B7 helpers, unit_is_terminal,
-                       is_orphaned), the atomic-write + flock primitives, and
-                       init_ledger / read_ledger.
+  * ledger_core      — constants, errors, paths, time helpers, the atomic-write +
+                       flock primitives, and init_ledger / read_ledger.
+  * ledger_predicate — the pure predicate logic (recompute_predicate + B7 helpers,
+                       gating_severities, unit_is_terminal, is_orphaned); imports
+                       only ledger_core, reached from core's _atomic_write via a
+                       deferred lazy-load (U16).
   * ledger_mutators  — the grammar-checked, flock-serialized scalar mutators
                        (transition, record_verdict, set_loop, set_gaps_open,
                        set_*, accumulate_active_time, increment_iteration_attempts).
@@ -46,6 +48,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module, resolve_repo  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
+ledger_predicate = load_lib_module("ledger_predicate")
 ledger_mutators = load_lib_module("ledger_mutators")
 ledger_emitters = load_lib_module("ledger_emitters")
 
@@ -83,12 +86,12 @@ lock_path = ledger_core.lock_path
 now_iso = ledger_core.now_iso
 parse_iso = ledger_core.parse_iso
 
-# Pure predicate logic.
-gating_severities = ledger_core.gating_severities
-unit_is_terminal = ledger_core.unit_is_terminal
-recompute_predicate = ledger_core.recompute_predicate
-_compute_iteration_pending = ledger_core._compute_iteration_pending
-is_orphaned = ledger_core.is_orphaned
+# Pure predicate logic (extracted to ledger_predicate.py in U16).
+gating_severities = ledger_predicate.gating_severities
+unit_is_terminal = ledger_predicate.unit_is_terminal
+recompute_predicate = ledger_predicate.recompute_predicate
+_compute_iteration_pending = ledger_predicate._compute_iteration_pending
+is_orphaned = ledger_predicate.is_orphaned
 
 # Primitives + create/read API (incl. the private RMW primitive consumers reach
 # for in tests/integration).
