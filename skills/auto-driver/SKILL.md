@@ -34,14 +34,15 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
 | `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
-| `reviewed-plan`   | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path> --recipe w"`               | (n/a — single plan unambiguous)      |
+| `reviewed-plan`   | load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --recipe w"` | (n/a — single plan unambiguous)      |
 | `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9)            | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
 | `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
-**Argument-aware freeform** (before loading the hypothesis): a plan-file path →
-`auto.sh "<path> --recipe w"`. Else `python lib/verb-classify.py "$ARGUMENTS"`:
-`work`→work the freshest plan `auto.sh "<plan> --recipe w"` (none? you decide); `both`→`/ce-plan <ARGUMENTS>` then work it; `plan`/`ambiguous`→`/ce-plan <ARGUMENTS>`.
+**Argument-aware freeform** (pre-hypothesis): a plan-file path → load `auto-launch`
+→ `auto.sh "<path> --recipe w"`. Else classify with `lib/verb-classify.py`, then hand
+to the `auto-launch` chooser (self-driven → silent-apply) for the class's route —
+work the freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan` (§14, §15).
 
 **Workspace handling** (plan 004): branch on `workspace_action`.
 `create`/`recreate`: chain in ONE Bash call so the workspace id

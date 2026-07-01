@@ -47,3 +47,29 @@ Render each with `bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh" --render <nam
   comparator.
 - `w` — work-only: `phase_order: ["work"]`, no plan, no emitter; units come from
   `enumerate_plan_units` at init (an already-reviewed plan, built directly).
+
+## Comparison — stacking cards for the launch chooser (KTD-2/KTD-3)
+
+The launch chooser (`skills/auto-launch`) draws candidate shapes side-by-side so
+the operator can see the shape difference at a glance. That contrast block is
+`lib/topology-render.py::render_comparison(recipes, *, highlight=None, width=60)`
+— a thin COMPOSING wrapper, **not** a second renderer. It calls the one `render`
+once per candidate and stacks the cards, so the KTD-10 one-renderer rule still
+holds: a comparison is just N invocations of `render`, and a user-authored recipe
+contrasts against a built-in identically. A separate parallel renderer is rejected
+— it would reintroduce exactly the drift the single-renderer invariant guards
+against.
+
+- Cards stack in **input order** (preserved), separated by a blank-line +
+  horizontal rule (`─ × width`).
+- The card whose recipe `name` equals `highlight` is prefixed with a
+  `► recommended` marker line; `highlight=None` (or a name not among the
+  candidates) emits no marker.
+- A single-recipe list renders one card with no separator artifacts. Output is
+  deterministic (byte-identical across calls), so tests can assert it exactly.
+
+Render a contrast block with
+`bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh" --compare <name>... [--highlight <name>]`
+— it resolves each candidate through the same first-wins `recipes.resolve` as
+`--render`, then prints the stacked cards (KTD-3: the cards go to stdout above the
+`AskUserQuestion`, not crammed into an option field).

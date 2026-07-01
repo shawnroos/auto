@@ -133,7 +133,10 @@ ALLOWED_FUNCTIONS=(
   # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in
   # _bind_presatisfied_plan, off-budget; the residual is glue). Further splitting
   # the linear glue into micro-helpers would hurt readability, not help it.
-  "lib/auto.py:run:125"
+  # Launch-chooser agent-native Gap 3 added the post-init run-scoped-recipe
+  # teardown — the delete logic is extracted to _teardown_run_scoped_recipe
+  # (off-budget); only the +3 lines of conditional glue stay in run().
+  "lib/auto.py:run:128"
 )
 
 # ── Test harness ───────────────────────────────────────────────────────────

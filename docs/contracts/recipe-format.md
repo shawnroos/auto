@@ -127,6 +127,22 @@ Each entry declares which **emitter** fires at a phase boundary:
   invokes `do_unit` to build): same single-phase shape, different op — no
   plan phase, no auto-advance, no rebound.
 
+> **Launch run-scoped variants (v0.7.0).** The interactive launch chooser
+> (`skills/auto-launch`, `driver-reference.md` §14) may compile a **run-scoped
+> variant** when the operator edits a gated recipe's gates or composes a custom
+> loop: it is a plain **workspace-tier** recipe (`<repo>/.claude/auto/recipes/`)
+> carrying the typed `verification` array on its `iteration.gate_unit` (§11), so
+> the ordinary first-wins resolver and `validate()` apply to it unchanged — it is
+> **not** a new built-in and not part of the conformance corpus above. Its only
+> distinguishing trait is a **distinct stem `<builtin>-<run-slug>`** (e.g.
+> `a2-fix-checkout`), which is the anti-shadow guard: a distinct name (not a
+> description check) keeps `resolve("a2", repo)` returning the built-in unshadowed
+> while the variant resolves at the workspace tier. Because the engine reads the
+> recipe only at `init_ledger` time and is recipe-blind thereafter (§1), the
+> variant is **torn down once the run's ledger is initialized** — nothing
+> accumulates in the workspace tier across runs (the "inline compile-and-run"
+> scope boundary; persistent saves stay with `auto-author-recipe`).
+
 ## 6. `iteration` — outcomes-gated emission (v0.3.0+)
 
 A recipe MAY declare an `iteration` block to make the loop **outcomes-gated**:

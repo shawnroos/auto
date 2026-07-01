@@ -96,3 +96,34 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
             lines.append(arrow)
 
     return "\n".join(lines)
+
+
+# Marker line prefixed onto the highlighted card in a comparison block.
+_RECOMMENDED_MARKER = "► recommended"
+
+
+def render_comparison(recipes: list, *, highlight=None, width: int = _DEFAULT_WIDTH) -> str:
+    """Stack N candidate cards for the launch chooser's contrast block (KTD-2/3).
+
+    A thin COMPOSING wrapper: it calls the one `render` once per candidate and
+    joins the cards — it does NOT re-implement any per-card art. So the KTD-10
+    "one renderer = the surfaces can't drift" invariant holds: a comparison is
+    just N invocations of `render` (a separate parallel renderer would reintroduce
+    exactly the drift KTD-10 guards against).
+
+    Cards are stacked in input order (preserved, so tests assert exact output),
+    separated by a blank-line + horizontal rule. The card whose recipe `name`
+    equals `highlight` is prefixed with a `► recommended` marker line; when
+    `highlight` is None or names no candidate, no marker is emitted. Pure stdlib,
+    deterministic.
+    """
+    w = max(24, int(width or _DEFAULT_WIDTH))
+    rule = "─" * w
+    blocks = []
+    for recipe in recipes:
+        card = render(recipe, w)
+        if highlight is not None and recipe.get("name") == highlight:
+            card = f"{_RECOMMENDED_MARKER}\n{card}"
+        blocks.append(card)
+    separator = f"\n\n{rule}\n\n"
+    return separator.join(blocks)

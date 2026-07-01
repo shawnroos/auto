@@ -763,6 +763,16 @@ def _tier_dirs(repo_root: str):
     ]
 
 
+def workspace_recipe_path(repo_root: str, name: str) -> str:
+    """The workspace-tier file path for recipe ``name`` (the run-scoped variant
+    home). Single source of truth for where the launch chooser writes a
+    ``<builtin>-<run-slug>`` recipe and where ``auto.py --teardown-recipe-after-init``
+    deletes exactly that file post-init. Targets ONLY the workspace tier, so it can
+    never name a built-in or global recipe — deleting it can't shadow-break a
+    canonical recipe."""
+    return os.path.join(repo_root, ".claude", "auto", "recipes", f"{name}.json")
+
+
 def resolve(name: str, repo_root: str):
     """Resolve recipe ``name`` across the three tiers, first-wins.
 

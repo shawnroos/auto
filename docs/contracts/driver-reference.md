@@ -800,3 +800,158 @@ it is **negation-blind** ("don't implement" reads as work) and can misread a
 domain noun, so the driver should sanity-check a `both`/`work` result against the
 literal request before arming a run. This mirrors the detector ↔ `recommender.py`
 division of labor.
+
+---
+
+## 15. Interactive launch chooser (v0.7.0 — KTD-1/4/5/6)
+
+Interactive `/auto` no longer dispatches the loop silently. The launch agent
+(`skills/auto-launch/SKILL.md`) runs one step between situation-detection and
+dispatch: it reads the session, picks (or composes) a loop shape the
+deterministic router can't reach, proposes typed gates, and lets the operator
+confirm — **skipping the question entirely when both the shape and its gates are
+obvious.** This section is the theory; the rules themselves live in code
+(`lib/launch-gate.py`) and the orchestration in the skill. Load this only when an
+edge case isn't covered inline there.
+
+### The confidence ladder (KTD-1)
+
+The skip-vs-confirm-vs-two-step decision splits the same way `lib/recommender.py`
+splits classification: the **fuzzy** half (how sure am I of the shape, and of the
+gates) stays in the launch agent; the **crisp** half — which tier that maps to —
+is `lib/launch-gate.py::classify_launch(...)`, a pure, IO-free function. The agent
+emits two self-assessed confidences in `[0,1]` (`shape_confidence`,
+`gates_confidence`) plus structural facts (`recipe_kind ∈ {builtin, custom}`, the
+proposed `gate_types`, and a precomputed `router_agrees` boolean);
+`classify_launch` returns `skip` / `confirm` / `two_step`. The three tiers:
+
+- **`skip`** — proceed with no question, printing a one-line notice (R9). Permitted
+  ONLY inside a tight envelope (below). This is the load-bearing safety property:
+  a wrong autonomous skip (a loop the operator never saw) costs more than one extra
+  question, so the bar is high and the default leans to showing the chooser.
+- **`confirm`** — one `AskUserQuestion` showing the drawn shape + pick + gates;
+  dispatch on confirm.
+- **`two_step`** — the full chooser: step 1 confirms the shape (candidates drawn
+  for contrast, recommendation highlighted, a "design new" escape hatch always
+  present); on a shape override the gates are re-derived for the chosen shape (R7);
+  step 2 confirms or edits the gates.
+
+`lib/launch-gate.py` owns the exact rules and the two constants (`SKIP_BAR = 0.85`
+on both dimensions, `CONFIRM_BAR = 0.70` for the settled-but-soft dimension). Do
+not restate the thresholds as independent assertions elsewhere — read them from
+that module. The rules, evaluated in order, are what the code enforces:
+
+1. `recipe_kind == "custom"` → **`two_step`**. A composed loop is always drawn and
+   confirmed (R4); it never skips and never single-confirms.
+2. Any `gate_type ∈ {advisor_judge, human, model_judge}` → **never `skip`** (a
+   non-deterministic gate is by definition not "obvious"). Note this forbids skip
+   *only* — with a settled shape such a launch may still **single-confirm** (rule 4
+   does not re-check for a blocking gate), and otherwise falls to `two_step`. It is
+   not forced to the two-step chooser.
+3. `skip` iff both confidences `≥ SKIP_BAR` **and** `recipe_kind == "builtin"`
+   **and** `gate_types ⊆ {programmatic}` (empty is allowed — a1/w emit no typed
+   gate) **and** `router_agrees`.
+4. else `confirm` iff `recipe_kind == "builtin"` **and** exactly one dimension
+   clears `SKIP_BAR` while the other clears `CONFIRM_BAR` but stays below
+   `SKIP_BAR`. (If both clear `SKIP_BAR` but the skip envelope failed for some
+   other reason, this does not fire — it falls through.)
+5. otherwise → **`two_step`** (the bias-to-show default).
+
+Bad inputs degrade toward safety, never toward an accidental skip: a non-numeric
+or out-of-range confidence coerces to `0.0`, an unknown `recipe_kind` is treated as
+`custom` (→ `two_step`), malformed `gate_types` block the rule-3 subset check, and
+only the literal boolean `True` counts as `router_agrees`.
+
+### `router_agrees` — the deterministic cross-check on skip (KTD-1)
+
+The skip inputs are model-self-assessed, and LLM self-confidence is uncalibrated
+and biased high. The structural guards (builtin ∧ programmatic-or-no-typed-gates ∧
+not custom) are *necessary but not sufficient* — they can't catch a confidently
+wrong shape *inside* the builtin+programmatic envelope (work that truly needs `a2`
+misjudged as `a1` at `shape_confidence=0.9`). So skip carries a fourth,
+**deterministic** precondition: `router_agrees` — the agent's recommended stem must
+equal `lib/recommender.py`'s pick for the launch's classified state label
+(`reviewed-plan`→`w`, `clear-intent-no-plan`→`a1`). The caller (the launch agent)
+precomputes the boolean so `classify_launch` stays IO-free.
+
+This is a real discriminator precisely because the router only ever reaches `a1`/`w`
+and skip itself already collapses to `a1`/`w` — the router is **exactly
+authoritative for the only shapes that can skip.** An agent recommending `a2`/`a4`/
+custom on a `reviewed-plan` state can never match the router's `w`, so
+`router_agrees` is `False` and the chooser fires instead of skipping. The float
+stays the discriminator; the router corroborates it with deterministic code where
+skip is possible.
+
+### Interception point (KTD-5)
+
+The chooser fires for interactive `/auto` exactly where the driver today picks a
+*loop shape* and dispatches it — wired in `skills/auto-driver/SKILL.md`:
+
+- **`reviewed-plan`** (was: silent `auto.sh "<path> --recipe w"`) → routes through
+  `auto-launch`, which classifies the state, runs the ladder, and dispatches.
+- **Freeform-not-a-plan** (`$ARGUMENTS` is a sentence, not a plan file) → was
+  `/ce-plan <ARGUMENTS>`-and-end; now classifies to `clear-intent-no-plan`
+  (recommend `a1`@plan) and runs the chooser, dispatching a loop. This is an
+  intended behavior change (KTD-5).
+
+It does **not** fire for `in-flight` / `ambiguous-runs` / `multi-plan` (those
+select a *run*, not a loop shape — run-selection, deferred), for
+`conversation-context` (self-applied silently, R11), or for `--recipe`
+(`commands/auto.md` branch 2, bypassed entirely, R12).
+
+**Interactive-only by construction (R11 / AE6).** The chooser must never reach an
+`AskUserQuestion` on a self-driven or headless run. It does not lean on the
+advisor gate's mid-question denial (§12): at chooser entry the launch agent checks
+the same `driving_session_id` ownership signal and, when a self-driven run owns the
+session (or no interactive operator is present), routes straight to silent-apply —
+computing the recommendation and dispatching it with the R9 notice, never entering
+the question path. So a self-driven `reviewed-plan` run silent-applies by
+construction.
+
+### Gate attachment: a1/w vs a2/a4/custom (KTD-4 — the load-bearing wiring split)
+
+The v0.7.0 typed `verification` array rides on `iteration.gate_unit`, which must
+name a **declared** unit (`recipe-format.md` §6, §11). `a2`/`a4` declare structural
+gate units (`judge` / `compare`); `a1`/`w` do not — their work units are emitted at
+runtime by `plan_output_to_work_units` with dynamic ids that can't be enumerated.
+Adding an iteration block + gate unit to a1/w would be a new built-in topology,
+which is out of scope. So gating attaches differently by shape:
+
+- **`a1` / `w`** — **no iteration gate point.** What the chooser/notice surfaces for
+  them is a *description of the inherent review-to-P3 exit predicate*
+  (`blockers == 0 ∧ majors == 0 ∧ all_units_terminal`), for visibility only — **not**
+  a new `verification` block. R2's "at each gate point" is vacuously satisfied
+  (a1/w have no iteration gate point). The notice names that predicate, not a literal
+  programmatic check.
+- **`a2` / `a4` / custom** — a declared gate unit exists, so typed `verification`
+  attaches via the existing mechanism. When the operator's confirmed gates differ
+  from the built-in default (or it is a custom recipe), the launch agent compiles a
+  **run-scoped workspace recipe** through `auto-author-recipe`'s validation gate
+  carrying the `verification` array on the gate unit, then dispatches
+  `--recipe <run-scoped-name>` (see `recipe-format.md` §5, and KTD-6 below). When the
+  gates are the built-in default, it dispatches the built-in directly.
+
+This keeps the feature clear of the "plan documents a behavior the code never wires"
+bug class (§2's AST lint guards the same boundary) and adds no new gate mechanism.
+
+### Skip notice format (R9)
+
+On a `skip` the run dispatches without a prompt but prints one non-blocking line so
+the decision stays visible and auditable:
+
+```
+-> <recipe> · gate: <summary>
+```
+
+`<summary>` is shape-specific (KTD-4):
+
+- For **a1 / w** it names the inherent review-to-P3 exit predicate, e.g.
+  `-> a1 · gate: review-clean to P3` — **not** a literal programmatic check. (A
+  "gate: tests green" phrasing for a1/w would misrepresent what actually gates the
+  run; that wording in AE1 is illustrative shorthand for the exit predicate.)
+- For **a2 / a4** with a default gate it names the gate unit's check, e.g.
+  `-> a2 · gate: judge picks a winner`.
+
+See `lib/launch-gate.py` (the ladder + `SKIP_BAR` / `CONFIRM_BAR`),
+`skills/auto-launch/SKILL.md` (the agent, its §6/§6.1 compile step), and KTD-1 /
+KTD-4 / KTD-5 / KTD-6 in the plan for the full rationale.
