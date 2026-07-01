@@ -50,6 +50,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
+    DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
@@ -59,9 +60,6 @@ from _bootstrap import (  # noqa: E402
 # Read the phase via the ONE phase-decision module so the AST lint can forbid a
 # raw phase literal anywhere else in lib/ (KTD-3).
 phase_grammar = load_lib_module("phase-grammar")
-
-# Ledger key recorded by U5 at arm time (read defensively — see module docstring).
-_DRIVING_SESSION_KEY = "driving_session_id"
 
 
 def _read_session_id(raw: str):
@@ -94,13 +92,13 @@ def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, n
     # Dead-chain guard (mirrors on-stop.py): a self-driven run whose beat is
     # older than the stale threshold is a dead chain, not a live owner.
     if not skip_staleness:
-        last_beat = ledger._parse_iso(loop.get("last_beat_at"))
+        last_beat = ledger.parse_iso(loop.get("last_beat_at"))
         if last_beat is None:
             return False
         if (now - last_beat).total_seconds() > stale_threshold:
             return False
     # KTD-5 — session_id EQUALITY (read driving_session_id defensively).
-    driving = led.get(_DRIVING_SESSION_KEY)
+    driving = led.get(DRIVING_SESSION_KEY)
     return bool(driving) and driving == session_id
 
 

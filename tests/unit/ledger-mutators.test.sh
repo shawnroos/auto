@@ -487,6 +487,140 @@ assert_eq \
   '{"raised": "no", "iteration_pending": false, "active_wall_seconds_written": 1.0}' \
   "$(iter_driver predicate-survives-corrupt-iteration-attempts)"
 
+# ════════════════════════════════════════════════════════════════════════════
+# U14 P2 anti-livelock — set_enumerated_units sanitizes model-emitted depends_on.
+#
+# A dangling id, a self-edge, or a cycle in the model's per-item depends_on
+# would leave the materialized work unit permanently un-_is_ready → a SILENT
+# full-run livelock (never ready, never dispatched, dispatch-timeout never
+# fires, all_units_terminal false forever). set_enumerated_units is the single
+# chokepoint where runtime model output enters the ledger; it DROPS invalid
+# edges (recording dispatch_context.dropped_depends_on_edges) rather than
+# raising (a raise would materialize zero work units — also a stall). Valid
+# edges, including forward-refs to sibling enumerated units, are preserved.
+#
+# These assert the CLEANED edges + marker; orchestrator.test.sh asserts the
+# sanitized shape actually becomes ready (the real anti-hang claim).
+enum_driver() {
+  "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'
+import json, sys, importlib.util, os
+repo, ledger_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+op = sys.argv[3]
+
+
+def setup(run):
+    p = m.ledger_path(repo, run)
+    if os.path.exists(p):
+        os.unlink(p)
+    m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  units=[{"id": "plan", "state": "pending", "phase": "plan"}])
+
+
+def report(run, enumerated):
+    setup(run)
+    m.set_enumerated_units(repo, run, "plan", enumerated)
+    L = m.read_ledger(repo, run)
+    plan = next(u for u in L["units"] if u["id"] == "plan")
+    dc = plan["dispatch_context"]
+    deps = {it["id"]: it.get("depends_on", []) for it in dc["enumerated_units"]}
+    dropped = [[x["unit"], x["dep"], x["reason"]]
+               for x in dc.get("dropped_depends_on_edges", [])]
+    print(json.dumps({"deps": deps, "dropped": dropped}, sort_keys=True))
+
+
+if op == "dangling":
+    report("g-dangling",
+           [{"id": "w1", "invokes": {}, "depends_on": ["ghost"]}])
+elif op == "self":
+    report("g-self",
+           [{"id": "w1", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "two-cycle":
+    report("g-2cyc",
+           [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+            {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "three-cycle":
+    report("g-3cyc",
+           [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+            {"id": "w2", "invokes": {}, "depends_on": ["w3"]},
+            {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "forward-ref":
+    report("g-fwd",
+           [{"id": "w1", "invokes": {}, "depends_on": []},
+            {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "mixed":
+    # cycle w1<->w2 PLUS a legitimate forward-ref w3->w1; break the cycle,
+    # keep w3's edge (no over-drop).
+    report("g-mixed",
+           [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+            {"id": "w2", "invokes": {}, "depends_on": ["w1"]},
+            {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "existing-ref":
+    # depending on an EXISTING ledger unit ("plan") is valid — preserved.
+    report("g-exist",
+           [{"id": "w1", "invokes": {}, "depends_on": ["plan"]}])
+elif op == "leaf-dep":
+    # dep points at a batch item that has NO depends_on key (not an adj node) —
+    # exercises the back-edge finder's leaf guard (no KeyError).
+    report("g-leaf",
+           [{"id": "w1", "invokes": {}},
+            {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "unhashable":
+    # malformed model output: an unhashable (list) element where a string id
+    # belongs — must be DROPPED, not raise TypeError on the `in set` test (which
+    # would abort the persist → zero units → the same stall class, just loud).
+    report("g-unhashable",
+           [{"id": "w1", "invokes": {}, "depends_on": [["nested"]]}])
+PYEOF
+}
+
+it "U14 guard: dangling dep id → dropped, unit left with depends_on:[] (no dangling stall)"
+assert_eq \
+  '{"deps": {"w1": []}, "dropped": [["w1", "ghost", "dangling"]]}' \
+  "$(enum_driver dangling)"
+
+it "U14 guard: self-edge → dropped (a unit can never satisfy itself)"
+assert_eq \
+  '{"deps": {"w1": []}, "dropped": [["w1", "w1", "self"]]}' \
+  "$(enum_driver self)"
+
+it "U14 guard: unhashable (list) dep element → dropped, no TypeError/persist-abort"
+assert_eq \
+  '{"deps": {"w1": []}, "dropped": [["w1", ["nested"], "dangling"]]}' \
+  "$(enum_driver unhashable)"
+
+it "U14 guard: 2-cycle → one edge dropped, graph made acyclic"
+assert_eq \
+  '{"deps": {"w1": ["w2"], "w2": []}, "dropped": [["w2", "w1", "cycle"]]}' \
+  "$(enum_driver two-cycle)"
+
+it "U14 guard: 3-cycle (w1→w2→w3→w1) → back edge dropped, acyclic (generalizes past pairwise)"
+assert_eq \
+  '{"deps": {"w1": ["w2"], "w2": ["w3"], "w3": []}, "dropped": [["w3", "w1", "cycle"]]}' \
+  "$(enum_driver three-cycle)"
+
+it "U14 guard: valid sibling forward-ref preserved verbatim (behavior-preserving happy path)"
+assert_eq \
+  '{"deps": {"w1": [], "w2": ["w1"]}, "dropped": []}' \
+  "$(enum_driver forward-ref)"
+
+it "U14 guard: cycle + legitimate forward-ref in one batch → break cycle, do NOT over-drop the valid edge"
+assert_eq \
+  '{"deps": {"w1": ["w2"], "w2": [], "w3": ["w1"]}, "dropped": [["w2", "w1", "cycle"]]}' \
+  "$(enum_driver mixed)"
+
+it "U14 guard: dep on an existing ledger unit is valid → preserved"
+assert_eq \
+  '{"deps": {"w1": ["plan"]}, "dropped": []}' \
+  "$(enum_driver existing-ref)"
+
+it "U14 guard: dep points at a batch leaf (no depends_on key) → kept, no KeyError in back-edge finder"
+assert_eq \
+  '{"deps": {"w1": [], "w2": ["w1"]}, "dropped": []}' \
+  "$(enum_driver leaf-dep)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger-mutators.test.sh: ${PASS} passed, ${FAIL} failed"

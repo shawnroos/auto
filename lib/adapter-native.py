@@ -45,11 +45,22 @@ the shared scale (no foreign vocabulary), so the "mapping" is the injected
 rubric (``review_rubric``); ``validate_findings`` rejects anything off-scale.
 """
 
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _bootstrap import plan_step_sequencer  # noqa: E402  (path-prepend first)
+
 ADAPTER_NAME = "native"
 # Set by the rubric probe above (partial -> blocker-only).
 ADAPTER_SCALE = "blocker-only"
 
 _SEVERITIES = ("blocker", "major", "minor")
+
+# The transition sequence handed to the shared sequencer (U10): plan steps
+# WITHOUT the terminal "done". Native has NO deepen step, so it NEVER emits
+# "deepen": plan -> review_plan, looping back to "review_plan" while gaps remain.
+_PLAN_SEQUENCE = ("plan", "review_plan")
 
 REVIEW_RUBRIC = (
     "Tag each finding with exactly one severity:\n"
@@ -78,25 +89,18 @@ def validate_findings(findings):
 
 
 def _next_plan_step(ledger):
-    """Pure native plan-loop sequencer (contract §4). Native has NO deepen step,
-    so it NEVER emits "deepen": plan -> review_plan -> (loop review while gaps
-    remain) -> done.
+    """Thin native wrapper over the shared ``plan_step_sequencer`` (U10).
 
-    §4.1 coherence guard FIRST: gaps_open == 0 after a review_plan -> "done".
-    See the CONTRACT GAP block: `plan_step` is not yet a schema field.
+    Native has NO deepen step, so it NEVER emits "deepen": plan -> review_plan
+    and, while gaps remain, loops back to "review_plan"; once a review_plan round
+    closes the gaps the shared §4.1 coherence guard returns "done". That
+    per-adapter difference is now the injected ``_PLAN_SEQUENCE``; the guard +
+    ``plan_step is None`` first-step logic live once in ``_bootstrap``.
+    ``plan_step`` IS a real validated ledger field (``ledger_core.PLAN_STEPS``)
+    that the tick persists — read identically by both adapters (there is no
+    native-specific schema gap; the sequencer just keeps native's None-tolerance).
     """
-    epr = ledger.get("exit_predicate_result") or {}
-    plan_step = ledger.get("plan_step")
-    if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
-        return "done"
-    if plan_step is None:
-        return "plan"
-    if plan_step == "plan":
-        return "review_plan"
-    if plan_step == "review_plan":
-        # gaps still open (else the guard fired) -> review again. Never deepens.
-        return "review_plan"
-    return "done"
+    return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
 
 
 class Adapter:
@@ -120,11 +124,20 @@ class Adapter:
         reviewed prose plan and returns a list of unit dicts; the engine persists
         them to the plan unit's dispatch_context.enumerated_units (U6) and the
         emitters (U5b) shape them into ledger units. The producer the emitters
-        read — resolves the F4 gap."""
+        read — resolves the F4 gap.
+
+        U14 (KTD-1): each enumerated item carries a depends_on list (sibling unit
+        ids that must complete first; empty [] when independent) so the readiness
+        engine can order the fan-out. Prepare-only, so this invocation string is
+        where the model is instructed to originate the edges."""
         return {
             "adapter": ADAPTER_NAME,
             "op": "enumerate_plan_units",
-            "invocation": "enumerate-plan-work-units",
+            "invocation": (
+                "enumerate-plan-work-units; each item is {id, invokes, "
+                "depends_on}, where depends_on lists the sibling unit ids that "
+                "must complete first (empty [] if independent)"
+            ),
         }
 
     def plan(self, ledger):

@@ -304,6 +304,56 @@ else
   fail "res1=$res1_status res2=$res2_status launch_count=$launch_count disp_at_stable=$disp_at_stable (expected dispatched / rejected:not-pending(dispatched) / 1 / True)"
 fi
 
+# ─── Scenario 6b: adapter_op validation (U12) ─────────────────────────────────
+# dispatch_batch rejects a unit whose declared adapter_op is not in
+# VALID_ADAPTER_OPS — the op must NOT flow to launch. The adapter_op is injected
+# on `dispatch_context` (the durable home: _normalize_unit preserves
+# dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_unit)
+# and is the deliberate-fail CONTROL: same injected shape, valid value -> it
+# dispatches and launches, proving the guard keys on the op VALUE, not on the
+# unit's presence.
+it "adapter_op: unknown op -> rejected:bad-adapter-op, not launched, stays pending; valid op dispatches (control)"
+ledger_init "adapter-op" \
+  '[{"id":"Uvalid","state":"pending","dispatch_context":{"adapter_op":"do_unit"}},{"id":"Ubad","state":"pending","dispatch_context":{"adapter_op":"totally-bogus-op"}}]' \
+  >/dev/null 2>&1
+aop="$("$PY" - "$REPO" "adapter-op" "$ORCH_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, orch_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+
+launches = []
+def counting_launch(uid, attempt=0):
+    launches.append(uid)
+
+res = dict(o.dispatch_batch(repo, run, ["Uvalid", "Ubad"], 4, launch_fn=counting_launch))
+led = o.read_ledger(repo, run)
+states = {u["id"]: u["state"] for u in led["units"]}
+print(json.dumps({
+    "valid_status": res.get("Uvalid"),
+    "bad_status": res.get("Ubad"),
+    "bad_launched": "Ubad" in launches,
+    "bad_state": states.get("Ubad"),
+    "valid_launched": "Uvalid" in launches,
+    "valid_state": states.get("Uvalid"),
+    "valid_in_ops": "do_unit" in o.VALID_ADAPTER_OPS,
+}))
+PYEOF
+)"
+vstat="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_status'])" "$aop")"
+bstat="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_status'])" "$aop")"
+blaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_launched'])" "$aop")"
+bstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_state'])" "$aop")"
+vlaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_launched'])" "$aop")"
+vstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_state'])" "$aop")"
+if [ "$vstat" = "dispatched" ] && [ "$bstat" = "rejected:bad-adapter-op" ] \
+   && [ "$blaunch" = "False" ] && [ "$bstate" = "pending" ] \
+   && [ "$vlaunch" = "True" ] && [ "$vstate" = "dispatched" ]; then
+  pass
+else
+  fail "valid=$vstat bad=$bstat bad_launched=$blaunch bad_state=$bstate valid_launched=$vlaunch valid_state=$vstate (expected dispatched / rejected:bad-adapter-op / False / pending / True / dispatched)"
+fi
+
 # ─── Scenario 7: VERDICT SURVIVES SESSION DEATH ───────────────────────────────
 # The load-bearing property. A background agent self-writes its verdict to the
 # durable ledger AFTER the driving session has exited. A FRESH converge (a
@@ -571,12 +621,12 @@ conv = o.converge(repo, run)
 led = m.read_ledger(repo, run)
 # advance over the current state: Ua has a major-only verdict -> no fix-due,
 # no re-enqueue-due (the livelock would re-enqueue Ua here under three-tier).
-adv_before = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_before = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 # Finish Ub cleanly so the whole run can be terminal.
 m.transition(repo, run, "Ub", "dispatched", dispatched_at="2026-05-21T14:05:00Z")
 m.record_verdict(repo, run, "Ub", [])
 # One more advance: still nothing to do (no gating findings anywhere).
-adv_after = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_after = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 final = m.read_ledger(repo, run)
 pred = final.get("exit_predicate_result") or {}
 print(json.dumps({
@@ -629,7 +679,7 @@ m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z"
 m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"now-gates"}])
 ready = o.ready_units(repo, run)              # Ub should be BLOCKED now.
 conv = o.converge(repo, run)                  # Ua should NOT be terminal now.
-adv = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
+adv = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
 pred = (m.read_ledger(repo, run).get("exit_predicate_result") or {})
 print(json.dumps({
     "ready": ready,
@@ -680,6 +730,137 @@ assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"stall
 
 it "round-robin: no eligible plan unit → None"
 assert_eq "None" "$(rr '{"units":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
+
+# ════════════════════════════════════════════════════════════════════════════
+# U14 — edge-driven ordering of an emitter fan-out (the readiness engine, once
+# fed real depends_on edges, sequences the work units). This is the consumer
+# side of U14: unit-emitters.test.sh proves the edges are materialized; here we
+# prove ready_units ORDERS on them.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ─── Ordering: w3 depends on BOTH w1 and w2; edges gate its readiness ─────────
+# w1,w2,w3 pending; w3.depends_on=[w1,w2]. The gate is edge-driven: w3 becomes
+# ready ONLY after BOTH predecessors are satisfied (per _dependency_satisfied).
+it "U14 ordering: w1 verdict-returned WITH open blocker -> ready is exactly [w2] (w3 gated on both edges)"
+ledger_init "u14-order" \
+  '[{"id":"w1","state":"pending"},{"id":"w2","state":"pending"},{"id":"w3","state":"pending","depends_on":["w1","w2"]}]' \
+  >/dev/null 2>&1
+ledger_transition "u14-order" "w1" "dispatched" >/dev/null 2>&1
+ledger_verdict "u14-order" "w1" '[{"severity":"blocker","note":"open"}]' >/dev/null 2>&1
+# w1 not pending (verdict-returned+blocker); w3 gated by unsatisfied w1 AND pending w2.
+assert_eq "w2" "$(orch_ready "u14-order")"
+
+it "U14 ordering: satisfy w2 only -> w3 STILL gated (w1's open blocker holds the edge)"
+ledger_transition "u14-order" "w2" "dispatched" >/dev/null 2>&1
+ledger_verdict "u14-order" "w2" '[]' >/dev/null 2>&1
+# w2 now verdict-returned+satisfied (not pending); w1 still carries a blocker;
+# w3 remains gated on the unsatisfied w1 edge -> nothing ready.
+assert_eq "" "$(orch_ready "u14-order")"
+
+it "U14 ordering: satisfy w1 too -> w3 appears (edge-driven, not incidental)"
+ledger_verdict "u14-order" "w1" '[]' >/dev/null 2>&1
+# Both edges satisfied -> w3 is the only pending unit and becomes ready.
+assert_eq "w3" "$(orch_ready "u14-order")"
+
+# ─── Regression: an edgeless fan-out (a1/pipeline) — all siblings ready now ───
+# A fan-out that declares no depends_on (Sites 2 & 4, or a1's plain plan->work)
+# materializes depends_on:[] and every sibling is immediately dispatchable.
+it "U14 regression: edgeless fan-out (depends_on:[]) -> all three siblings immediately ready"
+ledger_init "u14-edgeless" \
+  '[{"id":"w1","state":"pending","depends_on":[]},{"id":"w2","state":"pending","depends_on":[]},{"id":"w3","state":"pending","depends_on":[]}]' \
+  >/dev/null 2>&1
+assert_eq "w1,w2,w3" "$(orch_ready "u14-edgeless")"
+
+# ════════════════════════════════════════════════════════════════════════════
+# U14 P2 anti-livelock — the FULL chain proves no silent stall. A bad
+# model-emitted depends_on (dangling / self / cycle) enters via
+# set_enumerated_units, flows through the A1 emitter, materializes onto a work
+# ledger, and ready_units MUST still return a dispatchable unit (never the empty
+# set forever). ledger-mutators.test.sh proves the edge is cleaned; here we
+# prove the readiness engine is actually un-stalled — the real cure for the
+# livelock the finding describes.
+# ════════════════════════════════════════════════════════════════════════════
+livelock_chain() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module, load_ledger
+m = load_ledger()
+e = load_lib_module("unit_emitters")
+o = load_lib_module("orchestrator")
+op = sys.argv[2]
+
+
+def chain(run, batch):
+    """plan ledger → set_enumerated_units(batch) → A1 emitter → work ledger →
+    ready_units. Returns the comma-joined ready ids of the materialized work
+    units. A non-empty result means the livelock is cured."""
+    repo = os.path.join(os.environ["HOME"], "chain-repo")
+    os.makedirs(repo, exist_ok=True)
+    p = m.ledger_path(repo, run)
+    if os.path.exists(p):
+        os.unlink(p)
+    m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  units=[{"id": "plan", "state": "pending", "phase": "plan"}])
+    m.set_enumerated_units(repo, run, "plan", batch)
+    led = m.read_ledger(repo, run)
+    work = e.plan_output_to_work_units(led, "work")
+    wrun = run + "-w"
+    wp = m.ledger_path(repo, wrun)
+    if os.path.exists(wp):
+        os.unlink(wp)
+    units = [{"id": w["id"], "state": "pending", "phase": "work",
+              "depends_on": w["depends_on"]} for w in work]
+    m.init_ledger(repo, wrun, adapter="ce", loop_phase="work",
+                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  units=units)
+    print(",".join(o.ready_units(repo, wrun)))
+
+
+if op == "dangling":
+    chain("ll-dangling", [{"id": "w1", "invokes": {}, "depends_on": ["ghost"]}])
+elif op == "self":
+    chain("ll-self", [{"id": "w1", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "two-cycle":
+    chain("ll-2cyc",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "three-cycle":
+    chain("ll-3cyc",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w3"]},
+           {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "forward-ref":
+    chain("ll-fwd",
+          [{"id": "w1", "invokes": {}, "depends_on": []},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]}])
+elif op == "mixed":
+    chain("ll-mixed",
+          [{"id": "w1", "invokes": {}, "depends_on": ["w2"]},
+           {"id": "w2", "invokes": {}, "depends_on": ["w1"]},
+           {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
+PYEOF
+}
+
+it "U14 no-hang: dangling id edge → work unit materializes ready (NOT permanently pending)"
+assert_eq "w1" "$(livelock_chain dangling)"
+
+it "U14 no-hang: self-edge → work unit materializes ready (a self-dep never satisfies)"
+assert_eq "w1" "$(livelock_chain self)"
+
+it "U14 no-hang: 2-cycle → broken; w2 becomes ready (progress, not a mutual dead-lock)"
+assert_eq "w2" "$(livelock_chain two-cycle)"
+
+it "U14 no-hang: 3-cycle → broken; w3 becomes ready (generalizes past pairwise)"
+assert_eq "w3" "$(livelock_chain three-cycle)"
+
+it "U14 preserved: valid sibling forward-ref survives AND is enforced (only w1 ready; w2 waits)"
+assert_eq "w1" "$(livelock_chain forward-ref)"
+
+it "U14 combined: cycle+forward-ref batch → cycle broken (w2 ready), w3's valid edge still enforced"
+assert_eq "w2" "$(livelock_chain mixed)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

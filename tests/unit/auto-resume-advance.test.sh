@@ -108,6 +108,56 @@ elif scenario == "seam":
     emitted = out.getvalue().strip()
     is_arm = '"action": "arm-tick"' in emitted or '"action":"arm-tick"' in emitted
     print("%s|%s" % (after, is_arm))
+
+elif scenario == "pause_operator":
+    # U9: operator pause (auto-resume) → driver=manual, blocked_on recorded, and
+    # backstop_latched NOT set (default False) so the operator can run their own
+    # cleanup. The run stays resumable (loop_phase unchanged, not done) → a
+    # follow-up continue re-arms it. Also assert the /goal-clear reminder stdout.
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = resume._cmd_pause(ledger, repo, run_id, "waiting on auth login")
+    led = read()
+    loop = led.get("loop") or {}
+    latched = loop.get("backstop_latched")  # absent => None => not latched
+    goal_note = "/goal clear" in out.getvalue()
+    cont = io.StringIO()
+    with contextlib.redirect_stdout(cont):
+        resume._cmd_continue(ledger, repo, run_id)
+    emitted = cont.getvalue()
+    is_arm = '"action": "arm-tick"' in emitted or '"action":"arm-tick"' in emitted
+    print("%s|%s|%s|%s|%s|%s" % (
+        loop.get("driver"), latched, led.get("loop_phase"), rc, goal_note, is_arm,
+    ))
+
+elif scenario == "pause_backstop":
+    # U9: the shared core with backstop_latched=True (the backstop path) LATCHES
+    # the fail-closed gate so it keeps firing on a second destructive command in
+    # the same turn. Exercise apply_pause directly (the shared core is the unit;
+    # the full hook path is covered by advisor-gate/hooks suites).
+    ledger.apply_pause(repo, run_id, "destructive command denied", backstop_latched=True)
+    led = read()
+    loop = led.get("loop") or {}
+    print("%s|%s|%s" % (
+        loop.get("driver"), loop.get("backstop_latched"), led.get("loop_phase"),
+    ))
+
+elif scenario == "pause_done":
+    # U9: an already-done run → operator pause no-ops (message + rc 0, loop
+    # untouched — no driver flip, no blocked_on/latch written).
+    ledger.set_loop(repo, run_id, loop_phase="done")
+    before = read().get("loop") or {}
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = resume._cmd_pause(ledger, repo, run_id, "too late")
+    after = read().get("loop") or {}
+    msg = "already done" in out.getvalue()
+    unchanged = (
+        before.get("driver") == after.get("driver")
+        and after.get("blocked_on") is None
+        and after.get("backstop_latched") is None
+    )
+    print("%s|%s|%s" % (rc, msg, unchanged))
 PYEOF
 }
 
@@ -138,6 +188,34 @@ $res_s
 EOF
 [ "$s_phase" = "work" ] && [ "$s_arm" = "True" ] \
   && pass || fail "expected work|True, got ${res_s}"
+
+# ─── U9: operator pause → backstop_latched False + run stays resumable ───────
+it "pause(operator): driver=manual, NOT latched, /goal-clear note, continue re-arms"
+res_po="$(run_scenario pause_operator)"
+IFS='|' read -r po_driver po_latched po_phase po_rc po_note po_arm <<EOF
+$res_po
+EOF
+[ "$po_driver" = "manual" ] && [ "$po_latched" = "None" ] && [ "$po_phase" = "plan" ] \
+  && [ "$po_rc" = "0" ] && [ "$po_note" = "True" ] && [ "$po_arm" = "True" ] \
+  && pass || fail "expected manual|None|plan|0|True|True, got ${res_po}"
+
+# ─── U9: backstop pause → backstop_latched True ─────────────────────────────
+it "pause(backstop): apply_pause(latched=True) sets driver=manual + backstop_latched True"
+res_pb="$(run_scenario pause_backstop)"
+IFS='|' read -r pb_driver pb_latched pb_phase <<EOF
+$res_pb
+EOF
+[ "$pb_driver" = "manual" ] && [ "$pb_latched" = "True" ] && [ "$pb_phase" = "plan" ] \
+  && pass || fail "expected manual|True|plan, got ${res_pb}"
+
+# ─── U9: already-done run → operator pause no-ops ───────────────────────────
+it "pause(done): already-done run no-ops (message, exits 0, loop untouched)"
+res_pd="$(run_scenario pause_done)"
+IFS='|' read -r pd_rc pd_msg pd_unchanged <<EOF
+$res_pd
+EOF
+[ "$pd_rc" = "0" ] && [ "$pd_msg" = "True" ] && [ "$pd_unchanged" = "True" ] \
+  && pass || fail "expected 0|True|True, got ${res_pd}"
 
 echo ""
 echo "auto-resume-advance.test.sh: ${PASS} passed, ${FAIL} failed"

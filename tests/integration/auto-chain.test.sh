@@ -373,7 +373,7 @@ ledger.set_enumerated_units(repo, run, "U1", [{"id":"w1","invokes":{}}])
 L=ledger.read_ledger(repo, run)
 met_plan=L.get("exit_predicate_result",{}).get("met")
 # Exercise the auto seam branch directly (the engine function), as the tick would.
-out=tick._maybe_seam(repo, run, L, auto=True, advance_result={"advanced":"plan-step"})
+out=tick.tick_advance._maybe_seam(repo, run, L, auto=True, advance_result={"advanced":"plan-step"})
 L2=ledger.read_ledger(repo, run)
 print(json.dumps({
     "met_plan": met_plan,

@@ -41,7 +41,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
-import emitters  # noqa: E402
+import unit_emitters as emitters  # noqa: E402
 tick_guidance = load_lib_module("tick_guidance")
 # v0.6.0 U9: the pure upstream-cluster classifier. A stdlib-only leaf (it imports
 # no lib siblings) — this adds the single DAG edge tick_advance → upstream_cluster.
@@ -69,7 +69,7 @@ _PLAN_STEP_OPS = ("plan", "deepen", "review_plan")
 
 
 def _seconds_since(iso_value, now) -> float:
-    parsed = ledger._parse_iso(iso_value)
+    parsed = ledger.parse_iso(iso_value)
     if parsed is None:
         return -1.0
     return (now - parsed).total_seconds()
@@ -352,7 +352,7 @@ def _persist_enumerated_units(repo_root, run_id, enumerated):
         return
     target = next(
         (u for u in plan_units
-         if not (u.get("dispatch_context") or {}).get("enumerated_units")),
+         if not iteration.read_enumerated_units(u)),
         plan_units[0],
     )
     ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
@@ -362,8 +362,11 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """Plan-loop advance: ask the adapter for the next step and call that ONE
     step. The ADAPTER owns plan-step sequencing — the engine never picks it.
 
-    Returns (result_dict, raised_call_or_None). On an adapter raise the caller
-    records the error; we surface which op raised so last_error.call is precise.
+    Returns a bare ``result_dict`` (U18 / KTD-5: the advance-return contract is
+    normalized so every phase-advance returns a bare dict). A raise from the
+    adapter op (or a bad plan step) propagates to the caller's try/except in
+    ``_dispatch_phase_advance``, which records it as a stall — this function does
+    NOT catch and never signals the raising op back through its return value.
 
     CRITICAL (anti-livelock — schema §3.1): after the adapter op returns
     SUCCESSFULLY, we PERSIST the executed step to the ledger via
@@ -420,7 +423,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
                     enum_envelope = enum_result
             if enumerated is not None:
                 _persist_enumerated_units(repo_root, run_id, enumerated)
-        return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}, None
+        return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}
     if step not in _PLAN_STEP_OPS:
         raise TickError(f"adapter returned unknown plan step: {step!r}")
     op = getattr(adapter, step, None)
@@ -450,14 +453,14 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     # Op succeeded — persist the step so the NEXT fresh-process tick advances
     # from it instead of re-reading null and re-planning (the livelock).
     ledger.set_loop(repo_root, run_id, plan_step=step)
-    return {"advanced": "plan-step", "step": step}, None
+    return {"advanced": "plan-step", "step": step}
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Iteration loop (v0.3.0 U4).
 
 
-# v0.3.1 B10: `no_emit` moved to lib/emitters.py (collocated with the other
+# v0.3.1 B10: `no_emit` moved to lib/unit_emitters.py (collocated with the other
 # emit functions per kieran-r2-2 — emitters belong in the emitters module).
 # The call site below now references `emitters.no_emit`.
 
@@ -608,9 +611,8 @@ def _build_bound_exit_report(led, gate_unit_id):
     gate = next(
         (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
     )
-    dc = (gate or {}).get("dispatch_context") or {}
-    base["bound_override"] = dc.get("bound_override")
-    base["best_so_far"] = dc.get("decision_payload")
+    base["bound_override"] = iteration.read_bound_override(gate or {})
+    base["best_so_far"] = iteration.read_decision_payload(gate or {})
     return base
 
 
@@ -708,8 +710,7 @@ def _brainstorm_unit_ready(led) -> bool:
             continue
         if u.get("state") != "verdict-returned":
             return False
-        dc = u.get("dispatch_context") or {}
-        return bool(dc.get("requirements_doc"))
+        return bool(iteration.read_requirements_doc(u))
     return False
 
 

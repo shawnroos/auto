@@ -435,6 +435,54 @@ assert_eq "iterate" "$(run_iter verif-persisted)"
 it "U4: gate without verification block → signal None, no pending (legacy untouched)"
 assert_eq "None|0" "$(run_iter verif-legacy)"
 
+# ── U12: typed dispatch_context accessors (read_dc + named) ───────────────────
+# A MISSPELLED key must fail LOUD (KeyError) at the accessor, not swallow into a
+# silent None the way `(dc or {}).get("<typo>")` would; a declared-but-ABSENT key
+# returns None (real-miss semantics); a named accessor reads the declared key.
+it "U12: read_dc typed-miss on misspelled key raises; absent key -> None; named accessor reads"
+dcres="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+iteration = load_lib_module("iteration")
+
+unit = {"dispatch_context": {"enumerated_units": [{"id": "w1"}]}}
+
+# 1. misspelled key -> KeyError (loud), NOT a silent None.
+try:
+    iteration.read_dc(unit, "enumarated_units")  # typo
+    typo = "no-raise"
+except KeyError:
+    typo = "raised"
+
+# 2. declared-but-absent key -> None (real-miss semantics preserved).
+absent = iteration.read_dc(unit, "winner_unit_id")
+
+# 3. named accessor reads the declared key.
+named = iteration.read_enumerated_units(unit)
+
+# 4. read_decision still delegates through read_dc (behavior identical).
+dec = iteration.read_decision({"dispatch_context": {"decision": "iterate"}})
+
+print(json.dumps({
+    "typo": typo,
+    "absent_is_none": absent is None,
+    "named": named,
+    "decision": dec,
+}))
+PYEOF
+)"
+dc_typo="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['typo'])" "$dcres")"
+dc_absent="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['absent_is_none'])" "$dcres")"
+dc_named="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['named'])" "$dcres")"
+dc_dec="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['decision'])" "$dcres")"
+if [ "$dc_typo" = "raised" ] && [ "$dc_absent" = "True" ] \
+   && [ "$dc_named" = "[{'id': 'w1'}]" ] && [ "$dc_dec" = "iterate" ]; then
+  pass
+else
+  fail "typo=$dc_typo absent=$dc_absent named=$dc_named decision=$dc_dec (expected raised / True / [{'id': 'w1'}] / iterate)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "iteration.test.sh: ${PASS} passed, ${FAIL} failed"

@@ -51,28 +51,12 @@ FUNC_BUDGET=120
 # fires (so growth-of-allowlisted-debt is still caught).
 
 ALLOWED_FILES=(
-  # ledger_core.py is 32 LOC over budget. v0.3.1 B5 split ledger.py
-  # 1746 → core 1014 + mutators + emitters + facade; core is by design the
-  # heaviest of the four (it owns the I-1 recompute chokepoint, init_ledger,
-  # the lock primitives, and all module constants/errors). Decomposing it
-  # further means splitting recompute_predicate's helpers OR init_ledger,
-  # both of which are tracked as separate backlog items (B7 was done; the
-  # init_ledger split is implicit in the function allowlist below).
-  # v0.4.0 U1 added goal_intent: 1 init_ledger arg + 1 type check + 7-line
-  # ledger-dict comment + 1 dict line = 18 LOC growth on the file and on
-  # init_ledger itself. The init_ledger split remains the load-bearing
-  # decomposition; bumping the waiver to keep that work scoped to its own
-  # backlog item rather than dragging it into U1.
-  # v0.6.0 U5 added driving_session_id (KTD-5): same shape as goal_intent —
-  # 1 init_ledger arg + 1 type check + a 4-line ledger-dict field comment.
-  # A ledger field has no home but init_ledger (the construction chokepoint);
-  # the init_ledger split is still the right decomposition, kept off U5.
-  # v0.7.0 KTD-1 (verification-gate-hardening) added the conditional
-  # `verification` preserve in _normalize_unit: a 6-line comment + the
-  # if/assign/return = 9 LOC growth. _normalize_unit is the only unit-rebuild
-  # point, so the preserve has no other home; the init_ledger split remains the
-  # load-bearing decomposition, kept off this fix.
-  "lib/ledger_core.py:1055"
+  # (lib/ledger_core.py:1055 waiver retired — U16 extracted the pure predicate
+  # evaluator (recompute_predicate + B7 helpers, gating_severities,
+  # unit_is_terminal, is_orphaned) into lib/ledger_predicate.py, dropping core
+  # from 1055 to ~710 LOC — back under the 1000 budget. "Decompose below
+  # threshold → remove the waiver": no lib/*.py file is over budget now, so this
+  # array is intentionally empty.)
 )
 
 ALLOWED_FUNCTIONS=(
@@ -98,21 +82,25 @@ ALLOWED_FUNCTIONS=(
   # spread the dispatch across helpers without making it smaller.
   "lib/tick_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
-  # + adapter routing + verdict-write. Pre-v0.2.0 surface; not touched by
-  # the v0.3.x work. Decomposition candidate.
-  "lib/orchestrator.py:dispatch_batch:132"
+  # + adapter routing + verdict-write. U12 added the per-unit adapter_op
+  # validation guard (reject an unknown op before launch), +8 LOC over the
+  # prior 132 waiver. The guard is cohesive with the other per-unit
+  # pre-filters (not-pending / over-cap) it sits beside. Decomposition
+  # candidate (extract the per-unit filter chain).
+  "lib/orchestrator.py:dispatch_batch:140"
   # _print_run is the /auto-status rendering surface — F1's iteration
   # section + G2's exit_reason line + G7's defense-in-depth wrap + the
   # legacy unit/predicate render. Each new visible field adds a few lines;
-  # decomposing would extract per-section render helpers.
-  "lib/auto-status.py:_print_run:127"
-  # iterate_template is v0.3.0 U3's emitter. 127 LOC is on the high side
-  # but the body is a single coherent computation: validate inputs (recipe
-  # shape + emit_count bounds), read iteration_emit_count, compute the
-  # next N unit ids, build the unit dicts. Decomposition would extract
-  # 2-3 private helpers (validate-shape, validate-emit-count, build-units).
-  # Tracked as v0.3.2 candidate.
-  "lib/emitters.py:iterate_template:127"
+  # decomposing would extract per-section render helpers. (U12 shrank it 1
+  # LOC by routing the bound_override read through iteration.read_bound_override.)
+  "lib/auto-status.py:_print_run:126"
+  # iterate_template is v0.3.0 U3's emitter. A single coherent computation:
+  # validate inputs (recipe shape + emit_count bounds), read
+  # iteration_emit_count, compute the next N unit ids, build the unit dicts.
+  # Decomposition would extract 2-3 private helpers (validate-shape,
+  # validate-emit-count, build-units). Tracked as v0.3.2 candidate. (U12
+  # shrank it 2 LOC via iteration.read_decision_payload.)
+  "lib/unit_emitters.py:iterate_template:125"
   # (recipes.py:validate waiver retired: decomposed into per-concern
   # validators — _validate_toplevel / _validate_phase_order / _validate_units /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on
@@ -122,11 +110,16 @@ ALLOWED_FUNCTIONS=(
   # _next_plan_step is the LAST top-level def before `class Adapter` in
   # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
   # `class`) attributes the ENTIRE Adapter class body to it. The real
-  # _next_plan_step is ~27 LOC — a MEASUREMENT ARTIFACT, not a complex function.
-  # v0.6.0 U7 added the prepare-only `brainstorm` op; v0.4.3 KTD-15 added the
-  # enumerate plan_path surface (+ a sibling _bound_plan_path helper). Waived
-  # (not decomposed) because the function itself is small.
-  "lib/adapter-ce.py:_next_plan_step:139"
+  # _next_plan_step is now a ~11-LOC thin wrapper (U10 moved the state-machine
+  # body into the shared _bootstrap.plan_step_sequencer) — a MEASUREMENT
+  # ARTIFACT, not a complex function. v0.6.0 U7 added the prepare-only
+  # `brainstorm` op; v0.4.3 KTD-15 added the enumerate plan_path surface (+ a
+  # sibling _bound_plan_path helper). Waived (not decomposed) because the
+  # function itself is small; U10 shrank the measured span 139 → 125.
+  # U14 (KTD-1) added the enumerate op's per-item `depends_on` edge clause to the
+  # `enumerate_plan_units` method (in the Adapter class body the awk attributes
+  # here) so the readiness engine can order the emitter fan-out — 125 → 137.
+  "lib/adapter-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation orchestrator (parse → validate recipe
   # → build units → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,

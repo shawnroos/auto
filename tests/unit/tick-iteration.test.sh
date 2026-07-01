@@ -348,7 +348,7 @@ elif op == "a1-early-return":
     before = json.dumps(m.read_ledger(repo, "u4-a1")["units"][0], sort_keys=True)
     # Probe the helper directly to assert it returns None.
     led = m.read_ledger(repo, "u4-a1")
-    direct = t.advance_iteration_loop(repo, "u4-a1", led)
+    direct = t.tick_advance.advance_iteration_loop(repo, "u4-a1", led)
     r = t.dispatch_tick(repo, "u4-a1")
     after_state = m.read_ledger(repo, "u4-a1")["units"][0].get("state")
     print(json.dumps({
@@ -368,7 +368,7 @@ elif op == "w-early-return":
                   units=[{"id": "W1", "state": "verdict-returned",
                           "findings": [{"severity": "blocker", "note": "x"}]}])
     led = m.read_ledger(repo, "u4-w")
-    direct = t.advance_iteration_loop(repo, "u4-w", led)
+    direct = t.tick_advance.advance_iteration_loop(repo, "u4-w", led)
     print(json.dumps({"direct_is_none": direct is None}))
 
 elif op == "r9-last-attempt-guidance":
@@ -436,7 +436,7 @@ elif op == "kill-switch":
     os.environ["CLAUDE_AUTO_DISABLE_ITERATION"] = "1"
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
-        direct = t.advance_iteration_loop(repo, "u4-killswitch", led)
+        direct = t.tick_advance.advance_iteration_loop(repo, "u4-killswitch", led)
     finally:
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
         # Don't unset the sentinel — tests/run.sh exports it for the whole
@@ -816,7 +816,7 @@ elif op == "df-killswitch-ignored":
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
         led = m.read_ledger(repo, "u4-df-kill")
-        direct = t.advance_iteration_loop(repo, "u4-df-kill", led)
+        direct = t.tick_advance.advance_iteration_loop(repo, "u4-df-kill", led)
     finally:
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
     print(json.dumps({"direct_is_none": direct is None,
@@ -905,9 +905,9 @@ open(pa, "w").write(src_a)
 pt = os.path.join(sys.argv[1], "tick.py")
 src_t = open(pt).read()
 old_sc = ('if pred.get("met") and not pred.get("iteration_pending", False) \\\n'
-          '            and phase != "plan" and phase != "seam":')
+          '            and phase_grammar.is_terminal_phase(led, phase):')
 new_sc = ('if (pred.get("met") or pred.get("iteration_pending")) \\\n'
-          '            and phase != "plan" and phase != "seam":')
+          '            and phase_grammar.is_terminal_phase(led, phase):')
 if old_sc not in src_t:
     sys.exit("DF#2 anchor 2 not found")
 src_t = src_t.replace(old_sc, new_sc)

@@ -54,6 +54,12 @@ function lints. Loaded via `_bootstrap.load_lib_module("recommender")`.
 
 from __future__ import annotations
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bootstrap import coerce_confidence
+
 # Confidence at or above this is "confident enough to dispatch"; below it the
 # driver escalates pre-dispatch (U3). A float in [0.0, 1.0]. 0.6 is deliberately
 # conservative: the cost of a wrong autonomous dispatch (a run the operator
@@ -161,23 +167,6 @@ def known_states():
     return frozenset(_TAXONOMY)
 
 
-def _coerce_confidence(confidence):
-    """Clamp confidence to [0.0, 1.0]; non-numeric -> 0.0 (treated as low).
-
-    A bad confidence value must never crash the recommender — it degrades to the
-    safe direction (low confidence -> escalate). bool is rejected explicitly
-    because ``isinstance(True, int)`` is True in Python and True/False are not
-    meaningful confidences.
-    """
-    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-        return 0.0
-    if confidence < 0.0:
-        return 0.0
-    if confidence > 1.0:
-        return 1.0
-    return float(confidence)
-
-
 def recommend(state_label, confidence=1.0):
     """Map a classified state label + confidence to a recommendation dict.
 
@@ -189,7 +178,10 @@ def recommend(state_label, confidence=1.0):
     operator pre-dispatch" (U3). Pure: no IO, no crash on any input (an unknown
     or non-string state degrades to the safe escalate default).
     """
-    conf = _coerce_confidence(confidence)
+    # coerce_confidence (shared in _bootstrap) clamps to [0.0, 1.0]; a bad or
+    # non-numeric value degrades to the safe direction here: low confidence ->
+    # escalate (never a wrong autonomous dispatch on an unparseable classification).
+    conf = coerce_confidence(confidence)
     base = _TAXONOMY.get(state_label) if isinstance(state_label, str) else None
     if base is None:
         # Unknown / ambiguous / non-string state -> safe default: escalate.
@@ -212,7 +204,7 @@ def _cli(argv):
 
     Lets a bash test (or the driver, if it ever wants the mapping from a shell)
     read the recommendation deterministically. Confidence parse failure -> 0.0
-    via _coerce_confidence (so the CLI never crashes on a bad arg either).
+    via coerce_confidence (so the CLI never crashes on a bad arg either).
 
     Sub-mode `recommender.py --check-agrees <state> <stem>` -> prints `true` /
     `false` and nothing else. This is the deterministic `router_agrees` primitive

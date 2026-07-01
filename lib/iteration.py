@@ -67,6 +67,48 @@ DECISIONS = ("advance", "iterate", "exit")
 # a documented trade, not an open "close the dimension" TODO.
 
 
+# ── dispatch_context: the typed key set + thin accessors (U12) ───────────────
+# `dispatch_context` is the additive per-unit bag `transition()` preserves
+# verbatim (no normalize step). Historically every consumer read it via
+# `(u.get("dispatch_context") or {}).get("<literal>")` — a shape that SWALLOWS a
+# typo: `.get("enumarated_units")` returns None just like a real miss. Declaring
+# the key set ONCE + reading through `read_dc` turns a misspelled key into a loud
+# KeyError at the accessor instead of a silent None. `read_decision` (the
+# centralized decision reader the AST lint pins here) now delegates to `read_dc`,
+# so the "decision" literal still lives only in this module.
+DISPATCH_CONTEXT_KEYS = frozenset({
+    "decision",
+    "decision_payload",
+    "winner_unit_id",
+    "judge_verdicts",
+    "enumerated_units",
+    "bound_override",
+    "requirements_doc",
+    "plan_path",
+    "cluster_findings",
+    "bias",
+    "plan_items",
+})
+
+
+def read_dc(unit: dict, key: str, default=None):
+    """Typed read of a single `dispatch_context` key off a unit.
+
+    Raises ``KeyError`` if `key` is not a declared `dispatch_context` key — a
+    MISSPELLED key name fails loud at the accessor instead of silently returning
+    None the way `(dc or {}).get("<typo>")` would. A declared-but-ABSENT key
+    returns `default` (None), matching the prior `.get()` semantics for a real
+    miss. Thin by design: no coercion, no isinstance guards — a caller that needs
+    to distinguish a non-dict `dispatch_context` keeps its own guard.
+    """
+    if key not in DISPATCH_CONTEXT_KEYS:
+        raise KeyError(
+            f"read_dc: {key!r} is not a declared dispatch_context key; "
+            f"known keys: {sorted(DISPATCH_CONTEXT_KEYS)!r}"
+        )
+    return (unit.get("dispatch_context") or {}).get(key, default)
+
+
 def read_decision(unit: dict):
     """Return the gate unit's verdict.decision, or None if not set.
 
@@ -75,7 +117,46 @@ def read_decision(unit: dict):
     `record_verdict` normalizes to `{severity, note}`). This is the ONE function
     every caller routes through; the AST lint enforces it.
     """
-    return (unit.get("dispatch_context") or {}).get("decision")
+    return read_dc(unit, "decision")
+
+
+# Named thin accessors for the read-heavy keys — one call per consumer read site
+# so a typo becomes an AttributeError on the module, not a swallowed None. Keys
+# with no live read site (`bias`, `plan_items` — emitter-WRITTEN only) stay in
+# `DISPATCH_CONTEXT_KEYS` and are reachable via `read_dc` without a named alias.
+def read_enumerated_units(unit: dict):
+    """The plan unit's enumerated work-unit list (producer-persist), or None."""
+    return read_dc(unit, "enumerated_units")
+
+
+def read_winner_unit_id(unit: dict):
+    """The judge gate's chosen winner unit id, or None."""
+    return read_dc(unit, "winner_unit_id")
+
+
+def read_judge_verdicts(unit: dict):
+    """The gate's persisted judge verdicts map, or None."""
+    return read_dc(unit, "judge_verdicts")
+
+
+def read_bound_override(unit: dict):
+    """The gate's bound-override record ({bound, original_decision, ...}), or None."""
+    return read_dc(unit, "bound_override")
+
+
+def read_requirements_doc(unit: dict):
+    """The brainstorm/plan unit's requirements-doc path, or None."""
+    return read_dc(unit, "requirements_doc")
+
+
+def read_plan_path(unit: dict):
+    """The plan unit's durable plan_path, or None."""
+    return read_dc(unit, "plan_path")
+
+
+def read_decision_payload(unit: dict):
+    """The gate's per-iteration decision payload dict, or None."""
+    return read_dc(unit, "decision_payload")
 
 
 def _find_gate_unit(ledger: dict, gate_unit_id: str) -> dict:
@@ -129,7 +210,7 @@ def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None
             res = verification.evaluate_programmatic(c, cwd=repo_root)
             programmatic_results[res["criterion_id"]] = res["status"]
     jv = dict(judge_verdicts or {})
-    existing = (gate.get("dispatch_context") or {}).get("judge_verdicts") or {}
+    existing = read_judge_verdicts(gate) or {}
     for k, val in existing.items():
         jv.setdefault(k, val)
     agg = verification.aggregate(crits, programmatic_results, jv)

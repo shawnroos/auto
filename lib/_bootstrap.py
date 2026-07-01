@@ -247,6 +247,55 @@ def resolve_shared_dir(*, cwd=None):
 CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 
 
+# The ledger key holding the DRIVING interactive session's id (v0.6.0 U5 / KTD-5).
+# ONE definition shared by the advisor-gate WRITER and the READERS so they can
+# never drift: the arm-time setter (lib/ledger_mutators.py::set_driving_session_id)
+# writes it, and BOTH PreToolUse hooks (lib/on-pretooluse-action.py,
+# lib/on-pretooluse-askuser.py) match a live run to a session by reading it and
+# comparing session-id EQUALITY. lib/ledger_core.py::init_ledger also emits this
+# key as its schema default, but it CANNOT import _bootstrap (that would be a
+# circular import — _bootstrap.load_ledger loads ledger_core; see the note at
+# ledger_core.py's deferred-loader) so it inlines the literal on purpose — keep
+# that one string in sync with this constant.
+DRIVING_SESSION_KEY = "driving_session_id"
+
+
+# The plugin-qualified tick command — the ONE copy of the string AND its hazard
+# note (v0.6.5). A programmatically fired plugin slash command must resolve as
+# `/<plugin>:<command>`: the bare `/auto-tick` is "Unknown command" under
+# ScheduleWakeup / loop re-injection, so every re-arm hit that and the loop never
+# self-paced. The plugin name is `auto`. tick.py / auto.py / auto-resume.py all
+# build their re-arm prompt through build_tick_prompt() so this hazard lives once.
+TICK_COMMAND = "/auto:auto-tick"
+
+
+def build_tick_prompt(run_id) -> str:
+    """The re-arm prompt: the plugin-qualified tick command + the run id.
+
+    The ONE builder of the `/auto:auto-tick <run>` string (was three hand-built
+    copies in tick.py / auto.py / auto-resume.py, each re-explaining the
+    plugin-qualification hazard — see TICK_COMMAND).
+    """
+    return f"{TICK_COMMAND} {run_id}"
+
+
+def build_arm_intent(run_id, prompt, note, extra=None):
+    """The `arm-tick` INTENT envelope emitted by the non-tick arm sites.
+
+    Both auto.py (new run) and auto-resume.py (re-arm) emit an ``arm-tick``
+    intent — "schedule the next tick" — with the same ``action``/``run``/
+    ``prompt`` core and a trailing ``note``. auto.py carries extra keys
+    (``auto``/``adapter``/``plan``/``goal``) between ``prompt`` and ``note``;
+    pass them via ``extra`` (an ordered dict) so the emitted key order stays
+    byte-identical to the hand-built envelopes the stdout-contract tests assert.
+    """
+    intent = {"action": "arm-tick", "run": run_id, "prompt": prompt}
+    if extra:
+        intent.update(extra)
+    intent["note"] = note
+    return intent
+
+
 def cmux_available() -> bool:
     """Probe whether the cmux binary (or its override) is on PATH.
 
@@ -311,6 +360,29 @@ def iter_worktree_ledgers(repo_root: str):
         yield run_id, led
 
 
+def iter_active_runs(repo_root: str):
+    """Yield ``(run_id, ledger_dict)`` for each NON-``done`` run under
+    ``<repo_root>/.claude/auto/*.json``, in ``iter_worktree_ledgers``' sorted order.
+
+    The shared active-run scan (U7): consolidates two divergent ``_active_runs``
+    copies that both wrapped ``iter_worktree_ledgers`` + ``phase_grammar.current_phase``
+    to drop ``"done"`` runs — ``auto-status.py`` yielded the richer ``(run_id, led)``
+    tuples, while ``auto-resume.py`` yielded bare run_id strings AND carried a dead
+    ``ledger`` param. The two filter polarities (``== "done"`` skip vs
+    ``!= "done"`` keep) were equivalent; this yields the richer tuple shape and
+    ``auto-resume`` adapts via ``run_id for run_id, _ in iter_active_runs(...)``.
+
+    Loads phase-grammar lazily via ``load_lib_module`` (cached) so the "is this
+    run done" decision stays in the ONE phase-grammar module (U5) rather than a
+    raw ``loop_phase`` compare here, and phase-grammar stays off ``_bootstrap``'s
+    import-time surface. Never raises: a missing dispatch dir yields nothing.
+    """
+    phase_grammar = load_lib_module("phase-grammar")
+    for run_id, led in iter_worktree_ledgers(repo_root):
+        if phase_grammar.current_phase(led) != "done":
+            yield run_id, led
+
+
 def test_hatch_enabled(hatch_var: str) -> bool:
     """Return True iff BOTH the test-harness sentinel AND ``hatch_var`` are set.
 
@@ -348,3 +420,70 @@ def is_iteration_disabled() -> bool:
     deterministic, grep-checkable mechanism.
     """
     return os.environ.get("CLAUDE_AUTO_DISABLE_ITERATION") == "1"
+
+
+def coerce_confidence(confidence):
+    """Clamp a confidence to [0.0, 1.0]; non-numeric/bool -> 0.0 (treated as low).
+
+    The ONE confidence clamp for the launch classifiers. Consolidated (U6) from
+    two byte-identical private copies that each carried a load-bearing SAFETY
+    contract: ``lib/launch-gate.py::_coerce_confidence`` (a SAFETY gate — a bad
+    value must bias to LOW so the launch shows the chooser rather than skipping
+    it) and ``lib/recommender.py::_coerce_confidence`` (low confidence ->
+    escalate). The clamp semantics are identical, so this shared helper is safe;
+    each caller keeps its own intent comment because the *direction* the safe
+    degrade protects differs.
+
+    A bad value must never crash and must degrade toward LOW confidence. ``bool``
+    is rejected explicitly because ``isinstance(True, int)`` is True in Python and
+    True/False are not meaningful confidences. An out-of-range value clamps
+    (``>1.0 -> 1.0`` = max confidence; ``<0.0 -> 0.0`` = no confidence).
+    """
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return 0.0
+    if confidence < 0.0:
+        return 0.0
+    if confidence > 1.0:
+        return 1.0
+    return float(confidence)
+
+
+def plan_step_sequencer(ledger, *, sequence):
+    """Pure plan-loop sequencer shared by both adapters (U10).
+
+    Collapses the byte-identical ``_next_plan_step`` skeleton that lived in
+    ``adapter-ce.py`` and ``adapter-native.py``. The ONLY thing that differed
+    between the two was the transition ``sequence``; the coherence guard and the
+    ``plan_step is None`` first-step logic were identical, so they live here once.
+
+    ``sequence`` is the per-adapter ordered plan steps EXCLUDING the terminal
+    ``done`` — CE passes ``("plan", "deepen", "review_plan")`` and native passes
+    ``("plan", "review_plan")`` (native has no deepen step). ``plan_step`` is a
+    real validated ledger field (``ledger_core.PLAN_STEPS``) that the tick persists
+    via ``set_loop(plan_step=step)``; both adapters read it identically and this
+    sequencer keeps the ``None``-tolerance native already relied on. No IO — the
+    engine persists the returned step; the adapter never writes the ledger (§1).
+
+    §4.1 coherence guard runs FIRST (livelock hazard): once a ``review_plan``
+    round has closed the gaps (``gaps_open == 0``) the next call MUST return
+    ``"done"``. It is keyed on ``plan_step in ("review_plan", "done")`` specifically
+    because ``gaps_open`` is 0 by default before any review has run — the guard
+    must only fire AFTER a real review pass, else the loop would never start.
+    """
+    epr = ledger.get("exit_predicate_result") or {}
+    plan_step = ledger.get("plan_step")
+    if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
+        return "done"
+    if plan_step is None:
+        return sequence[0]
+    if plan_step in sequence:
+        idx = sequence.index(plan_step)
+        if idx + 1 < len(sequence):
+            return sequence[idx + 1]
+        # Last step (review_plan) reached with gaps STILL open (else the guard
+        # above fired) -> loop back to the first POST-plan step: sequence[1].
+        # This is deliberately NOT sequence[-2]: for native (["plan",
+        # "review_plan"]) that would be "plan" and wrongly re-plan from scratch;
+        # sequence[1] loops CE back to "deepen" and native back to "review_plan".
+        return sequence[1]
+    return "done"

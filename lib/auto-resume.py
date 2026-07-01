@@ -47,6 +47,10 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    DRIVING_SESSION_KEY,
+    build_arm_intent,
+    build_tick_prompt,
+    iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
@@ -97,12 +101,7 @@ def _resumable_runs(ledger, repo_root: str):
 def _emit_rearm(run_id: str, note: str) -> int:
     """Emit the re-arm INTENT — the model fires the actual /auto:auto-tick."""
     json.dump(
-        {
-            "action": "arm-tick",
-            "run": run_id,
-            "prompt": f"/auto:auto-tick {run_id}",
-            "note": note,
-        },
+        build_arm_intent(run_id, build_tick_prompt(run_id), note),
         sys.stdout,
     )
     sys.stdout.write("\n")
@@ -148,7 +147,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
             "present).\n"
         )
         return 1
-    existing = led.get("driving_session_id")
+    existing = led.get(DRIVING_SESSION_KEY)
     loop = led.get("loop") or {}
     run_is_live = (
         loop.get("driver") == "self"
@@ -240,9 +239,10 @@ def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to pause.\n")
         return 0
     reason = (reason or "").strip()
-    ledger.set_loop(
-        repo_root, run_id, driver="manual", blocked_on=(reason or None)
-    )
+    # Shared pause core (U9). Operator path uses the default backstop_latched=
+    # False: the operator now owns the session and runs their own cleanup, so
+    # the fail-closed gate must not re-fire on it (the backstop path latches).
+    ledger.apply_pause(repo_root, run_id, reason or None)
     why = f" — {reason}" if reason else ""
     sys.stdout.write(
         f"resume: run {run_id!r} paused (driver=manual){why}.\n"
@@ -347,20 +347,6 @@ def _cmd_skip(ledger, repo_root: str, run_id: str, unit_id: str) -> int:
     return 0
 
 
-def _active_runs(ledger, repo_root: str):
-    """Run-ids that are NOT done (candidates for `pause`).
-
-    `pause` targets a LIVE run, not a resumable one, so it disambiguates over a
-    different set than continue/abort (which use `_resumable_runs`).
-    """
-    runs = []
-    for run_id, led in iter_worktree_ledgers(repo_root):
-        if phase_grammar.current_phase(led) == "done":
-            continue
-        runs.append(run_id)
-    return runs
-
-
 def _resolve_run_or_disambiguate(ledger, repo_root: str, run_id, *, candidates=None, label="resumable"):
     """Return a run-id, or print a disambiguation prompt and return None.
 
@@ -404,7 +390,7 @@ def run(argv) -> int:
     if sub == "pause":
         run_id = _resolve_run_or_disambiguate(
             ledger, repo_root, run_arg,
-            candidates=_active_runs(ledger, repo_root), label="active",
+            candidates=[run_id for run_id, _ in iter_active_runs(repo_root)], label="active",
         )
         if run_id is None:
             return 0
@@ -417,7 +403,7 @@ def run(argv) -> int:
         # advance a run that is mid-phase, not one parked at a seam.
         run_id = _resolve_run_or_disambiguate(
             ledger, repo_root, run_arg,
-            candidates=_active_runs(ledger, repo_root), label="active",
+            candidates=[run_id for run_id, _ in iter_active_runs(repo_root)], label="active",
         )
         if run_id is None:
             return 0

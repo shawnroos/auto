@@ -29,6 +29,9 @@ from _bootstrap import load_ledger, load_lib_module  # noqa: E402
 
 ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
+# U12: typed dispatch_context accessors (iteration is a `_bootstrap`-only leaf —
+# no import cycle, and import-topology only forbids the tick/tick_advance edges).
+iteration = load_lib_module("iteration")
 
 
 def _operator_guidance_for(phase, advance_result, led):
@@ -166,14 +169,12 @@ def _iteration_guidance_prefix(led):
     )
     if gate is None:
         return ""
-    dc = gate.get("dispatch_context") or {}
-
     # Branch 1 (higher priority): bound_override was written. Surface bound
     # type + best-so-far so the operator sees what we tried before bound.
-    override = dc.get("bound_override")
+    override = iteration.read_bound_override(gate)
     if override:
         btype = override.get("bound") or "unknown"
-        payload = dc.get("decision_payload")
+        payload = iteration.read_decision_payload(gate)
         payload_repr = (
             json.dumps(payload, sort_keys=True) if payload is not None else "null"
         )
@@ -276,7 +277,7 @@ def _most_recently_dispatched(led):
     for u in led.get("units", []):
         if u.get("state") != "dispatched":
             continue
-        at = ledger._parse_iso(u.get("dispatched_at"))
+        at = ledger.parse_iso(u.get("dispatched_at"))
         if at is None:
             continue
         if best_at is None or at > best_at:

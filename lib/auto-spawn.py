@@ -50,10 +50,15 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (
     CMUX_REF_CHARS as _CMUX_REF_CHARS,
     cmux_available as _cmux_available,
+    load_ledger,
     load_lib_module,
     resolve_host_repo_root,
     resolve_shared_dir,
 )  # noqa: E402
+
+# The ledger facade owns the canonical ISO-Z time stamp (ledger.now_iso). Load
+# it via the facade — not ledger_core — to keep facade discipline (U4).
+ledger = load_ledger()
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -107,15 +112,7 @@ def _slugify(name: str) -> str:
     return slug
 
 
-# ── Time helpers (parity with ledger_core::_now_iso) ───────────────────────
-
-
-def _now_iso() -> str:
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .replace(microsecond=0)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+# ── Time helpers ───────────────────────────────────────────────────────────
 
 
 def _now_stamp() -> str:
@@ -358,10 +355,12 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
     )
     script = os.path.join(_LIB_DIR, "cmux-socket.sh")
 
-    # Decide dispatch mode via the full detect() check. detect() handles
-    # the four cases — unmarked, project, non-project, stale — so we route
-    # to tab-mode ONLY when status == "project" (marker matches env AND
-    # cmux says the workspace is live). Stale markers degrade to the
+    # Decide dispatch mode via the full detect() check. detect() returns
+    # one of four statuses — "unmarked", "project", "non-project", and
+    # "recreate" (marker present but its cmux workspace is gone, i.e.
+    # marker_stale=True) — so we route to tab-mode ONLY when
+    # status == "project" (marker matches env AND cmux says the workspace is
+    # live). Every other status, including "recreate", safe-degrades to the
     # workspace-per-plan fallback rather than spawning into a dead pane.
     #
     # Round-1 plan-004 review P3 #6: ws_state can be precomputed once
@@ -500,7 +499,7 @@ def fanout(plan_paths, *, composite_intent=None):
     sidecar_path = os.path.join(_batches_dir(shared), f"{batch_id}.json")
     sidecar = {
         "id": batch_id,
-        "created_at": _now_iso(),
+        "created_at": ledger.now_iso(),
         "status": "provisional",
         "composite_intent": composite_intent or _default_intent(plans),
         "plans": plans,

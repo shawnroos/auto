@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 recipes = load_lib_module("recipes")
 ledger = load_lib_module("ledger")
-emitters = load_lib_module("emitters")
+emitters = load_lib_module("unit_emitters")
 op = sys.argv[2]
 
 

@@ -4,18 +4,21 @@ ledger_core / ledger_mutators / ledger_emitters.
 
 This module was split (B5) for maintainability: the implementation now lives in
 three sibling modules along an acyclic DAG (core ← mutators ← emitters ← this
-facade). This file re-exports the WHOLE surface — every public name PLUS the
-private helpers consumers reach through the ``ledger.`` namespace (``_now_iso``,
-``_parse_iso``, ``_with_locked_ledger``) — so existing callers that do
+facade). This file re-exports the WHOLE surface — every public name (the time helpers
+``now_iso`` / ``parse_iso`` are public here) PLUS the one private helper
+consumers reach through the ``ledger.`` namespace (``_with_locked_ledger``) — so
+existing callers that do
 ``ledger = _bootstrap.load_ledger()`` and reference ``ledger.<name>`` keep
 resolving unchanged. See those three modules for the implementation and
 docs/contracts/ledger-schema.md for the authoritative spec (if they disagree,
 the contract wins and the code is the bug).
 
-  * ledger_core      — constants, errors, paths, time helpers, the pure predicate
-                       logic (recompute_predicate + B7 helpers, unit_is_terminal,
-                       is_orphaned), the atomic-write + flock primitives, and
-                       init_ledger / read_ledger.
+  * ledger_core      — constants, errors, paths, time helpers, the atomic-write +
+                       flock primitives, and init_ledger / read_ledger.
+  * ledger_predicate — the pure predicate logic (recompute_predicate + B7 helpers,
+                       gating_severities, unit_is_terminal, is_orphaned); imports
+                       only ledger_core, reached from core's _atomic_write via a
+                       deferred lazy-load (U16).
   * ledger_mutators  — the grammar-checked, flock-serialized scalar mutators
                        (transition, record_verdict, set_loop, set_gaps_open,
                        set_*, accumulate_active_time, increment_iteration_attempts).
@@ -45,6 +48,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module, resolve_repo  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
+ledger_predicate = load_lib_module("ledger_predicate")
 ledger_mutators = load_lib_module("ledger_mutators")
 ledger_emitters = load_lib_module("ledger_emitters")
 
@@ -76,18 +80,18 @@ InvalidTransition = ledger_core.InvalidTransition
 StaleVerdict = ledger_core.StaleVerdict
 UnknownUnit = ledger_core.UnknownUnit
 
-# Paths + time helpers (incl. the private time helpers consumers reach for).
+# Paths + time helpers (now_iso / parse_iso are the public time surface).
 ledger_path = ledger_core.ledger_path
 lock_path = ledger_core.lock_path
-_now_iso = ledger_core._now_iso
-_parse_iso = ledger_core._parse_iso
+now_iso = ledger_core.now_iso
+parse_iso = ledger_core.parse_iso
 
-# Pure predicate logic.
-gating_severities = ledger_core.gating_severities
-unit_is_terminal = ledger_core.unit_is_terminal
-recompute_predicate = ledger_core.recompute_predicate
-_compute_iteration_pending = ledger_core._compute_iteration_pending
-is_orphaned = ledger_core.is_orphaned
+# Pure predicate logic (extracted to ledger_predicate.py in U16).
+gating_severities = ledger_predicate.gating_severities
+unit_is_terminal = ledger_predicate.unit_is_terminal
+recompute_predicate = ledger_predicate.recompute_predicate
+_compute_iteration_pending = ledger_predicate._compute_iteration_pending
+is_orphaned = ledger_predicate.is_orphaned
 
 # Primitives + create/read API (incl. the private RMW primitive consumers reach
 # for in tests/integration).
@@ -119,6 +123,40 @@ transition_and_emit = ledger_emitters.transition_and_emit
 emit_within_phase = ledger_emitters.emit_within_phase
 reset_for_iteration = ledger_emitters.reset_for_iteration
 atomic_iterate_step = ledger_emitters.atomic_iterate_step
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Composite pause helper (U9). Topology-correct home: it wraps set_loop, so it
+# belongs on the ledger surface both pause callers already reach through.
+
+
+def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
+    """The single pause write both pause paths route through.
+
+    Flip the loop to ``driver="manual"`` and record ``blocked_on=reason``
+    WITHOUT marking the loop done — the run stays resumable. The two callers
+    differ ONLY by ``backstop_latched``:
+
+      * the destructive-action backstop (on-pretooluse-action.py::_pause_run)
+        passes ``True`` — the pause LATCHES the fail-closed gate so it keeps
+        firing on a second destructive command in the same autonomous turn
+        (no self-disarm);
+      * the operator CLI (auto-resume.py::_cmd_pause) uses the default
+        ``False`` — the operator now owns the session and runs their own
+        cleanup, so the gate must not re-fire on it.
+
+    ``backstop_latched`` rides the SAME atomic set_loop write as
+    ``driver="manual"`` (P3-b) => the latch exists iff the backstop pause does.
+    Note apply_pause only ever SETS the latch (never clears): the operator path
+    (default False) leaves any pre-existing latch UNTOUCHED, because a latch is
+    cleared ONLY by a clean `auto-resume continue` (forgiveness). That stickiness
+    is the anti-self-disarm door — an agent that hits the backstop cannot run
+    `auto-resume pause` to drop the latch and retry the destructive command
+    (advisor-gate P3-b). So we pass backstop_latched to set_loop only when
+    latching; omitting it leaves set_loop's field unchanged (UNSET sentinel).
+    """
+    kwargs = {"backstop_latched": True} if backstop_latched else {}
+    set_loop(repo_root, run_id, driver="manual", blocked_on=reason, **kwargs)
 
 
 # ──────────────────────────────────────────────────────────────────────────

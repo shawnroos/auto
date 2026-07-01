@@ -58,6 +58,7 @@ import time
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    build_tick_prompt,
     load_ledger,
     load_lib_module,
     test_hatch_enabled,
@@ -90,21 +91,16 @@ DEFAULT_REARM_DELAY_SECONDS = 60
 
 TickError = tick_advance.TickError
 
-# B4 re-exports: tests load tick.py via spec_from_file_location("tick", …) and
-# access these as attributes on the tick module (t.advance_plan_loop,
-# tick._maybe_seam, …). The functions now live in the sibling modules; binding
-# them here keeps the test surface byte-identical. Internal callers in this
-# file reach through the qualified module name (tick_advance.X / tick_guidance.X)
-# so the dependency stays grep-visible; these aliases exist ONLY for the tests.
-advance_iteration_loop = tick_advance.advance_iteration_loop
-advance_plan_loop = tick_advance.advance_plan_loop
-advance_work_loop = tick_advance.advance_work_loop
-# v0.6.0 U7: the spine's brainstorm→plan forward trigger (emitter-driven).
-advance_brainstorm_loop = tick_advance.advance_brainstorm_loop
-detect_and_halt_stalled = tick_advance.detect_and_halt_stalled
-_maybe_seam = tick_advance._maybe_seam
-# advance_to_phase is a PRODUCTION re-export: lib/auto-resume.py calls
-# tick.advance_to_phase on the manual seam→work resume path.
+# PRODUCTION re-exports (U18: the test-only alias block was deleted). The pure
+# advance/stall helpers (advance_plan_loop, advance_work_loop,
+# advance_brainstorm_loop, advance_iteration_loop, detect_and_halt_stalled,
+# _maybe_seam) live in tick_advance; internal callers in this file already reach
+# them through the qualified module name (tick_advance.X) so the dependency stays
+# grep-visible, and the tests now reach them the same way (t.tick_advance.X).
+# Only two genuine cross-module re-exports survive here:
+#   * advance_to_phase — lib/auto-resume.py calls tick.advance_to_phase on the
+#     manual seam→work resume path (a production dependency).
+#   * _iteration_guidance_prefix — the guidance-surface re-export.
 advance_to_phase = tick_advance.advance_to_phase
 _iteration_guidance_prefix = tick_guidance._iteration_guidance_prefix
 
@@ -228,6 +224,51 @@ def resolve_adapter(name: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# The tick's public re-arm/stop/noop envelope (the contract at the top of this
+# file). ONE constructor per action so every emit site shares the exact key set
+# and order the stdout-contract tests assert. NOTE: the iteration channel's
+# advance/iterate/stop returns (tick_advance.advance_iteration_loop) are a
+# SEPARATE decision surface — tick.py consumes them unchanged, never builds them.
+
+
+def _rearm_intent(run_id, *, delay, prompt, advance, stalled, halted,
+                  operator_guidance):
+    """The ``rearm`` envelope — "schedule the next tick after ``delay`` s"."""
+    return {
+        "action": "rearm",
+        "run": run_id,
+        "delay": int(delay),
+        "prompt": prompt,
+        "advance": advance,
+        "stalled": stalled,
+        "halted": halted,
+        "operator_guidance": operator_guidance,
+    }
+
+
+def _stop_intent(run_id, reason, *, error=None, report=None, advance=None):
+    """The ``stop`` envelope — the loop is done/paused, no re-arm.
+
+    ``reason`` is required; the optional ``error``/``report``/``advance`` keys
+    are appended in that order ONLY when supplied, matching the five hand-built
+    stop sites (bare / +error / +report / +advance / +report+advance).
+    """
+    intent = {"action": "stop", "reason": reason, "run": run_id}
+    if error is not None:
+        intent["error"] = error
+    if report is not None:
+        intent["report"] = report
+    if advance is not None:
+        intent["advance"] = advance
+    return intent
+
+
+def _noop_intent(run_id, reason):
+    """The ``noop`` envelope — a live tick already holds the lock."""
+    return {"action": "noop", "reason": reason, "run": run_id}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # The tick.
 
 
@@ -259,17 +300,15 @@ def dispatch_tick(
             )
     except _TickLockHeld:
         # Another live tick is driving this run — no-op (the double-drive guard).
-        return {"action": "noop", "reason": "lock-held-by-live-tick", "run": run_id}
+        return _noop_intent(run_id, "lock-held-by-live-tick")
 
 
 def _tick_body(repo_root, run_id, *, adapter, auto, delay):
-    # NAMESPACED (v0.6.5): plugin slash commands resolve as `/<plugin>:<command>`
-    # when fired programmatically (ScheduleWakeup / loop re-injection). The bare
-    # `/auto-tick` is "Unknown command" there — every re-arm hit that and the loop
-    # never self-paced. The plugin name is `auto`, so the command is `/auto:auto-tick`.
-    rearm_prompt = f"/auto:auto-tick {run_id}"
+    # The plugin-qualified re-arm command (see _bootstrap.TICK_COMMAND for the
+    # "must be `/auto:auto-tick`, not bare `/auto-tick`" hazard).
+    rearm_prompt = build_tick_prompt(run_id)
     now = _now_dt()
-    now_iso = ledger._now_iso()
+    now_iso = ledger.now_iso()
     # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of
     # _tick_body so the `finally` clause below can accumulate the delta on
     # EVERY return path INCLUDING the except path (crashed-tick deltas land in
@@ -385,16 +424,15 @@ def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
         )
     except Exception:  # noqa: BLE001 — never bury the original.
         pass
-    return {
-        "action": "stop",
-        "reason": reason_value,
-        "run": run_id,
-        "error": {
+    return _stop_intent(
+        run_id,
+        reason_value,
+        error={
             "call": "advance_iteration_loop",
             "message": message,
             "at": now_iso,
         },
-    }
+    )
 
 
 def _try_iteration_check(
@@ -483,19 +521,18 @@ def _try_iteration_check(
             led = ledger.read_ledger(repo_root, run_id)
             ledger.set_loop(repo_root, run_id, driver="self", beat=True)
             led_now = ledger.read_ledger(repo_root, run_id)
-            return {
-                "action": "rearm",
-                "run": run_id,
-                "delay": int(delay),
-                "prompt": rearm_prompt,
-                "advance": {
+            return _rearm_intent(
+                run_id,
+                delay=delay,
+                prompt=rearm_prompt,
+                advance={
                     "advanced": "iterate-step",
                     "gate": (led_now.get("iteration") or {}).get("gate_unit"),
                 },
-                "stalled": [],
-                "halted": [],
-                "operator_guidance": tick_guidance._operator_guidance_for(phase, None, led_now),
-            }, led
+                stalled=[],
+                halted=[],
+                operator_guidance=tick_guidance._operator_guidance_for(phase, None, led_now),
+            ), led
         # action == "advance": fall through to the standard flow. The gate
         # said "advance"; the existing predicate-met short-circuit (now
         # suppressed only by iteration_pending=True) will fire normally
@@ -536,18 +573,17 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
     """
     pred = led.get("exit_predicate_result") or {}
     if pred.get("met") and not pred.get("iteration_pending", False) \
-            and phase != "plan" and phase != "seam":
-        # Work predicate met: mark the run done + manual; finished, not orphaned.
+            and phase_grammar.is_terminal_phase(led, phase):
+        # Terminal-phase predicate met: mark the run done + manual; finished, not
+        # orphaned. Route the phase decision through phase_grammar (KTD-3) so a
+        # non-work-terminal recipe stops at ITS terminal phase — the old denylist
+        # (`phase != "plan" and phase != "seam"`) over-fired at any non-plan/seam
+        # phase, which only matched the terminal for work-terminal recipes.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
         report = tick_guidance._build_report(led)
-        return {
-            "action": "stop",
-            "reason": "predicate-met",
-            "run": run_id,
-            "report": report,
-        }
+        return _stop_intent(run_id, "predicate-met", report=report)
     return None
 
 
@@ -572,7 +608,7 @@ def _dispatch_phase_advance(
         if phase == "plan":
             if adapter is None:
                 adapter = resolve_adapter(led.get("adapter"))
-            advance_result, _ = tick_advance.advance_plan_loop(
+            advance_result = tick_advance.advance_plan_loop(
                 repo_root, run_id, led, adapter
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
@@ -609,11 +645,7 @@ def _dispatch_phase_advance(
                 driver="manual",
                 beat=True,
             )
-            return advance_result, {
-                "action": "stop",
-                "reason": "seam-pause",
-                "run": run_id,
-            }
+            return advance_result, _stop_intent(run_id, "seam-pause")
         else:
             advance_result = {"advanced": "none", "reason": f"phase={phase}"}
     except Exception as exc:  # noqa: BLE001 — convert ANY raise into a recorded stall.
@@ -646,12 +678,7 @@ def _try_seam_pause(advance_result, run_id):
     signalled it; surface as a stop (no re-arm).
     """
     if isinstance(advance_result, dict) and advance_result.get("seam_pause"):
-        return {
-            "action": "stop",
-            "reason": "seam-pause",
-            "run": run_id,
-            "advance": advance_result,
-        }
+        return _stop_intent(run_id, "seam-pause", advance=advance_result)
     return None
 
 
@@ -660,27 +687,28 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
 
     Re-read to decide the stop-check from the freshly-cached predicate
     (memory feedback_loop_monitor_terminal_state_field — read the cached
-    field, never re-derive). PHASE-AWARE (gap #4): only a WORK predicate
-    routes to `done`. A plan tick already routed through `_maybe_seam`
-    (seam/auto-flip); never let the post-advance met-check turn a met PLAN
-    predicate into `done` (that would skip the seam). After an auto-flip the
-    ledger phase is now "work", but this tick STARTED in plan, so we gate on
-    the start-of-tick `phase` to leave the just-flipped work loop to its own
-    first work tick.
+    field, never re-derive). PHASE-AWARE (gap #4): only a TERMINAL-phase
+    predicate routes to `done`, decided by phase_grammar.is_terminal_phase
+    (KTD-3) so a non-work-terminal recipe stops at ITS terminal phase (the old
+    `phase == "work"` allowlist never stopped a non-work terminal). A plan tick
+    already routed through `_maybe_seam` (seam/auto-flip); never let the
+    post-advance met-check turn a met PLAN predicate into `done` (that would
+    skip the seam). After an auto-flip the ledger phase is now "work", but this
+    tick STARTED in plan, so we gate on the start-of-tick `phase` to leave the
+    just-flipped work loop to its own first work tick.
     """
     led = ledger.read_ledger(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
-    if pred.get("met") and phase == "work":
+    if pred.get("met") and phase_grammar.is_terminal_phase(led, phase):
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
-        return {
-            "action": "stop",
-            "reason": "predicate-met-after-advance",
-            "run": run_id,
-            "report": tick_guidance._build_report(led),
-            "advance": advance_result,
-        }
+        return _stop_intent(
+            run_id,
+            "predicate-met-after-advance",
+            report=tick_guidance._build_report(led),
+            advance=advance_result,
+        )
     return None
 
 
@@ -699,18 +727,17 @@ def _build_rearm_intent(
     guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
     """
     led_now = ledger.read_ledger(repo_root, run_id)
-    intent = {
-        "action": "rearm",
-        "run": run_id,
-        "delay": int(delay),
-        "prompt": rearm_prompt,
-        "advance": advance_result,
-        "stalled": newly_stalled,
-        "halted": halted_ids,
-        "operator_guidance": tick_guidance._operator_guidance_for(
+    intent = _rearm_intent(
+        run_id,
+        delay=delay,
+        prompt=rearm_prompt,
+        advance=advance_result,
+        stalled=newly_stalled,
+        halted=halted_ids,
+        operator_guidance=tick_guidance._operator_guidance_for(
             phase, advance_result, led_now
         ),
-    }
+    )
     gap_guard = tick_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
         intent["gaps_open_guard"] = gap_guard

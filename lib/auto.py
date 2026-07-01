@@ -48,7 +48,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import build_arm_intent, build_tick_prompt, load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE driving-session identity helper (KTD-5), shared with the resume
 # re-arm path so arm and re-arm record ownership identically (fix-round-6 P1).
@@ -309,25 +309,25 @@ def _emit_arm(
     which enters at ``brainstorm``) reports the true starting phase rather than a
     hardcoded ``plan``.
     """
-    # NAMESPACED (v0.6.5): a programmatically-fired plugin command must be
-    # `/<plugin>:<command>` (the bare `/auto-tick` is "Unknown command" via
-    # ScheduleWakeup/loop). Plugin name is `auto` → `/auto:auto-tick`.
-    prompt = f"/auto:auto-tick {run_id}"
+    # The plugin-qualified tick command (see _bootstrap.TICK_COMMAND for the
+    # bare-`/auto-tick`-is-"Unknown command" hazard).
+    prompt = build_tick_prompt(run_id)
     if auto:
         prompt += " --auto"
-    intent = {
-        "action": "arm-tick",
-        "run": run_id,
-        "prompt": prompt,
-        "auto": auto,
-        "adapter": adapter,
-        "plan": plan,
-        "goal": goal,  # null => bind /goal to the loop's own exit predicate.
-        "note": (
+    intent = build_arm_intent(
+        run_id,
+        prompt,
+        (
             f"new run created (loop_phase={loop_phase}); set the deliberate-stop "
             "/goal, then arm the first tick"
         ),
-    }
+        extra={
+            "auto": auto,
+            "adapter": adapter,
+            "plan": plan,
+            "goal": goal,  # null => bind /goal to the loop's own exit predicate.
+        },
+    )
     json.dump(intent, sys.stdout)
     sys.stdout.write("\n")
     return 0
