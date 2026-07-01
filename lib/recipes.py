@@ -111,14 +111,6 @@ _KNOWN_TOPLEVEL = frozenset(
         # finished plan. W is the shipped recipe that uses it. ADDITIVE — absent/
         # false validates as before. Coherence checked by _validate_plan_presatisfied.
         "plan_presatisfied",
-        # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe
-        # for "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go
-        # straight to enumerating its work units" sets this true. The engine
-        # inits plan_step="review_plan" + gaps_open=0 so the first tick's
-        # next_plan_step returns "done" → enumerate_plan_units → plan→work,
-        # never re-deriving the finished plan. W is the shipped recipe that
-        # uses it. ADDITIVE — absent/false validates as before (a1, a2, a4).
-        "plan_presatisfied",
     }
 )
 _KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes", "verification"})
