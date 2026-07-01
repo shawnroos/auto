@@ -47,6 +47,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
@@ -347,20 +348,6 @@ def _cmd_skip(ledger, repo_root: str, run_id: str, unit_id: str) -> int:
     return 0
 
 
-def _active_runs(ledger, repo_root: str):
-    """Run-ids that are NOT done (candidates for `pause`).
-
-    `pause` targets a LIVE run, not a resumable one, so it disambiguates over a
-    different set than continue/abort (which use `_resumable_runs`).
-    """
-    runs = []
-    for run_id, led in iter_worktree_ledgers(repo_root):
-        if phase_grammar.current_phase(led) == "done":
-            continue
-        runs.append(run_id)
-    return runs
-
-
 def _resolve_run_or_disambiguate(ledger, repo_root: str, run_id, *, candidates=None, label="resumable"):
     """Return a run-id, or print a disambiguation prompt and return None.
 
@@ -404,7 +391,7 @@ def run(argv) -> int:
     if sub == "pause":
         run_id = _resolve_run_or_disambiguate(
             ledger, repo_root, run_arg,
-            candidates=_active_runs(ledger, repo_root), label="active",
+            candidates=[run_id for run_id, _ in iter_active_runs(repo_root)], label="active",
         )
         if run_id is None:
             return 0
@@ -417,7 +404,7 @@ def run(argv) -> int:
         # advance a run that is mid-phase, not one parked at a seam.
         run_id = _resolve_run_or_disambiguate(
             ledger, repo_root, run_arg,
-            candidates=_active_runs(ledger, repo_root), label="active",
+            candidates=[run_id for run_id, _ in iter_active_runs(repo_root)], label="active",
         )
         if run_id is None:
             return 0

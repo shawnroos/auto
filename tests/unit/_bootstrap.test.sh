@@ -244,6 +244,81 @@ assert_eq "1.0" "$(probe_coerce over)"
 it "coerce_confidence: valid in-range (0.5) -> passthrough as float"
 assert_eq "0.5" "$(probe_coerce pass)"
 
+# ── iter_active_runs (U7: the shared active-run scan) ───────────────────────
+# One generator consolidated from two divergent _active_runs copies — auto-status
+# yielded (run_id, led) tuples; auto-resume yielded bare run_id strings and dragged
+# a dead `ledger` param. Both filtered `current_phase(led) != "done"` over
+# iter_worktree_ledgers. Load-bearing contract: yields the RICHER (run_id, led)
+# tuple shape, drops done runs, and preserves iter_worktree_ledgers' PATH sort so
+# a mixed done/active dir proves filtering AND ordering in one assertion.
+# Driver mirrors probe_scan: fresh tempdir, ledger files with a loop_phase field
+# (current_phase reads loop_phase; "done" is filtered, anything else is active).
+probe_active() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json, tempfile, shutil
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+import _bootstrap as b
+scenario = sys.argv[2]
+
+def write(path, raw):
+    with open(path, "w") as fh:
+        fh.write(raw)
+
+tmp = tempfile.mkdtemp(prefix="bootstrap-active-")
+try:
+    if scenario == "empty_dir":
+        # .claude/auto exists but holds NO ledgers → yields nothing, never raises.
+        os.makedirs(os.path.join(tmp, ".claude", "auto"))
+        got = list(b.iter_active_runs(tmp))
+        print("NORAISE:%d" % len(got))
+    elif scenario == "missing_dir":
+        # No dispatch dir at all → also empty (delegates to iter_worktree_ledgers).
+        got = list(b.iter_active_runs(tmp))
+        print("NORAISE:%d" % len(got))
+    else:
+        adir = os.path.join(tmp, ".claude", "auto")
+        os.makedirs(adir)
+        if scenario == "mixed":
+            # Interleave by filename so ONE assertion proves filter + PATH sort:
+            # a=active, b=done (filtered), c=active → expect "a-run c-run".
+            write(os.path.join(adir, "a.json"), '{"run_id": "a-run", "loop_phase": "work"}')
+            write(os.path.join(adir, "b.json"), '{"run_id": "b-run", "loop_phase": "done"}')
+            write(os.path.join(adir, "c.json"), '{"run_id": "c-run", "loop_phase": "seam"}')
+            print(" ".join(rid for rid, _ in b.iter_active_runs(tmp)))
+        elif scenario == "all_done":
+            # Every run is done → active scan is empty.
+            write(os.path.join(adir, "x.json"), '{"run_id": "x-run", "loop_phase": "done"}')
+            write(os.path.join(adir, "y.json"), '{"run_id": "y-run", "loop_phase": "done"}')
+            got = list(b.iter_active_runs(tmp))
+            print("EMPTY:%d" % len(got))
+        elif scenario == "tuple_shape":
+            # Yields the richer (run_id, led) tuple, not a bare run_id string.
+            write(os.path.join(adir, "one.json"), '{"run_id": "one-run", "loop_phase": "plan"}')
+            (rid, led), = list(b.iter_active_runs(tmp))
+            print("%s:%s" % (rid, isinstance(led, dict)))
+        else:
+            sys.exit("unknown active scenario: %s" % scenario)
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+PYEOF
+}
+
+it "iter_active_runs: mixed done/active → only active yielded, in PATH-sorted order"
+assert_eq "a-run c-run" "$(probe_active mixed)"
+
+it "iter_active_runs: all runs done → yields nothing (every run filtered)"
+assert_eq "EMPTY:0" "$(probe_active all_done)"
+
+it "iter_active_runs: yields the richer (run_id, led) tuple, not a bare run_id"
+assert_eq "one-run:True" "$(probe_active tuple_shape)"
+
+it "iter_active_runs: empty dispatch dir → yields nothing, never raises"
+assert_eq "NORAISE:0" "$(probe_active empty_dir)"
+
+it "iter_active_runs: missing dispatch dir → yields nothing, never raises"
+assert_eq "NORAISE:0" "$(probe_active missing_dir)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "_bootstrap.test.sh: ${PASS} passed, ${FAIL} failed"

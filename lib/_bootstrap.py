@@ -311,6 +311,29 @@ def iter_worktree_ledgers(repo_root: str):
         yield run_id, led
 
 
+def iter_active_runs(repo_root: str):
+    """Yield ``(run_id, ledger_dict)`` for each NON-``done`` run under
+    ``<repo_root>/.claude/auto/*.json``, in ``iter_worktree_ledgers``' sorted order.
+
+    The shared active-run scan (U7): consolidates two divergent ``_active_runs``
+    copies that both wrapped ``iter_worktree_ledgers`` + ``phase_grammar.current_phase``
+    to drop ``"done"`` runs — ``auto-status.py`` yielded the richer ``(run_id, led)``
+    tuples, while ``auto-resume.py`` yielded bare run_id strings AND carried a dead
+    ``ledger`` param. The two filter polarities (``== "done"`` skip vs
+    ``!= "done"`` keep) were equivalent; this yields the richer tuple shape and
+    ``auto-resume`` adapts via ``run_id for run_id, _ in iter_active_runs(...)``.
+
+    Loads phase-grammar lazily via ``load_lib_module`` (cached) so the "is this
+    run done" decision stays in the ONE phase-grammar module (U5) rather than a
+    raw ``loop_phase`` compare here, and phase-grammar stays off ``_bootstrap``'s
+    import-time surface. Never raises: a missing dispatch dir yields nothing.
+    """
+    phase_grammar = load_lib_module("phase-grammar")
+    for run_id, led in iter_worktree_ledgers(repo_root):
+        if phase_grammar.current_phase(led) != "done":
+            yield run_id, led
+
+
 def test_hatch_enabled(hatch_var: str) -> bool:
     """Return True iff BOTH the test-harness sentinel AND ``hatch_var`` are set.
 

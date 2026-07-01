@@ -32,6 +32,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     is_iteration_disabled,
+    iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
@@ -46,12 +47,6 @@ phase_grammar = load_lib_module("phase-grammar")
 # Repo root resolution is shared with auto.py and auto-resume.py; lives in
 # _bootstrap.resolve_repo (P2-8 — was three identical copies).
 _resolve_repo = resolve_repo
-
-
-def _active_runs(repo_root: str):
-    """Runs whose loop_phase is not 'done'. Scans the shared per-worktree ledger
-    iterator (``_bootstrap`` owns the glob + safe-load + run_id derivation)."""
-    return [(r, led) for (r, led) in iter_worktree_ledgers(repo_root) if phase_grammar.current_phase(led) != "done"]
 
 
 def _should_render_iteration(led: dict) -> bool:
@@ -370,7 +365,7 @@ def run(argv) -> int:
         return 0
 
     # No run-id: resolve the active run, or list if ambiguous / report none.
-    active = _active_runs(repo_root)
+    active = list(iter_active_runs(repo_root))
     if not active:
         all_runs = list(iter_worktree_ledgers(repo_root))
         if not all_runs:
