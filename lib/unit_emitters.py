@@ -43,6 +43,12 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 recipes = load_lib_module("recipes")
 RecipeError = recipes.RecipeError
+# U12: typed `dispatch_context` accessors (iteration is a `_bootstrap`-only leaf,
+# so this adds no import cycle) — reads route through named accessors so a
+# misspelled key trips a KeyError at the accessor, not a swallowed None. Aliased
+# `_iteration` because `iterate_template` binds a LOCAL `iteration` (the ledger's
+# iteration block) that would otherwise shadow the module.
+_iteration = load_lib_module("iteration")
 
 
 def _enumerated_units(unit: dict) -> list:
@@ -52,7 +58,7 @@ def _enumerated_units(unit: dict) -> list:
     `enumerate_plan_units` output, persisted in U6's advance path). Empty list if
     the plan produced nothing (the caller/predicate handles the vacuous case).
     """
-    return list((unit.get("dispatch_context") or {}).get("enumerated_units") or [])
+    return list(_iteration.read_enumerated_units(unit) or [])
 
 
 def _plan_units(ledger: dict) -> list:
@@ -114,8 +120,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
             "the plan phase"
         )
     # The spine has exactly one brainstorm unit; read its recorded output.
-    bdc = brainstorm_units[0].get("dispatch_context") or {}
-    requirements_doc = bdc.get("requirements_doc")
+    requirements_doc = _iteration.read_requirements_doc(brainstorm_units[0])
     if not requirements_doc:
         raise RecipeError(
             "brainstorm_output_to_plan_unit: brainstorm unit "
@@ -168,7 +173,7 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
         raise RecipeError(
             f"judge_winner_to_work_units: no {gate_unit_id!r} unit in ledger"
         )
-    winner_id = (judge.get("dispatch_context") or {}).get("winner_unit_id")
+    winner_id = _iteration.read_winner_unit_id(judge)
     if not winner_id:
         raise RecipeError(
             "judge_winner_to_work_units: judge dispatch_context.winner_unit_id "
@@ -310,9 +315,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
             f"iterate_template: gate unit {gate_unit_id!r} not in ledger.units"
         )
 
-    decision_payload = (
-        (gate.get("dispatch_context") or {}).get("decision_payload") or {}
-    )
+    decision_payload = _iteration.read_decision_payload(gate) or {}
     emit_count = decision_payload.get("emit_count", 1)
 
     # Validate emit_count. Reject bool first — `isinstance(True, int)` is True

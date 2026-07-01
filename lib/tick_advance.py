@@ -352,7 +352,7 @@ def _persist_enumerated_units(repo_root, run_id, enumerated):
         return
     target = next(
         (u for u in plan_units
-         if not (u.get("dispatch_context") or {}).get("enumerated_units")),
+         if not iteration.read_enumerated_units(u)),
         plan_units[0],
     )
     ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
@@ -608,9 +608,8 @@ def _build_bound_exit_report(led, gate_unit_id):
     gate = next(
         (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
     )
-    dc = (gate or {}).get("dispatch_context") or {}
-    base["bound_override"] = dc.get("bound_override")
-    base["best_so_far"] = dc.get("decision_payload")
+    base["bound_override"] = iteration.read_bound_override(gate or {})
+    base["best_so_far"] = iteration.read_decision_payload(gate or {})
     return base
 
 
@@ -708,8 +707,7 @@ def _brainstorm_unit_ready(led) -> bool:
             continue
         if u.get("state") != "verdict-returned":
             return False
-        dc = u.get("dispatch_context") or {}
-        return bool(dc.get("requirements_doc"))
+        return bool(iteration.read_requirements_doc(u))
     return False
 
 

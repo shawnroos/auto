@@ -34,7 +34,11 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from _bootstrap import plan_step_sequencer  # noqa: E402  (path-prepend first)
+from _bootstrap import load_lib_module, plan_step_sequencer  # noqa: E402  (path-prepend first)
+
+# U12: typed dispatch_context accessor for the plan_path read (iteration is a
+# `_bootstrap`-only leaf — no import cycle).
+iteration = load_lib_module("iteration")
 
 ADAPTER_NAME = "ce"
 ADAPTER_SCALE = "three-tier"
@@ -77,7 +81,7 @@ def _bound_plan_path(ledger):
     """
     for u in ledger.get("units", []):
         if u.get("phase") == "plan":
-            return (u.get("dispatch_context") or {}).get("plan_path")
+            return iteration.read_plan_path(u)
     return None
 
 

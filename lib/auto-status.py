@@ -42,6 +42,9 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
+# U12: typed dispatch_context accessor for the bound_override render (iteration
+# is a `_bootstrap`-only leaf — no cycle).
+iteration = load_lib_module("iteration")
 
 
 # Repo root resolution is shared with auto.py and auto-resume.py; lives in
@@ -306,8 +309,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
             # at}`). Includes original_decision so the rendered surface matches
             # the stored payload exactly (fix-the-class — no asymmetry between
             # what we persist and what we show).
-            dc = u.get("dispatch_context") or {}
-            bo = dc.get("bound_override")
+            bo = iteration.read_bound_override(u)
             if isinstance(bo, dict):
                 sys.stdout.write(
                     f"        bound_exit: bound={bo.get('bound', '?')} "

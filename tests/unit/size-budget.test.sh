@@ -98,21 +98,25 @@ ALLOWED_FUNCTIONS=(
   # spread the dispatch across helpers without making it smaller.
   "lib/tick_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
-  # + adapter routing + verdict-write. Pre-v0.2.0 surface; not touched by
-  # the v0.3.x work. Decomposition candidate.
-  "lib/orchestrator.py:dispatch_batch:132"
+  # + adapter routing + verdict-write. U12 added the per-unit adapter_op
+  # validation guard (reject an unknown op before launch), +8 LOC over the
+  # prior 132 waiver. The guard is cohesive with the other per-unit
+  # pre-filters (not-pending / over-cap) it sits beside. Decomposition
+  # candidate (extract the per-unit filter chain).
+  "lib/orchestrator.py:dispatch_batch:140"
   # _print_run is the /auto-status rendering surface — F1's iteration
   # section + G2's exit_reason line + G7's defense-in-depth wrap + the
   # legacy unit/predicate render. Each new visible field adds a few lines;
-  # decomposing would extract per-section render helpers.
-  "lib/auto-status.py:_print_run:127"
-  # iterate_template is v0.3.0 U3's emitter. 127 LOC is on the high side
-  # but the body is a single coherent computation: validate inputs (recipe
-  # shape + emit_count bounds), read iteration_emit_count, compute the
-  # next N unit ids, build the unit dicts. Decomposition would extract
-  # 2-3 private helpers (validate-shape, validate-emit-count, build-units).
-  # Tracked as v0.3.2 candidate.
-  "lib/unit_emitters.py:iterate_template:127"
+  # decomposing would extract per-section render helpers. (U12 shrank it 1
+  # LOC by routing the bound_override read through iteration.read_bound_override.)
+  "lib/auto-status.py:_print_run:126"
+  # iterate_template is v0.3.0 U3's emitter. A single coherent computation:
+  # validate inputs (recipe shape + emit_count bounds), read
+  # iteration_emit_count, compute the next N unit ids, build the unit dicts.
+  # Decomposition would extract 2-3 private helpers (validate-shape,
+  # validate-emit-count, build-units). Tracked as v0.3.2 candidate. (U12
+  # shrank it 2 LOC via iteration.read_decision_payload.)
+  "lib/unit_emitters.py:iterate_template:125"
   # (recipes.py:validate waiver retired: decomposed into per-concern
   # validators — _validate_toplevel / _validate_phase_order / _validate_units /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on

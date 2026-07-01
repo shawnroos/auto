@@ -304,6 +304,56 @@ else
   fail "res1=$res1_status res2=$res2_status launch_count=$launch_count disp_at_stable=$disp_at_stable (expected dispatched / rejected:not-pending(dispatched) / 1 / True)"
 fi
 
+# ─── Scenario 6b: adapter_op validation (U12) ─────────────────────────────────
+# dispatch_batch rejects a unit whose declared adapter_op is not in
+# VALID_ADAPTER_OPS — the op must NOT flow to launch. The adapter_op is injected
+# on `dispatch_context` (the durable home: _normalize_unit preserves
+# dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_unit)
+# and is the deliberate-fail CONTROL: same injected shape, valid value -> it
+# dispatches and launches, proving the guard keys on the op VALUE, not on the
+# unit's presence.
+it "adapter_op: unknown op -> rejected:bad-adapter-op, not launched, stays pending; valid op dispatches (control)"
+ledger_init "adapter-op" \
+  '[{"id":"Uvalid","state":"pending","dispatch_context":{"adapter_op":"do_unit"}},{"id":"Ubad","state":"pending","dispatch_context":{"adapter_op":"totally-bogus-op"}}]' \
+  >/dev/null 2>&1
+aop="$("$PY" - "$REPO" "adapter-op" "$ORCH_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, orch_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+
+launches = []
+def counting_launch(uid, attempt=0):
+    launches.append(uid)
+
+res = dict(o.dispatch_batch(repo, run, ["Uvalid", "Ubad"], 4, launch_fn=counting_launch))
+led = o.read_ledger(repo, run)
+states = {u["id"]: u["state"] for u in led["units"]}
+print(json.dumps({
+    "valid_status": res.get("Uvalid"),
+    "bad_status": res.get("Ubad"),
+    "bad_launched": "Ubad" in launches,
+    "bad_state": states.get("Ubad"),
+    "valid_launched": "Uvalid" in launches,
+    "valid_state": states.get("Uvalid"),
+    "valid_in_ops": "do_unit" in o.VALID_ADAPTER_OPS,
+}))
+PYEOF
+)"
+vstat="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_status'])" "$aop")"
+bstat="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_status'])" "$aop")"
+blaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_launched'])" "$aop")"
+bstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_state'])" "$aop")"
+vlaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_launched'])" "$aop")"
+vstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_state'])" "$aop")"
+if [ "$vstat" = "dispatched" ] && [ "$bstat" = "rejected:bad-adapter-op" ] \
+   && [ "$blaunch" = "False" ] && [ "$bstate" = "pending" ] \
+   && [ "$vlaunch" = "True" ] && [ "$vstate" = "dispatched" ]; then
+  pass
+else
+  fail "valid=$vstat bad=$bstat bad_launched=$blaunch bad_state=$bstate valid_launched=$vlaunch valid_state=$vstate (expected dispatched / rejected:bad-adapter-op / False / pending / True / dispatched)"
+fi
+
 # ─── Scenario 7: VERDICT SURVIVES SESSION DEATH ───────────────────────────────
 # The load-bearing property. A background agent self-writes its verdict to the
 # durable ledger AFTER the driving session has exited. A FRESH converge (a

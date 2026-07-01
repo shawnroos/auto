@@ -262,6 +262,30 @@ def pick_next_plan_unit_to_advance(ledger: dict):
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
+# The closed set of adapter ops a unit may declare via ``invokes.adapter_op``
+# (recipe-compiled units carry it on ``dispatch_context`` — ``recipes.unit_for``
+# merges ``invokes`` into ``dispatch_context``, and ``_normalize_unit`` drops the
+# raw ``invokes`` key but preserves ``dispatch_context`` verbatim). Every shipped
+# recipe's op is one of these four (``tests/unit/recipes.test.sh`` asserts the
+# subset). ``dispatch_batch`` rejects any OTHER value at dispatch instead of
+# launching an agent against a misspelled/unknown op — the guard closes the gap
+# where an unknown op previously flowed straight to ``launch_fn``.
+VALID_ADAPTER_OPS = frozenset({"brainstorm", "do_unit", "next_plan_step", "review"})
+
+
+def _unit_adapter_op(unit: dict):
+    """Resolve a unit's declared ``adapter_op``, or None if it declares none.
+
+    Reads ``dispatch_context.adapter_op`` FIRST (the durable home on a
+    recipe-compiled ledger unit — ``_normalize_unit`` preserves dispatch_context
+    but drops the raw ``invokes`` bag), falling back to ``invokes.adapter_op``
+    for any pre-normalize/raw unit shape. Returns None when neither is present;
+    a None op is NOT rejected (units may legitimately carry no op).
+    """
+    dc = unit.get("dispatch_context") or {}
+    inv = unit.get("invokes") or {}
+    return dc.get("adapter_op") or inv.get("adapter_op")
+
 
 def _default_launch_fn(unit_id: str, attempt: int = 0) -> None:
     """Default agent-launch: a no-op recorder.
@@ -341,6 +365,14 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
         if unit.get("state") != "pending":
             # Idempotency guard: already dispatched / verdict-returned / etc.
             results.append((uid, f"rejected:not-pending({unit.get('state')})"))
+            continue
+        op = _unit_adapter_op(unit)
+        if op is not None and op not in VALID_ADAPTER_OPS:
+            # A declared-but-unknown adapter_op (typo in a recipe, or a hand-
+            # crafted unit) must NOT flow to launch — reject it per-unit,
+            # mirroring the not-pending path. Checked BEFORE the cap so a bad op
+            # surfaces eagerly rather than being deferred as "over-cap".
+            results.append((uid, "rejected:bad-adapter-op"))
             continue
         if dispatched_count >= cap:
             # Eligible but over the agent-chosen cap for THIS wave; left pending

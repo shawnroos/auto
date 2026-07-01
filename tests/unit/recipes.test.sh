@@ -1085,6 +1085,46 @@ assert_eq "spoof:0" "$(itr spoof-self-match)"
 it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan"
 assert_eq "clean" "$(itr spoof-builtins-clean)"
 
+# ── U12: every shipped recipe's declared adapter_op ∈ VALID_ADAPTER_OPS ───────
+# The build-time counterpart to orchestrator.dispatch_batch's runtime guard: a
+# typo in a shipped recipe JSON is caught here, before it can ship. Enumerates
+# EVERY `adapter_op` across recipes/*.json (exhaustive, not a sample) and asserts
+# the set is a subset of orchestrator.VALID_ADAPTER_OPS.
+it "U12: every shipped recipe adapter_op is in orchestrator.VALID_ADAPTER_OPS"
+opcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json, glob, importlib.util
+auto_root = sys.argv[1]
+spec = importlib.util.spec_from_file_location(
+    "orchestrator", os.path.join(auto_root, "lib", "orchestrator.py"))
+o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+
+def walk_ops(node):
+    if isinstance(node, dict):
+        inv = node.get("invokes")
+        if isinstance(inv, dict) and "adapter_op" in inv:
+            yield inv["adapter_op"]
+        for v in node.values():
+            yield from walk_ops(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from walk_ops(v)
+
+found, unknown = set(), set()
+for path in glob.glob(os.path.join(auto_root, "recipes", "*.json")):
+    if os.path.basename(path) == "schema.json":
+        continue
+    with open(path) as f:
+        doc = json.load(f)
+    for op in walk_ops(doc):
+        found.add(op)
+        if op not in o.VALID_ADAPTER_OPS:
+            unknown.add(op)
+# Must have actually FOUND ops (guards against a vacuous pass if the walk breaks).
+print("ok" if found and not unknown else f"bad:found={sorted(found)}:unknown={sorted(unknown)}")
+PYEOF
+)"
+assert_eq "ok" "$opcheck"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "recipes.test.sh: ${PASS} passed, ${FAIL} failed"
