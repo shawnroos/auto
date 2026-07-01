@@ -247,6 +247,19 @@ def resolve_shared_dir(*, cwd=None):
 CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 
 
+# The ledger key holding the DRIVING interactive session's id (v0.6.0 U5 / KTD-5).
+# ONE definition shared by the advisor-gate WRITER and the READERS so they can
+# never drift: the arm-time setter (lib/ledger_mutators.py::set_driving_session_id)
+# writes it, and BOTH PreToolUse hooks (lib/on-pretooluse-action.py,
+# lib/on-pretooluse-askuser.py) match a live run to a session by reading it and
+# comparing session-id EQUALITY. lib/ledger_core.py::init_ledger also emits this
+# key as its schema default, but it CANNOT import _bootstrap (that would be a
+# circular import — _bootstrap.load_ledger loads ledger_core; see the note at
+# ledger_core.py's deferred-loader) so it inlines the literal on purpose — keep
+# that one string in sync with this constant.
+DRIVING_SESSION_KEY = "driving_session_id"
+
+
 def cmux_available() -> bool:
     """Probe whether the cmux binary (or its override) is on PATH.
 

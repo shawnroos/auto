@@ -30,7 +30,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module  # noqa: E402
+from _bootstrap import DRIVING_SESSION_KEY, load_lib_module  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
 
@@ -519,9 +519,9 @@ def set_driving_session_id(repo_root, run_id, session_id):
 
     def mutate(ledger):
         if session_id is None:
-            ledger.pop("driving_session_id", None)
+            ledger.pop(DRIVING_SESSION_KEY, None)
         else:
-            ledger["driving_session_id"] = session_id
+            ledger[DRIVING_SESSION_KEY] = session_id
         return session_id
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)

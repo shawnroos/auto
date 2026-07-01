@@ -70,6 +70,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
+    DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
@@ -77,8 +78,6 @@ from _bootstrap import (  # noqa: E402
 )
 
 phase_grammar = load_lib_module("phase-grammar")
-
-_DRIVING_SESSION_KEY = "driving_session_id"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Destructive pattern set (KTD-4 — anchored to the project's CLAUDE.md
@@ -382,7 +381,7 @@ def _owns_session(led, *, session_id):
         return False
     if phase_grammar.current_phase(led) == "done":
         return False
-    driving = led.get(_DRIVING_SESSION_KEY)
+    driving = led.get(DRIVING_SESSION_KEY)
     if not (bool(driving) and driving == session_id):
         return False
     loop = led.get("loop") or {}

@@ -52,6 +52,8 @@ if op == "is_iteration_disabled":
 elif op == "test_hatch":
     var = sys.argv[3]
     print(b.test_hatch_enabled(var))
+elif op == "driving_session_key":
+    print(b.DRIVING_SESSION_KEY)
 else:
     sys.exit(f"unknown op: {op}")
 PYEOF
@@ -318,6 +320,14 @@ assert_eq "NORAISE:0" "$(probe_active empty_dir)"
 
 it "iter_active_runs: missing dispatch dir → yields nothing, never raises"
 assert_eq "NORAISE:0" "$(probe_active missing_dir)"
+
+# ── DRIVING_SESSION_KEY (U8: the shared advisor-gate ledger key) ────────────
+# One definition consumed by the arm-time WRITER (ledger_mutators.set_driving_
+# session_id) and BOTH PreToolUse hook READERS, which used to each inline the
+# literal. The value is load-bearing: it IS the ledger field the destructive
+# backstop matches session-id equality on, so a drift silently darkens the gate.
+it "DRIVING_SESSION_KEY: is exactly 'driving_session_id' (writer/reader share one source)"
+assert_eq "driving_session_id" "$(probe driving_session_key)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
