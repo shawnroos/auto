@@ -348,3 +348,29 @@ def is_iteration_disabled() -> bool:
     deterministic, grep-checkable mechanism.
     """
     return os.environ.get("CLAUDE_AUTO_DISABLE_ITERATION") == "1"
+
+
+def coerce_confidence(confidence):
+    """Clamp a confidence to [0.0, 1.0]; non-numeric/bool -> 0.0 (treated as low).
+
+    The ONE confidence clamp for the launch classifiers. Consolidated (U6) from
+    two byte-identical private copies that each carried a load-bearing SAFETY
+    contract: ``lib/launch-gate.py::_coerce_confidence`` (a SAFETY gate — a bad
+    value must bias to LOW so the launch shows the chooser rather than skipping
+    it) and ``lib/recommender.py::_coerce_confidence`` (low confidence ->
+    escalate). The clamp semantics are identical, so this shared helper is safe;
+    each caller keeps its own intent comment because the *direction* the safe
+    degrade protects differs.
+
+    A bad value must never crash and must degrade toward LOW confidence. ``bool``
+    is rejected explicitly because ``isinstance(True, int)`` is True in Python and
+    True/False are not meaningful confidences. An out-of-range value clamps
+    (``>1.0 -> 1.0`` = max confidence; ``<0.0 -> 0.0`` = no confidence).
+    """
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return 0.0
+    if confidence < 0.0:
+        return 0.0
+    if confidence > 1.0:
+        return 1.0
+    return float(confidence)

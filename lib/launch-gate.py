@@ -60,6 +60,12 @@ lints. Loadable via `_bootstrap.load_lib_module("launch-gate")` or directly.
 
 from __future__ import annotations
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bootstrap import coerce_confidence
+
 # The skip bar on BOTH dimensions. High and gating-aware: a wrong autonomous
 # skip (a loop the operator didn't intend, never shown) costs more than one
 # extra operator question, so the bar that lets the chooser be skipped is the
@@ -104,25 +110,6 @@ JUDGE_OR_HUMAN_GATES = frozenset({"advisor_judge", "human", "model_judge"})
 _UNKNOWN_GATE = "_unknown_"
 
 
-def _coerce_confidence(confidence):
-    """Clamp confidence to [0.0, 1.0]; non-numeric -> 0.0 (treated as low).
-
-    Identical pattern to recommender._coerce_confidence: a bad value must never
-    crash and must degrade toward the SAFE direction. Here the safe direction is
-    low confidence -> bias-to-show (two_step), never an accidental skip. `bool`
-    is rejected explicitly because ``isinstance(True, int)`` is True in Python
-    and True/False are not meaningful confidences. An out-of-range value clamps
-    (>1.0 -> 1.0 = max confidence; <0.0 -> 0.0 = no confidence).
-    """
-    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-        return 0.0
-    if confidence < 0.0:
-        return 0.0
-    if confidence > 1.0:
-        return 1.0
-    return float(confidence)
-
-
 def _normalize_gate_types(gate_types):
     """Return a list of gate-type strings; malformed input blocks skip safely.
 
@@ -157,8 +144,12 @@ def classify_launch(shape_confidence, gates_confidence, recipe_kind,
     and malformed `gate_types` block skip. Rules are evaluated in KTD-1 order;
     the structural guard plus `router_agrees` is the skip safety property (R10).
     """
-    shape = _coerce_confidence(shape_confidence)
-    gates = _coerce_confidence(gates_confidence)
+    # SAFETY (U6): coerce_confidence (shared in _bootstrap) clamps to [0.0, 1.0]
+    # and maps bad/non-numeric/bool inputs to 0.0. Here the safe direction is LOW
+    # confidence -> bias-to-show (two_step), NEVER an accidental skip — this is
+    # the load-bearing skip-safety property; do not let a bad value read as high.
+    shape = coerce_confidence(shape_confidence)
+    gates = coerce_confidence(gates_confidence)
     kind = recipe_kind if recipe_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
     types = _normalize_gate_types(gate_types)
     # router_agrees is a precomputed boolean; only the literal True counts as
@@ -206,7 +197,7 @@ def _cli(argv):
       router_agrees  : true|1 -> True; anything else -> False.
 
     Lets a bash test read the tier deterministically. Bad numeric args coerce to
-    a low confidence (via _coerce_confidence in classify_launch), so the CLI
+    a low confidence (via coerce_confidence in classify_launch), so the CLI
     never crashes on a malformed arg.
     """
     import json
@@ -232,8 +223,10 @@ def _cli(argv):
     recipe_kind_norm = recipe_kind if recipe_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
     json.dump({
         "tier": tier,
-        "shape_confidence": _coerce_confidence(shape),
-        "gates_confidence": _coerce_confidence(gates),
+        # Echo the SAFETY-clamped confidences (shared coerce_confidence): a bad
+        # arg reads back as 0.0 (low), never as a value that could green-light a skip.
+        "shape_confidence": coerce_confidence(shape),
+        "gates_confidence": coerce_confidence(gates),
         "recipe_kind": recipe_kind_norm,
         "gate_types": _normalize_gate_types(gate_types),
         "router_agrees": router_agrees,

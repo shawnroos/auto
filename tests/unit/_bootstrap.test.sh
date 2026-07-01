@@ -205,6 +205,45 @@ assert_eq "good-run" "$(probe_scan iter_skip)"
 it "iter_worktree_ledgers: run_id falls back to the filename stem when ledger has no run_id"
 assert_eq "stemname" "$(probe_scan iter_runid_fallback)"
 
+# ── coerce_confidence (U6: the shared confidence clamp) ─────────────────────
+# One clamp consolidated from two byte-identical private copies — a SAFETY gate
+# (launch-gate) and the recommender. The load-bearing contract: a bad value must
+# NEVER crash and must degrade toward LOW (0.0), never toward a high value that
+# could green-light an accidental skip / autonomous dispatch. Type rejection
+# (bool, non-numeric) can't be exercised through stringified CLI args, so the
+# probe constructs the real Python values in-heredoc via scenario dispatch.
+probe_coerce() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+import _bootstrap as b
+val = {
+    "bool": True,        # isinstance(True, int) is True — must still reject.
+    "nonnum": "abc",     # non-numeric -> low.
+    "neg": -0.5,         # below range -> clamp to 0.0.
+    "over": 1.5,         # above range -> clamp to 1.0.
+    "pass": 0.5,         # in-range, exactly representable -> passthrough.
+}[sys.argv[2]]
+print(b.coerce_confidence(val))
+PYEOF
+}
+
+it "coerce_confidence: bool (True) -> 0.0 (rejected despite isinstance(True, int))"
+assert_eq "0.0" "$(probe_coerce bool)"
+
+it "coerce_confidence: non-numeric ('abc') -> 0.0 (degrades to low)"
+assert_eq "0.0" "$(probe_coerce nonnum)"
+
+it "coerce_confidence: below range (-0.5) -> 0.0 (clamp)"
+assert_eq "0.0" "$(probe_coerce neg)"
+
+it "coerce_confidence: above range (1.5) -> 1.0 (clamp)"
+assert_eq "1.0" "$(probe_coerce over)"
+
+it "coerce_confidence: valid in-range (0.5) -> passthrough as float"
+assert_eq "0.5" "$(probe_coerce pass)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "_bootstrap.test.sh: ${PASS} passed, ${FAIL} failed"
