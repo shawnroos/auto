@@ -56,6 +56,18 @@ auto_test::assert_true "! grep -qE '^##[[:space:]]+OUTPUT VOICE' '$SKILL'"
 auto_test::it "auto-driver SKILL.md sets CLAUDE_AUTO_CONVERSATION_SIGNAL inline on the detector call (U3: closes the dead-signal gap)"
 auto_test::assert_true "grep -qE 'CLAUDE_AUTO_CONVERSATION_SIGNAL=1[[:space:]]+bash.*auto-detect\\.sh' '$SKILL'"
 
+# ── verb-aware args routing wired into the driver (v0.7.x U4) ─────────────────
+# The freeform-args rule must consult lib/verb-classify.py (not blindly route
+# every non-plan-file arg to /ce-plan) so imperatives about existing work reach
+# WORK — the fix for the 2026-06 field misroute. Pin the wiring; the routing
+# itself is model-executed and covered behaviorally by verb-classify.test.sh.
+auto_test::it "auto-driver SKILL.md wires lib/verb-classify.py into the args rule (U4)"
+auto_test::assert_true "grep -qF 'verb-classify.py' '$SKILL'"
+
+VC="$ROOT/lib/verb-classify.py"
+auto_test::it "lib/verb-classify.py exists (the args classifier)"
+auto_test::assert_file_exists "$VC"
+
 # ── commands/auto.md delegation surface ──────────────────────────────────────
 auto_test::it "commands/auto.md frontmatter lists the Skill tool"
 auto_test::assert_true "grep -qE '^allowed-tools:.*\\bSkill\\b' '$CMD'"

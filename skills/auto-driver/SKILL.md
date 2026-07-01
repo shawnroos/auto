@@ -37,9 +37,9 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 | `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
-**Argument-aware freeform**: before loading the hypothesis, if
-`$ARGUMENTS` is non-empty AND does NOT resolve to a plan file, invoke
-`/ce-plan <ARGUMENTS>` via Skill and end the turn (v0.3.x routing).
+**Argument-aware freeform** (before loading the hypothesis): a plan-file path →
+`auto.sh "<path> --recipe w"`. Else `python lib/verb-classify.py "$ARGUMENTS"`:
+`work`→WORK a discovered plan (none? you decide); `both`→`/ce-plan` then work; `plan`/`ambiguous`→`/ce-plan <ARGUMENTS>`.
 
 **Workspace handling** (plan 004): branch on `workspace_action`.
 `create`/`recreate`: chain in ONE Bash call so the workspace id
