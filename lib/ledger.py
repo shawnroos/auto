@@ -123,6 +123,40 @@ atomic_iterate_step = ledger_emitters.atomic_iterate_step
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Composite pause helper (U9). Topology-correct home: it wraps set_loop, so it
+# belongs on the ledger surface both pause callers already reach through.
+
+
+def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
+    """The single pause write both pause paths route through.
+
+    Flip the loop to ``driver="manual"`` and record ``blocked_on=reason``
+    WITHOUT marking the loop done — the run stays resumable. The two callers
+    differ ONLY by ``backstop_latched``:
+
+      * the destructive-action backstop (on-pretooluse-action.py::_pause_run)
+        passes ``True`` — the pause LATCHES the fail-closed gate so it keeps
+        firing on a second destructive command in the same autonomous turn
+        (no self-disarm);
+      * the operator CLI (auto-resume.py::_cmd_pause) uses the default
+        ``False`` — the operator now owns the session and runs their own
+        cleanup, so the gate must not re-fire on it.
+
+    ``backstop_latched`` rides the SAME atomic set_loop write as
+    ``driver="manual"`` (P3-b) => the latch exists iff the backstop pause does.
+    Note apply_pause only ever SETS the latch (never clears): the operator path
+    (default False) leaves any pre-existing latch UNTOUCHED, because a latch is
+    cleared ONLY by a clean `auto-resume continue` (forgiveness). That stickiness
+    is the anti-self-disarm door — an agent that hits the backstop cannot run
+    `auto-resume pause` to drop the latch and retry the destructive command
+    (advisor-gate P3-b). So we pass backstop_latched to set_loop only when
+    latching; omitting it leaves set_loop's field unchanged (UNSET sentinel).
+    """
+    kwargs = {"backstop_latched": True} if backstop_latched else {}
+    set_loop(repo_root, run_id, driver="manual", blocked_on=reason, **kwargs)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.
 

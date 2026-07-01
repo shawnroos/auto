@@ -410,25 +410,22 @@ def _owning_run_id(repo_root: str, session_id):
 def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
     """Halt the owned run via the pause seam (the fail-closed mechanism).
 
-    Mirrors auto-resume.py's `_cmd_pause`: set_loop driver="manual" +
-    blocked_on, WITHOUT marking the loop done — the run stays resumable. Routed
-    through the ledger FACADE (import-topology facade discipline). Best-effort:
-    a write failure must not propagate (rel-001), but the deny/systemMessage is
-    still emitted, so the action is not silently allowed.
+    Routes through the shared ledger.apply_pause core (import-topology facade
+    discipline): set_loop driver="manual" + blocked_on, WITHOUT marking the loop
+    done — the run stays resumable. The backstop passes ``backstop_latched=True``
+    so the gate keeps firing on a second destructive command in the same
+    autonomous turn (no self-disarm), whereas the operator pause
+    (auto-resume.py, default False) is exempt so the operator can run their own
+    cleanup. Best-effort: a write failure must not propagate (rel-001), but the
+    deny/systemMessage is still emitted, so the action is not silently allowed.
     """
     try:
         ledger = load_ledger()
-        # backstop_latched=True in the SAME atomic write as driver="manual" (P3-b):
-        # it marks this pause as backstop-initiated so the gate keeps firing on a
-        # second destructive command in the same autonomous turn (no self-disarm),
-        # while an OPERATOR pause (auto-resume.py pause, NOT latched) is exempt so
-        # the operator can run their own cleanup. Set atomically => the latch
-        # exists iff the pause does. NOT a separate best-effort write (the audit
-        # record below is separate; a latch derived from it could split-brain).
-        ledger.set_loop(
-            repo_root, run_id, driver="manual", blocked_on=reason,
-            backstop_latched=True,
-        )
+        # backstop_latched=True rides the SAME atomic write as driver="manual"
+        # (P3-b) => the latch exists iff the pause does. NOT a separate
+        # best-effort write (the audit record below is separate; a latch derived
+        # from it could split-brain).
+        ledger.apply_pause(repo_root, run_id, reason, backstop_latched=True)
     except Exception:
         pass
 

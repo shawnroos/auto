@@ -47,6 +47,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
+    DRIVING_SESSION_KEY,
     iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
@@ -149,7 +150,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
             "present).\n"
         )
         return 1
-    existing = led.get("driving_session_id")
+    existing = led.get(DRIVING_SESSION_KEY)
     loop = led.get("loop") or {}
     run_is_live = (
         loop.get("driver") == "self"
@@ -241,9 +242,10 @@ def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to pause.\n")
         return 0
     reason = (reason or "").strip()
-    ledger.set_loop(
-        repo_root, run_id, driver="manual", blocked_on=(reason or None)
-    )
+    # Shared pause core (U9). Operator path uses the default backstop_latched=
+    # False: the operator now owns the session and runs their own cleanup, so
+    # the fail-closed gate must not re-fire on it (the backstop path latches).
+    ledger.apply_pause(repo_root, run_id, reason or None)
     why = f" — {reason}" if reason else ""
     sys.stdout.write(
         f"resume: run {run_id!r} paused (driver=manual){why}.\n"
