@@ -283,9 +283,10 @@ def _workspace_action(workspace, situation):
       * status=project, situation routes to dispatch (reviewed-plan,
         multi-plan, in-flight) → use (skill dispatches tabs in this
         workspace; v0.4.1 spawn-side path)
-      * status=unmarked + marker_stale=True, situation is
-        reviewed-plan/multi-plan → recreate (skill should overwrite
-        the stale marker with a fresh workspace)
+      * status=recreate (marker present but its cmux workspace is gone,
+        marker_stale=True), situation is reviewed-plan/multi-plan →
+        recreate (skill should overwrite the stale marker with a fresh
+        workspace)
       * status=unmarked (no marker yet), situation is reviewed-plan
         or multi-plan → create (skill creates first, then dispatches)
       * status=non-project, situation is reviewed-plan/multi-plan →
@@ -302,7 +303,10 @@ def _workspace_action(workspace, situation):
         return "use"
     if status == "non-project":
         return "ambiguous"
-    if status == "unmarked" and workspace.get("marker_stale"):
+    # detect() reports "recreate" for a stale marker (its cmux workspace is
+    # gone). Tolerate the older "unmarked"+marker_stale shape too, in case an
+    # out-of-tree detect() predates the distinct-status fix.
+    if status == "recreate" or (status == "unmarked" and workspace.get("marker_stale")):
         return "recreate"
     if status == "unmarked":
         return "create"

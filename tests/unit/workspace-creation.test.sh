@@ -59,6 +59,9 @@ pane:stub-right-1  [1 surface]}"
   list-pane-surfaces)
     echo "\${CLAUDE_AUTO_TEST_LIST_SURFACES_OUT:-surface:stub-primary-1  [terminal]}"
     ;;
+  list-workspaces)
+    echo "\${CLAUDE_AUTO_TEST_WS_LIST:-}"
+    ;;
   *) exit 0 ;;
 esac
 EOF
@@ -207,13 +210,15 @@ else
 fi
 rm -rf "$R5"
 
-# ── Scenario 6: existing marker without --force raises
-auto_test::it "existing marker without --force raises with clear error"
+# ── Scenario 6: existing marker pointing at a LIVE workspace without --force raises
+# (a live marker's workspace would be stranded by an overwrite, so create() refuses).
+auto_test::it "existing marker (live workspace) without --force raises with clear error"
 R6="$(make_repo)"
 mkdir -p "$R6/.claude/auto"
 echo '{"workspace_id":"workspace:pre-existing"}' > "$R6/.claude/auto/workspace.json"
 set +e
-out="$("$PY" "$WS" create "$R6" 2>&1)"
+out="$(CLAUDE_AUTO_TEST_WS_LIST="workspace:pre-existing (Live)" \
+       "$PY" "$WS" create "$R6" 2>&1)"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "marker already exists"; then
@@ -222,6 +227,31 @@ else
   auto_test::fail "expected non-zero + 'marker already exists', got rc=$rc: $out"
 fi
 rm -rf "$R6"
+
+# ── Scenario 6b: STALE marker (cmux workspace gone) without --force → recreate succeeds
+# This is the detect()=="recreate" path. create() treats a stale marker as
+# overwrite-eligible so the stale→recreate flow does not fail silently. On
+# pre-change code this raised "marker already exists" (the deliberate-fail guard).
+auto_test::it "stale marker (cmux workspace gone) without --force → recreate succeeds"
+R6B="$(make_repo)"
+mkdir -p "$R6B/.claude/auto"
+echo '{"workspace_id":"workspace:gone-999"}' > "$R6B/.claude/auto/workspace.json"
+set +e
+out="$(CLAUDE_AUTO_TEST_WS_LIST="workspace:some-other-live" \
+       "$PY" "$WS" create "$R6B" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+  new_id="$("$PY" -c "import json; print(json.load(open('$R6B/.claude/auto/workspace.json'))['workspace_id'])")"
+  if [ "$new_id" = "workspace:stub-ws-1" ]; then
+    auto_test::pass
+  else
+    auto_test::fail "stale marker not overwritten; workspace_id=$new_id"
+  fi
+else
+  auto_test::fail "expected recreate to succeed (rc=0), got rc=$rc: $out"
+fi
+rm -rf "$R6B"
 
 # ── Scenario 7: --force overwrites existing marker
 auto_test::it "--force overwrites existing marker"

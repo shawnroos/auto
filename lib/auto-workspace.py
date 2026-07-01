@@ -140,7 +140,7 @@ def detect(host_repo: str) -> dict:
     .. code-block:: json
 
        {
-         "status": "project | non-project | unmarked",
+         "status": "project | non-project | unmarked | recreate",
          "marker_path": "<abs-path>|null",
          "workspace_id": "<cmux-uuid>|null",
          "left_pane_id": "<cmux-uuid>|null",
@@ -163,9 +163,15 @@ def detect(host_repo: str) -> dict:
     ws_id = marker.get("workspace_id")
     left_pane_id = marker.get("left_pane_id")
     # Marker exists. Check whether the referenced workspace is still live.
+    # If the marker's cmux workspace is gone, report "recreate" (NOT
+    # "unmarked"): the marker file is still on disk, so a caller that read
+    # "unmarked" and then invoked create() would hit the marker-exists guard
+    # and fail silently. "recreate" tells the caller the stale marker is
+    # overwrite-eligible; create() honors that by treating a stale marker as
+    # force-eligible.
     if ws_id and not _cmux_workspace_exists(ws_id):
         return {
-            "status": "unmarked",
+            "status": "recreate",
             "marker_path": mpath,
             "workspace_id": ws_id,
             "left_pane_id": left_pane_id,
@@ -213,18 +219,19 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
         host_repo: absolute path to the project's main repo. Used as
           the workspace cwd AND the marker's location.
         name: workspace name. Defaults to the repo's basename.
-        force: when True, overwrite an existing marker. Without
-          force, raises WorkspaceError if a marker already exists.
+        force: when True, overwrite an existing marker unconditionally.
+          Without force, an existing marker is refused UNLESS it is stale
+          (detect()=="recreate"), which is overwrite-eligible.
 
     Raises:
-        WorkspaceError: marker already exists (when force=False),
-          cmux is unavailable, any cmux subprocess fails, or pane
-          enumeration returns unexpected output.
+        WorkspaceError: a live (non-stale) marker already exists and
+          force=False, cmux is unavailable, any cmux subprocess fails,
+          or pane enumeration returns unexpected output.
     """
     if not os.path.isdir(host_repo):
         raise WorkspaceError(f"host_repo does not exist: {host_repo}")
     mpath = marker_path(host_repo)
-    if os.path.isfile(mpath) and not force:
+    if os.path.isfile(mpath) and not force and not _marker_is_stale(host_repo):
         raise WorkspaceError(
             f"marker already exists at {mpath} — pass force=True to overwrite"
         )
@@ -306,6 +313,20 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
     }
     write_marker(host_repo, marker)
     return marker
+
+
+def _marker_is_stale(host_repo: str) -> bool:
+    """True when a marker exists but its cmux workspace is gone.
+
+    This is the detect()=="recreate" case. A stale marker is
+    overwrite-eligible in create() so the stale→recreate path doesn't fail
+    silently. We treat the marker as NON-stale (block overwrite) when it can't
+    be parsed or lacks a workspace_id — err on the safe side rather than
+    clobbering a marker we can't reason about.
+    """
+    marker = read_marker(host_repo)
+    ws_id = marker.get("workspace_id") if marker else None
+    return bool(ws_id) and not _cmux_workspace_exists(ws_id)
 
 
 def _now_iso() -> str:

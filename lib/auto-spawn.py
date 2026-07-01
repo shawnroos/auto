@@ -358,10 +358,12 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
     )
     script = os.path.join(_LIB_DIR, "cmux-socket.sh")
 
-    # Decide dispatch mode via the full detect() check. detect() handles
-    # the four cases — unmarked, project, non-project, stale — so we route
-    # to tab-mode ONLY when status == "project" (marker matches env AND
-    # cmux says the workspace is live). Stale markers degrade to the
+    # Decide dispatch mode via the full detect() check. detect() returns
+    # one of four statuses — "unmarked", "project", "non-project", and
+    # "recreate" (marker present but its cmux workspace is gone, i.e.
+    # marker_stale=True) — so we route to tab-mode ONLY when
+    # status == "project" (marker matches env AND cmux says the workspace is
+    # live). Every other status, including "recreate", safe-degrades to the
     # workspace-per-plan fallback rather than spawning into a dead pane.
     #
     # Round-1 plan-004 review P3 #6: ws_state can be precomputed once

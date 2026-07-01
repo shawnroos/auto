@@ -57,11 +57,12 @@ field() {
   "$PY" "$WS" detect "$repo" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['$key'])"
 }
 
-# ── Scenario 1: no marker → status=unmarked
-auto_test::it "no marker → status=unmarked"
+# ── Scenario 1: no marker → status=unmarked, marker_path=None
+auto_test::it "no marker → status=unmarked, marker_path=None"
 R1="$(make_repo)"
 unset CMUX_WORKSPACE_ID
 auto_test::assert_eq "unmarked" "$(field "$R1" status)"
+auto_test::assert_eq "None" "$(field "$R1" marker_path)"
 rm -rf "$R1"
 
 # ── Scenario 2: marker + matching env → status=project
@@ -82,14 +83,19 @@ export CMUX_WORKSPACE_ID="workspace:different-id"
 auto_test::assert_eq "non-project" "$(field "$R3" status)"
 rm -rf "$R3"
 
-# ── Scenario 4: marker but cmux says workspace gone → status=unmarked + marker_stale
-auto_test::it "marker but cmux workspace missing → status=unmarked + marker_stale=true"
+# ── Scenario 4: marker but cmux says workspace gone → status=recreate + marker_stale
+# The marker file is still on disk, so detect() must NOT report "unmarked"
+# (that would send a caller into create()'s marker-exists guard and fail the
+# stale→recreate path silently). It reports "recreate" with marker_stale=True
+# and a non-null marker_path.
+auto_test::it "marker but cmux workspace missing → status=recreate + marker_stale=true + marker_path non-null"
 R4="$(make_repo)"
 plant_marker "$R4" "workspace:abc123"
 export CLAUDE_AUTO_TEST_WS_LIST="workspace:other-only"
 export CMUX_WORKSPACE_ID="workspace:abc123"
-auto_test::assert_eq "unmarked" "$(field "$R4" status)"
+auto_test::assert_eq "recreate" "$(field "$R4" status)"
 auto_test::assert_eq "True" "$(field "$R4" marker_stale)"
+auto_test::assert_eq "$R4/.claude/auto/workspace.json" "$(field "$R4" marker_path)"
 rm -rf "$R4"
 
 # ── Scenario 5: marker with no env (e.g. claude run outside cmux)
