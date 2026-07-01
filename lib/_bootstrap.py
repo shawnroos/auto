@@ -410,3 +410,44 @@ def coerce_confidence(confidence):
     if confidence > 1.0:
         return 1.0
     return float(confidence)
+
+
+def plan_step_sequencer(ledger, *, sequence):
+    """Pure plan-loop sequencer shared by both adapters (U10).
+
+    Collapses the byte-identical ``_next_plan_step`` skeleton that lived in
+    ``adapter-ce.py`` and ``adapter-native.py``. The ONLY thing that differed
+    between the two was the transition ``sequence``; the coherence guard and the
+    ``plan_step is None`` first-step logic were identical, so they live here once.
+
+    ``sequence`` is the per-adapter ordered plan steps EXCLUDING the terminal
+    ``done`` — CE passes ``("plan", "deepen", "review_plan")`` and native passes
+    ``("plan", "review_plan")`` (native has no deepen step). ``plan_step`` is a
+    real validated ledger field (``ledger_core.PLAN_STEPS``) that the tick persists
+    via ``set_loop(plan_step=step)``; both adapters read it identically and this
+    sequencer keeps the ``None``-tolerance native already relied on. No IO — the
+    engine persists the returned step; the adapter never writes the ledger (§1).
+
+    §4.1 coherence guard runs FIRST (livelock hazard): once a ``review_plan``
+    round has closed the gaps (``gaps_open == 0``) the next call MUST return
+    ``"done"``. It is keyed on ``plan_step in ("review_plan", "done")`` specifically
+    because ``gaps_open`` is 0 by default before any review has run — the guard
+    must only fire AFTER a real review pass, else the loop would never start.
+    """
+    epr = ledger.get("exit_predicate_result") or {}
+    plan_step = ledger.get("plan_step")
+    if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
+        return "done"
+    if plan_step is None:
+        return sequence[0]
+    if plan_step in sequence:
+        idx = sequence.index(plan_step)
+        if idx + 1 < len(sequence):
+            return sequence[idx + 1]
+        # Last step (review_plan) reached with gaps STILL open (else the guard
+        # above fired) -> loop back to the first POST-plan step: sequence[1].
+        # This is deliberately NOT sequence[-2]: for native (["plan",
+        # "review_plan"]) that would be "plan" and wrongly re-plan from scratch;
+        # sequence[1] loops CE back to "deepen" and native back to "review_plan".
+        return sequence[1]
+    return "done"

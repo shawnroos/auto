@@ -329,6 +329,55 @@ assert_eq "NORAISE:0" "$(probe_active missing_dir)"
 it "DRIVING_SESSION_KEY: is exactly 'driving_session_id' (writer/reader share one source)"
 assert_eq "driving_session_id" "$(probe driving_session_key)"
 
+# ── plan_step_sequencer (U10: the shared plan-loop sequencer) ───────────────
+# One pure function both adapters delegate to. CE injects
+# ("plan","deepen","review_plan"); native injects ("plan","review_plan") — same
+# coherence guard + None-tolerance, ONLY the sequence differs. These probe the
+# shared function DIRECTLY (adapter-severity.test.sh is the end-to-end guard).
+#
+# Driver: call plan_step_sequencer with a per-adapter sequence + a ledger built
+# from (plan_step, gaps_open). Prints the returned step.
+seq_step() {
+  # args: <adapter: ce|native> <plan_step|null> <gaps_open>
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+import _bootstrap as b
+adapter, plan_step, gaps_open = sys.argv[2], sys.argv[3], int(sys.argv[4])
+sequence = ("plan", "deepen", "review_plan") if adapter == "ce" else ("plan", "review_plan")
+ledger = {
+    "plan_step": None if plan_step == "null" else plan_step,
+    "exit_predicate_result": {"gaps_open": gaps_open},
+}
+print(b.plan_step_sequencer(ledger, sequence=sequence))
+PYEOF
+}
+
+# CE full walk: plan -> deepen -> review_plan, loop-back to deepen.
+it "plan_step_sequencer CE: fresh ledger (plan_step None) -> plan"
+assert_eq "plan" "$(seq_step ce null 0)"
+it "plan_step_sequencer CE: after plan -> deepen"
+assert_eq "deepen" "$(seq_step ce plan 0)"
+it "plan_step_sequencer CE: after deepen -> review_plan"
+assert_eq "review_plan" "$(seq_step ce deepen 0)"
+it "plan_step_sequencer CE: review_plan with gaps open -> deepen (loop-back)"
+assert_eq "deepen" "$(seq_step ce review_plan 3)"
+
+# native full walk: plan -> review_plan, loop-back to review_plan (NEVER deepen).
+it "plan_step_sequencer native: fresh ledger (plan_step None) -> plan"
+assert_eq "plan" "$(seq_step native null 0)"
+it "plan_step_sequencer native: after plan -> review_plan (never deepen)"
+assert_eq "review_plan" "$(seq_step native plan 0)"
+it "plan_step_sequencer native: review_plan with gaps open -> review_plan (loop, never deepen)"
+assert_eq "review_plan" "$(seq_step native review_plan 2)"
+
+# §4.1 coherence guard: livelock case — review_plan + gaps_open==0 -> done.
+it "plan_step_sequencer CE: coherence guard, review_plan + gaps_open==0 -> done"
+assert_eq "done" "$(seq_step ce review_plan 0)"
+it "plan_step_sequencer native: coherence guard, review_plan + gaps_open==0 -> done"
+assert_eq "done" "$(seq_step native review_plan 0)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "_bootstrap.test.sh: ${PASS} passed, ${FAIL} failed"

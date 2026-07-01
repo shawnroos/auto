@@ -30,6 +30,12 @@ DECLARED adapter_scale: "three-tier"
     driven reviewer") and declares three-tier directly.
 """
 
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _bootstrap import plan_step_sequencer  # noqa: E402  (path-prepend first)
+
 ADAPTER_NAME = "ce"
 ADAPTER_SCALE = "three-tier"
 
@@ -37,6 +43,10 @@ ADAPTER_SCALE = "three-tier"
 _SEVERITY_TABLE = {"P0": "blocker", "P1": "major", "P2": "major", "P3": "minor"}
 
 _PLAN_STEPS = ("plan", "deepen", "review_plan", "done")
+# The transition sequence handed to the shared sequencer (U10): the plan steps
+# WITHOUT the terminal "done". CE loops plan -> deepen -> review_plan and, while
+# gaps remain, loops back to "deepen".
+_PLAN_SEQUENCE = _PLAN_STEPS[:-1]
 
 
 def map_level(ce_level):
@@ -72,30 +82,16 @@ def _bound_plan_path(ledger):
 
 
 def _next_plan_step(ledger):
-    """Pure CE plan-loop sequencer (contract §4): plan -> deepen -> review_plan
-    -> (loop deepen/review while gaps remain) -> done.
+    """Thin CE wrapper over the shared ``plan_step_sequencer`` (U10).
 
-    §4.1 coherence guard FIRST: once a review_plan round has closed the gaps
-    (gaps_open == 0), the next call MUST return "done" (else livelock). Keyed on
-    plan_step == "review_plan" specifically — gaps_open is 0 by default before
-    any review has run, so the guard must only fire AFTER a real review pass.
-
-    `plan_step` is a real validated ledger field (schema §3.1) the tick persists.
+    CE's plan loop runs plan -> deepen -> review_plan and, while gaps remain,
+    loops back to "deepen"; once a review_plan round closes the gaps the shared
+    §4.1 coherence guard returns "done" (else livelock). All that per-adapter
+    logic is now the injected ``_PLAN_SEQUENCE``; the guard + ``plan_step is
+    None`` first-step logic live once in ``_bootstrap``. ``plan_step`` is a real
+    validated ledger field (``ledger_core.PLAN_STEPS``) the tick persists.
     """
-    epr = ledger.get("exit_predicate_result") or {}
-    plan_step = ledger.get("plan_step")
-    if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
-        return "done"
-    if plan_step is None:
-        return "plan"
-    if plan_step == "plan":
-        return "deepen"
-    if plan_step == "deepen":
-        return "review_plan"
-    if plan_step == "review_plan":
-        # gaps still open here (else the guard fired) -> another deepen round.
-        return "deepen"
-    return "done"
+    return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
 
 
 class Adapter:
