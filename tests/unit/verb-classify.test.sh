@@ -67,6 +67,20 @@ assert_eq "plan" "$(cls "write a plan for billing")"
 it "'run the plan' → work (article-preceded 'plan' is a noun, not a verb)"
 assert_eq "work" "$(cls "run the plan")"
 
+# ── collision nouns (review/run) as topic objects must NOT read as work ─────
+it "'design a review workflow' → plan (article-preceded 'review' is a noun)"
+assert_eq "plan" "$(cls "design a review workflow")"
+
+it "'plan a run-rate dashboard' → plan (article-preceded 'run' is a noun)"
+assert_eq "plan" "$(cls "plan a run-rate dashboard")"
+
+# ── punctuation / possessive before 'plan' must still read it as a noun ─────
+it "'review (the plan)' → work (punctuation-wrapped article still gates the noun)"
+assert_eq "work" "$(cls "review (the plan)")"
+
+it "'review team'\''s plan' → work (possessive makes 'plan' a noun)"
+assert_eq "work" "$(cls "review team's plan")"
+
 # ── ambiguous: no verb signal → model decides ──────────────────────────────
 it "'make it better' → ambiguous (improvement verb, no work/plan intent)"
 assert_eq "ambiguous" "$(cls "make it better")"

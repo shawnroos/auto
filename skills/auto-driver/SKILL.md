@@ -23,8 +23,7 @@ on (a just-built plan / imperative about existing work) so it preempts stale pla
 CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
 
-If the detector yields NO parseable envelope (empty/non-zero — an env hiccup, not
-a normal path; it otherwise always emits + exits 0), don't stall: treat as `raw`.
+If the detector yields no parseable envelope (empty/non-zero env hiccup), don't stall — treat as `raw`.
 
 Returns one JSON object with `situation`, `summary`, `ambiguity`,
 `single_plan`, `multi_plan`, `in_flight`, `workspace`,
@@ -42,7 +41,7 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 
 **Argument-aware freeform** (before loading the hypothesis): a plan-file path →
 `auto.sh "<path> --recipe w"`. Else `python lib/verb-classify.py "$ARGUMENTS"`:
-`work`→WORK a discovered plan (none? you decide); `both`→`/ce-plan` then work; `plan`/`ambiguous`→`/ce-plan <ARGUMENTS>`.
+`work`→work the freshest plan `auto.sh "<plan> --recipe w"` (none? you decide); `both`→`/ce-plan <ARGUMENTS>` then work it; `plan`/`ambiguous`→`/ce-plan <ARGUMENTS>`.
 
 **Workspace handling** (plan 004): branch on `workspace_action`.
 `create`/`recreate`: chain in ONE Bash call so the workspace id

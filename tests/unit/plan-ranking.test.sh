@@ -188,6 +188,19 @@ setup_empty() { mkdir -p "$1/docs/plans"; git_init "$1"; }
 it "empty plan dir → empty list, no crash"
 assert_eq "0" "$(rank_json setup_empty 'len(R)')"
 
+# Glob-taxonomy guard: plan-rank.discover MUST cover the same three conventional
+# locations the detector's _discover_plans globs (docs/plans/*.md, plans/*.md,
+# *-plan.md) — they duplicate the tuple, so pin it here to catch a future desync.
+setup_all_three_patterns() {
+  git_init "$1"
+  mkdir -p "$1/docs/plans" "$1/plans"
+  echo "# a" > "$1/docs/plans/a.md"     # docs/plans/*.md
+  echo "# b" > "$1/plans/b.md"          # plans/*.md
+  echo "# c" > "$1/c-plan.md"           # *-plan.md at repo root
+}
+it "discover covers all three conventional plan locations (detector parity)"
+assert_eq "3" "$(rank_json setup_all_three_patterns 'len(R)')"
+
 # ── summary ────────────────────────────────────────────────────────────────
 echo ""
 echo "plan-ranking.test.sh: ${PASS} passed, ${FAIL} failed"

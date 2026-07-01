@@ -338,6 +338,24 @@ assert_eq "3" "$(json_field_tracked setup_all_stale_multi 'len([o for o in H["am
 it "all-stale-multi: multi_plan.paths still populated"
 assert_eq "3" "$(json_field_tracked setup_all_stale_multi 'len(H["multi_plan"]["paths"])')"
 
+# ≥2 GENUINELY-fresh (uncommitted) tracked plans → multi-plan ask WITH fan-out
+# offered. The existing setup_three_plans covers this via the gitignored-docs
+# mtime-fresh fallback; this pins the same fan-out behavior under REAL tracked
+# docs (uncommitted files git reports as fresh), the normal-repo condition.
+setup_two_fresh_tracked() {
+  local repo="$1"
+  mkdir -p "$repo/docs/plans"
+  # Two uncommitted (untracked) plans → both fresh; no stale siblings.
+  echo "# f1" > "$repo/docs/plans/f1-plan.md"
+  echo "# f2" > "$repo/docs/plans/f2-plan.md"
+}
+it "two-fresh-tracked: situation=multi-plan (>=2 fresh)"
+assert_eq "multi-plan" "$(json_field_tracked setup_two_fresh_tracked 'H["situation"]')"
+it "two-fresh-tracked: fan-out-all option IS offered (fresh set, legitimate)"
+assert_eq "1" "$(json_field_tracked setup_two_fresh_tracked 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
+it "two-fresh-tracked: options = 2 plans + fan-out-all"
+assert_eq "3" "$(json_field_tracked setup_two_fresh_tracked 'len(H["ambiguity"]["options"])')"
+
 # ── Scenario 4: in-flight single + goal_intent feeds summary ───────────────
 it "in-flight: situation=in-flight when one not-met run present"
 assert_eq "in-flight" "$(json_field setup_inflight_one 'H["situation"]')"

@@ -31,6 +31,7 @@
 import re
 import sys
 import json
+import string
 
 # Verbs that unambiguously mean "carry out existing work". Kept deliberately
 # tight — genuinely dual-use verbs ("build", "develop") are NOT here; they only
@@ -57,13 +58,32 @@ def _has_any(text, patterns):
     return any(re.search(r"\b" + p + r"\b", text) for p in patterns)
 
 
-def _has_plan_verb(text):
-    """True iff 'plan'/'planning' is used as a VERB (not preceded by an article/
-    possessive — 'the plan' is a noun reference to an existing artifact)."""
-    for m in re.finditer(r"\bplan(?:ning)?\b", text):
-        before = text[:m.start()].split()
-        prev = before[-1] if before else ""
-        if prev not in _ARTICLES:
+def _preceded_by_determiner(text, start):
+    """True iff the token immediately before position `start` is an article or
+    possessive — i.e. the word at `start` is a NOUN object, not a verb.
+
+    Punctuation is stripped from the preceding token first, so "(the plan)" and
+    "review the plan." resolve correctly; a possessive ("team's plan") is noun
+    context too. This is what lets "execute the plan" read as work (execute is a
+    verb; "plan" is the article-preceded noun) while "plan and implement" reads
+    as plan-creation (leading "plan" is a verb)."""
+    before = text[:start].split()
+    if not before:
+        return False
+    prev = before[-1].strip(string.punctuation + "’")
+    if prev in _ARTICLES:
+        return True
+    # Possessive ("team's", "clients'") makes the following word a noun.
+    return prev.endswith("'s") or prev.endswith("'") or prev.endswith("’s")
+
+
+def _used_as_verb(text, pattern):
+    """True iff `pattern` matches at least once NOT preceded by an article/
+    possessive — used as a verb, not a noun object. Applied to work AND plan
+    verbs so a topic noun ("design a review workflow", "plan a run-rate board")
+    does not trip the collision word (`review`, `run`) as a work verb."""
+    for m in re.finditer(r"\b" + pattern + r"\b", text):
+        if not _preceded_by_determiner(text, m.start()):
             return True
     return False
 
@@ -74,8 +94,9 @@ def classify(args):
     text = (args or "").lower().strip()
     if not text:
         return {"class": "ambiguous", "work": False, "plan_intent": False}
-    work = _has_any(text, _WORK)
-    plan_verb = _has_any(text, _PLAN) or _has_plan_verb(text)
+    work = any(_used_as_verb(text, p) for p in _WORK)
+    plan_verb = (any(_used_as_verb(text, p) for p in _PLAN)
+                 or _used_as_verb(text, r"plan(?:ning)?"))
     plan_noun = bool(re.search(r"\bplans?\b", text))
     plan_intent = plan_verb or (_has_any(text, _CREATION) and plan_noun)
     if work and plan_intent:

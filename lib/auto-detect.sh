@@ -574,14 +574,16 @@ try:
     ranked = _rank_plans_safe(repo)
     fresh = [p for p in ranked if p["freshness"] == "fresh"]
 
-    # Exactly one live plan (among any number of stale siblings) → the detector
-    # INFERS it as the reviewed plan. A lone plan (fresh or stale) is likewise
-    # unambiguous — one plan carries no fan-out footgun, so keep the v0.4.3
-    # reviewed-plan → recipe-w behavior. `_emit_*` raise SystemExit, so these
-    # guards are mutually exclusive with the multi-plan block below.
+    # Exactly one FRESH plan (among any number of stale siblings) → the detector
+    # INFERS it as the reviewed plan (a live plan beats conversation, always).
+    # A lone plan with NO fresh signal is reviewed-plan too — UNLESS the driver
+    # signalled a rich conversation, in which case a lone STALE plan yields to it
+    # (Step 2.5): "every discovered plan is stale" preempts at N=1 just as it does
+    # at N>=2, so adding/removing a stale sibling can't flip the outcome. `_emit_*`
+    # raise SystemExit, so these guards are mutually exclusive with the block below.
     if len(fresh) == 1:
         _emit_reviewed_plan(fresh[0]["path"])
-    if len(ranked) == 1:
+    if len(ranked) == 1 and not os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
         _emit_reviewed_plan(ranked[0]["path"])
 
     if len(ranked) > 1:
@@ -671,9 +673,20 @@ except BaseException as exc:
         "single_plan": None,
         "multi_plan": None,
         "in_flight": None,
-        # v0.6.0 U1: the catastrophic-error fallback bypasses _safe_envelope, so
-        # carry `recommendation` here too — EVERY envelope on EVERY path must
-        # have the key (the shape contract a downstream reader relies on).
+        # The catastrophic-error fallback bypasses _safe_envelope, so it must
+        # hand-carry EVERY envelope key — the nine-key shape contract holds on
+        # EVERY path including this one. `workspace`/`workspace_action` use inline
+        # safe defaults rather than calling _detect_workspace_safe(): this is the
+        # last-resort handler, so it must not risk re-raising from the very
+        # subsystem that may have failed. (v0.6.0 U1 added `recommendation`; the
+        # workspace keys were the gap this closes.)
+        "workspace": {
+            "status": "unmarked", "marker_path": None, "workspace_id": None,
+            "left_pane_id": None,
+            "env_workspace_id": os.environ.get("CMUX_WORKSPACE_ID"),
+            "marker_stale": False,
+        },
+        "workspace_action": "none",
         "recommendation": None,
     }, sys.stdout)
     sys.stdout.write("\n")

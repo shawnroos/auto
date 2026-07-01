@@ -776,18 +776,27 @@ instead of executed — the 2026-06 field misroute (it bit twice). The classifie
 returns one of `{work | plan | both | ambiguous}`:
 
 - `work` — a work verb (execute/run/implement/verify/review/…/open a PR) and no
-  plan-creation intent → route to WORK on a discovered plan (recipe `w`). If no
-  plan exists, the driver (the model) decides — there's nothing to execute yet.
+  plan-creation intent → route to WORK on a discovered plan (`auto.sh "<plan>
+  --recipe w"`). The args path short-circuits the detector, so the driver picks
+  the plan itself — run `python lib/plan-rank.py <repo>` and take the freshest
+  entry. If no plan exists, the driver (the model) decides — nothing to execute yet.
 - `plan` — plan-creation intent (`plan`/`design`/…, or a creation verb + the
   noun "plan") and no work verb → `/ce-plan <ARGUMENTS>`.
-- `both` — both ("develop and implement a plan", "plan and ship X") →
-  plan-then-work (recipe `a1`).
+- `both` — both a work verb AND plan-creation intent ("develop and implement a
+  plan", "plan and ship X") → `/ce-plan <ARGUMENTS>` to create the plan, then work
+  it (`--recipe w`). (NOT `auto.sh "<ARGUMENTS> --recipe a1"` — `auto.sh` needs a
+  plan/spec *file*, and freeform args are not one; a1 is the bare-tree /
+  conversation-context entry, where a goal doc exists.)
 - `ambiguous` — no verb signal (bare topics, "make it better") → the driver
   decides; the safe default stays `/ce-plan`.
 
-The one subtlety is "plan" the **verb** ("plan a feature" → create) vs the
-**noun** ("execute the plan" → an existing artifact): "plan" counts as a
-plan-verb only when NOT immediately preceded by an article/possessive. This
-keeps the split deterministic (the load-bearing mandate) while the genuinely
-fuzzy residual — `ambiguous`, and work-with-no-plan-to-run — is handed to the
-model, mirroring the detector ↔ `recommender.py` division of labor.
+The one subtlety is a **verb** ("plan a feature" → create; "run the build") vs a
+**noun object** ("execute the plan", "design a review workflow" → the words
+"plan"/"review" are nouns): a verb keyword counts only when NOT immediately
+preceded by an article/possessive (`_used_as_verb`). This keeps the split
+deterministic (the load-bearing mandate). The residual is handed to the model:
+`ambiguous`, work-with-no-plan-to-run, AND cases the keyword layer can't see —
+it is **negation-blind** ("don't implement" reads as work) and can misread a
+domain noun, so the driver should sanity-check a `both`/`work` result against the
+literal request before arming a run. This mirrors the detector ↔ `recommender.py`
+division of labor.
