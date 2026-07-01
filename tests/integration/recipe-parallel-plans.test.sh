@@ -207,7 +207,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 # sys.modules cache → emitters.judge_winner_to_work_units raises the SAME
 # RecipeError class that this test catches.
 from _bootstrap import load_lib_module
-emitters = load_lib_module("emitters")
+emitters = load_lib_module("unit_emitters")
 recipes = load_lib_module("recipes")
 # Judge without dispatch_context.winner_unit_id → the emitter raises with a
 # message pointing the operator at the right fix.
@@ -239,7 +239,7 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 ledger = load_lib_module("ledger")
-emitters = load_lib_module("emitters")
+emitters = load_lib_module("unit_emitters")
 
 repo = tempfile.mkdtemp(); run = "prod-path"
 ledger.init_ledger(repo, run, adapter="ce", units=[

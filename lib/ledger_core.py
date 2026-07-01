@@ -863,7 +863,7 @@ def init_ledger(
 
         # v0.3.0 fix-pass F0: seed iteration_emit_count from max numeric
         # suffix of unit ids that already match any emit_templates[*].id_prefix.
-        # iterate_template (lib/emitters.py) computes the next id as
+        # iterate_template (lib/unit_emitters.py) computes the next id as
         # `f"{id_prefix}{seed + i + 1}"`. If a recipe declares both
         # `units: [plan-1, plan-2, plan-3]` AND `emit_templates.<x>.id_prefix =
         # "plan-"`, seeding to 0 makes the first iterate emit `plan-1` — which

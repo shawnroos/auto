@@ -112,7 +112,7 @@ ALLOWED_FUNCTIONS=(
   # next N unit ids, build the unit dicts. Decomposition would extract
   # 2-3 private helpers (validate-shape, validate-emit-count, build-units).
   # Tracked as v0.3.2 candidate.
-  "lib/emitters.py:iterate_template:127"
+  "lib/unit_emitters.py:iterate_template:127"
   # (recipes.py:validate waiver retired: decomposed into per-concern
   # validators — _validate_toplevel / _validate_phase_order / _validate_units /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on

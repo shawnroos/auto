@@ -41,7 +41,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
-import emitters  # noqa: E402
+import unit_emitters as emitters  # noqa: E402
 tick_guidance = load_lib_module("tick_guidance")
 # v0.6.0 U9: the pure upstream-cluster classifier. A stdlib-only leaf (it imports
 # no lib siblings) — this adds the single DAG edge tick_advance → upstream_cluster.
@@ -457,7 +457,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
 # Iteration loop (v0.3.0 U4).
 
 
-# v0.3.1 B10: `no_emit` moved to lib/emitters.py (collocated with the other
+# v0.3.1 B10: `no_emit` moved to lib/unit_emitters.py (collocated with the other
 # emit functions per kieran-r2-2 — emitters belong in the emitters module).
 # The call site below now references `emitters.no_emit`.
 

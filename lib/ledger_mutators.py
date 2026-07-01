@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import sys
 
-# Import ledger_core via the standard bootstrap loader (mirrors emitters.py).
+# Import ledger_core via the standard bootstrap loader (mirrors unit_emitters.py).
 # The ledger surface is loaded from many sites by file path (the test harness
 # uses spec_from_file_location, which does NOT add lib/ to sys.path), so a plain
 # `import ledger_core` is not guaranteed to resolve. Prepending lib/ + routing

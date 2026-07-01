@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto U5b unit test: lib/emitters.py (3 emitters + registry) and the
+# auto U5b unit test: lib/unit_emitters.py (3 emitters + registry) and the
 # ledger.transition_and_emit primitive (atomic emit).
 #
 # v0.3.0 / U3 additions: iterate_template emitter scenarios + judge_winner
@@ -59,7 +59,7 @@ import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module, load_ledger
-emitters = load_lib_module("emitters")
+emitters = load_lib_module("unit_emitters")
 recipes = load_lib_module("recipes")
 ledger = load_ledger()
 op = sys.argv[2]
@@ -511,5 +511,5 @@ assert_eq "plan-4,plan-5|plan-4,plan-5|5" "$(em iter-tpl-integration)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "emitters.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "unit-emitters.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -43,7 +43,7 @@ _RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # The emitter NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
 # only reference these — the validator rejects any other name so a recipe can't
 # point at a v0.3.0 emitter that doesn't exist yet. Kept here (not imported from
-# emitters.py) so validation has no runtime dependency on the emitter module; the
+# unit_emitters.py) so validation has no runtime dependency on the emitter module; the
 # two are cross-checked by a U5b test that asserts this set equals the registry.
 V1_EMITTER_NAMES = frozenset(
     {
@@ -52,13 +52,13 @@ V1_EMITTER_NAMES = frozenset(
         "plan_output_to_paired_builders",
         # v0.3.0 (U3): iterate_template materializes new units from a recipe-
         # declared emit_templates entry when the gate unit verdicts "iterate".
-        # Added atomically with the REGISTRY entry in lib/emitters.py so the
+        # Added atomically with the REGISTRY entry in lib/unit_emitters.py so the
         # symmetry test stays green; U5 reserved this name but deferred the add.
         "iterate_template",
         # v0.6.0 (U8): brainstorm_output_to_plan_unit fires on arrival at `plan`
         # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
         # the brainstorm unit's requirements-doc output and emitting the single
-        # plan unit. Added atomically with the emitters.REGISTRY entry so the
+        # plan unit. Added atomically with the unit_emitters.REGISTRY entry so the
         # symmetry test (set(REGISTRY) == V1_EMITTER_NAMES) stays green.
         "brainstorm_output_to_plan_unit",
     }
@@ -212,7 +212,7 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
     flag is true we require:
       (a) a "plan" phase in phase_order (the satisfied state lives there),
       (b) exactly one plan-phase unit (the enumerate carrier — the emitters read
-          enumerated_units off the single plan unit, lib/emitters.py), and
+          enumerated_units off the single plan unit, lib/unit_emitters.py), and
       (c) a phase_transition {from: plan, to: work} (the enumerate→emit edge).
     Mechanical so a malformed work-only recipe can't ship a dead end. Absent or
     false validates as before (a1, a2, a4).
@@ -509,7 +509,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
         """Is ``dep_id`` plausibly an `iterate_template` output?
 
         iterate_template emits ids of the form ``{id_prefix}{N}`` where N is a
-        positive int (see ``lib/emitters.py``: ``f"{id_prefix}{base + i + 1}"``,
+        positive int (see ``lib/unit_emitters.py``: ``f"{id_prefix}{base + i + 1}"``,
         with base >= 0 and i >= 0). For depends_on validation we accept any
         prefix-match whose remainder parses as a positive int — string
         ``"build-1"`` matches, ``"build-typo"`` does not.
