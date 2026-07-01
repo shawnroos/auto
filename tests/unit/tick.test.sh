@@ -450,7 +450,7 @@ class DictGapAdapter:
         return {"op": "review_plan", "gap_set": [{"id": "g1"}, {"id": "g2"}, {"id": "g3"}]}
 
 led = ledg.read_ledger(repo, run)
-t.advance_plan_loop(repo, run, led, DictGapAdapter())
+t.tick_advance.advance_plan_loop(repo, run, led, DictGapAdapter())
 print(ledg.read_ledger(repo, run)["exit_predicate_result"]["gaps_open"])
 PYEOF
 )"
@@ -501,7 +501,7 @@ class EmptyGapAdapter(ace.Adapter):
 
 led = ledg.read_ledger(repo, run)
 adapter = EmptyGapAdapter()
-t.advance_plan_loop(repo, run, led, adapter)
+t.tick_advance.advance_plan_loop(repo, run, led, adapter)
 led2 = ledg.read_ledger(repo, run)
 gaps = led2["exit_predicate_result"]["gaps_open"]
 # Now ask the live sequencer for the next step: review_plan persisted +
@@ -562,7 +562,7 @@ env = adapter.review_plan(ledg.read_ledger(repo, run))
 assert isinstance(env, dict) and "gap_set" not in env, "envelope unexpectedly has gap_set: %r" % env
 
 led = ledg.read_ledger(repo, run)
-t.advance_plan_loop(repo, run, led, adapter)
+t.tick_advance.advance_plan_loop(repo, run, led, adapter)
 L2 = ledg.read_ledger(repo, run)
 go = L2["exit_predicate_result"]["gaps_open"]
 met = L2["exit_predicate_result"]["met"]
@@ -648,7 +648,7 @@ tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 led = ledg.read_ledger(repo, run)
 now = datetime.datetime.now(datetime.timezone.utc)
-fresh, halted, newly = t.detect_and_halt_stalled(repo, run, led, now)
+fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
 after = ledg.read_ledger(repo, run)
 u = after["units"][0]
 print("%s,%s,%s" % (u["state"], (",".join(newly)) if newly else "-", u.get("last_error")))
@@ -695,16 +695,17 @@ class FakeAdapter:
         return [{"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]
 
 led = m.read_ledger(repo, run)
-result, raised = t.advance_plan_loop(repo, run, led, FakeAdapter())
+result = t.tick_advance.advance_plan_loop(repo, run, led, FakeAdapter())
 after = m.read_ledger(repo, run)
 plan_unit = after["units"][0]
 enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_units") or []
-print("%s,%s,%s" % (result.get("advanced"), raised,
-                    ",".join(u["id"] for u in enum)))
+print("%s,%s" % (result.get("advanced"),
+                 ",".join(u["id"] for u in enum)))
 PYEOF
 )"
-# advanced plan-done, no raise, and the 2 enumerated units are persisted.
-assert_eq "plan-done,None,w1,w2" "$enum_res"
+# advanced plan-done (U18: advance_plan_loop returns a bare dict now), and the
+# 2 enumerated units are persisted.
+assert_eq "plan-done,w1,w2" "$enum_res"
 
 # ─── Fix-pass H: prepare/execute contract is LOUD in rearm intent ────────────
 # Field bug (2026-05-25, second agent): ticked 5 times expecting units to

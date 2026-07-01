@@ -362,8 +362,11 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """Plan-loop advance: ask the adapter for the next step and call that ONE
     step. The ADAPTER owns plan-step sequencing — the engine never picks it.
 
-    Returns (result_dict, raised_call_or_None). On an adapter raise the caller
-    records the error; we surface which op raised so last_error.call is precise.
+    Returns a bare ``result_dict`` (U18 / KTD-5: the advance-return contract is
+    normalized so every phase-advance returns a bare dict). A raise from the
+    adapter op (or a bad plan step) propagates to the caller's try/except in
+    ``_dispatch_phase_advance``, which records it as a stall — this function does
+    NOT catch and never signals the raising op back through its return value.
 
     CRITICAL (anti-livelock — schema §3.1): after the adapter op returns
     SUCCESSFULLY, we PERSIST the executed step to the ledger via
@@ -420,7 +423,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
                     enum_envelope = enum_result
             if enumerated is not None:
                 _persist_enumerated_units(repo_root, run_id, enumerated)
-        return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}, None
+        return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}
     if step not in _PLAN_STEP_OPS:
         raise TickError(f"adapter returned unknown plan step: {step!r}")
     op = getattr(adapter, step, None)
@@ -450,7 +453,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     # Op succeeded — persist the step so the NEXT fresh-process tick advances
     # from it instead of re-reading null and re-planning (the livelock).
     ledger.set_loop(repo_root, run_id, plan_step=step)
-    return {"advanced": "plan-step", "step": step}, None
+    return {"advanced": "plan-step", "step": step}
 
 
 # ──────────────────────────────────────────────────────────────────────────

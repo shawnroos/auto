@@ -621,12 +621,12 @@ conv = o.converge(repo, run)
 led = m.read_ledger(repo, run)
 # advance over the current state: Ua has a major-only verdict -> no fix-due,
 # no re-enqueue-due (the livelock would re-enqueue Ua here under three-tier).
-adv_before = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_before = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 # Finish Ub cleanly so the whole run can be terminal.
 m.transition(repo, run, "Ub", "dispatched", dispatched_at="2026-05-21T14:05:00Z")
 m.record_verdict(repo, run, "Ub", [])
 # One more advance: still nothing to do (no gating findings anywhere).
-adv_after = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_after = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 final = m.read_ledger(repo, run)
 pred = final.get("exit_predicate_result") or {}
 print(json.dumps({
@@ -679,7 +679,7 @@ m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z"
 m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"now-gates"}])
 ready = o.ready_units(repo, run)              # Ub should be BLOCKED now.
 conv = o.converge(repo, run)                  # Ua should NOT be terminal now.
-adv = t.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
+adv = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
 pred = (m.read_ledger(repo, run).get("exit_predicate_result") or {})
 print(json.dumps({
     "ready": ready,

@@ -91,21 +91,16 @@ DEFAULT_REARM_DELAY_SECONDS = 60
 
 TickError = tick_advance.TickError
 
-# B4 re-exports: tests load tick.py via spec_from_file_location("tick", …) and
-# access these as attributes on the tick module (t.advance_plan_loop,
-# tick._maybe_seam, …). The functions now live in the sibling modules; binding
-# them here keeps the test surface byte-identical. Internal callers in this
-# file reach through the qualified module name (tick_advance.X / tick_guidance.X)
-# so the dependency stays grep-visible; these aliases exist ONLY for the tests.
-advance_iteration_loop = tick_advance.advance_iteration_loop
-advance_plan_loop = tick_advance.advance_plan_loop
-advance_work_loop = tick_advance.advance_work_loop
-# v0.6.0 U7: the spine's brainstorm→plan forward trigger (emitter-driven).
-advance_brainstorm_loop = tick_advance.advance_brainstorm_loop
-detect_and_halt_stalled = tick_advance.detect_and_halt_stalled
-_maybe_seam = tick_advance._maybe_seam
-# advance_to_phase is a PRODUCTION re-export: lib/auto-resume.py calls
-# tick.advance_to_phase on the manual seam→work resume path.
+# PRODUCTION re-exports (U18: the test-only alias block was deleted). The pure
+# advance/stall helpers (advance_plan_loop, advance_work_loop,
+# advance_brainstorm_loop, advance_iteration_loop, detect_and_halt_stalled,
+# _maybe_seam) live in tick_advance; internal callers in this file already reach
+# them through the qualified module name (tick_advance.X) so the dependency stays
+# grep-visible, and the tests now reach them the same way (t.tick_advance.X).
+# Only two genuine cross-module re-exports survive here:
+#   * advance_to_phase — lib/auto-resume.py calls tick.advance_to_phase on the
+#     manual seam→work resume path (a production dependency).
+#   * _iteration_guidance_prefix — the guidance-surface re-export.
 advance_to_phase = tick_advance.advance_to_phase
 _iteration_guidance_prefix = tick_guidance._iteration_guidance_prefix
 
@@ -613,7 +608,7 @@ def _dispatch_phase_advance(
         if phase == "plan":
             if adapter is None:
                 adapter = resolve_adapter(led.get("adapter"))
-            advance_result, _ = tick_advance.advance_plan_loop(
+            advance_result = tick_advance.advance_plan_loop(
                 repo_root, run_id, led, adapter
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
