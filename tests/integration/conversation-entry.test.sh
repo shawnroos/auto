@@ -150,6 +150,31 @@ setup_inflight() {
 EOF
 }
 
+# A git repo whose docs/plans/ holds only STALE (old-committed) plans. Used for
+# the U3 preemption scenarios: a rich conversation must beat this stale set.
+mkrepo_stale_plans() {
+  local repo="${SANDBOX}/repo-$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  (
+    cd "$repo"
+    git init -q .; git config user.email t@t; git config user.name t
+    printf '.claude/\n' > .gitignore
+    echo "# s1" > docs/plans/s1-plan.md
+    echo "# s2" > docs/plans/s2-plan.md
+    git add -A
+    GIT_AUTHOR_DATE="2026-01-01T00:00:00" GIT_COMMITTER_DATE="2026-01-01T00:00:00" \
+      git -c commit.gpgsign=false commit -q -m stale
+  ) >/dev/null 2>&1
+  printf '%s' "$repo"
+}
+
+# Same, plus one uncommitted (FRESH) plan — a live plan must beat conversation.
+mkrepo_fresh_among_stale() {
+  local repo; repo="$(mkrepo_stale_plans "$1")"
+  echo "# live" > "$repo/docs/plans/z-live-plan.md"   # uncommitted → fresh
+  printf '%s' "$repo"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # U1 — detector / envelope
 # ════════════════════════════════════════════════════════════════════════════
@@ -196,17 +221,20 @@ assert_eq "None" "$(hfield "$RAW_RAW" 'H["recommendation"]')"
 # fallback dict in the source emits `recommendation`, and (b) confirm the key is
 # present on a degraded-repo envelope at runtime. Together these pin the
 # "recommendation on EVERY path incl. the error fallback" contract.
-it "U1: the catastrophic-error fallback dict in the source carries recommendation"
+it "U1: the catastrophic-error fallback dict in the source carries ALL nine keys"
 # Pull the literal fallback dict (the `except BaseException` json.dump block) and
-# assert it includes a `recommendation` key. The fallback is the ONLY json.dump
-# of a literal dict in the file (every other emit goes through _safe_envelope).
+# assert it includes EVERY envelope key — the nine-key contract holds on the
+# error path too (it bypasses _safe_envelope, so it must hand-carry them). The
+# fallback is the ONLY json.dump of a literal dict in the file.
 ERR_BLOCK="$("$PY" - "$DET" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1]).read()
-# The except-path dump is `json.dump({ ... }, sys.stdout)` after the handler.
-# Find the dict literal that contains "detector error" (the fallback summary).
 m = re.search(r'json\.dump\(\{.*?"detector error.*?\}, sys\.stdout\)', src, re.S)
-print("present" if (m and '"recommendation"' in m.group(0)) else "MISSING")
+keys = ["situation", "summary", "ambiguity", "single_plan", "multi_plan",
+        "in_flight", "workspace", "workspace_action", "recommendation"]
+block = m.group(0) if m else ""
+missing = [k for k in keys if ('"%s"' % k) not in block]
+print("present" if (m and not missing) else ("MISSING:%s" % ",".join(missing)))
 PYEOF
 )"
 assert_eq "present" "$ERR_BLOCK"
@@ -231,6 +259,54 @@ it "U1: signal SET but an in-flight run exists -> in-flight wins (no override)"
 REPO="$(mkrepo conv-run)"
 setup_inflight "$REPO"
 assert_eq "in-flight" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+# ─── Scenario 7b (U3): conversation PREEMPTS an all-stale plan set ────────────
+# The reworked precedence: a rich session beats stale docs/plans/ clutter, but
+# only when the driver signals it — and a FRESH plan still wins over both.
+it "U3: signal SET + all-stale plans -> conversation-context preempts the stale ask"
+REPO="$(mkrepo_stale_plans convstale)"
+assert_eq "conversation-context" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+it "U3: signal UNSET + all-stale plans -> multi-plan ask (no preemption without the signal)"
+assert_eq "multi-plan" "$(hfield "$(detect "$REPO")" 'H["situation"]')"
+
+it "U3: all-stale multi-plan ask suppresses the fan-out-all footgun (no null-path option)"
+assert_eq "0" "$(hfield "$(detect "$REPO")" 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
+
+it "U3: signal SET + one fresh plan among stale -> reviewed-plan (fresh wins over conversation)"
+REPO="$(mkrepo_fresh_among_stale convfresh)"
+assert_eq "reviewed-plan" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+it "U3: reviewed-plan picks the FRESH plan, not a stale sibling"
+assert_eq "docs/plans/z-live-plan.md" "$(hfield "$(detect "$REPO" signal)" 'H["single_plan"]["path"]')"
+
+# ─── Scenario 7c (U3): a LONE stale plan is preempted too (N=1 == N>=2) ───────
+# Review finding: a single stale plan + signal used to route to reviewed-plan,
+# inconsistent with the >=2-stale preemption and with §11 ("every discovered
+# plan is stale" -> conversation-context). Adding/removing a stale sibling must
+# not flip the outcome.
+setup_one_stale_plan() {
+  local repo="$1"
+  mkdir -p "$repo/docs/plans"
+  echo "# lone-old" > "$repo/docs/plans/lone-plan.md"
+  git -C "$repo" add docs/plans/ >/dev/null 2>&1
+  GIT_AUTHOR_DATE="2026-01-01T00:00:00" GIT_COMMITTER_DATE="2026-01-01T00:00:00" \
+    git -C "$repo" -c commit.gpgsign=false commit -q -m stale >/dev/null 2>&1
+}
+mkrepo_one_stale() {
+  local repo="${SANDBOX}/repo-$1"
+  mkdir -p "$repo/.claude/auto"
+  ( cd "$repo" && git init -q . && git config user.email t@t && git config user.name t \
+    && printf '.claude/\n' > .gitignore ) >/dev/null 2>&1
+  setup_one_stale_plan "$repo"
+  printf '%s' "$repo"
+}
+it "U3: signal SET + ONE lone stale plan -> conversation-context (preempted at N=1)"
+REPO="$(mkrepo_one_stale convlone)"
+assert_eq "conversation-context" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+it "U3: signal UNSET + ONE lone stale plan -> reviewed-plan (run it; no conversation to prefer)"
+assert_eq "reviewed-plan" "$(hfield "$(detect "$REPO")" 'H["situation"]')"
 
 # ─── Scenario 8: READ-ONLY — detector writes nothing on the signal path ───────
 it "U1: detector is READ-ONLY on the conversation-context path (hash unchanged)"

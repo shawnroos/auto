@@ -57,9 +57,12 @@
 #                     sets `ambiguity` (a choice: run one plan, or fan out all)
 #                     and the driver CONFIRMS before spawning. situation stays
 #                     multi-plan and paths are preserved for a confirmed fanout.
-#   conversation-context (v0.6.0 U1) — no in-flight run AND no plan, but the
-#                     DRIVER has signalled a rich current conversation worth
-#                     routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL set).
+#   conversation-context (v0.6.0 U1; v0.7.x U3) — no in-flight run and no LIVE
+#                     plan (no plan at all, OR every discovered plan is STALE),
+#                     but the DRIVER has signalled a rich current conversation
+#                     worth routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL
+#                     set). A stale plan set no longer blocks it — but a FRESH
+#                     plan (reviewed-plan) still wins over conversation.
 #                     The detector has no transcript access (single-quote
 #                     heredoc), so it cannot self-detect the conversation — it
 #                     only honours the driver's signal. It emits the situation
@@ -359,6 +362,79 @@ def _discover_plans(repo):
     return sorted(set(plans))
 
 
+def _rank_plans_safe(repo):
+    """Rank discovered plans by freshness via lib/plan-rank.py (U1).
+
+    Returns a list of {"path","freshness","sort_ts"} dicts, freshest first.
+    Imported lazily + degrade-safe (rel-001): if the ranking module can't load
+    or raises, fall back to treating EVERY plan as `fresh` — that reproduces the
+    pre-U2 behavior (a lone plan → reviewed-plan; multiple → a fan-out-capable
+    ask), so a broken ranker can never wedge the read-only detector.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "plan_rank", os.path.join(script_dir, "plan-rank.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.rank(repo)
+    except Exception:
+        return [{"path": os.path.relpath(p, repo), "freshness": "fresh",
+                 "sort_ts": 0.0} for p in _discover_plans(repo)]
+
+
+def _emit_reviewed_plan(plan_path):
+    """Emit the reviewed-plan envelope for a single unambiguous plan."""
+    _emit(_safe_envelope(
+        "reviewed-plan",
+        "starting `%s` (recipe w, work-only — reviewed plan goes straight "
+        "to the work-loop; pass `--recipe a1` to re-plan from scratch)"
+        % plan_path,
+        single_plan={"path": plan_path, "run_id_hint": None},
+    ))
+
+
+def _emit_multi_plan(targets, include_fanout):
+    """Emit the multi-plan ask over `targets` (a ranked-plan sublist).
+
+    `include_fanout` adds the null-path "Fan out all N" option — offered only
+    when the targets are genuinely live (>=2 fresh plans). For an all-stale set
+    the fan-out-all footgun is SUPPRESSED (2026-06 misfire: never offer to spawn
+    N worktrees on old docs/plans/ clutter) and each option is staleness-marked.
+    """
+    rel_paths = [p["path"] for p in targets]
+    all_stale = all(p["freshness"] == "stale" for p in targets)
+    options = []
+    for p in targets:
+        if p["freshness"] == "stale":
+            desc = "stale plan — run only this one"
+        else:
+            desc = "run only this plan"
+        options.append({"label": os.path.basename(p["path"]),
+                        "path": p["path"], "description": desc})
+    if include_fanout:
+        options.append({
+            "label": "Fan out all %d" % len(rel_paths),
+            "path": None,  # null path → fan out, using multi_plan.paths
+            "description": "create %d worktrees, one per plan" % len(rel_paths),
+        })
+    if all_stale:
+        summary = ("%d plans found, all stale — run one, or start fresh"
+                   % len(rel_paths))
+        question = ("%d plans found but all look stale — run one anyway, or "
+                    "start fresh?" % len(rel_paths))
+    else:
+        summary = ("%d live plans — confirm fanout to %d worktrees, or run "
+                   "just one" % (len(rel_paths), len(rel_paths)))
+        question = ("%d live plans found — fan out to %d worktrees, or run "
+                    "just one?" % (len(rel_paths), len(rel_paths)))
+    _emit(_safe_envelope(
+        "multi-plan", summary,
+        ambiguity={"kind": "choice", "question": question, "options": options},
+        multi_plan={"paths": rel_paths, "batch_id_hint": None},
+    ))
+
+
 def _has_uncommitted_diff(repo):
     """True iff git status reports a non-empty working tree.
 
@@ -489,81 +565,66 @@ try:
             in_flight={"run_id": None, "run_ids": [r for r, _g, _m in in_flight]},
         ))
 
-    # ── Step 2: plan discovery. ────────────────────────────────────────────
-    plans = _discover_plans(repo)
+    # ── Step 2: plan discovery + freshness ranking (U1/U2). ────────────────
+    # Plans are ranked fresh (the one you're working on — uncommitted or a
+    # recent commit) vs stale (old docs/plans/ clutter). Routing keys on the
+    # FRESH count, not the raw plan count, so a live plan is inferred instead of
+    # drowned by stale siblings (the 2026-06 field misfire: 6 plans, 1 authored
+    # this session, lost to a fan-out-all ask over all six).
+    ranked = _rank_plans_safe(repo)
+    fresh = [p for p in ranked if p["freshness"] == "fresh"]
 
-    if len(plans) == 1:
-        plan_path = os.path.relpath(plans[0], repo)
-        # Operator-facing summary names the recipe + policy explicitly. v0.4.3
-        # KTD-15: a reviewed plan now routes to the W (work-only) recipe — its
-        # plan phase starts already-satisfied so the run enumerates straight to
-        # the work-loop instead of re-running the plan-loop on finished work
-        # (review round 1 finding C-5 / project_auto_v042_stuck_root_causes ③:
-        # the old path silently ran full a1 and re-derived the green plan).
-        # Surfacing the action lets the operator interrupt if the inference is
-        # wrong (the plan ISN'T review-ready) and pass `--recipe a1` to re-plan.
-        _emit(_safe_envelope(
-            "reviewed-plan",
-            "starting `%s` (recipe w, work-only — reviewed plan goes straight "
-            "to the work-loop; pass `--recipe a1` to re-plan from scratch)"
-            % plan_path,
-            single_plan={"path": plan_path, "run_id_hint": None},
-        ))
+    # Exactly one FRESH plan (among any number of stale siblings) → the detector
+    # INFERS it as the reviewed plan (a live plan beats conversation, always).
+    # A lone plan with NO fresh signal is reviewed-plan too — UNLESS the driver
+    # signalled a rich conversation, in which case a lone STALE plan yields to it
+    # (Step 2.5): "every discovered plan is stale" preempts at N=1 just as it does
+    # at N>=2, so adding/removing a stale sibling can't flip the outcome. `_emit_*`
+    # raise SystemExit, so these guards are mutually exclusive with the block below.
+    if len(fresh) == 1:
+        _emit_reviewed_plan(fresh[0]["path"])
+    if len(ranked) == 1 and not os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
+        _emit_reviewed_plan(ranked[0]["path"])
 
-    if len(plans) > 1:
-        # v0.4.0 made multiple plans a silent fanout signal (one worktree per
-        # plan via auto-spawn.py, `ambiguity` null). The 2026-06 misfire showed
-        # that auto-spawning N worktrees on whatever plans happen to sit in
-        # docs/plans/ is the highest-blast-radius path in the detector (a fresh
-        # session fanned out two stale, unrelated plans). So multi-plan now sets
-        # `ambiguity` — the driver CONFIRMS before fanning out. `situation`
-        # stays multi-plan and `multi_plan.paths` is preserved so a confirmed
-        # fan-out-all still has its targets; per-plan options let the operator
-        # run just one instead.
-        rel_paths = [os.path.relpath(p, repo) for p in plans]
-        options = [
-            {"label": os.path.basename(p), "path": p,
-             "description": "run only this plan"}
-            for p in rel_paths
-        ]
-        options.append({
-            "label": "Fan out all %d" % len(rel_paths),
-            "path": None,  # null path → fan out, using multi_plan.paths
-            "description": "create %d worktrees, one per plan" % len(rel_paths),
-        })
-        _emit(_safe_envelope(
-            "multi-plan",
-            "%d plans found — confirm fanout to %d worktrees, or run just one"
-            % (len(rel_paths), len(rel_paths)),
-            ambiguity={
-                "kind": "choice",
-                "question": "%d plans found — fan out to %d worktrees, or run "
-                            "just one?" % (len(rel_paths), len(rel_paths)),
-                "options": options,
-            },
-            multi_plan={"paths": rel_paths, "batch_id_hint": None},
-        ))
+    if len(ranked) > 1:
+        # >=2 fresh → multiple genuinely-live plans: ask over the FRESH set with
+        # fan-out offered (fanning out over live plans is legitimate). fresh==0
+        # (all stale) → [Step 2.5 conversation-context can PREEMPT this when the
+        # driver signals a rich session]; absent the signal, ask over the stale
+        # set with staleness marked and the fan-out-all footgun suppressed.
+        if len(fresh) >= 2:
+            _emit_multi_plan(fresh, include_fanout=True)
+        elif not os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
+            _emit_multi_plan(ranked, include_fanout=False)
+        # else: all stale AND the driver signalled a rich conversation → fall
+        # through to Step 2.5, where conversation-context preempts the stale ask.
 
-    # ── Step 2.5 (v0.6.0 U1): conversation-context. ───────────────────────
-    # No in-flight run AND no plan, but the DRIVER signalled a rich current
-    # conversation worth routing on. The detector has NO transcript access (the
-    # single-quote heredoc disables shell substitution and carries no
-    # conversation), so it cannot self-classify — it only honours the driver's
-    # env-var signal. An argv signal would carry unstated invocation-plumbing
-    # work (the heredoc forwards only `_det_dir` today); an env var is read
-    # cleanly inside the heredoc with no plumbing change.
+    # ── Step 2.5 (v0.6.0 U1; v0.7.x U3): conversation-context. ─────────────
+    # Reached when there is no in-flight run and no LIVE plan to act on — either
+    # no plan at all, OR (v0.7.x U3 preemption) every discovered plan is STALE
+    # and the driver signalled a rich current conversation. The Step-2 plan
+    # branch falls through to here in the all-stale + signal case, so a live
+    # session preempts an ask over old docs/plans/ clutter (the reworked
+    # precedence: conversation beats stale plans, but a FRESH plan — reviewed-
+    # plan, emitted above — still wins over conversation).
+    #
+    # The detector has NO transcript access (the single-quote heredoc disables
+    # shell substitution and carries no conversation), so it cannot self-classify
+    # — it only honours the driver's env-var signal, which the auto-driver sets
+    # inline before loading the hypothesis (U3). An argv signal would carry
+    # unstated invocation-plumbing work (the heredoc forwards only `_det_dir`);
+    # an env var is read cleanly inside the heredoc with no plumbing change.
     #
     # The branch emits an EMPTY (null) recommendation + ambiguity null: the
     # driver computes the recommendation via lib/recommender.py (U2) and either
     # dispatches the entry recipe or pre-dispatch escalates (U3). When the signal
-    # is UNSET, this branch is skipped and the engine falls through to `raw`,
-    # byte-identical to v0.4.x (R-5: no conversation-context-vs-raw
-    # misclassification — the situation only fires on an explicit driver signal).
+    # is UNSET, this branch is skipped and the engine falls through to `raw` (and
+    # an all-stale plan set was already emitted as a multi-plan ask above).
     if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
         _emit(_safe_envelope(
             "conversation-context",
-            "no plan, no in-flight run — recommending a ce-family step from "
-            "the current conversation",
+            "no live plan, no in-flight run — recommending a ce-family step "
+            "from the current conversation",
             recommendation=None,
         ))
 
@@ -612,9 +673,20 @@ except BaseException as exc:
         "single_plan": None,
         "multi_plan": None,
         "in_flight": None,
-        # v0.6.0 U1: the catastrophic-error fallback bypasses _safe_envelope, so
-        # carry `recommendation` here too — EVERY envelope on EVERY path must
-        # have the key (the shape contract a downstream reader relies on).
+        # The catastrophic-error fallback bypasses _safe_envelope, so it must
+        # hand-carry EVERY envelope key — the nine-key shape contract holds on
+        # EVERY path including this one. `workspace`/`workspace_action` use inline
+        # safe defaults rather than calling _detect_workspace_safe(): this is the
+        # last-resort handler, so it must not risk re-raising from the very
+        # subsystem that may have failed. (v0.6.0 U1 added `recommendation`; the
+        # workspace keys were the gap this closes.)
+        "workspace": {
+            "status": "unmarked", "marker_path": None, "workspace_id": None,
+            "left_pane_id": None,
+            "env_workspace_id": os.environ.get("CMUX_WORKSPACE_ID"),
+            "marker_stale": False,
+        },
+        "workspace_action": "none",
         "recommendation": None,
     }, sys.stdout)
     sys.stdout.write("\n")

@@ -16,9 +16,14 @@ One action line per branch. Dispatch. Do not narrate.
 
 ## Load the hypothesis
 
+Set `CLAUDE_AUTO_CONVERSATION_SIGNAL=1` inline when THIS session is worth routing
+on (a just-built plan / imperative about existing work) so it preempts stale plans; else drop it:
+
 ```
-bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
+CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
+
+If the detector yields no parseable envelope (empty/non-zero env hiccup), don't stall — treat as `raw`.
 
 Returns one JSON object with `situation`, `summary`, `ambiguity`,
 `single_plan`, `multi_plan`, `in_flight`, `workspace`,
@@ -30,13 +35,13 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 | `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
 | `reviewed-plan`   | `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<path> --recipe w"`               | (n/a — single plan unambiguous)      |
-| `multi-plan`      | (n/a — multi-plan ALWAYS asks now; never auto-fans-out)                       | options = each plan (carries `path` → `auto.sh "<path>"`, runs just that one) + a "Fan out all N" option (`path` null → `auto-spawn.py fanout <multi_plan.paths>`) |
+| `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9)            | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
 | `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
-**Argument-aware freeform**: before loading the hypothesis, if
-`$ARGUMENTS` is non-empty AND does NOT resolve to a plan file, invoke
-`/ce-plan <ARGUMENTS>` via Skill and end the turn (v0.3.x routing).
+**Argument-aware freeform** (before loading the hypothesis): a plan-file path →
+`auto.sh "<path> --recipe w"`. Else `python lib/verb-classify.py "$ARGUMENTS"`:
+`work`→work the freshest plan `auto.sh "<plan> --recipe w"` (none? you decide); `both`→`/ce-plan <ARGUMENTS>` then work it; `plan`/`ambiguous`→`/ce-plan <ARGUMENTS>`.
 
 **Workspace handling** (plan 004): branch on `workspace_action`.
 `create`/`recreate`: chain in ONE Bash call so the workspace id
@@ -44,15 +49,12 @@ propagates: `WS=$(python lib/auto-workspace.py create <repo> [--force]
 --print-id) && CMUX_WORKSPACE_ID="$WS" python lib/auto-spawn.py fanout`.
 `use`/`none`: dispatch. `ambiguous`: ask switch/create/one-off.
 
-**Conversation-context** (v0.6.0, full detail in `driver-reference.md`
-§11/§13): classify the current transcript + a ~2-day `ce-sessions` lookback
-(NOT raw compaction) into one state → `python lib/recommender.py <state>
-<confidence>`. `escalate`/ambiguous → one AskUserQuestion BEFORE dispatch,
-no run (NOT via the gate). `kind=skill` (bug/what-to-improve/perf) → recommend
-the ce command, no wrap. `kind=recipe` (vague→`pipeline`@brainstorm — the spine,
-auto-advances brainstorm→plan→work; clear-intent→`a1`@plan; reviewed-plan→`w`@work;
-code-unreviewed→`review`@work) → `auto-author-goal` → goal doc (bind auto's OWN
-predicate, NEVER native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
+**Conversation-context** (signal set at load above; full detail in
+`driver-reference.md` §11): classify the session (transcript + ~2-day
+`ce-sessions` lookback, NOT raw compaction) → `python lib/recommender.py
+<state> <confidence>`. `escalate`/ambiguous → one AskUserQuestion, no run.
+`kind=skill` → recommend the ce command. `kind=recipe` → `auto-author-goal`
+(bind auto's OWN predicate, NEVER native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
 
 **Unknown situation** (defensive guard): treat as `raw`.
 
