@@ -16,8 +16,11 @@ One action line per branch. Dispatch. Do not narrate.
 
 ## Load the hypothesis
 
+Set `CLAUDE_AUTO_CONVERSATION_SIGNAL=1` inline when THIS session is worth routing
+on (a just-built plan / imperative about existing work) so it preempts stale plans; else drop it:
+
 ```
-bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
+CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
 
 Returns one JSON object with `situation`, `summary`, `ambiguity`,
@@ -44,15 +47,12 @@ propagates: `WS=$(python lib/auto-workspace.py create <repo> [--force]
 --print-id) && CMUX_WORKSPACE_ID="$WS" python lib/auto-spawn.py fanout`.
 `use`/`none`: dispatch. `ambiguous`: ask switch/create/one-off.
 
-**Conversation-context** (v0.6.0, full detail in `driver-reference.md`
-§11/§13): classify the current transcript + a ~2-day `ce-sessions` lookback
-(NOT raw compaction) into one state → `python lib/recommender.py <state>
-<confidence>`. `escalate`/ambiguous → one AskUserQuestion BEFORE dispatch,
-no run (NOT via the gate). `kind=skill` (bug/what-to-improve/perf) → recommend
-the ce command, no wrap. `kind=recipe` (vague→`pipeline`@brainstorm — the spine,
-auto-advances brainstorm→plan→work; clear-intent→`a1`@plan; reviewed-plan→`w`@work;
-code-unreviewed→`review`@work) → `auto-author-goal` → goal doc (bind auto's OWN
-predicate, NEVER native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
+**Conversation-context** (signal set at load above; full detail in
+`driver-reference.md` §11): classify the session (transcript + ~2-day
+`ce-sessions` lookback, NOT raw compaction) → `python lib/recommender.py
+<state> <confidence>`. `escalate`/ambiguous → one AskUserQuestion, no run.
+`kind=skill` → recommend the ce command. `kind=recipe` → `auto-author-goal`
+(bind auto's OWN predicate, NEVER native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
 
 **Unknown situation** (defensive guard): treat as `raw`.
 

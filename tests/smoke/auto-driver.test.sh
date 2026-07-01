@@ -48,6 +48,14 @@ auto_test::assert_file_exists "$REF"
 auto_test::it "auto-driver SKILL.md does NOT carry an OUTPUT VOICE preamble (v0.4.0 U4)"
 auto_test::assert_true "! grep -qE '^##[[:space:]]+OUTPUT VOICE' '$SKILL'"
 
+# ── conversation-signal production setter (v0.7.x U3) ─────────────────────────
+# The v0.6.0 conversation-context branch was dead: CLAUDE_AUTO_CONVERSATION_SIGNAL
+# had ZERO production setters (only an integration test set it), so the driver
+# never emitted the situation. U3 closes the gap — the skill must carry an
+# EXECUTABLE inline setter on the detector call, not just describe it in prose.
+auto_test::it "auto-driver SKILL.md sets CLAUDE_AUTO_CONVERSATION_SIGNAL inline on the detector call (U3: closes the dead-signal gap)"
+auto_test::assert_true "grep -qE 'CLAUDE_AUTO_CONVERSATION_SIGNAL=1[[:space:]]+bash.*auto-detect\\.sh' '$SKILL'"
+
 # ── commands/auto.md delegation surface ──────────────────────────────────────
 auto_test::it "commands/auto.md frontmatter lists the Skill tool"
 auto_test::assert_true "grep -qE '^allowed-tools:.*\\bSkill\\b' '$CMD'"

@@ -57,9 +57,12 @@
 #                     sets `ambiguity` (a choice: run one plan, or fan out all)
 #                     and the driver CONFIRMS before spawning. situation stays
 #                     multi-plan and paths are preserved for a confirmed fanout.
-#   conversation-context (v0.6.0 U1) — no in-flight run AND no plan, but the
-#                     DRIVER has signalled a rich current conversation worth
-#                     routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL set).
+#   conversation-context (v0.6.0 U1; v0.7.x U3) — no in-flight run and no LIVE
+#                     plan (no plan at all, OR every discovered plan is STALE),
+#                     but the DRIVER has signalled a rich current conversation
+#                     worth routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL
+#                     set). A stale plan set no longer blocks it — but a FRESH
+#                     plan (reviewed-plan) still wins over conversation.
 #                     The detector has no transcript access (single-quote
 #                     heredoc), so it cannot self-detect the conversation — it
 #                     only honours the driver's signal. It emits the situation
@@ -594,26 +597,32 @@ try:
         # else: all stale AND the driver signalled a rich conversation → fall
         # through to Step 2.5, where conversation-context preempts the stale ask.
 
-    # ── Step 2.5 (v0.6.0 U1): conversation-context. ───────────────────────
-    # No in-flight run AND no plan, but the DRIVER signalled a rich current
-    # conversation worth routing on. The detector has NO transcript access (the
-    # single-quote heredoc disables shell substitution and carries no
-    # conversation), so it cannot self-classify — it only honours the driver's
-    # env-var signal. An argv signal would carry unstated invocation-plumbing
-    # work (the heredoc forwards only `_det_dir` today); an env var is read
-    # cleanly inside the heredoc with no plumbing change.
+    # ── Step 2.5 (v0.6.0 U1; v0.7.x U3): conversation-context. ─────────────
+    # Reached when there is no in-flight run and no LIVE plan to act on — either
+    # no plan at all, OR (v0.7.x U3 preemption) every discovered plan is STALE
+    # and the driver signalled a rich current conversation. The Step-2 plan
+    # branch falls through to here in the all-stale + signal case, so a live
+    # session preempts an ask over old docs/plans/ clutter (the reworked
+    # precedence: conversation beats stale plans, but a FRESH plan — reviewed-
+    # plan, emitted above — still wins over conversation).
+    #
+    # The detector has NO transcript access (the single-quote heredoc disables
+    # shell substitution and carries no conversation), so it cannot self-classify
+    # — it only honours the driver's env-var signal, which the auto-driver sets
+    # inline before loading the hypothesis (U3). An argv signal would carry
+    # unstated invocation-plumbing work (the heredoc forwards only `_det_dir`);
+    # an env var is read cleanly inside the heredoc with no plumbing change.
     #
     # The branch emits an EMPTY (null) recommendation + ambiguity null: the
     # driver computes the recommendation via lib/recommender.py (U2) and either
     # dispatches the entry recipe or pre-dispatch escalates (U3). When the signal
-    # is UNSET, this branch is skipped and the engine falls through to `raw`,
-    # byte-identical to v0.4.x (R-5: no conversation-context-vs-raw
-    # misclassification — the situation only fires on an explicit driver signal).
+    # is UNSET, this branch is skipped and the engine falls through to `raw` (and
+    # an all-stale plan set was already emitted as a multi-plan ask above).
     if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
         _emit(_safe_envelope(
             "conversation-context",
-            "no plan, no in-flight run — recommending a ce-family step from "
-            "the current conversation",
+            "no live plan, no in-flight run — recommending a ce-family step "
+            "from the current conversation",
             recommendation=None,
         ))
 

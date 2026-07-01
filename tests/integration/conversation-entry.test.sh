@@ -150,6 +150,31 @@ setup_inflight() {
 EOF
 }
 
+# A git repo whose docs/plans/ holds only STALE (old-committed) plans. Used for
+# the U3 preemption scenarios: a rich conversation must beat this stale set.
+mkrepo_stale_plans() {
+  local repo="${SANDBOX}/repo-$1"
+  mkdir -p "$repo/.claude/auto" "$repo/docs/plans"
+  (
+    cd "$repo"
+    git init -q .; git config user.email t@t; git config user.name t
+    printf '.claude/\n' > .gitignore
+    echo "# s1" > docs/plans/s1-plan.md
+    echo "# s2" > docs/plans/s2-plan.md
+    git add -A
+    GIT_AUTHOR_DATE="2026-01-01T00:00:00" GIT_COMMITTER_DATE="2026-01-01T00:00:00" \
+      git -c commit.gpgsign=false commit -q -m stale
+  ) >/dev/null 2>&1
+  printf '%s' "$repo"
+}
+
+# Same, plus one uncommitted (FRESH) plan — a live plan must beat conversation.
+mkrepo_fresh_among_stale() {
+  local repo; repo="$(mkrepo_stale_plans "$1")"
+  echo "# live" > "$repo/docs/plans/z-live-plan.md"   # uncommitted → fresh
+  printf '%s' "$repo"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # U1 — detector / envelope
 # ════════════════════════════════════════════════════════════════════════════
@@ -231,6 +256,26 @@ it "U1: signal SET but an in-flight run exists -> in-flight wins (no override)"
 REPO="$(mkrepo conv-run)"
 setup_inflight "$REPO"
 assert_eq "in-flight" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+# ─── Scenario 7b (U3): conversation PREEMPTS an all-stale plan set ────────────
+# The reworked precedence: a rich session beats stale docs/plans/ clutter, but
+# only when the driver signals it — and a FRESH plan still wins over both.
+it "U3: signal SET + all-stale plans -> conversation-context preempts the stale ask"
+REPO="$(mkrepo_stale_plans convstale)"
+assert_eq "conversation-context" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+it "U3: signal UNSET + all-stale plans -> multi-plan ask (no preemption without the signal)"
+assert_eq "multi-plan" "$(hfield "$(detect "$REPO")" 'H["situation"]')"
+
+it "U3: all-stale multi-plan ask suppresses the fan-out-all footgun (no null-path option)"
+assert_eq "0" "$(hfield "$(detect "$REPO")" 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
+
+it "U3: signal SET + one fresh plan among stale -> reviewed-plan (fresh wins over conversation)"
+REPO="$(mkrepo_fresh_among_stale convfresh)"
+assert_eq "reviewed-plan" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+
+it "U3: reviewed-plan picks the FRESH plan, not a stale sibling"
+assert_eq "docs/plans/z-live-plan.md" "$(hfield "$(detect "$REPO" signal)" 'H["single_plan"]["path"]')"
 
 # ─── Scenario 8: READ-ONLY — detector writes nothing on the signal path ───────
 it "U1: detector is READ-ONLY on the conversation-context path (hash unchanged)"
