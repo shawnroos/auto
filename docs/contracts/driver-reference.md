@@ -356,7 +356,7 @@ additional `kind` values; the constant tuple is the contract.
 
 ---
 
-## 9. Multi-plan batch fanout (v0.4.0; confirm-gated 2026-06)
+## 9. Multi-plan batch fanout (v0.4.0; confirm-gated 2026-06; freshness-ranked v0.7.x)
 
 The `multi-plan` hypothesis no longer auto-dispatches a fanout. After the
 2026-06 misfire (a fresh session silently fanned out two stale, unrelated
@@ -365,6 +365,28 @@ plans found in `docs/plans/`), the detector sets `ambiguity` on every
 routing table): the operator either picks one plan (`auto.sh "<path>"`) or
 confirms "Fan out all N". Only on a confirmed fan-out-all does the driver
 invoke `lib/auto-spawn.py` with `multi_plan.paths`.
+
+**Freshness ranking (v0.7.x, U1/U2).** The detector no longer treats discovered
+plans as an unordered set. `lib/plan-rank.py` classifies each plan **fresh**
+(uncommitted, or a recent commit — the one you're working on) vs **stale** (old
+`docs/plans/` clutter); the freshness rule is git-opinion-wins with an mtime
+fallback (see the module header). The plan step then keys on the FRESH count,
+not the raw count:
+
+- exactly **one fresh** plan (among any number of stale siblings) → `reviewed-plan`
+  — the live plan is *inferred*, no ask (the 2026-06 field case: 6 plans, 1
+  authored that session, lost to a fan-out ask over all six);
+- **≥2 fresh** → `multi-plan` ask over the FRESH set, fan-out-all offered
+  (fanning out over genuinely-live plans is legitimate);
+- **all stale** → `multi-plan` ask with each option staleness-marked and the
+  fan-out-all footgun **suppressed** (never offer to spawn N worktrees on old
+  clutter) — OR, when the driver set `CLAUDE_AUTO_CONVERSATION_SIGNAL`, the stale
+  ask is **preempted** by `conversation-context` (§11): a live session beats a
+  stale plan set. A single lone plan (fresh or stale) stays `reviewed-plan` —
+  one plan carries no fan-out footgun.
+
+So `multi-plan` now fires only for genuinely-competing plans, and a
+`path: null` fan-out-all option appears only when the target set is fresh.
 
 ### Ambiguity option shape (discriminated union — read the payload key by situation)
 
@@ -423,12 +445,24 @@ See `docs/contracts/batch-sidecar-schema.md` for the sidecar format.
 - **Always goaled.** No `/auto` run proceeds without an active
   deliberate-stop goal/status engaging the Stop hook.
 
-## 11. Conversation-driven entry (v0.6.0 — `conversation-context`)
+## 11. Conversation-driven entry (v0.6.0 — `conversation-context`; wired v0.7.x U3)
 
-The `conversation-context` situation (lib/auto-detect.sh, U1) fires when there is
-no in-flight run AND no plan, but the driver judged the **current conversation**
-rich enough to route on and set `CLAUDE_AUTO_CONVERSATION_SIGNAL` before loading
-the hypothesis. The envelope's `recommendation` is null — the driver computes it.
+The `conversation-context` situation (lib/auto-detect.sh) fires when there is no
+in-flight run and no **live** plan, but the driver judged the **current
+conversation** rich enough to route on and set `CLAUDE_AUTO_CONVERSATION_SIGNAL`
+before loading the hypothesis. The envelope's `recommendation` is null — the
+driver computes it.
+
+**v0.7.x U3 — the signal is now actually set, and it can preempt stale plans.**
+v0.6.0 shipped this branch but specified the signal-set only as prose; no
+production code ever set the env var (only an integration test did), so the
+branch was dead — a context-rich bare `/auto` always fell through to `raw` or a
+plan ask. The auto-driver now sets it **inline** on the detector call
+(`CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash …/auto-detect.sh`) whenever the session
+is worth routing on. And the precedence changed: "no live plan" now includes the
+case where **every discovered plan is stale** (§9) — a stale plan set no longer
+blocks conversation-context. A **fresh** plan (`reviewed-plan`) still wins over
+conversation; only stale clutter yields to it.
 
 **Context sources (D2 — the split that keeps the classification honest):**
 - **Current conversation** = the driver reflecting on its OWN live transcript.
@@ -720,3 +754,40 @@ the seam the operator revisits the upstream artifact; `/auto-resume continue`
 will re-detect the same cluster and re-pause (the upstream flaw is unchanged),
 so the run does not get past the cluster on its own — autonomous rebound is
 v0.7.0.
+
+---
+
+## 14. Argument routing — the two entry trees (v0.7.x — U4)
+
+Entry routing is **two disjoint trees**, not one ranking. The args path
+short-circuits the detector entirely (auto-driver SKILL.md, "before loading the
+hypothesis"), so `$ARGUMENTS` never reaches the situation enum:
+
+- **Args tree** (driver, pre-detector): a plan-file path → run it
+  (`auto.sh "<path> --recipe w"`); otherwise classify the string with
+  `lib/verb-classify.py`.
+- **Bare tree** (detector envelope): in-flight → ambiguous-runs → ranked-plans /
+  conversation (§9) → raw.
+
+**`lib/verb-classify.py` (the deterministic half).** Pre-v0.7.x the args rule
+routed EVERY non-plan-file arg to `/ce-plan`, so an imperative about existing
+work ("execute, review and verify the plan, then open a PR") was re-planned
+instead of executed — the 2026-06 field misroute (it bit twice). The classifier
+returns one of `{work | plan | both | ambiguous}`:
+
+- `work` — a work verb (execute/run/implement/verify/review/…/open a PR) and no
+  plan-creation intent → route to WORK on a discovered plan (recipe `w`). If no
+  plan exists, the driver (the model) decides — there's nothing to execute yet.
+- `plan` — plan-creation intent (`plan`/`design`/…, or a creation verb + the
+  noun "plan") and no work verb → `/ce-plan <ARGUMENTS>`.
+- `both` — both ("develop and implement a plan", "plan and ship X") →
+  plan-then-work (recipe `a1`).
+- `ambiguous` — no verb signal (bare topics, "make it better") → the driver
+  decides; the safe default stays `/ce-plan`.
+
+The one subtlety is "plan" the **verb** ("plan a feature" → create) vs the
+**noun** ("execute the plan" → an existing artifact): "plan" counts as a
+plan-verb only when NOT immediately preceded by an article/possessive. This
+keeps the split deterministic (the load-bearing mandate) while the genuinely
+fuzzy residual — `ambiguous`, and work-with-no-plan-to-run — is handed to the
+model, mirroring the detector ↔ `recommender.py` division of labor.

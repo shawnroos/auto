@@ -47,13 +47,15 @@ lives in the `auto-driver` skill; theory + edge cases live in
   resolver degrades to cwd so a sick filesystem can't wedge the read-only
   detector.
 
-## Conversation-driven entry (v0.6.0)
+## Conversation-driven entry (v0.6.0; freshness-aware v0.8.0)
 
-Bare `/auto` after a rich conversation — no plan, no in-flight run — routes
-through branch 1 into the `auto-driver` skill. When the driver judges the
+Bare `/auto` after a rich conversation — no in-flight run and no *live* plan —
+routes through branch 1 into the `auto-driver` skill. When the driver judges the
 current session worth acting on, it sets the env var
 `CLAUDE_AUTO_CONVERSATION_SIGNAL` before loading the hypothesis; the detector
-then emits the `conversation-context` situation. The driver classifies the
+then emits the `conversation-context` situation. As of v0.8.0 this preempts a
+plan set that is entirely STALE (old `docs/plans/` clutter) — but a FRESH plan
+still wins over the conversation. The driver classifies the
 session (its own transcript plus a ~2-day `ce-sessions` lookback — never raw
 compaction text), calls `lib/recommender.py` for a ce-family recommendation, and
 either dispatches the entry recipe with an `auto-author-goal` phase goal or, when
