@@ -213,9 +213,36 @@ def _cli(argv):
     Lets a bash test (or the driver, if it ever wants the mapping from a shell)
     read the recommendation deterministically. Confidence parse failure -> 0.0
     via _coerce_confidence (so the CLI never crashes on a bad arg either).
+
+    Sub-mode `recommender.py --check-agrees <state> <stem>` -> prints `true` /
+    `false` and nothing else. This is the deterministic `router_agrees` primitive
+    the launch chooser (skills/auto-launch §4) calls: it folds "classify, run the
+    router, compare stems" into ONE shell step so the agent can't substitute its
+    own judgment for the cross-check. It is `true` IFF the router's deterministic
+    pick for <state> equals <stem> exactly. An unknown/blank state yields a
+    `recipe_or_entry` of None, which never string-equals a real stem -> `false`
+    (the conservative direction: an unverifiable agreement blocks skip).
     """
     import json
     import sys
+    if argv and argv[0] == "--check-agrees":
+        # --check-agrees <state> <stem>
+        state = argv[1] if len(argv) > 1 else None
+        stem = argv[2] if len(argv) > 2 else ""
+        pick = recommend(state).get("recipe_or_entry")
+        # Agreement gates a SKIP, so the pick must ALSO be skip-eligible: the
+        # router legitimately returns non-skip stems (`pipeline` for a vague
+        # state, `review` for code-unreviewed), and those must never green-light a
+        # skip. The eligible set is single-sourced from launch-gate (the skip
+        # decision), never hardcoded here — router policy stays separate from
+        # skip policy (round-2 adversarial).
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from _bootstrap import load_lib_module
+        eligible = load_lib_module("launch-gate").SKIP_ELIGIBLE_RECIPES
+        agree = pick is not None and pick == stem and pick in eligible
+        sys.stdout.write("true\n" if agree else "false\n")
+        return 0
     state = argv[0] if argv else None
     confidence = 1.0
     if len(argv) > 1:

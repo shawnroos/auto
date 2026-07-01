@@ -44,6 +44,22 @@ if args and args[0] == "--render" and len(args) > 1:
     tr = load_lib_module("topology-render")
     recipe, _tier = recipes.resolve(args[1], repo)
     print(tr.render(recipe, 60))
+elif args and args[0] == "--compare":
+    # --compare <name>... [--highlight <name>] — resolve each candidate and
+    # stack its card via topology-render.render_comparison (the chooser's
+    # contrast surface, KTD-2/3). Same first-wins resolve() as --render; the
+    # comparison is just N single-sourced cards, so the one-renderer rule holds.
+    tr = load_lib_module("topology-render")
+    rest, names, highlight, i = args[1:], [], None, 0
+    while i < len(rest):
+        if rest[i] == "--highlight" and i + 1 < len(rest):
+            highlight = rest[i + 1]
+            i += 2
+        else:
+            names.append(rest[i])
+            i += 1
+    cards = [recipes.resolve(n, repo)[0] for n in names]
+    print(tr.render_comparison(cards, highlight=highlight, width=60))
 else:
     for name, tier in recipes.list_available(repo):
         try:

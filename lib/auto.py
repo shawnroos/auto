@@ -92,10 +92,19 @@ def _parse_args(argv):
     adapter = _DEFAULT_ADAPTER
     goal = None
     recipe = None
+    # Launch-chooser U5 / agent-native Gap 3: when set, delete the run-scoped
+    # workspace recipe file once the ledger is initialized (engine is recipe-blind
+    # thereafter). Owning teardown HERE makes it atomic with init — the chooser no
+    # longer infers "ledger initialized" from this process's stdout.
+    teardown_recipe = False
 
     i = 0
     while i < len(argv):
         tok = argv[i]
+        if tok == "--teardown-recipe-after-init":
+            teardown_recipe = True
+            i += 1
+            continue
         if tok == "--adapter":
             if i + 1 >= len(argv):
                 raise ValueError("--adapter requires a value (ce|native)")
@@ -137,7 +146,7 @@ def _parse_args(argv):
     # Default recipe is a1 (classic) — bare /auto <plan> is byte-identical to
     # v0.1.x because a1 IS the encoding of the v0.1.x topology (KTD-1).
     return {"plan": plan, "auto": auto, "adapter": adapter, "goal": goal,
-            "recipe": recipe or "a1"}
+            "recipe": recipe or "a1", "teardown_recipe": teardown_recipe}
 
 
 def _seam_default_notice():
@@ -324,6 +333,25 @@ def _emit_arm(
     return 0
 
 
+def _teardown_run_scoped_recipe(recipes, repo_root: str, name: str) -> None:
+    """Delete the run-scoped WORKSPACE recipe ``name`` after a successful init.
+
+    Launch-chooser / agent-native Gap 3: with ``--teardown-recipe-after-init`` the
+    chooser hands auto.py ownership of teardown, so the delete is atomic with init
+    and the chooser never infers "ledger initialized" from this process's stdout.
+    The engine is recipe-blind post-init (``recipe-format.md`` §1: tick / dispatch
+    / predicate / resume all read the ledger, never the recipe file), so the file
+    is dead weight here. Targets ONLY the workspace-tier path for this name (never
+    a built-in / global), and is best-effort — ENOENT (a built-in resolved, or the
+    file already cleaned) is fine; the chooser keeps its own exit-code-keyed
+    cleanup for the case auto.sh fails BEFORE this point.
+    """
+    try:
+        os.remove(recipes.workspace_recipe_path(repo_root, name))
+    except OSError:
+        pass
+
+
 def run(argv) -> int:
     ledger = load_ledger()
     recipes = load_lib_module("recipes")
@@ -431,6 +459,9 @@ def run(argv) -> int:
     except ledger.LedgerError as exc:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
+
+    if args["teardown_recipe"]:
+        _teardown_run_scoped_recipe(recipes, repo_root, args["recipe"])
 
     # v0.4.3 KTD-15: finish the pre-satisfied state — plan-met also needs a
     # non-null gaps_open=0 (init_ledger set plan_step; see _bind_presatisfied_plan).

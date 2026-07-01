@@ -15,6 +15,13 @@ Two branches.
    hypothesis JSON from `lib/auto-detect.sh`, surfaces one action
    line, dispatches when ambiguity is null, or asks one blocking
    question when it isn't. Pass the operator's argument string through.
+   For interactive launches the driver now routes the in-scope
+   situations (`reviewed-plan` and freeform intent) through the
+   `auto-launch` launch chooser before dispatch — a worked-out loop
+   recommendation the operator confirms, or a silent-apply by
+   construction on self-driven / headless runs (the `driving_session_id`
+   ownership gate). Run-selection and `conversation-context` paths are
+   unchanged; branch 2 (`--recipe`) is unchanged.
 
 2. **Argument string contains `--recipe`** (explicit power-user form
    — the operator already chose a recipe). Pass straight to the
