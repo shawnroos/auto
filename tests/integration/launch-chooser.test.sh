@@ -459,5 +459,5 @@ assert_eq "0" "$WS_LEAK"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo
-printf "  %d passed, %d failed\n" "$PASS" "$FAIL"
+echo "launch-chooser.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ] || exit 1

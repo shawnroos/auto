@@ -332,5 +332,5 @@ assert_eq "rearm" "$(field tick_action "$R")"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo
-printf "  %d passed, %d failed\n" "$PASS" "$FAIL"
+echo "launch-recipe-compile.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ] || exit 1
