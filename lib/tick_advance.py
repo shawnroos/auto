@@ -117,7 +117,15 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     for uid in newly_stalled:
         # Plain timeout stall: last_error stays null (vs an adapter-raise stall,
         # which records {call, message, at}). See record_stall_error.
-        ledger.transition(repo_root, run_id, uid, "stalled")
+        #
+        # reap_pending (U3): the live agent may still be up (this is the alive-
+        # but-wedged case), so a model-side kill (TaskStop + SIGTERM) is OWED. We
+        # record that debt on the SAME atomic write as the stall flip; the driver
+        # clears it via clear_reap_pending right after issuing the kill. An
+        # uncleared marker on a later tick is an assertable "kill requested but
+        # unconfirmed" (units_awaiting_reap) — the only Python-visible handle on a
+        # kill that is otherwise entirely model-side.
+        ledger.transition(repo_root, run_id, uid, "stalled", reap_pending=True)
 
     # Compute the full halted set (newly + already-stalled) and their dependents.
     fresh = ledger.read_ledger(repo_root, run_id)
@@ -168,10 +176,59 @@ def reap_unit(repo_root, run_id, unit_id, attempt):
     if int(unit.get("attempt", 0) or 0) != int(attempt):
         return False
     try:
-        ledger.transition(repo_root, run_id, unit_id, "stalled")
+        # reap_pending (U3): mirror detect_and_halt_stalled — the death path also
+        # owes a model-side kill (TaskStop + SIGTERM) of whatever process is still
+        # up, recorded on the same atomic flip so a forgotten kill stays visible.
+        ledger.transition(repo_root, run_id, unit_id, "stalled", reap_pending=True)
     except ledger.InvalidTransition:
         return False
     return True
+
+
+def clear_reap_pending(repo_root, run_id, unit_id):
+    """Clear a unit's ``reap_pending`` marker — the driver calls this right after
+    it has issued the model-side kill (TaskStop + SIGTERM) for a stalled unit (U3).
+
+    The ``dispatched -> stalled`` flip (in BOTH detect_and_halt_stalled and
+    reap_unit) sets ``reap_pending=True`` to record that a live-agent kill is
+    OWED. The kill itself is model-side — no reaping primitive exists in lib/
+    (KTD2) — so Python cannot observe that it happened; instead the driver calls
+    HERE once it has. An UNCLEARED marker on a later tick is therefore an
+    assertable "kill requested but unconfirmed" state (units_awaiting_reap), which
+    keeps a forgotten kill (and its zombie agent) from being invisible to tests.
+
+    ``stalled -> stalled`` is not a legal grammar edge, so this is a same-state
+    FIELD update and does NOT go through ``transition`` (which would raise
+    InvalidTransition). It routes the write through the SAME atomic chokepoint —
+    ``ledger._with_locked_ledger`` -> ``_atomic_write`` (which recomputes the
+    predicate under flock) — so clearing the marker is never a bypass of the I-1
+    write path. Returns True iff the unit was found and its marker cleared.
+    """
+    def mutate(led):
+        for u in led.get("units", []):
+            if u.get("id") == unit_id:
+                u["reap_pending"] = False
+                return True
+        return False
+
+    return ledger._with_locked_ledger(repo_root, run_id, mutate)
+
+
+def units_awaiting_reap(ledger_dict):
+    """Pure: the ids of ``stalled`` units whose ``reap_pending`` marker is truthy.
+
+    The assertable "kill requested but unconfirmed" set. The stalled transition
+    sets the marker; the driver clears it via clear_reap_pending right after
+    issuing the kill — so anything still here on a later tick is a kill the driver
+    owes but has not confirmed (a possible zombie agent). Python owns this set
+    even though the kill is model-side, giving the test suite a handle on a
+    forgotten reap.
+    """
+    return [
+        u.get("id")
+        for u in ledger_dict.get("units", [])
+        if u.get("state") == "stalled" and u.get("reap_pending")
+    ]
 
 
 # ──────────────────────────────────────────────────────────────────────────

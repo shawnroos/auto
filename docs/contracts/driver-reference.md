@@ -290,6 +290,47 @@ polling antipattern the Agent tool explicitly forbids.
 The driver owns the batching; the tick is mechanical; the harness
 owns the wake signal.
 
+### Stalled-node policy — reap → retry → escalate
+
+Whenever a unit is `stalled` — put there by EITHER the watchdog-heartbeat
+timeout (`detect_and_halt_stalled`) OR the death path (`reap_unit`) —
+the driver applies this per stalled node:
+
+1. **Reap the live agent (model-side).** No reaping primitive exists in
+   `lib/`, so the driver owns the kill: `TaskStop` the agent, then
+   `kill -TERM` its process (the reap sequence — TaskStop then SIGTERM).
+2. **Clear the reap marker.** `tick_advance.clear_reap_pending(<run>,
+   <unit>)` right after issuing the kill. The `dispatched → stalled`
+   flip set `reap_pending=True` to record a kill was owed; clearing it
+   is the driver's confirmation it issued one.
+3. **Retry or escalate on the `attempt` budget.** If
+   `orchestrator.should_escalate(<unit>)` is False (`attempt < 2`) →
+   `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
+   clears `last_error`) to re-dispatch. If True (`attempt ≥ 2`) →
+   `bash lib/auto-resume.py pause <run> "<unit> wedged after 2
+   attempts"` to escalate to the operator instead of looping forever
+   (the §4.5-style pause seam; `driver=manual`, resumable).
+
+`detect_and_halt_stalled` already halts a stalled node's transitive
+dependents, so the policy runs **per stalled node while independent
+siblings keep advancing** — a single wedged branch never freezes the
+whole wave.
+
+**Nested `do_unit` reap.** A `do_unit` fan-out agent is not its own
+ledger row (KTD-5), so a wedged nested agent is reaped through its
+**parent** fan-out unit: the parent flips to `stalled` and its entire
+fan-out wave is reaped and re-dispatched together (coarse-grained v1;
+node-level reap of a single nested agent is deferred). The watch view
+still surfaces the individual wedged node.
+
+**`reap_pending` semantics.** The stalled transition sets the marker;
+the driver clears it (step 2) after the kill;
+`tick_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+whose marker is still set. An **uncleared marker on a later tick means
+"kill owed but unconfirmed"** — a forgotten kill (and its zombie agent)
+that is otherwise invisible, since the kill itself is model-side and
+Python owns only the marker.
+
 ### Work-unit `adapter_op` → invocation (the model-facing dispatch label)
 
 `orchestrator.dispatch_batch` is adapter-agnostic: it flips the unit

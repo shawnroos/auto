@@ -153,6 +153,42 @@ attempt. Spike caveat: if the harness surfaces no distinct death
 signal (only verdict/completion), this path degrades to the U1 timeout
 watchdog with no change to the loop's shape.
 
+**Stalled-node policy — reap → retry → escalate.** Whenever a unit is
+`stalled` (whether the watchdog-heartbeat timeout or the death path put
+it there), apply this per stalled node:
+
+1. **Reap the live agent.** The reap is model-side (there is NO reaping
+   primitive in `lib/`): `TaskStop` the agent, then `kill -TERM` its
+   process (the reap sequence — TaskStop then SIGTERM).
+2. **Clear the marker.** `tick_advance.clear_reap_pending(<run>,
+   <unit>)` right after issuing the kill — the `dispatched → stalled`
+   flip set `reap_pending=True` to record that a kill was owed; clearing
+   it confirms you issued it (see below).
+3. **Retry or escalate on the attempt budget.** If
+   `orchestrator.should_escalate(<unit>)` is False (`attempt < 2`) →
+   `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
+   clears `last_error`) to re-dispatch it. If True (`attempt ≥ 2`, wedged
+   twice) → **do not loop:** `bash lib/auto-resume.py pause <run>
+   "<unit> wedged after 2 attempts"` to hand it to the operator (§4.5).
+
+`detect_and_halt_stalled` already halts a stalled node's transitive
+dependents, so this policy runs **per stalled node while independent
+siblings keep advancing** — one wedged branch never freezes the wave.
+
+**Nested `do_unit` reap.** A `do_unit` fan-out agent is not its own
+ledger row (KTD-5), so a wedged nested agent is reaped through its
+**parent** fan-out unit: the parent flips to `stalled` and its whole
+fan-out wave is reaped + re-dispatched together (coarse-grained v1 —
+node-level reap of a single nested agent is deferred). The watch view
+still surfaces the individual wedged node for visibility.
+
+**`reap_pending` semantics.** The stalled transition sets
+`reap_pending`; the driver clears it (step 2) after the kill;
+`tick_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+whose marker is still set — an **uncleared marker on a later tick means
+"kill owed but unconfirmed"** (a possible zombie agent). It is the only
+Python-visible handle on a kill that is otherwise entirely model-side.
+
 Full mechanism + the "when ScheduleWakeup IS right" long-tail
 fallback: `driver-reference.md` §7.
 

@@ -732,6 +732,46 @@ it "round-robin: no eligible plan unit → None"
 assert_eq "None" "$(rr '{"units":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
 
 # ════════════════════════════════════════════════════════════════════════════
+# U3 — should_escalate: the retry-budget predicate (R8 / KTD4). A pure read of
+# the EXISTING `attempt` counter (bumped mechanically on each pending->dispatched
+# dispatch). At `attempt >= max_attempts` (default 2) the driver STOPS auto-
+# retrying a wedged unit and pause-escalates to the operator instead of looping.
+# ════════════════════════════════════════════════════════════════════════════
+esc() {
+  # esc <unit-json> [max_attempts]  — print should_escalate(unit[, max_attempts]).
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+orch = load_lib_module("orchestrator")
+unit = json.loads(sys.argv[2])
+if len(sys.argv) > 3:
+    print(orch.should_escalate(unit, int(sys.argv[3])))
+else:
+    print(orch.should_escalate(unit))
+PYEOF
+}
+
+it "should_escalate: attempt 1 (under the default N=2 budget) -> False (retry)"
+assert_eq "False" "$(esc '{"attempt":1}')"
+
+it "should_escalate: attempt 2 (at the default N=2 budget) -> True (escalate)"
+assert_eq "True" "$(esc '{"attempt":2}')"
+
+it "should_escalate: attempt 3 (past the default budget) -> True (escalate)"
+assert_eq "True" "$(esc '{"attempt":3}')"
+
+it "should_escalate: missing/zero attempt -> False (a fresh unit never escalates)"
+assert_eq "False" "$(esc '{}')"
+
+it "should_escalate: respects a custom max_attempts -> attempt 2 under max=3 is False"
+assert_eq "False" "$(esc '{"attempt":2}' 3)"
+
+it "should_escalate: respects a custom max_attempts -> attempt 3 at max=3 is True"
+assert_eq "True" "$(esc '{"attempt":3}' 3)"
+
+# ════════════════════════════════════════════════════════════════════════════
 # U14 — edge-driven ordering of an emitter fan-out (the readiness engine, once
 # fed real depends_on edges, sequences the work units). This is the consumer
 # side of U14: unit-emitters.test.sh proves the edges are materialized; here we

@@ -1046,6 +1046,83 @@ else
   fail "double_out=$double_out (expected True,-,False,stalled)"
 fi
 
+# ─── U3: reap_pending marker — kill-verifiability across the reap paths ────────
+# The `dispatched -> stalled` transition (in BOTH detect_and_halt_stalled and
+# reap_unit) sets `reap_pending=True` to record that a live-agent kill is OWED —
+# the kill itself (TaskStop + SIGTERM) is model-side (no reaping primitive in
+# lib/, KTD2), so Python cannot observe it. The driver clears the marker via
+# clear_reap_pending right AFTER issuing the kill; anything still in
+# units_awaiting_reap on a later tick is a forgotten kill ("requested but
+# unconfirmed"). Covers U3's reap_pending semantics.
+
+it "U3 reap_pending: reap_unit sets reap_pending; unit is in units_awaiting_reap; clear_reap_pending removes it"
+DISP_RP="$(now_minus 5)"
+ledger_init "reap-pending-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_RP")" \
+  >/dev/null 2>&1
+rp_flow="$("$PY" - "$REPO" "reap-pending-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Reap the dispatched unit at its matching attempt -> stalled + reap_pending set.
+t.tick_advance.reap_unit(repo, run, "U1", 1)
+led1 = ledg.read_ledger(repo, run)
+marker_after_reap = led1["units"][0].get("reap_pending")
+awaiting_before = t.tick_advance.units_awaiting_reap(led1)
+# Driver issues the model-side kill, then clears the marker.
+t.tick_advance.clear_reap_pending(repo, run, "U1")
+led2 = ledg.read_ledger(repo, run)
+marker_after_clear = led2["units"][0].get("reap_pending")
+awaiting_after = t.tick_advance.units_awaiting_reap(led2)
+print("%s|%s|%s|%s" % (
+    marker_after_reap,
+    ",".join(awaiting_before) or "-",
+    marker_after_clear,
+    ",".join(awaiting_after) or "-",
+))
+PYEOF
+)"
+# After reap: reap_pending True, U1 awaiting. After clear: reap_pending False, none awaiting.
+if [ "$rp_flow" = "True|U1|False|-" ]; then
+  pass
+else
+  fail "rp_flow=$rp_flow (expected True|U1|False|-)"
+fi
+
+it "U3 reap_pending: detect_and_halt_stalled (the timeout path) ALSO sets reap_pending"
+DISP_DP="$(now_minus 3600)"
+ledger_init "reap-pending-timeout" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$DISP_DP")" \
+  >/dev/null 2>&1
+tp_flow="$("$PY" - "$REPO" "reap-pending-timeout" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+now = datetime.datetime.now(datetime.timezone.utc)
+led = ledg.read_ledger(repo, run)
+fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+after = ledg.read_ledger(repo, run)
+awaiting = t.tick_advance.units_awaiting_reap(after)
+print("%s,%s,%s" % (
+    after["units"][0]["state"],
+    after["units"][0].get("reap_pending"),
+    ",".join(awaiting) or "-",
+))
+PYEOF
+)"
+# The timeout-stalled unit is stalled, carries reap_pending=True, and is awaiting reap.
+if [ "$tp_flow" = "stalled,True,U1" ]; then
+  pass
+else
+  fail "tp_flow=$tp_flow (expected stalled,True,U1)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"
