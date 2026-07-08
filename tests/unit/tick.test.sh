@@ -1123,6 +1123,45 @@ else
   fail "tp_flow=$tp_flow (expected stalled,True,U1)"
 fi
 
+it "U1 race-regression: heartbeat detect over a STALE snapshot whose unit landed a verdict -> no crash, unit dropped from newly_stalled"
+# U1's dispatch-time heartbeat runs detect_and_halt_stalled WHILE background agents
+# are live. If a healthy sibling lands its verdict (record_verdict) between the
+# snapshot read and the per-unit stalled flip, `stalled` is no longer a legal edge
+# from verdict-returned. Before the try/except guard this raised InvalidTransition
+# and wedged the run — the exact hang the watchdog exists to prevent.
+RACE_AT="$(now_minus 3600)"
+ledger_init "race-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$RACE_AT")" \
+  ce work >/dev/null 2>&1
+race_out="$("$PY" - "$REPO" "race-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Snapshot read WHILE dispatched (what the heartbeat tick holds).
+led = ledg.read_ledger(repo, run)
+# A concurrent healthy sibling lands its verdict on disk AFTER the snapshot.
+ledg.record_verdict(repo, run, "U1", [], attempt=1)
+now = datetime.datetime.now(datetime.timezone.utc)
+newly = []
+try:
+    fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+    crashed = "no"
+except Exception as e:  # noqa: BLE001 — the point is that NOTHING escapes.
+    crashed = type(e).__name__
+after = ledg.read_ledger(repo, run)
+print("%s,%s,%s" % (crashed, after["units"][0]["state"], (",".join(newly) if newly else "-")))
+PYEOF
+)"
+# No crash; the raced unit stays verdict-returned and is dropped from newly_stalled.
+if [ "$race_out" = "no,verdict-returned,-" ]; then
+  pass
+else
+  fail "race_out=$race_out (expected no,verdict-returned,-)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"

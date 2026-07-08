@@ -114,6 +114,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         if age >= 0 and age > threshold:
             newly_stalled.append(u.get("id"))
 
+    confirmed_stalled = []
     for uid in newly_stalled:
         # Plain timeout stall: last_error stays null (vs an adapter-raise stall,
         # which records {call, message, at}). See record_stall_error.
@@ -125,7 +126,21 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         # uncleared marker on a later tick is an assertable "kill requested but
         # unconfirmed" (units_awaiting_reap) — the only Python-visible handle on a
         # kill that is otherwise entirely model-side.
-        ledger.transition(repo_root, run_id, uid, "stalled", reap_pending=True)
+        try:
+            ledger.transition(repo_root, run_id, uid, "stalled", reap_pending=True)
+        except ledger.InvalidTransition:
+            # Lost race — newly exposed by U1's dispatch-time heartbeat, which
+            # runs this detector WHILE background agents are live. The unit left
+            # `dispatched` between the snapshot read (ledger_dict) above and this
+            # locked transition: a concurrent record_verdict (a healthy sibling
+            # landing its verdict) or a death-path reap_unit already resolved it.
+            # Swallow so the tick doesn't crash and wedge the run — the exact hang
+            # this watchdog exists to prevent — and drop the unit from the stalled
+            # set; the fresh re-read below reflects the true post-transition state.
+            # Mirrors reap_unit's guard: both writers to the dispatched→stalled
+            # edge must tolerate this race.
+            continue
+        confirmed_stalled.append(uid)
 
     # Compute the full halted set (newly + already-stalled) and their dependents.
     fresh = ledger.read_ledger(repo_root, run_id)
@@ -133,7 +148,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         u.get("id") for u in fresh.get("units", []) if u.get("state") == "stalled"
     ]
     halted = _transitive_dependents(fresh.get("units", []), stalled_ids)
-    return fresh, sorted(halted), newly_stalled
+    return fresh, sorted(halted), confirmed_stalled
 
 
 def reap_unit(repo_root, run_id, unit_id, attempt):
