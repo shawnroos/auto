@@ -248,7 +248,7 @@ standalone ce-skill in the same worktree is never intercepted.
 **Two-seam split — fan-out units (KTD-5).** Work-loop `do_unit` agents get
 their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
 destructive backstop) can reach them. When you construct a fan-out unit prompt
-(§4 step 3), bake in BOTH constraints:
+(§4 step 3), bake in all THREE constraints:
   - **(i) question routing:** "Do not call `AskUserQuestion`. For a mechanical
     clarification, consult the advisor and resolve it yourself; for a
     substantive design/architecture fork, pause-escalate via
@@ -262,6 +262,13 @@ destructive backstop) can reach them. When you construct a fan-out unit prompt
     needed, pause-escalate instead." `do_unit` is the MOST likely locus of
     destructive Bash (branch cleanup, file delete, force-push), and the action
     hook cannot gate it — so the constraint MUST ride in the prompt.
+  - **(iii) self-termination on no-progress:** "If you cannot make progress
+    within N minutes (blocked on something you cannot resolve, or spinning
+    without advancing), record a blocker verdict via `ledger.record_verdict`
+    and RETURN — do not keep spinning." This catches soft-stalls from the
+    inside (R12). It is defense-in-depth only: a truly wedged process cannot
+    self-report, so the watchdog heartbeat + stalled-node reap (U1/U3) remain
+    the backstop for a genuinely hung agent.
 
 ### 4.7 Gate advisor-judging — typed verification (v0.7.0, U5)
 
