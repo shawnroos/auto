@@ -84,15 +84,11 @@ DEFAULT_REARM_DELAY_SECONDS = 60
 
 # Watchdog-heartbeat wakeup (U1). ScheduleWakeup clamps to [60, 3600]s (same
 # bound as above); the dispatch-time fallback heartbeat is clamped to it too.
-# The per-run stall-threshold default lives on the ledger module, but
-# watchdog_wakeup_delay's `ledger` PARAMETER (the dict) shadows the module-level
-# `ledger` name, so capture the default here where the module is still reachable.
 WATCHDOG_WAKEUP_MIN_SECONDS = 60
 WATCHDOG_WAKEUP_MAX_SECONDS = 3600
-_DEFAULT_STALL_THRESHOLD_SECONDS = ledger.DEFAULT_STALL_THRESHOLD_SECONDS
 
 
-def watchdog_wakeup_delay(ledger):
+def watchdog_wakeup_delay(ledger_dict):
     """Fallback-heartbeat delay to arm at dispatch, or None if nothing is dispatched.
 
     Closes the inverted work-phase carve-out: the driver arms ONE long fallback
@@ -103,11 +99,11 @@ def watchdog_wakeup_delay(ledger):
     fires no later than the soonest in-flight unit's stall deadline. The result
     is CLAMPED to `[60, 3600]s` (the ScheduleWakeup bound). When NO unit is
     `dispatched`, returns None — a no-op sentinel the driver reads as "arm
-    nothing". Pure: no I/O; `ledger` is the ledger dict, not the module.
+    nothing". Pure: no I/O; `ledger_dict` is the ledger dict, not the module.
     """
     delays = [
-        int(u.get("stall_threshold_seconds") or _DEFAULT_STALL_THRESHOLD_SECONDS)
-        for u in ledger.get("units", [])
+        int(u.get("stall_threshold_seconds") or ledger.DEFAULT_STALL_THRESHOLD_SECONDS)
+        for u in ledger_dict.get("units", [])
         if u.get("state") == "dispatched"
     ]
     if not delays:

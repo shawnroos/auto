@@ -50,15 +50,15 @@ import os
 import sys
 
 # Load sibling lib modules via the ONE shared loader (see lib/_bootstrap). We
-# REUSE orchestrator's readiness frontier (KTD6 — no second copy of the predicate)
-# and topology-render's card style for the preview (KTD-10 — one renderer family).
+# REUSE orchestrator's readiness frontier (KTD6 — no second copy of the predicate).
+# The preview mirrors topology-render's card idiom by hand (KTD-10 — one renderer
+# family) rather than importing it, so no topology-render load is needed here.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 orchestrator = load_lib_module("orchestrator")
-_topology_render = load_lib_module("topology-render")
 
 # The readiness frontier we reuse verbatim (KTD6): a unit is ready iff it is
 # `pending`, every direct dependency is satisfied, and no transitive ancestor is
