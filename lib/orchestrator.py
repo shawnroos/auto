@@ -228,6 +228,27 @@ def ready_units(repo_root: str, run_id: str):
     return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id, scale)]
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Supervision / escalation predicate (U3 / KTD4 / R8).
+
+
+def should_escalate(unit: dict, max_attempts: int = 2) -> bool:
+    """True iff a stalled unit has exhausted its retry budget — the driver must
+    pause-escalate to the operator instead of retrying again (R8).
+
+    Pure over a single in-memory unit dict. It reads the EXISTING ``attempt``
+    counter (bumped mechanically on each ``pending -> dispatched`` dispatch, Bug
+    #6) — deliberately NO new counter (KTD4). The driver's stalled-node policy
+    (SKILL.md §4): reap the live agent, clear the reap marker, then if this is
+    False (``attempt < max_attempts``) ``auto-resume.py retry`` the unit; if True
+    (``attempt >= max_attempts``) ``auto-resume.py pause`` to hand a wedged unit
+    to the operator rather than looping forever. ``max_attempts`` defaults to 2,
+    the settled N=2 escalation budget. A missing/zero attempt reads as 0 (never
+    escalates), matching the attempt counter's additive default.
+    """
+    return int(unit.get("attempt", 0) or 0) >= int(max_attempts)
+
+
 def pick_next_plan_unit_to_advance(ledger: dict):
     """Round-robin selector for serialized N>1 plan-loop advance (U6 / KTD-4).
 

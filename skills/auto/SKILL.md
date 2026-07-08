@@ -64,7 +64,7 @@ dispatch:
 | `action` | phase | what you do |
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
-| `rearm`  | `work` | YIELD; harness re-invokes on next verdict. LONG ScheduleWakeup (1200s+) ONLY when no work in flight AND no ready units (genuinely stalled) |
+| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a tick fires even while work is in flight. A verdict landing first makes the heartbeat tick a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `seam-pause` → surface seam (§3) |
 | `noop`   | any   | another live tick holds the lock; do nothing |
 
@@ -122,13 +122,72 @@ IS the wake signal. Per wave:
    THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
-4. YIELD silently — end the turn. Do NOT ScheduleWakeup.
+4. YIELD for verdicts — end the turn — AND arm ONE watchdog-heartbeat
+   `ScheduleWakeup(watchdog_wakeup_delay(ledger), "/auto:auto-tick <run>")`
+   at dispatch. This single long wakeup (~the soonest in-flight stall
+   threshold, clamped to `[60, 3600]s`) fires a tick even while work is
+   in flight, so `detect_and_halt_stalled` reaps a wedged-but-alive
+   agent that never returns a verdict. It is NOT a sub-minute poll: a
+   verdict landing first re-invokes you and the heartbeat tick then
+   finds nothing past-threshold and is a self-cancelling no-op.
 5. On re-invocation: `orchestrator.converge(repo, run)` reads landed
    verdicts. Predicate met → exit (§5); ready_units → next wave;
    work in flight → yield again.
 6. Ticks apply fixes (`verdict-returned → fixed → pending`); re-
    dispatch; re-review. Loop terminates only when every unit reaches
    a clean terminal verdict.
+
+**Death path (event-driven reap).** When you observe a background
+agent has DIED — a crash, auth-churn silent death, or a completion
+that lands with no verdict written — reconcile that unit at once by
+calling `tick_advance.reap_unit(<run>, <unit>, <the dispatched
+attempt>)` (the attempt-gated reap) rather than waiting out the stall
+threshold. It flips the unit `dispatched → stalled` only when the unit
+is still `dispatched` at that attempt, then the stalled-node policy
+(reap → retry → escalate) takes over. This is idempotent with the
+watchdog-heartbeat timeout path above: a later tick that also sees the
+unit is a no-op because it is already `stalled`, and the attempt gate
+means a death event from an already-superseded attempt can never stall
+a fresh retry — the two paths converge on exactly one stall per
+attempt. Spike caveat: if the harness surfaces no distinct death
+signal (only verdict/completion), this path degrades to the U1 timeout
+watchdog with no change to the loop's shape.
+
+**Stalled-node policy — reap → retry → escalate.** Whenever a unit is
+`stalled` (whether the watchdog-heartbeat timeout or the death path put
+it there), apply this per stalled node:
+
+1. **Reap the live agent.** The reap is model-side (there is NO reaping
+   primitive in `lib/`): `TaskStop` the agent, then `kill -TERM` its
+   process (the reap sequence — TaskStop then SIGTERM).
+2. **Clear the marker.** `tick_advance.clear_reap_pending(<run>,
+   <unit>)` right after issuing the kill — the `dispatched → stalled`
+   flip set `reap_pending=True` to record that a kill was owed; clearing
+   it confirms you issued it (see below).
+3. **Retry or escalate on the attempt budget.** If
+   `orchestrator.should_escalate(<unit>)` is False (`attempt < 2`) →
+   `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
+   clears `last_error`) to re-dispatch it. If True (`attempt ≥ 2`, wedged
+   twice) → **do not loop:** `bash lib/auto-resume.py pause <run>
+   "<unit> wedged after 2 attempts"` to hand it to the operator (§4.5).
+
+`detect_and_halt_stalled` already halts a stalled node's transitive
+dependents, so this policy runs **per stalled node while independent
+siblings keep advancing** — one wedged branch never freezes the wave.
+
+**Nested `do_unit` reap.** A `do_unit` fan-out agent is not its own
+ledger row (KTD-5), so a wedged nested agent is reaped through its
+**parent** fan-out unit: the parent flips to `stalled` and its whole
+fan-out wave is reaped + re-dispatched together (coarse-grained v1 —
+node-level reap of a single nested agent is deferred). The watch view
+still surfaces the individual wedged node for visibility.
+
+**`reap_pending` semantics.** The stalled transition sets
+`reap_pending`; the driver clears it (step 2) after the kill;
+`tick_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+whose marker is still set — an **uncleared marker on a later tick means
+"kill owed but unconfirmed"** (a possible zombie agent). It is the only
+Python-visible handle on a kill that is otherwise entirely model-side.
 
 Full mechanism + the "when ScheduleWakeup IS right" long-tail
 fallback: `driver-reference.md` §7.
@@ -189,7 +248,7 @@ standalone ce-skill in the same worktree is never intercepted.
 **Two-seam split — fan-out units (KTD-5).** Work-loop `do_unit` agents get
 their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
 destructive backstop) can reach them. When you construct a fan-out unit prompt
-(§4 step 3), bake in BOTH constraints:
+(§4 step 3), bake in all THREE constraints:
   - **(i) question routing:** "Do not call `AskUserQuestion`. For a mechanical
     clarification, consult the advisor and resolve it yourself; for a
     substantive design/architecture fork, pause-escalate via
@@ -203,6 +262,13 @@ destructive backstop) can reach them. When you construct a fan-out unit prompt
     needed, pause-escalate instead." `do_unit` is the MOST likely locus of
     destructive Bash (branch cleanup, file delete, force-push), and the action
     hook cannot gate it — so the constraint MUST ride in the prompt.
+  - **(iii) self-termination on no-progress:** "If you cannot make progress
+    within N minutes (blocked on something you cannot resolve, or spinning
+    without advancing), record a blocker verdict via `ledger.record_verdict`
+    and RETURN — do not keep spinning." This catches soft-stalls from the
+    inside (R12). It is defense-in-depth only: a truly wedged process cannot
+    self-report, so the watchdog heartbeat + stalled-node reap (U1/U3) remain
+    the backstop for a genuinely hung agent.
 
 ### 4.7 Gate advisor-judging — typed verification (v0.7.0, U5)
 

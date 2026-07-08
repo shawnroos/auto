@@ -897,6 +897,271 @@ assert_eq "stop,done" \
   "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work B 0)"
 
 
+# ─── U1: watchdog_wakeup_delay — dispatch-time fallback heartbeat delay ───────
+# Closes the inverted work-phase carve-out: the driver arms ONE long fallback
+# ScheduleWakeup at dispatch so detect_and_halt_stalled fires while work is in
+# flight. watchdog_wakeup_delay is the pure helper that computes that delay —
+# the MINIMUM in-flight stall_threshold_seconds (default 600), clamped to the
+# ScheduleWakeup bound [60, 3600]. Returns None when nothing is dispatched (the
+# driver arms nothing). Pure over a ledger dict; no I/O, no on-disk ledger.
+
+# wwd <units-json>  — print watchdog_wakeup_delay({"units": <units-json>}).
+wwd() {
+  "$PY" - "$TICK_PY" "$1" <<'PYEOF'
+import sys, importlib.util, json
+tick_py, units_json = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+print(t.watchdog_wakeup_delay({"units": json.loads(units_json)}))
+PYEOF
+}
+
+it "U1 watchdog_wakeup_delay: single dispatched unit, no override -> default 600"
+assert_eq "600" "$(wwd '[{"id":"U1","state":"dispatched"}]')"
+
+it "U1 watchdog_wakeup_delay: MIN across dispatched units (non-dispatched ignored)"
+# U1=300, U2=120 dispatched -> min 120; U3 pending with a smaller 10 is ignored.
+assert_eq "120" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":300},{"id":"U2","state":"dispatched","stall_threshold_seconds":120},{"id":"U3","state":"pending","stall_threshold_seconds":10}]')"
+
+it "U1 watchdog_wakeup_delay: a 30s override clamps UP to the 60s floor"
+assert_eq "60" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":30}]')"
+
+it "U1 watchdog_wakeup_delay: a 4000s override clamps DOWN to the 3600s ceiling"
+assert_eq "3600" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":4000}]')"
+
+it "U1 watchdog_wakeup_delay: nothing dispatched -> None (driver arms nothing)"
+assert_eq "None" "$(wwd '[{"id":"U1","state":"pending"},{"id":"U2","state":"verdict-returned","findings":[]}]')"
+
+# ─── U2: reap_unit — attempt-gated idempotent reap primitive ──────────────────
+# The death path's counterpart to detect_and_halt_stalled's timeout path. On a
+# native death signal the driver reconciles the dead unit via reap_unit, which
+# idempotently flips dispatched -> stalled ONLY when the unit is `dispatched`
+# AND its current `attempt` equals the passed attempt. The attempt gate is the
+# load-bearing correctness point: without it a late death event from a driver-
+# killed attempt-1 agent would stall a fresh, healthy attempt-2 retry. The two
+# detection paths (timeout watchdog + native death) therefore converge on exactly
+# ONE stall per attempt. Covers R3, AE2, AE3.
+
+# reap <run> <unit> <attempt>  — call reap_unit on the on-disk ledger; print its
+# return value (True/False/None). Mirrors scenario 10's t.tick_advance access.
+reap() {
+  "$PY" - "$REPO" "$1" "$2" "$3" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, unit, attempt, tick_py = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+print(t.tick_advance.reap_unit(repo, run, unit, int(attempt)))
+PYEOF
+}
+
+it "U2 reap_unit: flips a dispatched unit at the matching attempt -> stalled (returns True)"
+DISP_R="$(now_minus 5)"
+ledger_init "reap-match-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_R")" \
+  >/dev/null 2>&1
+# Verify the fixture actually produced attempt 1 before asserting on the gate.
+attempt_match="$(ledger_field "reap-match-run" 'L["units"][0]["attempt"]')"
+ret_match="$(reap "reap-match-run" "U1" 1)"
+st_match="$(ledger_field "reap-match-run" 'L["units"][0]["state"]')"
+if [ "$attempt_match" = "1" ] && [ "$ret_match" = "True" ] && [ "$st_match" = "stalled" ]; then
+  pass
+else
+  fail "attempt=$attempt_match ret=$ret_match state=$st_match (expected 1/True/stalled)"
+fi
+
+it "U2 reap_unit: no-op on an already-stalled unit (returns False, state unchanged)"
+# Second reap of a unit the timeout watchdog already stalled: stalled -> stalled
+# is not a legal edge, so reap is a no-op, not a transition.
+ledger_init "reap-stalled-run" '[{"id":"U1","state":"stalled","attempt":1}]' >/dev/null 2>&1
+ret_stalled="$(reap "reap-stalled-run" "U1" 1)"
+st_stalled="$(ledger_field "reap-stalled-run" 'L["units"][0]["state"]')"
+if [ "$ret_stalled" = "False" ] && [ "$st_stalled" = "stalled" ]; then
+  pass
+else
+  fail "ret=$ret_stalled state=$st_stalled (expected False/stalled)"
+fi
+
+it "U2 reap_unit: no-op on a verdict-returned unit (returns False, state unchanged)"
+ledger_init "reap-vr-run" '[{"id":"U1","state":"verdict-returned","findings":[],"attempt":1}]' >/dev/null 2>&1
+ret_vr="$(reap "reap-vr-run" "U1" 1)"
+st_vr="$(ledger_field "reap-vr-run" 'L["units"][0]["state"]')"
+if [ "$ret_vr" = "False" ] && [ "$st_vr" = "verdict-returned" ]; then
+  pass
+else
+  fail "ret=$ret_vr state=$st_vr (expected False/verdict-returned)"
+fi
+
+it "U2 reap_unit: no-op when passed attempt is OLDER than current (late death after retry) -> stays dispatched"
+# The load-bearing case: a fresh attempt-2 retry is in flight; a late death event
+# from the superseded attempt-1 agent must NOT stall it. Unit dispatched at
+# attempt 2; reap with attempt 1 is a no-op.
+DISP_S="$(now_minus 5)"
+ledger_init "reap-super-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":2}]' "$DISP_S")" \
+  >/dev/null 2>&1
+# Verify the fixture actually produced attempt 2 (the retry generation).
+cur_attempt="$(ledger_field "reap-super-run" 'L["units"][0]["attempt"]')"
+ret_super="$(reap "reap-super-run" "U1" 1)"
+st_super="$(ledger_field "reap-super-run" 'L["units"][0]["state"]')"
+if [ "$cur_attempt" = "2" ] && [ "$ret_super" = "False" ] && [ "$st_super" = "dispatched" ]; then
+  pass
+else
+  fail "cur_attempt=$cur_attempt ret=$ret_super state=$st_super (expected 2/False/dispatched)"
+fi
+
+it "U2 double detection: past-threshold AND reaped yields exactly ONE stalled (second path is a no-op)"
+# The dedup-by-design property (AE3): a unit flagged by BOTH the native death
+# path (reap_unit) and the timeout watchdog (detect_and_halt_stalled) is stalled
+# exactly once. reap flips it first; the timeout path then finds nothing NEW to
+# stall; a re-fire of reap is a no-op.
+DISP_D="$(now_minus 3600)"
+ledger_init "reap-double-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$DISP_D")" \
+  >/dev/null 2>&1
+double_out="$("$PY" - "$REPO" "reap-double-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Path 1 (native death): reap_unit flips dispatched -> stalled.
+r1 = t.tick_advance.reap_unit(repo, run, "U1", 1)
+# Path 2 (timeout watchdog) fires on the SAME unit: it is already stalled, so
+# detect_and_halt_stalled records NO NEW stall (newly_stalled is empty).
+now = datetime.datetime.now(datetime.timezone.utc)
+led = ledg.read_ledger(repo, run)
+fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+# A re-fire of the death path is also a no-op.
+r2 = t.tick_advance.reap_unit(repo, run, "U1", 1)
+after = ledg.read_ledger(repo, run)
+print("%s,%s,%s,%s" % (r1, (",".join(newly) if newly else "-"), r2, after["units"][0]["state"]))
+PYEOF
+)"
+# reap reaped once (True); the timeout path found nothing NEW (-); the re-fire is
+# a no-op (False); net state is exactly one stalled.
+if [ "$double_out" = "True,-,False,stalled" ]; then
+  pass
+else
+  fail "double_out=$double_out (expected True,-,False,stalled)"
+fi
+
+# ─── U3: reap_pending marker — kill-verifiability across the reap paths ────────
+# The `dispatched -> stalled` transition (in BOTH detect_and_halt_stalled and
+# reap_unit) sets `reap_pending=True` to record that a live-agent kill is OWED —
+# the kill itself (TaskStop + SIGTERM) is model-side (no reaping primitive in
+# lib/, KTD2), so Python cannot observe it. The driver clears the marker via
+# clear_reap_pending right AFTER issuing the kill; anything still in
+# units_awaiting_reap on a later tick is a forgotten kill ("requested but
+# unconfirmed"). Covers U3's reap_pending semantics.
+
+it "U3 reap_pending: reap_unit sets reap_pending; unit is in units_awaiting_reap; clear_reap_pending removes it"
+DISP_RP="$(now_minus 5)"
+ledger_init "reap-pending-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_RP")" \
+  >/dev/null 2>&1
+rp_flow="$("$PY" - "$REPO" "reap-pending-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Reap the dispatched unit at its matching attempt -> stalled + reap_pending set.
+t.tick_advance.reap_unit(repo, run, "U1", 1)
+led1 = ledg.read_ledger(repo, run)
+marker_after_reap = led1["units"][0].get("reap_pending")
+awaiting_before = t.tick_advance.units_awaiting_reap(led1)
+# Driver issues the model-side kill, then clears the marker.
+t.tick_advance.clear_reap_pending(repo, run, "U1")
+led2 = ledg.read_ledger(repo, run)
+marker_after_clear = led2["units"][0].get("reap_pending")
+awaiting_after = t.tick_advance.units_awaiting_reap(led2)
+print("%s|%s|%s|%s" % (
+    marker_after_reap,
+    ",".join(awaiting_before) or "-",
+    marker_after_clear,
+    ",".join(awaiting_after) or "-",
+))
+PYEOF
+)"
+# After reap: reap_pending True, U1 awaiting. After clear: reap_pending False, none awaiting.
+if [ "$rp_flow" = "True|U1|False|-" ]; then
+  pass
+else
+  fail "rp_flow=$rp_flow (expected True|U1|False|-)"
+fi
+
+it "U3 reap_pending: detect_and_halt_stalled (the timeout path) ALSO sets reap_pending"
+DISP_DP="$(now_minus 3600)"
+ledger_init "reap-pending-timeout" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$DISP_DP")" \
+  >/dev/null 2>&1
+tp_flow="$("$PY" - "$REPO" "reap-pending-timeout" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+now = datetime.datetime.now(datetime.timezone.utc)
+led = ledg.read_ledger(repo, run)
+fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+after = ledg.read_ledger(repo, run)
+awaiting = t.tick_advance.units_awaiting_reap(after)
+print("%s,%s,%s" % (
+    after["units"][0]["state"],
+    after["units"][0].get("reap_pending"),
+    ",".join(awaiting) or "-",
+))
+PYEOF
+)"
+# The timeout-stalled unit is stalled, carries reap_pending=True, and is awaiting reap.
+if [ "$tp_flow" = "stalled,True,U1" ]; then
+  pass
+else
+  fail "tp_flow=$tp_flow (expected stalled,True,U1)"
+fi
+
+it "U1 race-regression: heartbeat detect over a STALE snapshot whose unit landed a verdict -> no crash, unit dropped from newly_stalled"
+# U1's dispatch-time heartbeat runs detect_and_halt_stalled WHILE background agents
+# are live. If a healthy sibling lands its verdict (record_verdict) between the
+# snapshot read and the per-unit stalled flip, `stalled` is no longer a legal edge
+# from verdict-returned. Before the try/except guard this raised InvalidTransition
+# and wedged the run — the exact hang the watchdog exists to prevent.
+RACE_AT="$(now_minus 3600)"
+ledger_init "race-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$RACE_AT")" \
+  ce work >/dev/null 2>&1
+race_out="$("$PY" - "$REPO" "race-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Snapshot read WHILE dispatched (what the heartbeat tick holds).
+led = ledg.read_ledger(repo, run)
+# A concurrent healthy sibling lands its verdict on disk AFTER the snapshot.
+ledg.record_verdict(repo, run, "U1", [], attempt=1)
+now = datetime.datetime.now(datetime.timezone.utc)
+newly = []
+try:
+    fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+    crashed = "no"
+except Exception as e:  # noqa: BLE001 — the point is that NOTHING escapes.
+    crashed = type(e).__name__
+after = ledg.read_ledger(repo, run)
+print("%s,%s,%s" % (crashed, after["units"][0]["state"], (",".join(newly) if newly else "-")))
+PYEOF
+)"
+# No crash; the raced unit stays verdict-returned and is dropped from newly_stalled.
+if [ "$race_out" = "no,verdict-returned,-" ]; then
+  pass
+else
+  fail "race_out=$race_out (expected no,verdict-returned,-)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"
