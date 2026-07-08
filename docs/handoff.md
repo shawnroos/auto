@@ -1,99 +1,94 @@
-# Spinoff: /auto entry-routing priors — match real usage
+# Spinoff: make /auto's detector goal-aware (stop N-way fanouts when the goal is well-defined)
 
-> This handoff is directional — author intent and a starting point, enough to orient and begin, not a spec to execute literally. The code and tests are the source of truth: validate against them and expect to refine.
+> This handoff is directional — author intent and a starting point, not a spec.
+> The code and tests are the source of truth; validate against them and refine.
 
-> **Directional handoff.** The agent report below is high-signal; treat its 6 issues +
-> 4 changes as the spine, but validate each against the current `auto-detect.sh` /
-> `auto-driver` code before building — some may already be partly addressed.
+> **Shipped in v0.11.0** — goal-aware plan routing. The driver recovers the
+> operative goal (current `/auto` intent or a current-session `/goal` text;
+> else a session inference) and weights discovered plans against it via
+> `skills/auto-driver/references/goal-plan-relevance-rubric.md`: an explicit
+> match suppresses the fanout and preselects (confirm-gated, interactive only),
+> an inferred match only re-ranks, no match / no goal is today's freshness path
+> unchanged. The deterministic detector is untouched. See
+> `docs/plans/2026-07-08-001-feat-goal-aware-detector-plan.md`.
 
 ## Goal
-Fix `/auto`'s deterministic entry-routing so its priors match how it's actually used.
-The mechanics are sound; the precedence/heuristics are wrong: instruction-style args, a
-freshly-built plan, and a cluttered `docs/plans/` all pointed one way while routing went
-another. An expert agent had to override the router on every entry.
+Make `/auto`'s entry detector **goal-aware**. When a goal is bound or clearly
+expressed, the detector should use it to select/collapse the work it proposes —
+not blindly offer an N-way plan fanout. Concretely: kill the failure where the
+detector "finds 15 plans when the goal is extremely well defined" and offers a
+15-way `multi-plan` fanout instead of routing to the one thing the goal points at.
 
 ## Why now / context
-Field report from an agent driving `/auto` (v0.6.7) to build + ship a feature. Routing
-"worked out" only because the agent overrode it each time. This **reinforces**
-(already folded into) memory `auto_should_be_context_aware_smart_entry` — carries
-forward, not brand-new.
+Shawn keeps hitting this: he fires `/auto` with a sharp, well-defined goal, and the
+detector ignores the goal and surfaces a big `multi-plan` fanout over whatever plan
+files happen to sit in `docs/plans/`. The detector treats **plan-file count on
+disk** as the signal, when a bound/expressed goal should be the stronger signal
+that narrows intent. It should be "goal-pilled": goal first, disk clutter second.
 
-## The 6 issues (verbatim-faithful)
-1. **Freeform/argument rule misroutes imperatives to `/ce-plan`.** Both entries carried
-   NL instructions ("develop and implement a plan…", "execute, code-review and verify
-   the plan, then open a PR"). Neither is a literal plan-file path, so the driver does
-   `/ce-plan <ARGUMENTS>` and ends — wrong both times (#1 wanted plan+implement; #2
-   wanted execute, not re-plan a green plan). The rule can't tell "topic to plan" from
-   "imperative about existing work." Verbs — execute/implement/review/verify/ship/open
-   a PR — are the tell it should key on.
-2. **Multi-plan detection is filesystem-blind and outranks live intent.**
-   `auto-detect.sh` found 6 plans in `docs/plans/` — 5 stale (Mar/May), 1 co-authored
-   to green THIS session. The driver always asks, listing all 6 + a **"Fan out all 6"**
-   option — a footgun (6 worktrees on abandoned plans). No recency/git-status ranking,
-   no notion of "the plan this conversation is about."
-3. **Conversation-context path never fires.** v0.6.0 has a "rich session, act on it"
-   branch, but it only triggers if the driver sets `CLAUDE_AUTO_CONVERSATION_SIGNAL`
-   before loading the hypothesis — and the multi-plan filesystem result short-circuits
-   that. The richest signal (we just designed + adversarially reviewed a plan together)
-   lost to stale files. **Precedence is backwards.**
-4. **Recipe→capability mapping isn't legible at decision time.** Table says
-   reviewed-plan → recipe `w`, but the driver can't tell if `w` opens a PR / runs review
-   / verifies — and memory records `a1` exits without a PR. For "execute, review,
-   verify, open PR" there was no confident recipe pick, so the agent drove CE skills
-   directly. Recipes should advertise capabilities (PRs? review loop? verify gate?).
-5. **Single dispatch line is a SPOF.** Everything hinges on one `bash auto.sh …` call;
-   when the Bash classifier was momentarily unavailable, the whole entry stalled. No
-   graceful fallback. (Env hiccup, not auto's bug — but the design has no resilience.)
-6. **Tension: multi-plan ALWAYS asks vs advisor-gate "never ask, infer/advisor."** The
-   one place the driver hard-asks is exactly where conversation made the answer obvious.
-   Fires in the pre-arm window so it's allowed — but at odds with the stated ethos.
+## Key decisions already made / grounding facts (verified in the code)
+- **Where the bug lives:** `lib/auto-detect.sh` (~33k). The plan-discovery path is
+  goal-blind:
+  - `_discover_plans(repo)` globs `docs/plans/*.md`, `plans/*.md`, `*-plan.md` and
+    returns **all** of them (sorted, deduped) — no goal filter.
+  - `_rank_plans_safe(repo)` ranks those by *freshness only* (via `lib/plan-rank.py`).
+  - `_emit_multi_plan(...)` fires the `multi-plan` situation whenever there are **≥2
+    fresh plans**, offering a per-plan fanout (`dispatchable` situations are
+    `reviewed-plan` / `multi-plan`). This is the highest-blast-radius path (it can
+    auto-spawn N worktrees), which is exactly why it shouldn't trigger under a
+    well-defined goal.
+- **The goal signal already exists but is only half-plumbed:** the detector reads
+  `goal_intent` from the ledger and surfaces it for **in-flight / not-met runs**
+  (`_scan_runs` ~L313–353, used at L505+, L518, L529, L550). That same goal signal
+  is **never consulted** in the plan-discovery / multi-plan path. The fix is
+  plumbing goal-awareness into `_discover_plans` / `_rank_plans_safe` /
+  `_emit_multi_plan`, not inventing a new goal source.
+- **Adjacent machinery to reuse, not rebuild:** `lib/goal-status.py` /
+  `goal-status.sh` (goal state), `lib/plan-rank.py` (already the ranking seam —
+  natural place to add goal-conditioned scoring), `lib/recommender.py`. The native
+  `/goal` is **model-judged, not an externally-settable predicate** — so "is there a
+  goal" likely means: a bound native goal, a ledger `goal_intent`, and/or the intent
+  in the invoking `/auto` prompt. Decide which sources count.
+- **Repo/version:** `/Users/shawnroos/projects/auto`, currently `0.8.0`, published to
+  the shrimpshack marketplace (version-gated — bump the plugin version so an install
+  actually pulls the change). Branch off fresh `origin/main`.
 
-## What to change (the agent's recommendations)
-- **Promote conversation-context above the filesystem scan.** A plan created/edited this
-  session, or a clear imperative referencing existing work, beats a `docs/plans/` glob.
-- **Teach the freeform rule to read verbs.** Imperative + existing plan → route to
-  WORK, not `/ce-plan`.
-- **Rank multi-plan by recency/git-status**, mark stale/merged plans, suppress "fan out
-  all" when most are stale.
-- **Make recipe capabilities self-describing** so the right recipe is pickable for a
-  multi-step ask.
+## Open questions / not yet decided
+- **What does "goal-aware" collapse TO?** When a goal is present and one plan clearly
+  matches, route straight to `reviewed-plan` (single target)? Or still show a
+  goal-*ranked* list but with the matched plan pre-selected and the fanout suppressed?
+- **How is goal↔plan match scored?** Freshness is already there; goal-relevance is
+  new. Cheap lexical/heuristic match in `plan-rank.py`, or a model-judged step?
+  Prefer deterministic first (Shawn won't ship probabilistic v1s).
+- **Which goal sources are authoritative** (bound native goal vs ledger `goal_intent`
+  vs the invoking prompt), and precedence when they disagree.
+- **Fanout guardrail:** should a well-defined goal *hard-suppress* `multi-plan`
+  (never auto-spawn N worktrees under a clear goal), or just de-rank it? Given
+  multi-plan is the highest-blast-radius path, suppression is the safer default.
 
-## Open questions / design forks
-- Precedence model: exact ordering of (live-session plan) > (imperative+existing) >
-  (single fresh plan) > (multi-plan ask). Where does `CLAUDE_AUTO_CONVERSATION_SIGNAL`
-  get set, and how to stop the filesystem branch short-circuiting it?
-- Verb taxonomy for the freeform rule — which verbs mean "work on existing" vs "plan
-  new"? Edge cases ("plan and implement" wants BOTH).
-- Recency/git-status ranking signal — mtime? git log? a `status:` field in plan
-  frontmatter? How to detect "the plan this conversation is about."
-- Recipe-capability schema — where declared (recipe table / frontmatter) and how the
-  driver surfaces it (PRs/review/verify flags).
-- Dispatch resilience (#5) — fallback when the one bash line can't run.
-
-## Starting point (concrete)
-- Repo `~/projects/auto`. **Branch from `origin/main` (`82ce19c`)** — local `main`
-  (`280329e`) is 1 behind.
-- `lib/auto-detect.sh` — the hypothesis builder + multi-plan scan +
-  `CLAUDE_AUTO_CONVERSATION_SIGNAL` (issues #1/#2/#3).
-- `skills/auto-driver/SKILL.md` — the freeform rule, multi-plan ask, recipe table,
-  precedence (issues #1/#2/#4/#6).
-- `lib/auto.sh` / `lib/auto-spawn.py` — the single dispatch line (issue #5).
-- **Heavy worktree overlap — check before building:** `feature/auto-conversation-entry`
-  (the ORIGINAL v0.6.0 conversation-entry dev branch — likely already shipped into main;
-  read it to see what the conversation-context branch was meant to do), plus in-flight
-  `feature/auto-drive-fixes` (backstop/CLI — touches entry) and `feature/loop-planning-opt`.
-  All touch the entry surface; coordinate landing order to avoid `auto-detect.sh` /
-  driver collisions.
-- Memory: `auto_should_be_context_aware_smart_entry` (already updated with this),
-  `auto_dx7_algorithm_picker` (recipes), `native_goal_is_model_judged...`.
+## Starting point
+- `lib/auto-detect.sh` — `_discover_plans` (~L357), `_rank_plans_safe` (~L365),
+  `_emit_multi_plan` (~L397), `_scan_runs` (~L313), and the emit/decision block
+  around L505–551. Start by reading these end-to-end.
+- `lib/plan-rank.py`, `lib/goal-status.py`, `lib/recommender.py`.
+- `skills/auto/` and the `auto-driver` / `auto-launch` skills (they *consume* the
+  detector's JSON — `situation`, `multi_plan.paths`, `recommendation`).
+- Detector JSON contract is documented in the header comment of `auto-detect.sh`
+  (situations list at ~L17–59) — keep that contract intact or update its consumers.
+- Tests: `tests/` — the repo's `tests/run.sh` has a quirk (only tallies a file whose
+  LAST summary line matches `^<name>.test.sh: N passed, M failed`); mirror the
+  existing detector-test pattern and see a new test fail once before it passes.
+- Relevant memories: `feedback_auto_should_be_context_aware_smart_entry`,
+  `native_goal_is_model_judged_not_externally_settable_predicate`,
+  `project_auto_entry_routing_v070_base_shift`, `auto_test_runner_summary_line_tally`,
+  `deterministic_over_probabilistic_v1`.
 
 ## Recommended next step
-`/ce-plan` — the agent's 4 changes are a ready plan spine; the open work is the
-precedence model + verb taxonomy + recipe-capability schema. Phase 0 should diff the
-current `auto-detect.sh`/driver against the 6 issues (some may be partly fixed since the
-report) AND read `auto-conversation-entry` to avoid re-deriving the conversation branch.
-Then `/ce-code-review` (auto's backstop/bash history). Validate against the code first.
+`/ce-brainstorm` — the *where* (auto-detect.sh plan path) is nailed down, but the
+*shape* of goal-awareness (collapse-to-single vs goal-rank, match scoring, which
+goal sources, suppress-vs-derank the fanout) is a real design fork. Brainstorm those
+4 open questions into a decision, then `/ce-plan`. Keep the first cut deterministic.
 
 ## Source session
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/dde8ee69-bcee-40bd-a003-27e56020f197.jsonl`
-Resume:     `cd /Users/shawnroos && claude -r dde8ee69-bcee-40bd-a003-27e56020f197`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/d7fba74d-4df6-426b-aeea-a7f3c587a64a.jsonl`
+Resume:     `cd /Users/shawnroos && claude -r d7fba74d-4df6-426b-aeea-a7f3c587a64a`

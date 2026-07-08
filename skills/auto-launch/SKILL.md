@@ -284,6 +284,14 @@ backends. The mechanics:
 
 - **Interactive-only by construction.** The `driving_session_id` guard (§0)
   routes self-driven / headless runs to silent-apply; they never call `AskUserQuestion` (R11 / AE6).
+  This same guard scopes the driver's **goal-aware plan routing** (auto-driver
+  `SKILL.md` → `references/goal-plan-relevance-rubric.md`): goal-conditioned
+  fanout suppression, match preselect, and the single-match confirm apply on
+  interactive runs only. A self-driven / headless launch that reaches this
+  chooser silent-applies today's route unchanged — goal-aware suppression never
+  engages here, because its safety is the confirm this path deliberately skips.
+  The chooser itself needs no rubric logic; the driver has already reshaped the
+  route (or left it unchanged) before handing off a single confirmed path.
 - **Seed, don't interview.** Always open from the `auto-detect` hypothesis (or a
   degraded fallback drawn from real session signal). Never a blank questionnaire.
 - **Rubric-grounded.** Both the shape pick and the gate proposal are grounded in

@@ -34,10 +34,57 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
 | `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
-| `reviewed-plan`   | load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --recipe w"` | (n/a — single plan unambiguous)      |
-| `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9)            | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
+| `reviewed-plan`   | run the **goal-aware pre-step** below first; if it does not reshape, load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --recipe w"` | (n/a — single plan unambiguous)      |
+| `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9). Run the **goal-aware pre-step** below first | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
 | `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
+
+## Goal-aware plan routing (pre-step)
+
+Runs for `reviewed-plan` and `multi-plan` **only**, and **only on interactive
+runs** (`driving_session_id` null — self-driven/headless runs skip this whole
+step and take the row above unchanged; the confirm gate that makes it safe
+cannot fire on them). Full rubric: `references/goal-plan-relevance-rubric.md`.
+
+1. **Recover the goal for THIS invocation** from the context window: the typed
+   `/auto` intent, or the text of a `/goal <…>` bound in the current session for
+   this invocation (explicit); else infer from the session (advisory). Read
+   `/goal` text only — never query/run/bind/clear it. Ignore a `/goal` bound for
+   a prior completed run (the ~2-day `ce-sessions` lookback is for session
+   classification, not goal recovery). If a bound `/goal`'s text is not reliably
+   recoverable, degrade to inferred/no-goal.
+2. **Weight the plans** (`multi_plan.paths` / `single_plan.path`) against the
+   goal using the rubric's observable match bar: a plan matches when its stated
+   Objective/Summary names the goal's target outcome (not filename or freshness).
+   This step — the fuzzy judgment — is yours; produce the ordered list of
+   matched plan paths (best first).
+3. **Route deterministically.** Hand your verdicts to the crisp router; do not
+   decide the branch yourself. It owns the routing logic and **enforces** the
+   guardrails in code — it will not emit a fan-out suppression unless the goal is
+   `explicit` AND the run is interactive, so a self-driven run or an inferred
+   goal can never bypass the confirm gate:
+
+   ```
+   python "${CLAUDE_PLUGIN_ROOT}/lib/goal-route.py" \
+     '{"authority":"<explicit|inferred|none>","matches":[<ordered matched paths>],
+       "all_plans":[<multi_plan.paths>],"interactive":<driving_session_id is null>}'
+   ```
+
+   Execute the returned `reason`:
+   - `explicit-suppress` → goal-ranked pick-one `AskUserQuestion` over `ranked`
+     (`path` → `auto.sh "<path>"`), `preselect` on top, **fan-out-all
+     suppressed** (`suppress_fanout: true`), confirm even on a single match.
+   - `inferred-re-rank` → same ask over `ranked` (matches on top), `preselect`
+     on top, but **keep** the fan-out-all option.
+   - `no-match-unchanged` / `no-goal-unchanged` / `self-driven-unchanged`
+     (`action: passthrough`) → act on the row above unchanged (the detector's
+     freshness verdict, fan-out-all offered per its own rules).
+
+The detector (`lib/auto-detect.py`) is untouched by this — it still emits
+`reviewed-plan`/`multi-plan` on freshness; this pre-step reshapes the routing
+before dispatch and never changes the detector's verdict. The branch logic and
+its guardrails live in `lib/goal-route.py` (truth-tested by
+`tests/unit/goal-route.test.sh`), not in this prose.
 
 **Argument-aware freeform** (pre-hypothesis): a plan-file path → load `auto-launch`
 → `auto.sh "<path> --recipe w"`. Else classify with `lib/verb-classify.py`, then hand

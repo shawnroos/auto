@@ -475,6 +475,19 @@ conversation; only stale clutter yields to it.
   decisions (`feedback_compaction_summary_may_hallucinate_apis_verify_against_git`);
   verify any claim against git/the live transcript before acting on it.
 
+**Goal-aware plan routing reuses D2's current-transcript read, NOT the lookback.**
+The goal-aware pre-step (auto-driver `SKILL.md` → `references/goal-plan-relevance-rubric.md`)
+recovers the operative goal — the current `/auto` intent or a current-session
+`/goal <…>` text — from the driver's own live context for **this** invocation.
+The ~2-day `ce-sessions` lookback above is for session *classification* only; it
+is never a goal source, so a `/goal` bound for a prior completed run is not
+treated as the current goal (that would suppress today's fanout under a stale
+intent). Recovery is best-effort — extracting a slash-command argument, not
+classifying a session — so if a bound `/goal`'s text isn't reliably present, the
+pre-step degrades to inferred/no-goal handling rather than asserting an explicit
+goal. Like conversation-context, goal-aware suppression is interactive-only
+(`driving_session_id` null).
+
 **The dispatch procedure (KTD-2/3/7):**
 1. **Classify** the session into ONE state label from `lib/recommender.py`'s
    taxonomy (vague / clear-intent-no-plan / reviewed-plan / code-unreviewed /
