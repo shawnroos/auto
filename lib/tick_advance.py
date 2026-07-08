@@ -128,6 +128,52 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     return fresh, sorted(halted), newly_stalled
 
 
+def reap_unit(repo_root, run_id, unit_id, attempt):
+    """Attempt-gated idempotent reap: flip a `dispatched` unit to `stalled` (U2).
+
+    The death path's counterpart to detect_and_halt_stalled's timeout path. On a
+    native death signal (crash / auth-churn / completion with no verdict) the
+    driver reconciles the dead unit HERE instead of waiting out the stall
+    threshold. The flip goes through ledger.transition (the I-1 chokepoint),
+    mirroring detect_and_halt_stalled.
+
+    It transitions ONLY when the unit exists, is currently `dispatched`, AND its
+    current `attempt` equals the passed ``attempt``. Otherwise it is a NO-OP that
+    returns False and never raises:
+
+      * already `stalled` (or any non-dispatched state) — a second reap of a unit
+        the timeout watchdog already stalled is a no-op (dispatched -> stalled is
+        the only legal edge; stalled -> stalled is not). This makes the two
+        detection paths converge on exactly one stall per attempt (R3 / AE3).
+      * ``attempt`` older than the unit's current attempt — a late death event
+        from a driver-killed, already-superseded attempt-1 agent must NOT stall a
+        fresh, healthy attempt-2 retry. This is the load-bearing gate that
+        record_verdict's ``StaleVerdict`` does NOT cover: StaleVerdict gates the
+        verdict write, not the reap, so reap carries its own attempt check.
+
+    Returns True iff it actually reaped (transitioned), else False. Swallows
+    ``InvalidTransition`` defensively (a lost race — the unit left `dispatched`
+    between the read and the locked transition — is treated as a no-op).
+    """
+    fresh = ledger.read_ledger(repo_root, run_id)
+    unit = None
+    for u in fresh.get("units", []):
+        if u.get("id") == unit_id:
+            unit = u
+            break
+    if unit is None:
+        return False
+    if unit.get("state") != "dispatched":
+        return False
+    if int(unit.get("attempt", 0) or 0) != int(attempt):
+        return False
+    try:
+        ledger.transition(repo_root, run_id, unit_id, "stalled")
+    except ledger.InvalidTransition:
+        return False
+    return True
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Error recording (atomic, via ledger.py).
 

@@ -137,6 +137,22 @@ IS the wake signal. Per wave:
    dispatch; re-review. Loop terminates only when every unit reaches
    a clean terminal verdict.
 
+**Death path (event-driven reap).** When you observe a background
+agent has DIED — a crash, auth-churn silent death, or a completion
+that lands with no verdict written — reconcile that unit at once by
+calling `tick_advance.reap_unit(<run>, <unit>, <the dispatched
+attempt>)` (the attempt-gated reap) rather than waiting out the stall
+threshold. It flips the unit `dispatched → stalled` only when the unit
+is still `dispatched` at that attempt, then the stalled-node policy
+(reap → retry → escalate) takes over. This is idempotent with the
+watchdog-heartbeat timeout path above: a later tick that also sees the
+unit is a no-op because it is already `stalled`, and the attempt gate
+means a death event from an already-superseded attempt can never stall
+a fresh retry — the two paths converge on exactly one stall per
+attempt. Spike caveat: if the harness surfaces no distinct death
+signal (only verdict/completion), this path degrades to the U1 timeout
+watchdog with no change to the loop's shape.
+
 Full mechanism + the "when ScheduleWakeup IS right" long-tail
 fallback: `driver-reference.md` §7.
 
