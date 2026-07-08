@@ -64,7 +64,7 @@ dispatch:
 | `action` | phase | what you do |
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
-| `rearm`  | `work` | YIELD; harness re-invokes on next verdict. LONG ScheduleWakeup (1200s+) ONLY when no work in flight AND no ready units (genuinely stalled) |
+| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a tick fires even while work is in flight. A verdict landing first makes the heartbeat tick a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `seam-pause` → surface seam (§3) |
 | `noop`   | any   | another live tick holds the lock; do nothing |
 
@@ -122,7 +122,14 @@ IS the wake signal. Per wave:
    THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
-4. YIELD silently — end the turn. Do NOT ScheduleWakeup.
+4. YIELD for verdicts — end the turn — AND arm ONE watchdog-heartbeat
+   `ScheduleWakeup(watchdog_wakeup_delay(ledger), "/auto:auto-tick <run>")`
+   at dispatch. This single long wakeup (~the soonest in-flight stall
+   threshold, clamped to `[60, 3600]s`) fires a tick even while work is
+   in flight, so `detect_and_halt_stalled` reaps a wedged-but-alive
+   agent that never returns a verdict. It is NOT a sub-minute poll: a
+   verdict landing first re-invokes you and the heartbeat tick then
+   finds nothing past-threshold and is a self-cancelling no-op.
 5. On re-invocation: `orchestrator.converge(repo, run)` reads landed
    verdicts. Predicate met → exit (§5); ready_units → next wave;
    work in flight → yield again.

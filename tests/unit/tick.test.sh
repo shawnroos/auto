@@ -897,6 +897,41 @@ assert_eq "stop,done" \
   "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work B 0)"
 
 
+# ─── U1: watchdog_wakeup_delay — dispatch-time fallback heartbeat delay ───────
+# Closes the inverted work-phase carve-out: the driver arms ONE long fallback
+# ScheduleWakeup at dispatch so detect_and_halt_stalled fires while work is in
+# flight. watchdog_wakeup_delay is the pure helper that computes that delay —
+# the MINIMUM in-flight stall_threshold_seconds (default 600), clamped to the
+# ScheduleWakeup bound [60, 3600]. Returns None when nothing is dispatched (the
+# driver arms nothing). Pure over a ledger dict; no I/O, no on-disk ledger.
+
+# wwd <units-json>  — print watchdog_wakeup_delay({"units": <units-json>}).
+wwd() {
+  "$PY" - "$TICK_PY" "$1" <<'PYEOF'
+import sys, importlib.util, json
+tick_py, units_json = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+print(t.watchdog_wakeup_delay({"units": json.loads(units_json)}))
+PYEOF
+}
+
+it "U1 watchdog_wakeup_delay: single dispatched unit, no override -> default 600"
+assert_eq "600" "$(wwd '[{"id":"U1","state":"dispatched"}]')"
+
+it "U1 watchdog_wakeup_delay: MIN across dispatched units (non-dispatched ignored)"
+# U1=300, U2=120 dispatched -> min 120; U3 pending with a smaller 10 is ignored.
+assert_eq "120" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":300},{"id":"U2","state":"dispatched","stall_threshold_seconds":120},{"id":"U3","state":"pending","stall_threshold_seconds":10}]')"
+
+it "U1 watchdog_wakeup_delay: a 30s override clamps UP to the 60s floor"
+assert_eq "60" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":30}]')"
+
+it "U1 watchdog_wakeup_delay: a 4000s override clamps DOWN to the 3600s ceiling"
+assert_eq "3600" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":4000}]')"
+
+it "U1 watchdog_wakeup_delay: nothing dispatched -> None (driver arms nothing)"
+assert_eq "None" "$(wwd '[{"id":"U1","state":"pending"},{"id":"U2","state":"verdict-returned","findings":[]}]')"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"
