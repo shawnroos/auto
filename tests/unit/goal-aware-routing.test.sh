@@ -49,6 +49,12 @@ if [ -f "$RUBRIC" ]; then pass; else fail "missing: ${RUBRIC}"; fi
 it "driver SKILL.md references the relevance rubric"
 if skill_has "goal-plan-relevance-rubric.md"; then pass; else fail "driver does not reference the rubric doc"; fi
 
+# ─── Scenario 2b: the driver delegates routing to the deterministic seam ─────
+# The branch decision + guardrails live in lib/goal-route.py, not prose. If the
+# driver stops calling it, the R12/R8 enforcement reverts to prose-only.
+it "driver SKILL.md delegates the route decision to lib/goal-route.py"
+if skill_has "lib/goal-route.py"; then pass; else fail "driver does not call the deterministic router lib/goal-route.py"; fi
+
 # ─── Scenario 3: the four routing-branch markers are present ────────────────
 # These are the contract strings the driver pre-step (step 3) writes and this
 # test guards. Missing any one means a routing branch was dropped or renamed.

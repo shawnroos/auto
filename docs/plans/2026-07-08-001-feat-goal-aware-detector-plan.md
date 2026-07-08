@@ -100,7 +100,7 @@ Firing `/auto` with a sharp, well-defined goal still surfaces a `multi-plan` fan
 - KTD-2. **Goal recovery is an in-agent context scan by the driver, scoped to the current invocation — no env-var round-trip.** The driver recovers the goal directly from the current invocation's context: the `/auto` prompt intent, and a `/goal <text>` line bound in the current session *for this invocation* (explicit), else a session inference (advisory). Crucially, the driver's existing `~2-day ce-sessions` lookback (`skills/auto-driver/SKILL.md`) is reused only for **session classification** (conversation-context), **not** for goal recovery — a `/goal` from a prior, already-completed run in that window must never be treated as the operative explicit goal, or a later bare `/auto` would suppress its fanout under a stale intent. Recovery is also best-effort: the driver's transcript capability today classifies the session rather than extracting a slash-command argument, so if a bound `/goal`'s text is not reliably recoverable in-context, the driver degrades to inferred/no-goal handling (keep fanout) rather than silently asserting an explicit goal. Unlike `CLAUDE_AUTO_CONVERSATION_SIGNAL` — which exists because the *detector* needed the signal — the detector never sees the goal here. Rationale: smallest plumbing; the detector's no-transcript constraint is irrelevant when weighting is driver-side; and scoping to the current invocation prevents a stale goal from wrongly narrowing.
 - KTD-3. **The rubric is a new reference doc extending `goal-rubric.md`.** It defines the three goal sources and their authority split (explicit narrows, inferred nudges), the relevance judgment (does a plan advance the goal's named outcome?), and the match / no-match bar. The bar is anchored to an **observable predicate** — a plan matches when its stated Objective/summary names the goal's target artifact or named outcome — rather than a "would two competent agents agree" agreement heuristic, which is the exact phrasing `goal-rubric.md` itself flags as too fuzzy to be a checkable criterion. Rationale: consume/extend the existing rubric precedent (R5) while avoiding an unstable bar that could suppress fanout on one run and offer it on the next from identical inputs.
 - KTD-4. **Goal-aware routing is a pre-step layered over the detector's existing verdict, not a contract change.** The detector still emits `multi-plan` / `reviewed-plan` with the same JSON envelope; the driver recovers the goal and reshapes the routing *before* it acts on the situation. Rationale: preserves the detector JSON contract and every consumer (`auto-launch`, `auto-spawn.py`), keeping blast radius to driver prose + one new doc.
-- KTD-5. **Behavioral verification is by deterministic envelope + doc-contract, not LLM behavioral tests.** The agent-judged routing is not bash-testable; the repo runs no LLM-in-the-loop tests. Verification leans on (a) detector/entry regression tests proving the no-goal path is byte-unchanged, and (b) a doc-contract test asserting the rubric exists and is wired into the driver. The safety argument holds because goal-aware suppression is scoped to interactive runs (R12): the always-ask confirm gate is what fences off a wrong route, and it can only fire on interactive runs — so on self-driven/headless runs, where the launch chooser silent-applies and no confirm is possible, goal-aware routing does not engage at all and behavior is today's unchanged path. No un-gated auto-act is introduced. Rationale: the always-ask gate + unchanged detector + interactive-only scope are the real safety; test what is deterministic and honestly mark what is prose.
+- KTD-5. **The routing DECISION is deterministic code; only the match JUDGMENT is agent-side.** The fuzzy half — "does plan P advance goal G's outcome?" — stays in the model (rubric). The crisp half — given those verdicts + authority + interactivity, which route fires and may it suppress the fanout — lives in `lib/goal-route.py` (the `recommender.py` precedent: model classifies, code decides). This makes the routing branches (R6/R7/R8/R9/R12) a bash-testable truth table (`tests/unit/goal-route.test.sh`) and **enforces the guardrails in code**: `goal-route.py` refuses to emit a fanout suppression unless the goal is `explicit` AND the run is interactive, so a self-driven run or an inferred goal can never bypass the confirm gate — a wrong model verdict can only mis-order a confirmable menu, never turn into an un-gated auto-suppress. Verification: (a) detector/entry regression proving the no-goal path is byte-unchanged (R10); (b) `goal-route.test.sh` truth table over the branches; (c) a doc-contract test that the driver wires the rubric + router. Only the match judgment itself is inherently untested (no LLM-in-the-loop tests in this repo) — and its worst case is bounded by the always-ask gate that the code enforces.
 
 ### High-Level Technical Design
 
@@ -199,17 +199,38 @@ The driver's existing situation table (`skills/auto-driver/SKILL.md`) gains this
 
 ---
 
+### U6. Deterministic routing seam + truth-table test
+
+- **Goal:** Move the routing DECISION (not the match judgment) out of driver prose into deterministic, tested code that enforces the guardrails.
+- **Requirements:** R6, R7, R8, R9, R12 (branch logic + enforcement).
+- **Dependencies:** U2 (the driver prose that calls it).
+- **Files:** `lib/goal-route.py` (new), `tests/unit/goal-route.test.sh` (new), `skills/auto-driver/SKILL.md` (wire the call).
+- **Approach:** `lib/goal-route.py` is a pure function of `{authority, matches, all_plans, interactive}` → `{action, reason, suppress_fanout, preselect, ranked}`, mirroring `lib/recommender.py` (model classifies, code decides). It refuses `suppress_fanout: true` unless `authority == explicit` AND `interactive` — the mechanical R12/R8 enforcement. Degrade-safe: malformed input → passthrough, never suppress, exit 0. The driver's pre-step (U2 step 3) produces the match verdicts, calls `goal-route.py`, and executes the returned `reason` (the four branch markers become the router's `reason` values, plus `self-driven-unchanged`).
+- **Execution note:** truth-table proof-first. See `goal-route.test.sh` fail once by breaking the R12 guard before it passes.
+- **Patterns to follow:** `lib/recommender.py` (pure deterministic mapping + CLI + degrade), `lib/plan-rank.py` (CLI/JSON idiom).
+- **Test scenarios:**
+  - explicit × interactive × ≥1 match → `explicit-suppress`, `suppress_fanout: true`, preselect top.
+  - inferred × interactive × match → `inferred-re-rank`, `suppress_fanout: false`, full set re-ranked matches-first.
+  - no match / no goal → passthrough, no suppress.
+  - self-driven (`interactive: false`) × explicit × match → `self-driven-unchanged`, **never** suppress (R12 control).
+  - malformed input / `matches` not a list → passthrough, never suppress (degrade).
+  - invariant sweep: `suppress_fanout: true` occurs **only** for explicit × interactive.
+- **Verification:** `bash tests/unit/goal-route.test.sh` green; breaking the R12 guard turns the R12 case + invariant sweep red.
+
+---
+
 ## Verification Contract
 
 | Gate | Command | Applies to | Done signal |
 |---|---|---|---|
 | Full suite | `bash tests/run.sh` | all units | Green, including the new `goal-aware-routing.test.sh` tally line |
 | Detector regression | `bash tests/run.sh` (subset: plan-ranking, recipe-smart-entry, launch-chooser, recipe-picker, conversation-entry) | U2 | Pass unchanged — proves the no-goal path (R10) is byte-stable |
-| Doc-contract | `bash tests/unit/goal-aware-routing.test.sh` | U1, U2, U5 | Rubric exists, driver references it, all four branches documented |
+| Routing truth table | `bash tests/unit/goal-route.test.sh` | U6 | Every branch (R6/R7/R8/R9/R12) correct; suppress emitted only for explicit × interactive |
+| Doc-contract | `bash tests/unit/goal-aware-routing.test.sh` | U1, U2, U5, U6 | Rubric exists, driver references it + the router, all four branches documented |
 | Wikilink + size lints | `bash tests/unit/wikilink-check.test.sh`, `bash tests/unit/size-budget.test.sh` | U1, U2 | Green — new doc links valid, no lib budget crossed |
 | Deliberate-fail check | Remove a branch string / the rubric file, run `goal-aware-routing.test.sh` | U5 | Test goes red, confirming it actually guards the wiring |
 
-Agent-judged routing behavior (R6–R9 at runtime) has no bash test — it is verified by the deterministic envelope (detector unchanged) plus the interactive-only always-ask gate (R12), per KTD-5. The U5 doc-contract test guards the *wiring and marker phrasing* so the prose can't silently drift to goal-blind, but it cannot prove the routing prose is semantically correct — that is an inherent limit of agent-judged behavior, disclosed here honestly.
+The routing DECISION is bash-tested by `goal-route.test.sh` (U6) — every branch and the R12/R8 guardrail. Only the fuzzy match JUDGMENT (does a plan advance the goal's outcome?) is agent-side and inherently untested here (no LLM-in-the-loop tests in this repo); its worst case is bounded because `goal-route.py` will not emit a suppression off the explicit × interactive path, so a wrong verdict only mis-orders a confirmable menu. The doc-contract test (U5) additionally guards that the driver keeps wiring the rubric + router so it can't silently drift to goal-blind.
 
 ---
 
@@ -220,6 +241,7 @@ Agent-judged routing behavior (R6–R9 at runtime) has no bash test — it is ve
 - Goal recovery is scoped to the current invocation and degrades to inferred/no-goal when a bound `/goal`'s text is not recoverable; a prior completed run's `/goal` is never treated as operative (R1, KTD-2).
 - `skills/auto-launch/SKILL.md` states that the self-driven silent-apply path does not apply goal-aware suppression/confirm (R12), so the always-ask safety gate is never bypassed.
 - A confirmed goal-ranked selection dispatches via the unchanged `auto.sh`/`auto-launch` path; an explicit single match asks rather than auto-dispatching on interactive runs (R6, R7).
+- `lib/goal-route.py` owns the routing decision + guardrail enforcement (suppress only for explicit × interactive), truth-tested by `tests/unit/goal-route.test.sh`; the driver calls it (R6–R9, R12).
 - `lib/auto-detect.py` and `lib/plan-rank.py` are unmodified; detector/entry regression tests pass unchanged (R10).
 - Plugin version bumped to `0.11.0`, with a feature/version note in `docs/handoff.md` (R11).
 - `bash tests/run.sh` is green, including the new `goal-aware-routing.test.sh` (whose grep markers match the phrasing U2 wrote), which was seen to fail once before passing.

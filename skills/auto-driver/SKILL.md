@@ -56,19 +56,35 @@ cannot fire on them). Full rubric: `references/goal-plan-relevance-rubric.md`.
 2. **Weight the plans** (`multi_plan.paths` / `single_plan.path`) against the
    goal using the rubric's observable match bar: a plan matches when its stated
    Objective/Summary names the goal's target outcome (not filename or freshness).
-3. **Route** — pick exactly one branch:
-   - `explicit-suppress` — explicit goal + ≥1 match → goal-ranked pick-one
-     `AskUserQuestion` (`path` → `auto.sh "<path>"`), top match preselected,
-     **fan-out-all suppressed**, confirm even on a single match.
-   - `inferred-re-rank` — inferred goal + ≥1 match → same ask, top match
-     preselected, but **keep** the fan-out-all option.
-   - `no-match-unchanged` — goal present, no plan matches → act on the row above
-     unchanged (freshness verdict, fan-out-all offered when the set is fresh).
-   - `no-goal-unchanged` — no goal recovered → act on the row above unchanged.
+   This step — the fuzzy judgment — is yours; produce the ordered list of
+   matched plan paths (best first).
+3. **Route deterministically.** Hand your verdicts to the crisp router; do not
+   decide the branch yourself. It owns the routing logic and **enforces** the
+   guardrails in code — it will not emit a fan-out suppression unless the goal is
+   `explicit` AND the run is interactive, so a self-driven run or an inferred
+   goal can never bypass the confirm gate:
+
+   ```
+   python "${CLAUDE_PLUGIN_ROOT}/lib/goal-route.py" \
+     '{"authority":"<explicit|inferred|none>","matches":[<ordered matched paths>],
+       "all_plans":[<multi_plan.paths>],"interactive":<driving_session_id is null>}'
+   ```
+
+   Execute the returned `reason`:
+   - `explicit-suppress` → goal-ranked pick-one `AskUserQuestion` over `ranked`
+     (`path` → `auto.sh "<path>"`), `preselect` on top, **fan-out-all
+     suppressed** (`suppress_fanout: true`), confirm even on a single match.
+   - `inferred-re-rank` → same ask over `ranked` (matches on top), `preselect`
+     on top, but **keep** the fan-out-all option.
+   - `no-match-unchanged` / `no-goal-unchanged` / `self-driven-unchanged`
+     (`action: passthrough`) → act on the row above unchanged (the detector's
+     freshness verdict, fan-out-all offered per its own rules).
 
 The detector (`lib/auto-detect.py`) is untouched by this — it still emits
 `reviewed-plan`/`multi-plan` on freshness; this pre-step reshapes the routing
-before dispatch and never changes the detector's verdict.
+before dispatch and never changes the detector's verdict. The branch logic and
+its guardrails live in `lib/goal-route.py` (truth-tested by
+`tests/unit/goal-route.test.sh`), not in this prose.
 
 **Argument-aware freeform** (pre-hypothesis): a plan-file path → load `auto-launch`
 → `auto.sh "<path> --recipe w"`. Else classify with `lib/verb-classify.py`, then hand
