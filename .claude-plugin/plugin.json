@@ -1,7 +1,7 @@
 {
   "name": "auto",
   "description": "Workflow-agnostic pulsed loop engine for Claude Code: runs the auto loop pattern (plan-loop -> seam -> work-loop, parallel fan-out, severity-based exit) as a durable, observable state machine. Ships named recipes (A1 Classic, A2 Parallel Theories+Judge, A4 Adversarial Pair, W Work-only) \u2014 pick a workflow topology at /auto start, or author your own. A disk-persisted per-unit ledger is the loop's source of truth; the engine is workflow-blind and drives any workflow through a thin adapter. Self-paces in-session via ScheduleWakeup; resume after a suspend is one command off the durable ledger.",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "author": {
     "name": "Shawn Roos",
     "email": "shawn@slateteams.com"
