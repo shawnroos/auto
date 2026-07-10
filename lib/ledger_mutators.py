@@ -31,7 +31,11 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from _bootstrap import DRIVING_SESSION_KEY, load_lib_module  # noqa: E402
+from _bootstrap import (  # noqa: E402
+    AGENT_SESSIONS_KEY,
+    DRIVING_SESSION_KEY,
+    load_lib_module,
+)
 
 ledger_core = load_lib_module("ledger_core")
 
@@ -854,6 +858,56 @@ def set_bound_override(
             "at": ledger_core.now_iso(),
         }
         return bound_type
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
+_MAX_AGENT_SESSIONS = 256
+
+
+def register_session(repo_root, run_id, session_id):
+    """Join ``session_id`` to the run's OWNERSHIP SET (U8 / R21 / KTD-7).
+
+    A dispatched phase sub-agent calls this on start. Both PreToolUse hooks then
+    gate it by membership of ``{driving_session_id} ∪ agent_session_ids`` instead
+    of scalar equality against the boss's session — which is why the fail-closed
+    destructive backstop now fires inside the sub-agent tree, where the ``fix``
+    phase writes code and runs Bash.
+
+    Membership is opt-IN by registration, never by co-location: an unrelated
+    Claude session running in the same worktree is in neither key and is never
+    gated (the "standalone ce-skill is not captured" dimension is preserved).
+
+    Idempotent — re-registering an already-present id is a no-op, so a sub-agent
+    that retries its own start does not grow the set. Bounded at
+    ``_MAX_AGENT_SESSIONS`` so a pathological re-dispatch loop cannot grow the
+    ledger without limit; the oldest entry is evicted first. Eviction is safe:
+    an evicted session is one that registered 256 dispatches ago and is long
+    dead, and a live sub-agent re-registers on start.
+
+    I-1: read + membership check + append happen inside ONE
+    ``_with_locked_ledger`` call. Two sub-agents registering concurrently
+    serialize; neither loses the other's id.
+
+    Does NOT touch ``driving_session_id`` — the boss remains the primary owner,
+    and only the boss's session is exempt from the action gate's operator-pause
+    carve-out (see on-pretooluse-action.py::_owns_session).
+    """
+    if not session_id or not isinstance(session_id, str):
+        raise ledger_core.LedgerError(
+            f"register_session requires a non-empty session_id string: {session_id!r}"
+        )
+
+    def mutate(ledger):
+        existing = ledger.get(AGENT_SESSIONS_KEY)
+        if not isinstance(existing, list):
+            existing = []
+        if session_id not in existing:
+            existing.append(session_id)
+            if len(existing) > _MAX_AGENT_SESSIONS:
+                existing = existing[-_MAX_AGENT_SESSIONS:]
+        ledger[AGENT_SESSIONS_KEY] = existing
+        return list(existing)
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 

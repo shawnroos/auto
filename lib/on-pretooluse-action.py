@@ -70,6 +70,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
+    AGENT_SESSIONS_KEY,
     DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
@@ -373,20 +374,47 @@ def _owns_session(led, *, session_id):
     first; ``abort`` → ``phase=done`` is the clean full-release cleanup path.
 
     Dimension #2 (a concurrent STANDALONE ce-skill is not gated) is preserved by
-    the ``session_id`` equality conjunct alone — a standalone skill has a
-    different session_id and never matches. Still NOT on-stop's `_is_blocking`
-    (no met-state coupling).
+    the ``session_id`` MEMBERSHIP conjunct alone — a standalone skill is neither
+    the driving session nor a registered sub-agent, so it never matches. Still
+    NOT on-stop's `_is_blocking` (no met-state coupling).
+
+    OWNERSHIP IS A SET (U8 / R21 / KTD-7): the loop's phase work — including
+    ``fix``, which writes code and runs Bash — now runs in background sub-agents
+    that carry their OWN session_id. Matching only the scalar ``driving_session_id``
+    left the destructive backstop dark for exactly the phase most likely to run a
+    destructive command. A dispatched sub-agent registers itself into
+    ``agent_session_ids`` and is gated identically to the boss.
+
+    THE OPERATOR-PAUSE EXEMPTION IS DRIVING-SESSION-ONLY (the hazard U8 had to
+    avoid): the exemption above exists because, during a pause the human
+    initiated, the only actor issuing tool calls is the OPERATOR doing their own
+    cleanup. A sub-agent is NEVER the operator — an in-flight sub-agent can still
+    be executing while the operator deliberates. Extending the exemption to the
+    whole owner set would have let a registered sub-agent run ``rm -rf`` during an
+    operator pause: a strictly WIDER destructive surface than before U8, created
+    by the very change meant to narrow it. So the exemption is gated on
+    ``is_driving``. tests/integration/tree-ownership.test.sh scenario 5 is the
+    regression.
     """
     if not isinstance(led, dict):
         return False
     if phase_grammar.current_phase(led) == "done":
         return False
+    if not session_id:
+        return False
     driving = led.get(DRIVING_SESSION_KEY)
-    if not (bool(driving) and driving == session_id):
+    is_driving = bool(driving) and driving == session_id
+    registered = led.get(AGENT_SESSIONS_KEY)
+    is_agent = isinstance(registered, list) and session_id in registered
+    if not (is_driving or is_agent):
         return False
     loop = led.get("loop") or {}
-    if loop.get("driver") == "manual" and not loop.get("backstop_latched"):
-        return False  # operator-controlled pause => allow the operator's own actions
+    if (
+        is_driving
+        and loop.get("driver") == "manual"
+        and not loop.get("backstop_latched")
+    ):
+        return False  # operator-controlled pause => allow the OPERATOR's own actions
     return True
 
 

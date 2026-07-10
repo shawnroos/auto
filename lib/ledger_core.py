@@ -638,6 +638,14 @@ def init_ledger(
             # top-level (run-identity, not liveness) + match on equality. Always
             # present at init (None included); the mutator's clear path pops it.
             "driving_session_id": driving_session_id,
+            # v0.13.0 U8 (KTD-7/R21): the OWNERSHIP SET. Dispatched phase
+            # sub-agents carry their own session_id and register here, so both
+            # PreToolUse hooks gate the tree by MEMBERSHIP of
+            # {driving_session_id} ∪ agent_session_ids rather than by scalar
+            # equality. Membership is opt-IN — an unrelated session sharing the
+            # worktree is never gated. Literal is inlined (see _bootstrap.py's
+            # AGENT_SESSIONS_KEY note: ledger_core cannot import _bootstrap).
+            "agent_session_ids": [],
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": now_iso()},

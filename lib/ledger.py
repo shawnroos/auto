@@ -114,6 +114,7 @@ set_winner_unit_id = ledger_mutators.set_winner_unit_id
 set_verdict_decision = ledger_mutators.set_verdict_decision
 set_bound_override = ledger_mutators.set_bound_override
 set_driving_session_id = ledger_mutators.set_driving_session_id
+register_session = ledger_mutators.register_session  # U8 ownership set (R21)
 append_advisor_audit = ledger_mutators.append_advisor_audit
 set_exit_reason = ledger_mutators.set_exit_reason
 accumulate_active_time = ledger_mutators.accumulate_active_time
@@ -253,6 +254,13 @@ def _cli(argv):
         # set-* feedback verbs above — force-skip/add-unit/reshape-deps are the
         # same "model drives, ledger revalidates under the lock" family, so they
         # take the run-id the agent already has and never an explicit repo arg.
+        if cmd == "register-session":
+            # register-session <run> <session-id>   (U8/R21 — a dispatched phase
+            # sub-agent joins the ownership set so the fail-closed destructive
+            # backstop and the advisor gate reach it. Idempotent.)
+            run, sid = argv[1], argv[2]
+            register_session(resolve_repo(), run, sid)
+            return 0
         if cmd == "force-skip":
             # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
             # the mutator rejects a blank one under the lock)

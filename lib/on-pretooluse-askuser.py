@@ -50,6 +50,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
+    AGENT_SESSIONS_KEY,
     DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
@@ -97,9 +98,26 @@ def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, n
             return False
         if (now - last_beat).total_seconds() > stale_threshold:
             return False
-    # KTD-5 — session_id EQUALITY (read driving_session_id defensively).
+    # KTD-5 — session_id MEMBERSHIP (read both keys defensively).
+    #
+    # U8 (R21/KTD-7): ownership widened from a scalar to the set
+    # {driving_session_id} ∪ agent_session_ids, so a dispatched phase sub-agent —
+    # which carries its own session_id and previously slipped this gate entirely —
+    # is redirected to the advisor exactly like the boss. Membership is opt-IN by
+    # registration: an unrelated standalone session in the same worktree is in
+    # neither, so it still never matches (Dimension #2 preserved).
+    #
+    # This gate fails OPEN, so a widened match can only ever deny MORE questions,
+    # never allow a destructive action. The fail-CLOSED action gate carries the
+    # operator-pause subtlety; nothing analogous is needed here because the
+    # `driver == "self"` conjunct above already excludes every paused run.
+    if not session_id:
+        return False
     driving = led.get(DRIVING_SESSION_KEY)
-    return bool(driving) and driving == session_id
+    if bool(driving) and driving == session_id:
+        return True
+    registered = led.get(AGENT_SESSIONS_KEY)
+    return isinstance(registered, list) and session_id in registered
 
 
 def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:

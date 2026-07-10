@@ -259,6 +259,19 @@ CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 # that one string in sync with this constant.
 DRIVING_SESSION_KEY = "driving_session_id"
 
+# U8 (R21/KTD-7) — the OWNERSHIP SET. The loop's phase work runs in background
+# sub-agents, which carry their own CLAUDE_CODE_SESSION_ID; a scalar
+# `driving_session_id` therefore matched none of them and BOTH PreToolUse hooks
+# went dark inside the tree. A dispatched sub-agent registers its session id here
+# (via `ledger.register_session`) and the hooks test MEMBERSHIP of
+# {driving_session_id} ∪ agent_session_ids.
+#
+# Membership is opt-IN by registration, never by mere co-location: an unrelated
+# Claude session in the same worktree is not in the set and is never gated. The
+# same "keep the literal in sync" caveat as DRIVING_SESSION_KEY applies to
+# ledger_core.py.
+AGENT_SESSIONS_KEY = "agent_session_ids"
+
 
 # The plugin-qualified tick command — the ONE copy of the string AND its hazard
 # note (v0.6.5). A programmatically fired plugin slash command must resolve as
