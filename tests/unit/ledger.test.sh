@@ -1061,6 +1061,48 @@ PYEOF
 )"
 assert_eq "ok" "$got"
 
+# ─── U3 (R4): `init` CLI verb — create a run + units from the tool surface ──
+# The plan-loop/work-loop steering family (force-skip/add-unit/reshape-deps)
+# auto-resolves the repo via resolve_repo() and takes only the run-id; `init`
+# joins that family so a run can be CREATED — not just mutated — from the CLI.
+LEDGER_CLI="$LEDGER_PY"
+
+it "init: CLI verb creates a readable ledger (predicate met==false, phase plan)"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliinit1 '[{"id":"u1"}]' ce plan \
+  >/dev/null 2>&1
+assert_eq "False|plan" \
+  "$(ledger_field cliinit1 '"%s|%s" % (L["exit_predicate_result"]["met"], L["loop_phase"])')"
+
+it "init: against an existing run-id fails (exit!=0) and leaves the ledger byte-identical"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliexist '[{"id":"u1"}]' ce plan \
+  >/dev/null 2>&1
+LPX="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" path "$REPO" cliexist)"
+before="$(cat "$LPX")"
+# Re-init with a DIFFERENT spec must be rejected AND must not touch the file.
+if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliexist '[{"id":"DIFFERENT"}]' native work \
+     >/dev/null 2>&1; then
+  fail "init succeeded against an existing run-id (should raise LedgerExists)"
+else
+  # byte-for-byte file contents (mtime-independent; stat is not compared).
+  [ "$before" = "$(cat "$LPX")" ] && pass \
+    || fail "a rejected init modified/truncated the existing ledger"
+fi
+
+it "init: an invalid adapter is rejected (exit!=0, no ledger file created)"
+LPBAD="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" path "$REPO" clibad)"
+if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clibad '[{"id":"u1"}]' bogus plan \
+     >/dev/null 2>&1; then
+  fail "invalid adapter accepted at the CLI"
+else
+  [ ! -f "$LPBAD" ] && pass || fail "invalid adapter left a ledger file on disk"
+fi
+
+it "init: units passed as JSON are normalized (state=pending, phase set, attempt counter)"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clinorm '[{"id":"n1"}]' ce plan \
+  >/dev/null 2>&1
+assert_eq "pending|True|True" \
+  "$(ledger_field clinorm '"%s|%s|%s" % (L["units"][0]["state"], "phase" in L["units"][0], "attempt" in L["units"][0])')"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger.test.sh: ${PASS} passed, ${FAIL} failed"

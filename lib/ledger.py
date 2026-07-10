@@ -261,6 +261,31 @@ def _cli(argv):
             run, sid = argv[1], argv[2]
             register_session(resolve_repo(), run, sid)
             return 0
+        if cmd == "init":
+            # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run
+            # from the tool surface; init_ledger was Python-API-only, so a sub-agent
+            # could read/mutate the ledger through the CLI but never open one.)
+            # units-json: JSON array of partial unit dicts (each at least {"id": ...});
+            # init_ledger normalizes each (fills state=pending, phase, attempt, ...).
+            # adapter defaults to "ce", loop-phase to "plan". Adapter/loop-phase are
+            # validated inside init_ledger against its authoritative sets BEFORE any
+            # write — an invalid one raises LedgerError (surfaced here as exit 1, no
+            # file written), so we do NOT re-guess the allowed set at the CLI.
+            # An existing run-id raises LedgerExists (a LedgerError) from init_ledger's
+            # under-lock existence check, which leaves the on-disk ledger untouched.
+            run = argv[1]
+            units = None
+            if len(argv) > 2 and argv[2]:
+                units = json.loads(argv[2])
+                if not isinstance(units, list):
+                    sys.stderr.write("ledger.py: init units must be a JSON array\n")
+                    return 2
+            adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
+            loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
+            init_ledger(
+                resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase
+            )
+            return 0
         if cmd == "force-skip":
             # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
             # the mutator rejects a blank one under the lock)
