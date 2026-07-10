@@ -1029,3 +1029,61 @@ the decision stays visible and auditable:
 See `lib/launch-gate.py` (the ladder + `SKIP_BAR` / `CONFIRM_BAR`),
 `skills/auto-launch/SKILL.md` (the agent, its §6/§6.1 compile step), and KTD-1 /
 KTD-4 / KTD-5 / KTD-6 in the plan for the full rationale.
+
+---
+
+## 16. Phase sub-agent dispatch — the tree runtime (v0.13.0 — KTD-1)
+
+v0.13.0 pushes the loop's context-heavy phase work DOWN into a sub-agent tree
+beneath a light boss session (the goal doc + phase digests are its whole resident
+context). The dispatch path does NOT change to make this happen — it is the same
+`ready_units → dispatch_batch → yield → converge` cycle §7 already describes,
+generalized so every phase's work descends into a disposable sub-agent that
+self-writes its verdict. This section is the theory; the operational steps live in
+`skills/auto/SKILL.md` §4 + §4.8.
+
+### `launch_fn` is and REMAINS a no-op — spawning is model-side
+
+This is the load-bearing, counterintuitive fact. Spawning a Claude sub-agent is a
+MODEL-side `Agent` tool call. `orchestrator.dispatch_batch` runs inside a
+`python3` subprocess and has NO access to that tool. So its injected
+`launch_fn` **stays the no-op recorder** — `orchestrator._default_launch_fn`
+returns `None` (`lib/orchestrator.py`), and the `orchestrator.py dispatch` CLI
+path uses that default. There is deliberately no "real launcher" wired into
+`dispatch_batch`; the earlier interface note about a driver-injected launcher is
+superseded — U5 wires no Python launcher, because none can spawn an `Agent`.
+
+Therefore `dispatch_batch` performs EXACTLY ONE thing: the `pending → dispatched`
+ledger transition (capped, `attempt`-incrementing, Bug #8-guarded). **The boss —
+a model session — issues the `Agent` spawns itself, in-turn**, exactly as the
+existing work-loop fan-out spawn (§7) and the model-side reap (§7 stalled-node
+policy) already operate. This is the standing "the tick PREPARES, YOU EXECUTE"
+contract (§1) applied to dispatch: `dispatch_batch` PREPARES (transitions the
+ledger); the boss EXECUTES (spawns the sub-agents). No new code lands on the
+dispatch path; `lib/orchestrator.py`, `lib/tick.py`, and the ledger family are
+untouched by U5.
+
+### Convergence reads the LEDGER, never sub-agent return text
+
+Each dispatched sub-agent self-writes its verdict via
+`bash lib/ledger.py record-verdict <run> <unit> '<findings>' <attempt>` — the I-1
+atomic write chokepoint — on completion. The verdict is durable the moment that
+(separate) process writes it, independent of whether the boss turn that
+dispatched it is still alive. `orchestrator.converge` is a pure READER (§7): a
+later pulse reads the landed verdict straight off disk. So a verdict lands even
+though the dispatching turn has exited — the durability property the whole tree
+runtime rests on, and the reason the boss context stays flat (it never reads
+sub-agent prose back in). `tests/integration/tree-dispatch.test.sh` proves this
+seam end-to-end deterministically (dispatch in one process, `record-verdict` in a
+separate process, converge in a third), plus attempt-identity (Bug #6), stale
+rejection (AE3 / `StaleVerdict`), the Bug #8 launch-failure guard, and the RISK-7
+alive-vs-past-threshold reap boundary.
+
+### The heartbeat still distinguishes a live boss from a dead tree (R19)
+
+Pacing and keep-alive stay in the boss session — a sub-agent cannot self-pace
+(no `ScheduleWakeup`; the spike settled this). The boss stamps `last_beat_at`
+every pulse (the tick's `beat=True` write); `lib/on-stop.py` treats a chain stale
+past `DRIVER_SELF_STALE_SECONDS` (3900s) as dead. The sub-agent prompt-builder
+sources its operating contract from the `describe` CLI verb (U4), not a line-range
+citation into this file, so R6/R7 hold where the work actually runs.

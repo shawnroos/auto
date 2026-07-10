@@ -317,6 +317,63 @@ advance/iterate, never the run's done-state. The decision math lives in
 only this live `advisor` consultation is integration-only (the bash+Python test
 harness cannot stub the `advisor` tool).
 
+### 4.8 Phase sub-agent dispatch — the tree runtime (v0.13.0, U5)
+
+The §4 work-loop fan-out IS the general mechanism: the loop's context-heavy
+phase work lives in a sub-agent tree beneath a light boss session, and the same
+dispatch → yield → converge shape drives it. **KTD-1 — read carefully, it is
+counterintuitive:** spawning a Claude sub-agent is a MODEL-side `Agent` tool
+call. `orchestrator.dispatch_batch` runs inside a `python3` subprocess with NO
+access to that tool — its `launch_fn` is and REMAINS a no-op
+(`orchestrator._default_launch_fn` returns `None`; the `orchestrator.py dispatch`
+CLI uses it). So **the boss (this session) issues the spawns itself, in-turn** —
+`dispatch_batch` performs ONLY the `pending → dispatched` ledger transition. This
+matches auto's standing "the tick PREPARES, YOU EXECUTE" contract
+(`driver-reference.md` §1, §16). `lib/orchestrator.py` is unchanged.
+
+Each pulse, on a `rearm` intent in the work phase:
+
+1. **Transition, don't spawn.** `orchestrator.dispatch_batch(repo, run, units,
+   cap)` — flips up to `cap` ready units `pending → dispatched` (bumping each
+   unit's `attempt`, Bug #6) and delegates the launch to the injected no-op. It
+   spawns nothing; that is your job.
+2. **Spawn ONE background `Agent` per dispatched unit.** Build each prompt to
+   carry: the **unit id**; its **`attempt` generation** (from this dispatch — the
+   agent passes it back so a superseded attempt's verdict is rejected as stale,
+   AE3); the **adapter invocation** (map `invokes.adapter_op` → skill per §4
+   step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
+   two-seam constraints — question routing, destructive-action avoidance,
+   self-termination on no-progress); and the instruction to **self-write its
+   verdict on completion** via `bash lib/ledger.py record-verdict <run> <unit>
+   '<json-findings>' <attempt>`.
+   - **Source the sub-agent's operating contract from the `describe` CLI verb**
+     (`bash lib/ledger.py describe`, shipping in U4) — NOT a `SKILL.md` line-range
+     citation. Hardcoding line ranges is the orientation tax this runtime removes
+     (R6/R7). **Dependency:** if `describe` is not yet on `lib/ledger.py`, the
+     prompt-builder still CALLS `bash lib/ledger.py describe`; only if the verb is
+     genuinely absent does it fall back to pointing at this section — never to a
+     line range.
+3. **YIELD, then converge from the LEDGER.** End the turn (§4 step 4, plus the
+   watchdog heartbeat). On re-invocation, `orchestrator.converge(repo, run)`
+   reads landed verdicts off disk — **NEVER from sub-agent return text.** A
+   verdict is durable the moment the sub-agent's `record-verdict` process writes
+   it, independent of whether the boss turn survived; convergence on a later
+   pulse picks it up even after the dispatching turn has exited (the durability
+   property, proved by `tests/integration/tree-dispatch.test.sh`). Reading
+   verdicts from the ledger — not from returned prose — is what keeps the boss
+   context flat across pulses (RISK-3).
+4. **Stamp `last_beat_at` every pulse (R19).** The tick's `beat=True` write is
+   the boss's keep-alive; it is what lets `lib/on-stop.py` tell a live boss from a
+   dead tree. If the chain goes stale past `DRIVER_SELF_STALE_SECONDS` (3900s)
+   with no beat, the Stop hook treats it as dead and releases the session.
+
+A launch that raises does NOT abandon the wave: `dispatch_batch`'s per-unit Bug #8
+guard marks that unit `stalled` (`last_error.call == "launch"`) and continues,
+and the stalled-node policy (§4) reaps → retries → escalates it. A dispatched but
+alive sub-agent within its `stall_threshold_seconds` is NOT reaped — only a
+past-threshold one is (RISK-7; `detect_and_halt_stalled` fires on `age >
+threshold`).
+
 ## 5. Exit
 
 Loop exits when tick returns `stop` with `predicate-met` reason and
