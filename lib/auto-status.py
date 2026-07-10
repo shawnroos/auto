@@ -299,6 +299,15 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
             deps = u.get("depends_on") or []
             dep_note = f"  depends_on={deps}" if deps else ""
             sys.stdout.write(f"    - {uid}: {state}  [{mark}]{dep_note}\n")
+            # R20: a force-skipped unit's reason — surfaced as a sub-bullet
+            # directly under the unit so a skip is auditable in the operator's
+            # face, never silent (mirrors the finding / bound_exit sub-bullet
+            # shape). Only terminal-skip units carry a skip_reason; a legacy or
+            # never-skipped unit reads None and prints nothing.
+            if state == "terminal-skip":
+                reason = u.get("skip_reason")
+                if reason:
+                    sys.stdout.write(f"        skip_reason: {reason}\n")
             for f in u.get("findings") or []:
                 sys.stdout.write(
                     f"        finding: {f.get('severity')} — {f.get('note', '')}\n"

@@ -104,6 +104,8 @@ read_ledger = ledger_core.read_ledger
 
 transition = ledger_mutators.transition
 force_skip = ledger_mutators.force_skip  # U2 steering verb (R3/R20)
+add_unit = ledger_mutators.add_unit  # U2 steering verb (R3)
+reshape_deps = ledger_mutators.reshape_deps  # U2 steering verb (R3)
 record_verdict = ledger_mutators.record_verdict
 set_loop = ledger_mutators.set_loop
 set_gaps_open = ledger_mutators.set_gaps_open
@@ -243,6 +245,44 @@ def _cli(argv):
             set_verdict_decision(
                 resolve_repo(), run, gate_unit, decision, payload=decision_payload
             )
+            return 0
+        # U2 STEERING channel — the surface the driving agent uses to operate the
+        # bookkeeping through Bash (its only ledger-write tool is this CLI; it
+        # cannot call the Python mutators directly). Repo auto-resolved from
+        # cwd/$CLAUDE_AUTO_REPO (resolve_repo), matching the record-verdict /
+        # set-* feedback verbs above — force-skip/add-unit/reshape-deps are the
+        # same "model drives, ledger revalidates under the lock" family, so they
+        # take the run-id the agent already has and never an explicit repo arg.
+        if cmd == "force-skip":
+            # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
+            # the mutator rejects a blank one under the lock)
+            run, unit, reason = argv[1], argv[2], argv[3]
+            force_skip(resolve_repo(), run, unit, reason)
+            return 0
+        if cmd == "add-unit":
+            # add-unit <run> <unit-id> [json-depends-on] [phase]
+            run, unit = argv[1], argv[2]
+            depends_on = None
+            if len(argv) > 3 and argv[3]:
+                depends_on = json.loads(argv[3])
+                if not isinstance(depends_on, list):
+                    sys.stderr.write(
+                        "ledger.py: add-unit depends_on must be a JSON array\n"
+                    )
+                    return 2
+            phase = argv[4] if len(argv) > 4 else None
+            add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
+            return 0
+        if cmd == "reshape-deps":
+            # reshape-deps <run> <unit-id> <json-depends-on>
+            run, unit, payload = argv[1], argv[2], argv[3]
+            depends_on = json.loads(payload)
+            if not isinstance(depends_on, list):
+                sys.stderr.write(
+                    "ledger.py: reshape-deps depends_on must be a JSON array\n"
+                )
+                return 2
+            reshape_deps(resolve_repo(), run, unit, depends_on)
             return 0
         sys.stderr.write(f"ledger.py: unknown subcommand {cmd!r}\n")
         return 2

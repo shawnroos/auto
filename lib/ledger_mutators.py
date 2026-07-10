@@ -5,8 +5,9 @@ The mutation layer of the ledger surface (see lib/ledger.py for the facade and
 docs/contracts/ledger-schema.md for the authoritative spec). Every function here
 routes through ``ledger_core._with_locked_ledger`` (the one RMW primitive), which
 recomputes the predicate in the SAME atomic snapshot as the write (I-1). Each is a
-single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
-``set_gaps_open``, ``set_enumerated_units``, ``set_winner_unit_id``,
+single-purpose mutator: ``transition``, ``record_verdict``, ``force_skip``,
+``add_unit``, ``reshape_deps``, ``set_loop``, ``set_gaps_open``,
+``set_enumerated_units``, ``set_winner_unit_id``,
 ``set_verdict_decision``, ``set_bound_override``, ``set_driving_session_id``,
 ``append_advisor_audit``, ``set_exit_reason``, ``accumulate_active_time``,
 ``increment_iteration_attempts``.
@@ -548,6 +549,151 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
             # Idempotent re-persist: clear any stale marker from a prior batch.
             dc.pop("dropped_depends_on_edges", None)
         return len(sanitized)
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
+def add_unit(repo_root, run_id, unit_id, depends_on=None, phase=None):
+    """Agent-driven unit insertion: append a NEW pending unit under flock (R3).
+
+    The steering verb behind R3 (an agent that discovers the plan needs one more
+    unit of work adds it directly, instead of re-running the plan phase). The new
+    unit is built through ``ledger_core._normalize_unit`` — it enters the ledger
+    with the SAME shape as an init-time or enumerate-time unit (state defaults to
+    ``pending``, the full findings/depends_on/attempt/skip_reason/… key set
+    present), so no downstream reader has to special-case an agent-added unit. We
+    do NOT hand-assemble the unit dict; the one unit-builder is the SSOT for shape.
+
+    I-1 (KTD-2): the duplicate-id check, the depends_on sanitize, the normalize
+    and the append all run inside ONE ``_with_locked_ledger`` call, and the
+    predicate is recomputed in that same atomic snapshot. A slow agent adding a
+    unit against a stale view has its write REVALIDATED and REJECTED rather than
+    merged; this function performs no ledger read or write outside that closure
+    (the steering-verbs lock-discipline test asserts this structurally).
+
+    Two invariants, both enforced INSIDE the lock because either violation would
+    otherwise wedge the run:
+      * DUPLICATE id → rejected. Two units sharing an id make ``_find_unit``
+        ambiguous (it returns the first match) and every id-keyed write becomes
+        nondeterministic — that is corruption, not a recoverable stall, so we
+        raise and write nothing.
+      * a ``depends_on`` edge to an UNKNOWN unit → rejected. Unlike
+        ``set_enumerated_units`` (which DROPS bad edges because it validates a
+        whole BATCH of model output, where a raise would materialize zero work
+        units — itself a stall), ``add_unit`` is a single DELIBERATE add: a bad
+        edge is a caller mistake we surface loudly, not silently repair. A
+        dangling edge would leave the unit permanently un-``_is_ready``
+        (``dep is None -> False``) — the exact silent-livelock class the
+        enumerate sanitizer exists to catch — so we REUSE that sanitizer
+        (``_sanitize_enumerated_depends_on``) rather than duplicate its logic and
+        turn any dropped edge into a hard reject. A self-edge is reported by the
+        sanitizer as ``self`` and likewise rejected (a unit depending on itself
+        is never ready).
+
+    New units are always ``pending`` — the ONLY legal birth state (every other
+    state is reached along the §3 grammar). ``depends_on`` defaults to empty;
+    ``phase`` defaults to ``_normalize_unit``'s run-phase-derived default
+    (``"work"`` outside a plan phase).
+    """
+    deps = list(depends_on or [])
+
+    def mutate(ledger):
+        units = ledger.setdefault("units", [])
+        existing_ids = {u.get("id") for u in units}
+        # DUPLICATE id: reject before any write — a colliding id is corruption
+        # (ambiguous _find_unit), not a stall we can repair by dropping.
+        if unit_id in existing_ids:
+            raise ledger_core.LedgerError(
+                f"cannot add unit {unit_id!r}: id already exists"
+            )
+        # Reuse the enumerate-path sanitizer as the ONE depends_on validator, but
+        # in REJECT mode: a single deliberate add surfaces a bad edge loudly
+        # rather than silently dropping it (the batch path's divergent choice).
+        sanitized, dropped = _sanitize_enumerated_depends_on(
+            [{"id": unit_id, "depends_on": deps}], existing_ids
+        )
+        if dropped:
+            _u, dep, reason = dropped[0]
+            raise ledger_core.LedgerError(
+                f"cannot add unit {unit_id!r}: depends_on edge to {dep!r} is "
+                f"{reason} (must name an existing unit, and not itself)"
+            )
+        clean_deps = sanitized[0].get("depends_on", [])
+        # Normalize through the ONE unit-builder so an agent-added unit is shape-
+        # identical to an init/enumerate unit (do NOT hand-build the dict).
+        loop_phase = ledger.get("loop_phase", "plan")
+        raw = {"id": unit_id, "state": "pending", "depends_on": clean_deps}
+        if phase is not None:
+            raw["phase"] = phase
+        units.append(ledger_core._normalize_unit(raw, loop_phase=loop_phase))
+        return unit_id
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
+def reshape_deps(repo_root, run_id, unit_id, depends_on):
+    """Agent-driven dependency rewrite: REPLACE a unit's ``depends_on`` under flock
+    (R3).
+
+    The steering verb behind R3 (an agent that learns unit X must actually wait
+    on unit Y rewires the graph directly). ``depends_on`` fully REPLACES the
+    unit's prior edge list — a merge would make the new complete set the agent
+    states unexpressible.
+
+    I-1 (KTD-2): the unit lookup, the unknown-dep + cycle checks and the write
+    all run inside ONE ``_with_locked_ledger`` call, predicate recomputed in the
+    same snapshot. A reshape decided against a stale graph is REVALIDATED and
+    REJECTED, never merged; no ledger read/write happens outside the closure
+    (asserted by the steering-verbs lock-discipline test).
+
+    Two rejections, both guarding readiness liveness:
+      * an edge to an UNKNOWN unit → rejected. A dangling dep leaves the unit
+        permanently un-``_is_ready`` (``dep is None -> False``); same class
+        ``set_enumerated_units`` sanitizes away, but a deliberate single reshape
+        surfaces it loudly. On rejection the ledger is untouched.
+      * a change that would introduce a CYCLE → rejected. A cycle makes every
+        unit on it mutually-unsatisfiable → never ready, never dispatched → a
+        silent full-run livelock. The check runs the SHARED detector
+        (``_find_depends_on_back_edge``) over the WHOLE unit graph with THIS
+        unit's edges swapped to the proposed set — because a reshape can close a
+        cycle THROUGH OTHER units (e.g. A->B already exists; reshaping B->A
+        closes it), the batch-internal-only view ``set_enumerated_units`` uses is
+        insufficient here, so we widen the graph but reuse the detector verbatim
+        (no second hand-rolled cycle finder). A self-edge is the degenerate
+        1-cycle and is caught by the same detector.
+    """
+    proposed = list(depends_on or [])
+
+    def mutate(ledger):
+        unit = ledger_core._find_unit(ledger, unit_id)  # raises UnknownUnit
+        units = ledger.get("units", [])
+        all_ids = {u.get("id") for u in units}
+        # UNKNOWN-dep guard: every proposed edge must name a real unit, else the
+        # reshaped unit can never become ready.
+        for d in proposed:
+            if not isinstance(d, str) or d not in all_ids:
+                raise ledger_core.LedgerError(
+                    f"cannot reshape {unit_id!r}: depends_on edge to {d!r} names "
+                    f"no existing unit"
+                )
+        # CYCLE guard: build the full dependency graph with this unit's edges
+        # REPLACED by the proposed set, then run the SHARED back-edge detector.
+        # Every unit id is a node key, and edges are restricted to known ids, so
+        # the detector never indexes a non-node (its `v not in adj` leaf guard is
+        # a no-op here). Reused verbatim — no divergent second cycle detector.
+        adj = {}
+        for u in units:
+            uid = u.get("id")
+            edges = proposed if uid == unit_id else (u.get("depends_on") or [])
+            adj[uid] = [d for d in edges if d in all_ids]
+        back = _find_depends_on_back_edge(adj)
+        if back is not None:
+            raise ledger_core.LedgerError(
+                f"cannot reshape {unit_id!r}: the change introduces a dependency "
+                f"cycle (back edge {back[0]!r} -> {back[1]!r})"
+            )
+        unit["depends_on"] = proposed
+        return proposed
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
