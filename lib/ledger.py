@@ -22,6 +22,9 @@ the contract wins and the code is the bug).
   * ledger_mutators  — the grammar-checked, flock-serialized scalar mutators
                        (transition, record_verdict, set_loop, set_gaps_open,
                        set_*, accumulate_active_time, increment_iteration_attempts).
+  * ledger_steering  — the AGENT-facing steering verbs (force_skip, add_unit,
+                       reshape_deps, register_session). Imports mutators for two
+                       graph helpers; never the reverse.
   * ledger_emitters  — phase-transition + iteration emission/composite paths
                        (transition_and_emit, emit_within_phase, reset_for_iteration,
                        atomic_iterate_step, and their pure helpers).
@@ -50,6 +53,7 @@ from _bootstrap import load_lib_module, resolve_repo  # noqa: E402
 ledger_core = load_lib_module("ledger_core")
 ledger_predicate = load_lib_module("ledger_predicate")
 ledger_mutators = load_lib_module("ledger_mutators")
+ledger_steering = load_lib_module("ledger_steering")
 ledger_emitters = load_lib_module("ledger_emitters")
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -103,9 +107,6 @@ read_ledger = ledger_core.read_ledger
 # Re-exports from ledger_mutators: grammar-checked scalar write paths.
 
 transition = ledger_mutators.transition
-force_skip = ledger_mutators.force_skip  # U2 steering verb (R3/R20)
-add_unit = ledger_mutators.add_unit  # U2 steering verb (R3)
-reshape_deps = ledger_mutators.reshape_deps  # U2 steering verb (R3)
 record_verdict = ledger_mutators.record_verdict
 set_loop = ledger_mutators.set_loop
 set_gaps_open = ledger_mutators.set_gaps_open
@@ -114,11 +115,20 @@ set_winner_unit_id = ledger_mutators.set_winner_unit_id
 set_verdict_decision = ledger_mutators.set_verdict_decision
 set_bound_override = ledger_mutators.set_bound_override
 set_driving_session_id = ledger_mutators.set_driving_session_id
-register_session = ledger_mutators.register_session  # U8 ownership set (R21)
 append_advisor_audit = ledger_mutators.append_advisor_audit
 set_exit_reason = ledger_mutators.set_exit_reason
 accumulate_active_time = ledger_mutators.accumulate_active_time
 increment_iteration_attempts = ledger_mutators.increment_iteration_attempts
+
+# ──────────────────────────────────────────────────────────────────────────
+# Re-exports from ledger_steering: the AGENT-facing steering verbs. One contract:
+# read freely; every write revalidates its precondition under the flock and can
+# reject. Split out of ledger_mutators when that file crossed its size budget.
+
+force_skip = ledger_steering.force_skip              # R3/R20 — reason mandatory
+add_unit = ledger_steering.add_unit                  # R3
+reshape_deps = ledger_steering.reshape_deps          # R3
+register_session = ledger_steering.register_session  # R21 — hook ownership set
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from ledger_emitters: phase-transition + iteration emission paths.
@@ -166,6 +176,86 @@ def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
 # ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.
+
+
+def _cli_steering(cmd, argv):
+    """Dispatch the AGENT-facing verbs. Returns an exit code, or None if unhandled.
+
+    Split out of ``_cli`` when it crossed the 120-LOC function budget. The cut is
+    conceptual, not arbitrary: these are the verbs the agent-native runtime exposes
+    as tools — create a run, add/reshape/retire a unit, join the hook ownership set
+    — as against the engine's own read + verdict-feedback verbs, which stay in
+    ``_cli``. All of them resolve the repo via ``resolve_repo()`` rather than an
+    explicit repo argv, because the model drives them with a run-id it already has.
+
+    ``None`` on an unrecognized command so ``_cli`` continues its own chain and
+    keeps emitting the single unknown-subcommand error. LedgerError propagates;
+    ``_cli`` owns the except clauses.
+    """
+    if cmd == "register-session":
+        # register-session <run> <session-id>   (U8/R21 — a dispatched phase
+        # sub-agent joins the ownership set so the fail-closed destructive
+        # backstop and the advisor gate reach it. Idempotent.)
+        run, sid = argv[1], argv[2]
+        register_session(resolve_repo(), run, sid)
+        return 0
+    if cmd == "init":
+        # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run
+        # from the tool surface; init_ledger was Python-API-only, so a sub-agent
+        # could read/mutate the ledger through the CLI but never open one.)
+        # units-json: JSON array of partial unit dicts (each at least {"id": ...});
+        # init_ledger normalizes each (fills state=pending, phase, attempt, ...).
+        # adapter defaults to "ce", loop-phase to "plan". Adapter/loop-phase are
+        # validated inside init_ledger against its authoritative sets BEFORE any
+        # write — an invalid one raises LedgerError (surfaced here as exit 1, no
+        # file written), so we do NOT re-guess the allowed set at the CLI.
+        # An existing run-id raises LedgerExists (a LedgerError) from init_ledger's
+        # under-lock existence check, which leaves the on-disk ledger untouched.
+        run = argv[1]
+        units = None
+        if len(argv) > 2 and argv[2]:
+            units = json.loads(argv[2])
+            if not isinstance(units, list):
+                sys.stderr.write("ledger.py: init units must be a JSON array\n")
+                return 2
+        adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
+        loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
+        init_ledger(
+            resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase
+        )
+        return 0
+    if cmd == "force-skip":
+        # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
+        # the mutator rejects a blank one under the lock)
+        run, unit, reason = argv[1], argv[2], argv[3]
+        force_skip(resolve_repo(), run, unit, reason)
+        return 0
+    if cmd == "add-unit":
+        # add-unit <run> <unit-id> [json-depends-on] [phase]
+        run, unit = argv[1], argv[2]
+        depends_on = None
+        if len(argv) > 3 and argv[3]:
+            depends_on = json.loads(argv[3])
+            if not isinstance(depends_on, list):
+                sys.stderr.write(
+                    "ledger.py: add-unit depends_on must be a JSON array\n"
+                )
+                return 2
+        phase = argv[4] if len(argv) > 4 else None
+        add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
+        return 0
+    if cmd == "reshape-deps":
+        # reshape-deps <run> <unit-id> <json-depends-on>
+        run, unit, payload = argv[1], argv[2], argv[3]
+        depends_on = json.loads(payload)
+        if not isinstance(depends_on, list):
+            sys.stderr.write(
+                "ledger.py: reshape-deps depends_on must be a JSON array\n"
+            )
+            return 2
+        reshape_deps(resolve_repo(), run, unit, depends_on)
+        return 0
+    return None
 
 
 def _cli(argv):
@@ -254,69 +344,9 @@ def _cli(argv):
         # set-* feedback verbs above — force-skip/add-unit/reshape-deps are the
         # same "model drives, ledger revalidates under the lock" family, so they
         # take the run-id the agent already has and never an explicit repo arg.
-        if cmd == "register-session":
-            # register-session <run> <session-id>   (U8/R21 — a dispatched phase
-            # sub-agent joins the ownership set so the fail-closed destructive
-            # backstop and the advisor gate reach it. Idempotent.)
-            run, sid = argv[1], argv[2]
-            register_session(resolve_repo(), run, sid)
-            return 0
-        if cmd == "init":
-            # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run
-            # from the tool surface; init_ledger was Python-API-only, so a sub-agent
-            # could read/mutate the ledger through the CLI but never open one.)
-            # units-json: JSON array of partial unit dicts (each at least {"id": ...});
-            # init_ledger normalizes each (fills state=pending, phase, attempt, ...).
-            # adapter defaults to "ce", loop-phase to "plan". Adapter/loop-phase are
-            # validated inside init_ledger against its authoritative sets BEFORE any
-            # write — an invalid one raises LedgerError (surfaced here as exit 1, no
-            # file written), so we do NOT re-guess the allowed set at the CLI.
-            # An existing run-id raises LedgerExists (a LedgerError) from init_ledger's
-            # under-lock existence check, which leaves the on-disk ledger untouched.
-            run = argv[1]
-            units = None
-            if len(argv) > 2 and argv[2]:
-                units = json.loads(argv[2])
-                if not isinstance(units, list):
-                    sys.stderr.write("ledger.py: init units must be a JSON array\n")
-                    return 2
-            adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
-            loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
-            init_ledger(
-                resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase
-            )
-            return 0
-        if cmd == "force-skip":
-            # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
-            # the mutator rejects a blank one under the lock)
-            run, unit, reason = argv[1], argv[2], argv[3]
-            force_skip(resolve_repo(), run, unit, reason)
-            return 0
-        if cmd == "add-unit":
-            # add-unit <run> <unit-id> [json-depends-on] [phase]
-            run, unit = argv[1], argv[2]
-            depends_on = None
-            if len(argv) > 3 and argv[3]:
-                depends_on = json.loads(argv[3])
-                if not isinstance(depends_on, list):
-                    sys.stderr.write(
-                        "ledger.py: add-unit depends_on must be a JSON array\n"
-                    )
-                    return 2
-            phase = argv[4] if len(argv) > 4 else None
-            add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
-            return 0
-        if cmd == "reshape-deps":
-            # reshape-deps <run> <unit-id> <json-depends-on>
-            run, unit, payload = argv[1], argv[2], argv[3]
-            depends_on = json.loads(payload)
-            if not isinstance(depends_on, list):
-                sys.stderr.write(
-                    "ledger.py: reshape-deps depends_on must be a JSON array\n"
-                )
-                return 2
-            reshape_deps(resolve_repo(), run, unit, depends_on)
-            return 0
+        rc = _cli_steering(cmd, argv)
+        if rc is not None:
+            return rc
         sys.stderr.write(f"ledger.py: unknown subcommand {cmd!r}\n")
         return 2
     except LedgerError as e:

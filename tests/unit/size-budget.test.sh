@@ -71,7 +71,14 @@ ALLOWED_FUNCTIONS=(
   # v0.6.0 U5 added driving_session_id (KTD-5): +1 param, +3-line type
   # validation, +4-line ledger-dict field. A ledger field's only home is
   # this chokepoint; the split stays the right move, kept off U5.
-  "lib/ledger_core.py:init_ledger:229"
+  # v0.13.0 U8 added agent_session_ids (KTD-7/R21, the PreToolUse ownership
+  # set): +1 dict line, +1 comment. Same reasoning as driving_session_id —
+  # a schema field's only home is this chokepoint, and the field is what
+  # lets the destructive backstop reach the sub-agent tree. The verb-surface
+  # work DID decompose where decomposition was real: ledger_mutators.py's
+  # steering verbs moved to ledger_steering.py and ledger.py::_cli's agent
+  # verbs moved to _cli_steering, both back under budget without a waiver.
+  "lib/ledger_core.py:init_ledger:231"
   # (_try_iteration_check waiver retired: the recipe-bug + iteration-crash
   # except branches were collapsed into the shared `_wedge_done_stop` helper,
   # bringing the function back under the 120-LOC budget — decompose, don't bump.)
@@ -93,7 +100,10 @@ ALLOWED_FUNCTIONS=(
   # legacy unit/predicate render. Each new visible field adds a few lines;
   # decomposing would extract per-section render helpers. (U12 shrank it 1
   # LOC by routing the bound_override read through iteration.read_bound_override.)
-  "lib/auto-status.py:_print_run:126"
+  # v0.13.0 U2 added R20's skip_reason render. The render BODY was extracted to
+  # _print_skip_reason rather than inlined (8 LOC out); what remains here is the
+  # single delegation call, +1 net. Decomposed first, waived only the residue.
+  "lib/auto-status.py:_print_run:127"
   # iterate_template is v0.3.0 U3's emitter. A single coherent computation:
   # validate inputs (recipe shape + emit_count bounds), read
   # iteration_emit_count, compute the next N unit ids, build the unit dicts.

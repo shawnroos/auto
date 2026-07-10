@@ -56,7 +56,7 @@ spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 core = m.ledger_core
 pred = m.ledger_predicate
-mut = m.ledger_mutators
+mut = m.ledger_steering  # the steering verbs moved out of ledger_mutators
 
 repo = os.environ["REPO"]
 op = sys.argv[1]

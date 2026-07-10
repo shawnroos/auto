@@ -5,12 +5,14 @@ The mutation layer of the ledger surface (see lib/ledger.py for the facade and
 docs/contracts/ledger-schema.md for the authoritative spec). Every function here
 routes through ``ledger_core._with_locked_ledger`` (the one RMW primitive), which
 recomputes the predicate in the SAME atomic snapshot as the write (I-1). Each is a
-single-purpose mutator: ``transition``, ``record_verdict``, ``force_skip``,
-``add_unit``, ``reshape_deps``, ``set_loop``, ``set_gaps_open``,
+single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
+``set_gaps_open``,
 ``set_enumerated_units``, ``set_winner_unit_id``,
 ``set_verdict_decision``, ``set_bound_override``, ``set_driving_session_id``,
 ``append_advisor_audit``, ``set_exit_reason``, ``accumulate_active_time``,
-``increment_iteration_attempts``.
+``increment_iteration_attempts``. The AGENT-facing steering verbs
+(``force_skip``, ``add_unit``, ``reshape_deps``, ``register_session``) live in
+``ledger_steering``, which imports this module for its two graph helpers.
 
 Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← emitters ← facade):
 imports ledger_core for constants, errors, the lock primitive, and the pure
@@ -31,11 +33,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from _bootstrap import (  # noqa: E402
-    AGENT_SESSIONS_KEY,
-    DRIVING_SESSION_KEY,
-    load_lib_module,
-)
+from _bootstrap import DRIVING_SESSION_KEY, load_lib_module  # noqa: E402
 
 ledger_core = load_lib_module("ledger_core")
 
@@ -97,67 +95,6 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
                 prev_attempt + 1,
                 int(passed) if passed is not None else 0,
             )
-        return unit["state"]
-
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
-
-
-# States from which force_skip may retire a unit. This is a force_skip-ONLY
-# transition set, deliberately WIDER than ALLOWED_TRANSITIONS (which governs the
-# reason-free `transition()` path). It is NOT added to ALLOWED_TRANSITIONS
-# because doing so would let `transition()` reach `terminal-skip` with no reason
-# — exactly what the mandatory-reason guard below exists to prevent. Precisely
-# the asymmetry `_VERDICT_WRITABLE_STATES` uses for findings.
-#
-#   * pending          — retire work that was never dispatched (the obsolete-unit
-#                        case; before U2 an agent had to contrive a stall).
-#   * verdict-returned — retire work whose verdict is superseded.
-#   * stalled          — the pre-existing human `auto-resume.py skip` source,
-#                        which reaches terminal-skip via plain `transition()`.
-_FORCE_SKIP_SOURCE_STATES = frozenset({"pending", "verdict-returned", "stalled"})
-
-
-def force_skip(repo_root, run_id, unit_id, reason):
-    """Agent-driven force-skip: <state> -> terminal-skip, with a mandatory reason.
-
-    The steering verb behind R3/R20, and the ONLY producer of the
-    `pending -> terminal-skip` / `verdict-returned -> terminal-skip` edges. An
-    agent that judges a unit obsolete no longer has to contrive a dispatch
-    timeout to retire it.
-
-    ``reason`` is REQUIRED and must be non-blank (R20) — a skip is auditable,
-    never silent. It is stored on the unit as ``skip_reason`` and rendered by
-    /auto-status. A blank/absent reason raises LedgerError and writes nothing.
-    Because the edges live in ``_FORCE_SKIP_SOURCE_STATES`` rather than
-    ALLOWED_TRANSITIONS, the reason cannot be bypassed by calling `transition()`.
-
-    I-1 (KTD-2): the precondition check, the mutation, and the predicate
-    recompute all happen inside ONE ``_with_locked_ledger`` call, so a slow agent
-    deciding against a stale snapshot has its write REJECTED rather than merged.
-    This function performs no ledger read or write outside that closure; the
-    steering-verbs test asserts that structurally.
-
-    Does NOT bury findings: a skipped unit keeps its ``findings``, and
-    ``_count_severities_by_unit`` counts them regardless of state, so a blocker on
-    a force-skipped unit still holds ``met`` false (AE5). A never-dispatched unit
-    carries no findings, so skipping it CAN clear the predicate — deliberate;
-    the done-floor is "no open gating findings" (R16), not "all work performed."
-    """
-    if reason is None or not str(reason).strip():
-        raise ledger_core.LedgerError(
-            f"force_skip requires a non-blank reason for unit {unit_id!r} (R20)"
-        )
-    clean_reason = str(reason).strip()
-
-    def mutate(ledger):
-        unit = ledger_core._find_unit(ledger, unit_id)
-        current = unit.get("state")
-        if current not in _FORCE_SKIP_SOURCE_STATES:
-            raise ledger_core.InvalidTransition(
-                f"{current!r} -> 'terminal-skip' not permitted for unit {unit_id!r}"
-            )
-        unit["state"] = "terminal-skip"
-        unit["skip_reason"] = clean_reason
         return unit["state"]
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
@@ -557,151 +494,6 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
-def add_unit(repo_root, run_id, unit_id, depends_on=None, phase=None):
-    """Agent-driven unit insertion: append a NEW pending unit under flock (R3).
-
-    The steering verb behind R3 (an agent that discovers the plan needs one more
-    unit of work adds it directly, instead of re-running the plan phase). The new
-    unit is built through ``ledger_core._normalize_unit`` — it enters the ledger
-    with the SAME shape as an init-time or enumerate-time unit (state defaults to
-    ``pending``, the full findings/depends_on/attempt/skip_reason/… key set
-    present), so no downstream reader has to special-case an agent-added unit. We
-    do NOT hand-assemble the unit dict; the one unit-builder is the SSOT for shape.
-
-    I-1 (KTD-2): the duplicate-id check, the depends_on sanitize, the normalize
-    and the append all run inside ONE ``_with_locked_ledger`` call, and the
-    predicate is recomputed in that same atomic snapshot. A slow agent adding a
-    unit against a stale view has its write REVALIDATED and REJECTED rather than
-    merged; this function performs no ledger read or write outside that closure
-    (the steering-verbs lock-discipline test asserts this structurally).
-
-    Two invariants, both enforced INSIDE the lock because either violation would
-    otherwise wedge the run:
-      * DUPLICATE id → rejected. Two units sharing an id make ``_find_unit``
-        ambiguous (it returns the first match) and every id-keyed write becomes
-        nondeterministic — that is corruption, not a recoverable stall, so we
-        raise and write nothing.
-      * a ``depends_on`` edge to an UNKNOWN unit → rejected. Unlike
-        ``set_enumerated_units`` (which DROPS bad edges because it validates a
-        whole BATCH of model output, where a raise would materialize zero work
-        units — itself a stall), ``add_unit`` is a single DELIBERATE add: a bad
-        edge is a caller mistake we surface loudly, not silently repair. A
-        dangling edge would leave the unit permanently un-``_is_ready``
-        (``dep is None -> False``) — the exact silent-livelock class the
-        enumerate sanitizer exists to catch — so we REUSE that sanitizer
-        (``_sanitize_enumerated_depends_on``) rather than duplicate its logic and
-        turn any dropped edge into a hard reject. A self-edge is reported by the
-        sanitizer as ``self`` and likewise rejected (a unit depending on itself
-        is never ready).
-
-    New units are always ``pending`` — the ONLY legal birth state (every other
-    state is reached along the §3 grammar). ``depends_on`` defaults to empty;
-    ``phase`` defaults to ``_normalize_unit``'s run-phase-derived default
-    (``"work"`` outside a plan phase).
-    """
-    deps = list(depends_on or [])
-
-    def mutate(ledger):
-        units = ledger.setdefault("units", [])
-        existing_ids = {u.get("id") for u in units}
-        # DUPLICATE id: reject before any write — a colliding id is corruption
-        # (ambiguous _find_unit), not a stall we can repair by dropping.
-        if unit_id in existing_ids:
-            raise ledger_core.LedgerError(
-                f"cannot add unit {unit_id!r}: id already exists"
-            )
-        # Reuse the enumerate-path sanitizer as the ONE depends_on validator, but
-        # in REJECT mode: a single deliberate add surfaces a bad edge loudly
-        # rather than silently dropping it (the batch path's divergent choice).
-        sanitized, dropped = _sanitize_enumerated_depends_on(
-            [{"id": unit_id, "depends_on": deps}], existing_ids
-        )
-        if dropped:
-            _u, dep, reason = dropped[0]
-            raise ledger_core.LedgerError(
-                f"cannot add unit {unit_id!r}: depends_on edge to {dep!r} is "
-                f"{reason} (must name an existing unit, and not itself)"
-            )
-        clean_deps = sanitized[0].get("depends_on", [])
-        # Normalize through the ONE unit-builder so an agent-added unit is shape-
-        # identical to an init/enumerate unit (do NOT hand-build the dict).
-        loop_phase = ledger.get("loop_phase", "plan")
-        raw = {"id": unit_id, "state": "pending", "depends_on": clean_deps}
-        if phase is not None:
-            raw["phase"] = phase
-        units.append(ledger_core._normalize_unit(raw, loop_phase=loop_phase))
-        return unit_id
-
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
-
-
-def reshape_deps(repo_root, run_id, unit_id, depends_on):
-    """Agent-driven dependency rewrite: REPLACE a unit's ``depends_on`` under flock
-    (R3).
-
-    The steering verb behind R3 (an agent that learns unit X must actually wait
-    on unit Y rewires the graph directly). ``depends_on`` fully REPLACES the
-    unit's prior edge list — a merge would make the new complete set the agent
-    states unexpressible.
-
-    I-1 (KTD-2): the unit lookup, the unknown-dep + cycle checks and the write
-    all run inside ONE ``_with_locked_ledger`` call, predicate recomputed in the
-    same snapshot. A reshape decided against a stale graph is REVALIDATED and
-    REJECTED, never merged; no ledger read/write happens outside the closure
-    (asserted by the steering-verbs lock-discipline test).
-
-    Two rejections, both guarding readiness liveness:
-      * an edge to an UNKNOWN unit → rejected. A dangling dep leaves the unit
-        permanently un-``_is_ready`` (``dep is None -> False``); same class
-        ``set_enumerated_units`` sanitizes away, but a deliberate single reshape
-        surfaces it loudly. On rejection the ledger is untouched.
-      * a change that would introduce a CYCLE → rejected. A cycle makes every
-        unit on it mutually-unsatisfiable → never ready, never dispatched → a
-        silent full-run livelock. The check runs the SHARED detector
-        (``_find_depends_on_back_edge``) over the WHOLE unit graph with THIS
-        unit's edges swapped to the proposed set — because a reshape can close a
-        cycle THROUGH OTHER units (e.g. A->B already exists; reshaping B->A
-        closes it), the batch-internal-only view ``set_enumerated_units`` uses is
-        insufficient here, so we widen the graph but reuse the detector verbatim
-        (no second hand-rolled cycle finder). A self-edge is the degenerate
-        1-cycle and is caught by the same detector.
-    """
-    proposed = list(depends_on or [])
-
-    def mutate(ledger):
-        unit = ledger_core._find_unit(ledger, unit_id)  # raises UnknownUnit
-        units = ledger.get("units", [])
-        all_ids = {u.get("id") for u in units}
-        # UNKNOWN-dep guard: every proposed edge must name a real unit, else the
-        # reshaped unit can never become ready.
-        for d in proposed:
-            if not isinstance(d, str) or d not in all_ids:
-                raise ledger_core.LedgerError(
-                    f"cannot reshape {unit_id!r}: depends_on edge to {d!r} names "
-                    f"no existing unit"
-                )
-        # CYCLE guard: build the full dependency graph with this unit's edges
-        # REPLACED by the proposed set, then run the SHARED back-edge detector.
-        # Every unit id is a node key, and edges are restricted to known ids, so
-        # the detector never indexes a non-node (its `v not in adj` leaf guard is
-        # a no-op here). Reused verbatim — no divergent second cycle detector.
-        adj = {}
-        for u in units:
-            uid = u.get("id")
-            edges = proposed if uid == unit_id else (u.get("depends_on") or [])
-            adj[uid] = [d for d in edges if d in all_ids]
-        back = _find_depends_on_back_edge(adj)
-        if back is not None:
-            raise ledger_core.LedgerError(
-                f"cannot reshape {unit_id!r}: the change introduces a dependency "
-                f"cycle (back edge {back[0]!r} -> {back[1]!r})"
-            )
-        unit["depends_on"] = proposed
-        return proposed
-
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
-
-
 def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
     """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_unit_id``
     (v0.2.0 round-2 P0 fix — fix-pass I).
@@ -858,56 +650,6 @@ def set_bound_override(
             "at": ledger_core.now_iso(),
         }
         return bound_type
-
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
-
-
-_MAX_AGENT_SESSIONS = 256
-
-
-def register_session(repo_root, run_id, session_id):
-    """Join ``session_id`` to the run's OWNERSHIP SET (U8 / R21 / KTD-7).
-
-    A dispatched phase sub-agent calls this on start. Both PreToolUse hooks then
-    gate it by membership of ``{driving_session_id} ∪ agent_session_ids`` instead
-    of scalar equality against the boss's session — which is why the fail-closed
-    destructive backstop now fires inside the sub-agent tree, where the ``fix``
-    phase writes code and runs Bash.
-
-    Membership is opt-IN by registration, never by co-location: an unrelated
-    Claude session running in the same worktree is in neither key and is never
-    gated (the "standalone ce-skill is not captured" dimension is preserved).
-
-    Idempotent — re-registering an already-present id is a no-op, so a sub-agent
-    that retries its own start does not grow the set. Bounded at
-    ``_MAX_AGENT_SESSIONS`` so a pathological re-dispatch loop cannot grow the
-    ledger without limit; the oldest entry is evicted first. Eviction is safe:
-    an evicted session is one that registered 256 dispatches ago and is long
-    dead, and a live sub-agent re-registers on start.
-
-    I-1: read + membership check + append happen inside ONE
-    ``_with_locked_ledger`` call. Two sub-agents registering concurrently
-    serialize; neither loses the other's id.
-
-    Does NOT touch ``driving_session_id`` — the boss remains the primary owner,
-    and only the boss's session is exempt from the action gate's operator-pause
-    carve-out (see on-pretooluse-action.py::_owns_session).
-    """
-    if not session_id or not isinstance(session_id, str):
-        raise ledger_core.LedgerError(
-            f"register_session requires a non-empty session_id string: {session_id!r}"
-        )
-
-    def mutate(ledger):
-        existing = ledger.get(AGENT_SESSIONS_KEY)
-        if not isinstance(existing, list):
-            existing = []
-        if session_id not in existing:
-            existing.append(session_id)
-            if len(existing) > _MAX_AGENT_SESSIONS:
-                existing = existing[-_MAX_AGENT_SESSIONS:]
-        ledger[AGENT_SESSIONS_KEY] = existing
-        return list(existing)
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
