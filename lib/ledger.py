@@ -103,6 +103,7 @@ read_ledger = ledger_core.read_ledger
 # Re-exports from ledger_mutators: grammar-checked scalar write paths.
 
 transition = ledger_mutators.transition
+force_skip = ledger_mutators.force_skip  # U2 steering verb (R3/R20)
 record_verdict = ledger_mutators.record_verdict
 set_loop = ledger_mutators.set_loop
 set_gaps_open = ledger_mutators.set_gaps_open

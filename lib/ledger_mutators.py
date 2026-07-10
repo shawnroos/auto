@@ -97,6 +97,67 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
+# States from which force_skip may retire a unit. This is a force_skip-ONLY
+# transition set, deliberately WIDER than ALLOWED_TRANSITIONS (which governs the
+# reason-free `transition()` path). It is NOT added to ALLOWED_TRANSITIONS
+# because doing so would let `transition()` reach `terminal-skip` with no reason
+# — exactly what the mandatory-reason guard below exists to prevent. Precisely
+# the asymmetry `_VERDICT_WRITABLE_STATES` uses for findings.
+#
+#   * pending          — retire work that was never dispatched (the obsolete-unit
+#                        case; before U2 an agent had to contrive a stall).
+#   * verdict-returned — retire work whose verdict is superseded.
+#   * stalled          — the pre-existing human `auto-resume.py skip` source,
+#                        which reaches terminal-skip via plain `transition()`.
+_FORCE_SKIP_SOURCE_STATES = frozenset({"pending", "verdict-returned", "stalled"})
+
+
+def force_skip(repo_root, run_id, unit_id, reason):
+    """Agent-driven force-skip: <state> -> terminal-skip, with a mandatory reason.
+
+    The steering verb behind R3/R20, and the ONLY producer of the
+    `pending -> terminal-skip` / `verdict-returned -> terminal-skip` edges. An
+    agent that judges a unit obsolete no longer has to contrive a dispatch
+    timeout to retire it.
+
+    ``reason`` is REQUIRED and must be non-blank (R20) — a skip is auditable,
+    never silent. It is stored on the unit as ``skip_reason`` and rendered by
+    /auto-status. A blank/absent reason raises LedgerError and writes nothing.
+    Because the edges live in ``_FORCE_SKIP_SOURCE_STATES`` rather than
+    ALLOWED_TRANSITIONS, the reason cannot be bypassed by calling `transition()`.
+
+    I-1 (KTD-2): the precondition check, the mutation, and the predicate
+    recompute all happen inside ONE ``_with_locked_ledger`` call, so a slow agent
+    deciding against a stale snapshot has its write REJECTED rather than merged.
+    This function performs no ledger read or write outside that closure; the
+    steering-verbs test asserts that structurally.
+
+    Does NOT bury findings: a skipped unit keeps its ``findings``, and
+    ``_count_severities_by_unit`` counts them regardless of state, so a blocker on
+    a force-skipped unit still holds ``met`` false (AE5). A never-dispatched unit
+    carries no findings, so skipping it CAN clear the predicate — deliberate;
+    the done-floor is "no open gating findings" (R16), not "all work performed."
+    """
+    if reason is None or not str(reason).strip():
+        raise ledger_core.LedgerError(
+            f"force_skip requires a non-blank reason for unit {unit_id!r} (R20)"
+        )
+    clean_reason = str(reason).strip()
+
+    def mutate(ledger):
+        unit = ledger_core._find_unit(ledger, unit_id)
+        current = unit.get("state")
+        if current not in _FORCE_SKIP_SOURCE_STATES:
+            raise ledger_core.InvalidTransition(
+                f"{current!r} -> 'terminal-skip' not permitted for unit {unit_id!r}"
+            )
+        unit["state"] = "terminal-skip"
+        unit["skip_reason"] = clean_reason
+        return unit["state"]
+
+    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+
+
 # States from which record_verdict may write a verdict. This is a record_verdict
 # -ONLY transition set, deliberately WIDER than ALLOWED_TRANSITIONS (which governs
 # the findings-free `transition()` path). It is NOT added to ALLOWED_TRANSITIONS

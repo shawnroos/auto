@@ -118,6 +118,14 @@ SEVERITIES = ("blocker", "major", "minor")
 GATING_SEVERITIES = ("blocker", "major")  # severities that block terminality/done.
 
 # State grammar (§3 of the contract). A unit may move ONLY along these edges.
+#
+# The agent-driven force-skip edges (`pending -> terminal-skip`,
+# `verdict-returned -> terminal-skip`) are deliberately NOT here — see
+# `ledger_mutators._FORCE_SKIP_SOURCE_STATES`. Putting them in this table would
+# let the findings-free, reason-free `transition()` reach `terminal-skip`,
+# silently bypassing the mandatory skip-reason (R20). Same asymmetry, and for the
+# same reason, as `_VERDICT_WRITABLE_STATES`: a wider edge set owned by the one
+# mutator that enforces the extra precondition.
 ALLOWED_TRANSITIONS = {
     "pending": {"dispatched"},
     "dispatched": {"verdict-returned", "stalled"},
@@ -661,6 +669,10 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
             u.get("stall_threshold_seconds", DEFAULT_STALL_THRESHOLD_SECONDS)
         ),
         "last_error": u.get("last_error"),
+        # R20: why this unit was force-skipped. None for every unit that was not
+        # skipped by an agent. Additive / backward-compatible: an old ledger
+        # without the key normalizes to None.
+        "skip_reason": u.get("skip_reason"),
         # Bug #6 (attempt-identity): the dispatch generation counter. Each
         # pending->dispatched bump increments it; record_verdict carries the
         # attempt it is writing for and a verdict whose attempt is OLDER than this
