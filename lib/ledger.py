@@ -174,6 +174,80 @@ def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Agent orientation surface (R6/R7). `describe` emits this as ONE JSON object so
+# a driving agent reads the stable operating contract on demand instead of
+# re-deriving it from ~2000 lines of skill prose every session. The prose home
+# is docs/contracts/agent-tool-surface.md; this is the machine-readable mirror.
+#
+# COMPLETENESS IS TESTED: tests/unit/ledger.test.sh asserts set-equality between
+# the `cmd == "..."` literals in this file and _AGENT_TOOL_SURFACE["verbs"], so a
+# verb added to the CLI without a describe entry fails CI. Keep them in lockstep.
+
+_AGENT_TOOL_SURFACE = {
+    "contract": (
+        "Read freely. Every write commits through a verb that revalidates its "
+        "precondition INSIDE the flock and can REJECT. The model never holds the "
+        "lock and never does a read-then-write across two invocations — a decision "
+        "made against a now-stale snapshot is rejected, not merged. See "
+        "docs/contracts/agent-tool-surface.md."
+    ),
+    "ledger_path": "<repo>/.claude/auto/<run-id>.json — read it, never re-derive.",
+    "intent_envelope": {
+        "doc": "lib/tick.py emits ONE of these on stdout; the model issues the tool call.",
+        "actions": {
+            "rearm": '{"action":"rearm","delay":N,"prompt":"/auto:auto-tick <run>",...}',
+            "stop": '{"action":"stop","reason":"predicate-met"|"seam-pause",...}',
+            "noop": '{"action":"noop","reason":"lock-held-by-live-tick"}',
+        },
+    },
+    "verbs": {
+        # read / inspection (no mutation)
+        "read": {"args": "<repo> <run>", "reads": True},
+        "path": {"args": "<repo> <run>", "reads": True},
+        "is-orphaned": {"args": "<repo> <run>", "reads": True},
+        "describe": {"args": "(none)", "reads": True},
+        # verdict-feedback (engine's own write path)
+        "record-verdict": {
+            "args": "<run> <unit> <findings-json> [attempt]",
+            "rejects": "StaleVerdict if attempt is older than the unit's current "
+            "dispatch generation; InvalidTransition from a non-verdict-writable state.",
+        },
+        "set-gaps-open": {"args": "<run> <n>"},
+        "set-enumerated-units": {"args": "<run> <unit> <payload-json>"},
+        "set-verdict-decision": {"args": "<run> <gate-unit> <decision>"},
+        # agent steering verbs (the reshape surface)
+        "init": {
+            "args": "<run> <units-json> [adapter] [loop-phase]",
+            "rejects": "LedgerExists if the run-id already exists (existing ledger "
+            "untouched); LedgerError on an unknown adapter.",
+        },
+        "force-skip": {
+            "args": "<run> <unit> <reason>",
+            "rejects": "LedgerError on a blank reason (R20); InvalidTransition from a "
+            "state with no terminal-skip edge. A skip cannot bury an existing finding.",
+        },
+        "add-unit": {
+            "args": "<run> <unit-id> [depends-on-json] [phase]",
+            "rejects": "LedgerError on a duplicate id or a dependency on an unknown unit.",
+        },
+        "reshape-deps": {
+            "args": "<run> <unit-id> <depends-on-json>",
+            "rejects": "LedgerError on a dependency cycle or an edge to an unknown unit.",
+        },
+        "register-session": {
+            "args": "<run> <session-id>",
+            "rejects": "LedgerError on an empty session-id. Idempotent otherwise.",
+        },
+        "transition": {
+            "args": "<repo> <run> <unit> <state>",
+            "rejects": "InvalidTransition for any edge not in ALLOWED_TRANSITIONS; "
+            "LedgerError if used to write findings (use record-verdict).",
+        },
+    },
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.
 
@@ -264,6 +338,12 @@ def _cli(argv):
         return 2
     cmd = argv[0]
     try:
+        if cmd == "describe":
+            # R6/R7: the whole stable operating contract as ONE JSON object, so an
+            # agent orients without loading the skill corpus. No repo, no mutation.
+            json.dump(_AGENT_TOOL_SURFACE, sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+            return 0
         if cmd == "read":
             repo, run = argv[1], argv[2]
             json.dump(read_ledger(repo, run), sys.stdout, indent=2, sort_keys=True)

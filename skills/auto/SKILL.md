@@ -20,6 +20,14 @@ invocation is a no-op. Source of truth is the disk ledger at
 contract + traps (bash-loop, deepen↔review livelock):
 `docs/contracts/driver-reference.md` §1.
 
+**Orientation on demand (R6/R7).** The stable operating contract — the
+ledger path, the intent-envelope grammar, and every read / feedback /
+steering verb with its argument shape and rejection modes — is one call
+away: `python3 lib/ledger.py describe` (one JSON object). Prose home:
+`docs/contracts/agent-tool-surface.md`. Fetch it instead of re-deriving
+the verb surface from this skill; the one rule is *read freely, write
+only through a verb that revalidates under the lock and can reject.*
+
 ## 1. Goal binding
 
 Every `/auto` run is goaled before arming.

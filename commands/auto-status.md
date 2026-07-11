@@ -120,3 +120,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "<resolved-run-id>"
 ```
 (do NOT include this as a literal line in your response — invoke the Bash
 tool with the constructed command.)
+
+For the full agent operating contract (the verb surface, argument shapes,
+and rejection modes), run `python3 lib/ledger.py describe` — see
+`docs/contracts/agent-tool-surface.md`.
