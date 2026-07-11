@@ -10,8 +10,8 @@
 # the skill drives:
 #
 #   load_content -> validate_oneshot_criteria -> build_oneshot_launch ->
-#   synthesize_oneshot_unit -> (stub the dispatch: evaluate_programmatic in-process
-#   + a supplied model_judge verdict) -> oneshot_verdict.
+#   (stub the dispatch: evaluate_programmatic in-process + a supplied model_judge
+#   verdict) -> oneshot_verdict(ratified_criteria, ...).
 #
 # SELF-CONTAINED harness; python pinned via CLAUDE_AUTO_PYTHON3; modules loaded
 # via importlib from an absolute path. Deterministic (no network, no live agent):
@@ -19,8 +19,8 @@
 # injects the model_judge verdict as data.
 #
 # Scenarios (U7 plan / F1):
-#   1. a built-in content loads, its ratified criteria validate, a unit
-#      synthesizes, and with all criteria resolved PASS -> verdict `pass`.
+#   1. a built-in content loads, its ratified criteria validate, and with all
+#      criteria resolved PASS -> verdict `pass`.
 #   2. the same wiring with one programmatic criterion FAILING -> verdict `fail`.
 #   3. the launch descriptor for the built-in content names its op and folds its
 #      prompt_template body (U5 in the F1 chain).
@@ -50,7 +50,7 @@ echo "auto-content-oneshot.test.sh"
 
 probe() {
   "$PY" - "$LIB" "$AUTO_ROOT" <<'PYEOF'
-import sys, importlib.util
+import sys, importlib.util, tempfile
 
 lib = sys.argv[1]
 auto_root = sys.argv[2]
@@ -74,7 +74,10 @@ except Exception as e:
 results = []
 
 # ── Step 1: load a built-in content (the `auto-content` skill's first move) ──
-content = contents.load_content("tuned-review", auto_root)
+# Load against an EMPTY temp repo so a workspace override can never shadow the
+# built-in seed (test hermeticity); auto_root stays the target workspace below.
+empty_repo = tempfile.mkdtemp(prefix="oneshot-empty-repo-")
+content = contents.load_content("tuned-review", empty_repo)
 ok_c, errs_c = contents.validate_content(content)
 results.append("content_valid=%s" % ok_c)
 
@@ -93,10 +96,7 @@ launch = co.build_oneshot_launch(content, auto_root)
 results.append("launch_op=%s" % launch.get("adapter_op"))
 results.append("launch_body_folds=%s" % ("Tuned review prompt" in (launch.get("prompt_template_body") or "")))
 
-# ── Step 4: synthesize the single-unit run (U2) ──────────────────────────────
-unit = co.synthesize_oneshot_unit(content, ratified)
-
-# ── Step 5: STUB the dispatch — resolve every criterion inline (KTD-3) ───────
+# ── Step 4: STUB the dispatch — resolve every criterion inline (KTD-3) ────────
 # programmatic: run it in-process exactly as the skill would.
 prog = verification.evaluate_programmatic(
     {"id": "op-ran", "argv": ["true"], "check": "exit_zero"}
@@ -105,22 +105,22 @@ programmatic_results = {prog["criterion_id"]: prog["status"]}
 # model_judge: the dispatched agent returned a pass self-verdict.
 judge_verdicts = {"reads-clean": "pass"}
 
-# ── Step 6: terminal verdict (U4) — all resolved PASS -> pass ────────────────
-v_pass = co.oneshot_verdict(unit, programmatic_results, judge_verdicts)
+# ── Step 5: terminal verdict (U4) — the ratified criteria fold in directly ────
+# all resolved PASS -> pass.
+v_pass = co.oneshot_verdict(ratified, programmatic_results, judge_verdicts)
 results.append("verdict_all_pass=%s" % v_pass.get("verdict"))
-results.append("signal_all_pass=%s" % v_pass.get("signal"))
+results.append("signal_all_pass=%s" % v_pass.get("aggregate_signal"))
 
 # ── Scenario 2: one programmatic criterion FAILS -> verdict `fail` ───────────
 ratified_fail = [
     {"id": "op-ran", "type": "programmatic", "argv": ["false"], "check": "exit_zero"},
     {"id": "reads-clean", "type": "model_judge"},
 ]
-unit_fail = co.synthesize_oneshot_unit(content, ratified_fail)
 prog_fail = verification.evaluate_programmatic(
     {"id": "op-ran", "argv": ["false"], "check": "exit_zero"}
 )
 v_fail = co.oneshot_verdict(
-    unit_fail, {prog_fail["criterion_id"]: prog_fail["status"]}, {"reads-clean": "pass"}
+    ratified_fail, {prog_fail["criterion_id"]: prog_fail["status"]}, {"reads-clean": "pass"}
 )
 results.append("verdict_one_fail=%s" % v_fail.get("verdict"))
 

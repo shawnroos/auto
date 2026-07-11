@@ -77,8 +77,9 @@ when the second read or the human judgment is worth blocking for — otherwise a
 ## Handing the resolved criteria to the verdict
 
 Once all criteria are resolved, the skill folds them into a single terminal
-verdict via `content_oneshot.oneshot_verdict(unit, programmatic_results,
-judge_verdicts)`:
+verdict via `content_oneshot.oneshot_verdict(ratified_criteria,
+programmatic_results, judge_verdicts)` — the ratified criteria list goes in
+directly (there is no synthesized unit):
 
 - `programmatic_results` — `{criterion_id: status}` from `evaluate_programmatic`.
 - `judge_verdicts` — `{criterion_id: status}` for `model_judge` /
@@ -100,4 +101,4 @@ at verdict time — if any remain, `oneshot_verdict` raises `OneShotIncomplete`
   criterion, the EDITED form is validated and baked — the proposed original is
   discarded (AE2).
 - **Nothing dispatches until the criteria are accepted** (AE1). Propose → the
-  operator accepts or edits → validate → only then synthesize and launch.
+  operator accepts or edits → validate → only then launch.

@@ -281,6 +281,7 @@ No `lib/content_run.py` and no `lib/contents.py` registry/catalog — the one-sh
   - Ratified criteria are present on the unit and readable without `read_dc` (KTD-4 guard).
   - No criteria supplied → the unit carries none (not an empty-gate default).
 - **Verification:** a one-shot unit synthesizes with the content's op and baked criteria, no loop machinery.
+- **(Post-review:** the synthesized-unit indirection was collapsed — `oneshot_verdict` takes the ratified criteria directly; see the review-fix commit.)
 
 ### U3. Contextual verification: propose, ratify, bake (pre-dispatch)
 

@@ -1,38 +1,35 @@
 #!/usr/bin/env python3
-"""auto one-shot content helpers (U2 + U4, addressable-step-contents).
+"""auto one-shot content helpers (addressable-step-contents).
 
-Two THIN, pure/testable pieces the `auto-content` skill calls to run a content
+THIN, pure/testable pieces the `auto-content` skill calls to run a content
 one-shot (KTD-3 — the skill is the orchestrator; this module holds no control
 flow, no tick, no `/goal`):
 
-  1. ``synthesize_oneshot_unit(content, ratified_criteria)`` (U2) — turn a loaded
-     content + the ratified verification criteria into a SINGLE work-phase ledger
-     unit. The content's `invokes` (adapter_op + optional prompt_template) rides on
-     the unit's ``dispatch_context`` (the durable home ``orchestrator._unit_adapter_op``
-     reads first). NO ``iteration`` block, NO ``phase_transitions`` — the one-shot
-     never loops (KTD-3).
+  1. ``validate_oneshot_criteria(criteria)`` (U3) — validate a RATIFIED criteria
+     list against the verification taxonomy BEFORE dispatch, reusing the recipe
+     validator's shape check (KTD-2 reuse).
 
-  2. ``oneshot_verdict(unit, programmatic_results, judge_verdicts)`` (U4) — the
-     TERMINAL verdict: fold the ratified criteria + resolved results into a single
-     ``verification.aggregate`` call and re-label the aggregator's advance/iterate
-     SIGNAL as a terminal ``pass``/``fail`` (KTD-1). This is READ-ONLY over the
-     criteria: it reports a verdict, it does NOT commit an iteration decision.
+  2. ``build_oneshot_launch(content, repo)`` (U5) — build the driver-side launch
+     descriptor: the content's `adapter_op`, plus the `prompt_template` body when
+     the content declares one (KTD-5 — the tuning is folded at the DRIVER launch,
+     never via an adapter edit).
+
+  3. ``oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)``
+     (U4) — the TERMINAL verdict: fold the ratified criteria + resolved results
+     into a single ``verification.aggregate`` call and re-label the aggregator's
+     advance/iterate SIGNAL as a terminal ``pass``/``fail`` (KTD-1). It takes the
+     ratified criteria list DIRECTLY (there is no synthesized unit) and is
+     READ-ONLY over them: it reports a verdict, it does NOT commit an iteration
+     decision.
 
 KTD-1 BOUNDARY (defended in review + import-topology): this module MUST NOT import
 `lib/iteration.py` (the iteration-decision-commit module) and MUST NOT write a
-`decision` field onto the unit's `dispatch_context`. The one-shot verdict is a
-terminal read of the pure evaluator, distinct from the looping recipe's gate. It
-reuses ONLY `verification.aggregate` — the same pure primitive
+`decision` field anywhere. The one-shot verdict is a terminal read of the pure
+evaluator, distinct from the looping recipe's gate. It reuses ONLY
+`verification.aggregate` — the same pure primitive
 `iteration.resolve_gate_verification` folds through, but reached HERE independently
-(pattern reuse, not a call into iteration).
-
-KTD-4: the ratified criteria are baked onto a TOP-LEVEL ``one_shot_verification``
-key at synthesis time (a compile-time write — no preconditioned steering mutator,
-no lost-update concern). They are read back with a PLAIN dict access, NOT via
-`iteration.read_dc`: `one_shot_verification` is not a declared
-`ledger_core.DISPATCH_CONTEXT_KEYS` member, so `read_dc` would raise `KeyError` on
-it. Keeping the criteria off `dispatch_context` (and off `read_dc`) is what makes
-the one-shot path independent of the iteration accessor surface.
+(pattern reuse, not a call into iteration). `verification` is a stdlib-safe leaf
+loaded at import; the KTD-1 boundary is about `iteration`, not `verification`.
 """
 
 from __future__ import annotations
@@ -50,7 +47,7 @@ from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sy
 
 # The auto plugin root (lib/'s parent) — where the built-in `contents/` seeds and
 # their `prompt_template` files ship. `build_oneshot_launch` resolves a content's
-# relative prompt_template against this first (built-in), then the workspace repo.
+# relative prompt_template against the workspace repo first, then this built-in root.
 _AUTO_ROOT = os.path.dirname(_LIB_DIR)
 
 # `recipe_validate` is the pure-stdlib validation DAG root (imports no heavy
@@ -67,13 +64,10 @@ _validate_verification = _recipe_validate._validate_verification
 _check_prompt_template = _recipe_validate._check_prompt_template
 RecipeError = _recipe_validate.RecipeError
 
-# The synthesized unit's fixed id. A one-shot run has exactly one unit; a stable
-# legible id keeps the ledger record + any observability legible.
-_ONE_SHOT_UNIT_ID = "one-shot"
-
-# The top-level key the ratified criteria are baked under (KTD-4). Deliberately
-# NOT a dispatch_context key — read directly, never via read_dc.
-ONE_SHOT_VERIFICATION_KEY = "one_shot_verification"
+# The pure verification evaluator — a stdlib-safe leaf (subprocess + typing only).
+# `oneshot_verdict` reuses ONLY `verification.aggregate` (KTD-1); `iteration` is
+# still never imported (the boundary is about iteration, not verification).
+_verification = load_lib_module("verification")
 
 
 class OneShotIncomplete(Exception):
@@ -90,13 +84,13 @@ def validate_oneshot_criteria(criteria) -> tuple:
     rather than raises so the skill can surface the problem and re-ratify.
 
     This is the pre-dispatch gate: the criteria the operator accepted (possibly
-    EDITED — AE2) are checked BEFORE they are baked into the one-shot unit
-    (``synthesize_oneshot_unit``). It REUSES ``recipe_validate._validate_verification``
-    (KTD-2 reuse discipline) — the SAME shape check the recipe validator applies
-    at both write time and engine-load time — by wrapping the list in a synthetic
-    unit. So a malformed proposed criterion (a `programmatic` with a shell string
-    instead of an argv list, an unknown `type`, >16 criteria, a per-type unknown
-    field) is rejected here with the exact same rules the engine would enforce.
+    EDITED — AE2) are checked BEFORE the op is launched. It REUSES
+    ``recipe_validate._validate_verification`` (KTD-2 reuse discipline) — the SAME
+    shape check the recipe validator applies at both write time and engine-load
+    time — by wrapping the list in a synthetic unit. So a malformed proposed
+    criterion (a `programmatic` with a shell string instead of an argv list, an
+    unknown `type`, >16 criteria, a per-type unknown field) is rejected here with
+    the exact same rules the engine would enforce.
 
     ``criteria`` may be ``None`` or ``[]`` — a one-shot with no criteria is a
     valid (vacuous-pass) run, so an empty/None list validates ``ok``.
@@ -104,65 +98,12 @@ def validate_oneshot_criteria(criteria) -> tuple:
     # `_validate_verification` reads `u["id"]` + `u.get("verification")` and
     # RAISES RecipeError on the first violation. A synthetic unit adapts the
     # raise-on-first-error contract to the collect-and-return one this gate wants.
-    synthetic_unit = {"id": _ONE_SHOT_UNIT_ID, "verification": criteria}
+    synthetic_unit = {"id": "one-shot", "verification": criteria}
     try:
         _validate_verification(synthetic_unit)
     except RecipeError as e:
         return False, [str(e)]
     return True, []
-
-
-def synthesize_oneshot_unit(content: dict, ratified_criteria) -> dict:
-    """Turn a loaded ``content`` + the ``ratified_criteria`` into ONE work-phase
-    ledger unit (U2). Pure — builds and returns a fresh dict, mutating nothing.
-
-    The unit:
-      - is a single work-phase unit (``phase == "work"``, no dependencies);
-      - carries the content's ``invokes`` (``adapter_op`` + optional
-        ``prompt_template``) on ``dispatch_context`` — the home
-        ``orchestrator._unit_adapter_op`` reads first (``_normalize_unit`` drops
-        the raw ``invokes`` bag but preserves ``dispatch_context`` verbatim);
-      - bakes ``ratified_criteria`` onto a TOP-LEVEL ``one_shot_verification`` key
-        (KTD-4 — readable with a plain dict access, never via ``read_dc``), and
-        ONLY when there are criteria: absent → no key at all, so the unit carries
-        NO empty-gate default;
-      - has NO ``iteration`` block and NO ``phase_transitions`` (KTD-3 — the
-        one-shot is single-pass; it never enters the tick loop).
-
-    ``content`` is expected to be a validated content dict (see
-    ``lib/contents.py::validate_content``); ``ratified_criteria`` is a list of
-    typed verification criteria (possibly empty or None).
-
-    IN-PROCESS ONLY — do NOT persist this unit through ``init_ledger`` /
-    ``add_units``: ``ledger_core._normalize_unit`` rebuilds a unit from a fixed
-    key whitelist and would silently drop the top-level ``one_shot_verification``
-    key, discarding the ratified criteria. The one-shot skill holds this unit in
-    memory from synthesis (here) straight to ``oneshot_verdict``. The failure is
-    not silent even if this is ever violated: a criteria-stripped unit verdicts
-    ``unverified`` (not a spurious ``pass``) — see ``oneshot_verdict``.
-    """
-    invokes = content.get("invokes") or {}
-    dispatch_context = {"adapter_op": invokes.get("adapter_op")}
-    # Carry the tuning template ONLY when the content declares one — a template-less
-    # content must synthesize a template-less unit (regression-safe launch, U5).
-    if "prompt_template" in invokes:
-        dispatch_context["prompt_template"] = invokes["prompt_template"]
-
-    unit = {
-        "id": _ONE_SHOT_UNIT_ID,
-        "state": "pending",
-        "phase": "work",
-        "depends_on": [],
-        "dispatch_context": dispatch_context,
-    }
-
-    # Bake criteria only when present — mirrors _normalize_unit's CONDITIONAL
-    # `verification` preserve: an unconditional [] would stamp an empty-gate
-    # default onto every one-shot unit (the thing the plan says NOT to do).
-    if ratified_criteria:
-        unit[ONE_SHOT_VERIFICATION_KEY] = list(ratified_criteria)
-
-    return unit
 
 
 def build_oneshot_launch(content: dict, repo: str) -> dict:
@@ -183,17 +124,22 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
         plain op invocation — no template keys at all (regression-safe: a
         template-less content launches exactly as before).
 
+    ``content`` is a VALIDATED content dict (see ``lib/contents.py::validate_content``
+    / ``load_and_validate_content``), so ``invokes`` and ``invokes.adapter_op`` are
+    accessed directly — the validator guarantees them.
+
     The relative ``prompt_template`` path is re-path-bounded (defensively — same
     ``_check_prompt_template`` the recipe/content validators use) and resolved
-    against the auto plugin root first (where built-in seeds ship), then the
-    workspace ``repo``. A declared-but-unreadable template FAILS CLOSED with a
-    ``RecipeError`` rather than launching a half-tuned agent.
+    against the workspace ``repo`` first (a workspace override wins, matching
+    ``load_content``'s tier order), then the auto plugin root (where built-in seeds
+    ship). A declared-but-unreadable template FAILS CLOSED with a ``RecipeError``
+    rather than launching a half-tuned agent.
 
     Returns ``{"adapter_op": <op>[, "prompt_template": <path>,
     "prompt_template_body": <text>]}``. Pure w.r.t. ``content`` — mutates nothing.
     """
-    invokes = content.get("invokes") or {}
-    descriptor = {"adapter_op": invokes.get("adapter_op")}
+    invokes = content["invokes"]
+    descriptor = {"adapter_op": invokes["adapter_op"]}
 
     pt = invokes.get("prompt_template")
     if pt:
@@ -201,7 +147,7 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
         # not run validate_content, so this helper cannot assume it was checked).
         _check_prompt_template(pt, "invokes")
         body = None
-        for base in (_AUTO_ROOT, repo):
+        for base in (repo, _AUTO_ROOT):
             candidate = os.path.join(base, pt)
             # Open directly (one syscall, no TOCTOU): a miss falls through to the
             # next base; a present-but-unreadable file is a hard error.
@@ -218,7 +164,7 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
         if body is None:
             raise RecipeError(
                 f"prompt_template {pt!r} not found; searched: "
-                + ", ".join(os.path.join(b, pt) for b in (_AUTO_ROOT, repo))
+                + ", ".join(os.path.join(b, pt) for b in (repo, _AUTO_ROOT))
             )
         descriptor["prompt_template"] = pt
         descriptor["prompt_template_body"] = body
@@ -226,26 +172,18 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
     return descriptor
 
 
-def _read_baked_criteria(unit: dict) -> list:
-    """Read the ratified criteria baked onto ``unit`` at synthesis (KTD-4).
-
-    A PLAIN top-level dict read — NOT ``iteration.read_dc`` (which would ``KeyError``
-    on a key outside ``DISPATCH_CONTEXT_KEYS``). Absent key → no criteria.
-    """
-    return unit.get(ONE_SHOT_VERIFICATION_KEY) or []
-
-
-def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict) -> dict:
+def oneshot_verdict(ratified_criteria, programmatic_results: dict, judge_verdicts: dict) -> dict:
     """Terminal one-shot verdict (U4 / KTD-1). READ-ONLY over the criteria.
 
-    Reads the ratified criteria baked on ``unit`` (KTD-4), folds them plus the
-    supplied resolved results into a single ``verification.aggregate`` call, and
-    maps the aggregator's advance/iterate SIGNAL to a terminal ``pass``/``fail``:
-    all resolved criteria pass → ``pass``; any resolved fail → ``fail``. A run
-    with NO ratified criteria verified nothing, so it is reported as
-    ``unverified`` — never ``pass``. A gating verdict that greens with nothing
-    checked is a silent pass, so an empty check is honestly labelled rather than
-    folded (with the evaluator's empty-gate ``advance``) into a green.
+    Takes the RATIFIED criteria list directly (a list, possibly empty or ``None``),
+    folds them plus the supplied resolved results into a single
+    ``verification.aggregate`` call, and maps the aggregator's advance/iterate
+    SIGNAL to a terminal ``pass``/``fail``: all resolved criteria pass → ``pass``;
+    any resolved fail → ``fail``. A run with NO ratified criteria verified nothing,
+    so it is reported as ``unverified`` — never ``pass``. A gating verdict that
+    greens with nothing checked is a silent pass, so an empty check is honestly
+    labelled rather than folded (with the evaluator's empty-gate ``advance``) into
+    a green.
 
     ``programmatic_results`` / ``judge_verdicts`` are ``{criterion_id: "pass"|"fail"}``
     maps the CALLER resolved inline (KTD-3): programmatic in-process, model_judge
@@ -254,17 +192,15 @@ def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict
     be no ``pending_judges`` here — if there are, that is a caller error and we
     raise ``OneShotIncomplete`` rather than silently passing.
 
-    Returns ``{"verdict": "pass"|"fail"|"unverified", "signal": <raw aggregate
-    signal>, "criteria_count": int}``. Does NOT mutate ``unit`` and NEVER writes a
+    Returns ``{"verdict": "pass"|"fail"|"unverified", "aggregate_signal": <raw
+    aggregate signal, diagnostic>, "criteria_count": int}``. NEVER writes a
     ``decision`` field (KTD-1 boundary — this is verdict reporting, not an
     iteration-decision commit).
     """
-    criteria = _read_baked_criteria(unit)
-    # Reuse ONLY the pure aggregator (KTD-1). Lazy-load mirrors the
-    # iteration.resolve_gate_verification pattern; iteration itself is NEVER
-    # imported here (the KTD-1 boundary, enforced by import-topology).
-    verification = load_lib_module("verification")
-    agg = verification.aggregate(criteria, programmatic_results or {}, judge_verdicts or {})
+    criteria = ratified_criteria or []
+    # Reuse ONLY the pure aggregator (KTD-1); iteration itself is NEVER imported
+    # here (the KTD-1 boundary, enforced by import-topology).
+    agg = _verification.aggregate(criteria, programmatic_results or {}, judge_verdicts or {})
 
     pending = agg.get("pending_judges") or []
     if pending:
@@ -287,6 +223,41 @@ def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict
         verdict = "pass" if signal == "advance" else "fail"
     return {
         "verdict": verdict,
-        "signal": signal,
+        "aggregate_signal": signal,
         "criteria_count": len(criteria),
     }
+
+
+# ── op-dispatch CLI (exercised by tests/unit/content-cli.test.sh) ─────────────
+def _cli(argv) -> int:
+    import json
+
+    if not argv:
+        sys.stderr.write("usage: content_oneshot.py <op> ...\n")
+        return 2
+    op = argv[0]
+    if op == "validate-criteria":
+        # argv[1] = ratified criteria JSON
+        ok, errs = validate_oneshot_criteria(json.loads(argv[1]))
+        print("OK" if ok else "INVALID: " + "; ".join(errs))
+        return 0
+    if op == "launch":
+        # argv[1] = content name, argv[2] = repo. Loads + validates the content
+        # (fail closed) before folding its tuning into the launch descriptor.
+        contents = load_lib_module("contents")
+        content = contents.load_and_validate_content(argv[1], argv[2])
+        print(json.dumps(build_oneshot_launch(content, argv[2])))
+        return 0
+    if op == "verdict":
+        # argv[1]=criteria JSON, argv[2]=programmatic_results JSON, argv[3]=judge_verdicts JSON
+        crits = json.loads(argv[1])
+        pres = json.loads(argv[2])
+        jver = json.loads(argv[3])
+        print(json.dumps(oneshot_verdict(crits, pres, jver)))
+        return 0
+    sys.stderr.write(f"content_oneshot.py: unknown op {op!r}\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))

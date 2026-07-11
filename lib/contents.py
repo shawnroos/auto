@@ -205,3 +205,43 @@ def validate_content(obj) -> tuple:
                     errors.append(str(e))
 
     return (len(errors) == 0), errors
+
+
+def load_and_validate_content(name: str, repo: str) -> dict:
+    """Resolve content ``name`` and validate its shape in one call — the loader
+    convenience the ``auto-content`` skill (and the CLI below) use so a malformed
+    content fails closed BEFORE it is launched.
+
+    Raises ``ContentError`` — never a bare traceback — on an unresolved/unparseable
+    name (from ``load_content``) OR on an invalid shape (the collected
+    ``validate_content`` errors, joined). Returns the validated content dict.
+    """
+    obj = load_content(name, repo)
+    ok, errors = validate_content(obj)
+    if not ok:
+        raise ContentError(f"content {name!r} is invalid: " + "; ".join(errors))
+    return obj
+
+
+# ── op-dispatch CLI (exercised by tests/unit/content-cli.test.sh) ─────────────
+def _cli(argv) -> int:
+    if not argv:
+        sys.stderr.write("usage: contents.py <op> ...\n")
+        return 2
+    op = argv[0]
+    if op == "load-validate":
+        # argv[1] = content name, argv[2] = repo. Prints OK on a valid resolved
+        # content, or the operator-facing ContentError message otherwise.
+        try:
+            load_and_validate_content(argv[1], argv[2])
+        except ContentError as e:
+            print("INVALID: " + str(e))
+            return 0
+        print("OK")
+        return 0
+    sys.stderr.write(f"contents.py: unknown op {op!r}\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))

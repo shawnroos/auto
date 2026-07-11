@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # auto U3 unit test (addressable-step-contents): validate_oneshot_criteria.
 #
-# The pre-dispatch ratify gate: before criteria are baked into a one-shot unit
-# (U2 synthesize_oneshot_unit), the ratified list is validated against the SAME
-# taxonomy shape a recipe's verification block uses. validate_oneshot_criteria
+# The pre-dispatch ratify gate: before the ratified criteria flow into the
+# terminal verdict, the list is validated against the SAME taxonomy shape a
+# recipe's verification block uses. validate_oneshot_criteria
 # REUSES recipe_validate._validate_verification (KTD-2 reuse discipline) so
 # "malformed proposed criterion is rejected" is a REAL test, not just prose.
 #

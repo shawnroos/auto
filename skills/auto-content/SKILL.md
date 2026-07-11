@@ -7,11 +7,10 @@ description: >
   <target>", "one-shot the tuned-review on this diff", "fire scoped-build on
   <target>". This skill IS the orchestrator (no tick, no /goal, no re-arm): it
   loads the content, PROPOSES context-fit verification the operator accepts or
-  edits, synthesizes a single-unit run, launches the content's op ONCE as an
-  awaited sub-agent honoring its prompt_template, resolves every criterion
-  inline, computes a pass/fail verdict, reports, and terminates. It runs ONE
-  step against ONE target — a multi-step plan-then-build is a flow (deferred),
-  not a content.
+  edits, launches the content's op ONCE as an awaited sub-agent honoring its
+  prompt_template, resolves every criterion inline, folds the ratified criteria
+  into a pass/fail verdict, reports, and terminates. It runs ONE step against
+  ONE target — a multi-step plan-then-build is a flow (deferred), not a content.
 ---
 
 # auto-content (the one-shot content orchestrator)
@@ -50,24 +49,23 @@ shape). The thin lib seams this skill drives live in `lib/contents.py` and
 
 ## The one-shot flow (F1)
 
-### 1. Load the content by name
+The lib seams are driven through each module's CLI (`_cli`/`__main__`, the house
+pattern — see `lib/verification.py`), as one-liners. **JSON args are single-quoted**
+so the shell hands the whole document through as one argv element.
 
-The operator names a content and a target. Resolve + validate it:
+### 1. Load and validate the content by name
+
+The operator names a content and a target. Resolve + validate it in one call:
 
 ```
-python3 -c '
-import sys; sys.path.insert(0, sys.argv[1])
-from _bootstrap import load_lib_module
-contents = load_lib_module("contents")
-c = contents.load_content(sys.argv[2], sys.argv[3])
-ok, errs = contents.validate_content(c)
-print("OK" if ok else "INVALID: " + "; ".join(errs))
-' "${CLAUDE_PLUGIN_ROOT}/lib" "<content-name>" "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/contents.py" load-validate "<content-name>" "$PWD"
 ```
 
-`load_content` resolves the workspace tier (`<repo>/.claude/auto/contents/`)
-first, then the built-in seeds — first-wins. Shipped seeds today:
-`tuned-review` (a tuned `review`) and `scoped-build` (a scoped `do_unit`).
+Prints `OK` for a valid resolved content, or `INVALID: <message>` (an unknown name
+or a bad shape). `load_content` resolves the workspace tier
+(`<repo>/.claude/auto/contents/`) first, then the built-in seeds — first-wins.
+Shipped seeds today: `tuned-review` (a tuned `review`) and `scoped-build` (a scoped
+`do_unit`).
 
 **Unknown content name → clear error, then point multi-step reuse at the flow
 arc (R-D).** `load_content` raises `ContentError` listing what it searched —
@@ -86,56 +84,29 @@ the operator ACCEPTS or EDITS it. **Do not dispatch until the criteria are
 accepted (AE1).** An edited criterion is the one that gets baked, not the
 proposed original (AE2).
 
-Validate the ratified list against the taxonomy shape BEFORE baking — reject a
+Validate the ratified list against the taxonomy shape BEFORE launch — reject a
 malformed criterion (a `programmatic` with a shell string instead of an argv
 list, an unknown `type`, >16 criteria) and re-ratify:
 
 ```
-python3 -c '
-import sys, json; sys.path.insert(0, sys.argv[1])
-from _bootstrap import load_lib_module
-co = load_lib_module("content_oneshot")
-ok, errs = co.validate_oneshot_criteria(json.loads(sys.argv[2]))
-print("OK" if ok else "INVALID: " + "; ".join(errs))
-' "${CLAUDE_PLUGIN_ROOT}/lib" '<ratified-criteria-json>'
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" validate-criteria '<ratified-criteria-json>'
 ```
 
-Nothing is written back to the content file — the ratified criteria are
-ephemeral (R2/A2).
+Prints `OK` or `INVALID: <message>`. Nothing is written back to the content file
+— the ratified criteria are ephemeral (R2/A2) and flow directly into the step-5
+verdict; there is no persisted unit.
 
-### 3. Synthesize the single-unit run (U2)
-
-Turn the loaded content + the ratified criteria into ONE work-phase unit: the
-content's `invokes` rides on `dispatch_context`; the criteria bake onto a
-top-level `one_shot_verification` key; there is NO `iteration` block and NO
-`phase_transitions` — the one-shot never loops (KTD-3/KTD-4). Emit the unit as
-JSON — this is the `<unit-json>` step 6 consumes; hold it in this run, do NOT
-persist it via the ledger (`_normalize_unit` would drop the criteria):
-
-```
-python3 -c '
-import sys, json; sys.path.insert(0, sys.argv[1])
-from _bootstrap import load_lib_module
-contents = load_lib_module("contents"); co = load_lib_module("content_oneshot")
-c = contents.load_content(sys.argv[2], sys.argv[3])
-print(json.dumps(co.synthesize_oneshot_unit(c, json.loads(sys.argv[4]))))
-' "${CLAUDE_PLUGIN_ROOT}/lib" "<content-name>" "$PWD" '<ratified-criteria-json>'
-```
-
-### 4. Launch the content's op ONCE, honoring `prompt_template` (U5 / KTD-5)
+### 3. Launch the content's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
 Build the launch descriptor — the DRIVER folds the content's tuning in (the
 orchestrator never consults the adapter, driver-reference §7):
 
 ```
-python3 -c '
-import sys, json; sys.path.insert(0, sys.argv[1])
-from _bootstrap import load_lib_module
-contents = load_lib_module("contents"); co = load_lib_module("content_oneshot")
-c = contents.load_content(sys.argv[2], sys.argv[3])
-print(json.dumps(co.build_oneshot_launch(c, sys.argv[3])))
-' "${CLAUDE_PLUGIN_ROOT}/lib" "<content-name>" "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" launch "<content-name>" "$PWD"
 ```
+
+The `launch` op re-loads and re-validates the content (fail closed) before
+building the descriptor.
 
 The descriptor always names `adapter_op`. When the content declares a
 `prompt_template`, the descriptor carries `prompt_template_body` (the template
@@ -150,22 +121,17 @@ awaited sub-agent** and wait for its result. If any ratified criterion is a
 `model_judge`, instruct the sub-agent to self-grade against it and return a
 pass/fail alongside its output.
 
-### 5. Resolve every ratified criterion inline (U4 / KTD-3)
+### 4. Resolve every ratified criterion inline (U4 / KTD-3)
 
 With the sub-agent's result in hand, resolve each criterion — **all in this one
 synchronous pass**, per `references/one-shot-verification.md`:
 
-- **`programmatic`** → run in-process via `verification.evaluate_programmatic`;
-  record `{criterion_id: status}` into `programmatic_results`:
+- **`programmatic`** → run in-process via `verification.py`'s `eval-programmatic`
+  op (runs in the current working directory); record `{criterion_id: status}`
+  into `programmatic_results`:
 
   ```
-  python3 -c '
-  import sys, json; sys.path.insert(0, sys.argv[1])
-  from _bootstrap import load_lib_module
-  v = load_lib_module("verification")
-  r = v.evaluate_programmatic(json.loads(sys.argv[2]), sys.argv[3])
-  print(json.dumps(r))
-  ' "${CLAUDE_PLUGIN_ROOT}/lib" '<criterion-json>' "$PWD"
+  python3 "${CLAUDE_PLUGIN_ROOT}/lib/verification.py" eval-programmatic '<criterion-json>'
   ```
 - **`model_judge`** → read the dispatched sub-agent's own pass/fail.
 - **`advisor_judge`** → consult the `advisor` (blocking), map its prose to
@@ -174,26 +140,21 @@ synchronous pass**, per `references/one-shot-verification.md`:
 
 Collect the judge results into `judge_verdicts` (`{criterion_id: status}`).
 
-### 6. Verdict, report, terminate
+### 5. Verdict, report, terminate
 
-Fold everything into the terminal verdict:
+Fold the **ratified criteria** plus the resolved results into the terminal
+verdict — the criteria list goes in directly (there is no persisted unit):
 
 ```
-python3 -c '
-import sys, json; sys.path.insert(0, sys.argv[1])
-from _bootstrap import load_lib_module
-co = load_lib_module("content_oneshot")
-unit = json.loads(sys.argv[2])
-v = co.oneshot_verdict(unit, json.loads(sys.argv[3]), json.loads(sys.argv[4]))
-print(json.dumps(v))
-' "${CLAUDE_PLUGIN_ROOT}/lib" '<unit-json>' '<programmatic_results-json>' '<judge_verdicts-json>'
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" verdict \
+  '<ratified-criteria-json>' '<programmatic_results-json>' '<judge_verdicts-json>'
 ```
 
 `oneshot_verdict` maps **all-resolved-pass → `pass`; any-resolved-fail → `fail`;
 NO ratified criteria → `unverified`** (KTD-1 — a read-only terminal aggregate,
 never an iteration decision). A one-shot that verified nothing is `unverified`,
 never a green — do not present it as a pass. Because every type was resolved in
-step 5, no judges are pending; if any were, it raises `OneShotIncomplete` rather
+step 4, no judges are pending; if any were, it raises `OneShotIncomplete` rather
 than passing silently.
 
 Then **surface the content's output and the verdict distinctly** — the review /
