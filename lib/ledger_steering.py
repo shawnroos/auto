@@ -276,13 +276,31 @@ def register_session(repo_root, run_id, session_id):
     Idempotent — re-registering an already-present id is a no-op, so a sub-agent
     that retries its own start does not grow the set. Bounded at
     ``_MAX_AGENT_SESSIONS`` so a pathological re-dispatch loop cannot grow the
-    ledger without limit; the oldest entry is evicted first. Eviction is safe:
-    an evicted session is one that registered 256 dispatches ago and is long
-    dead, and a live sub-agent re-registers on start.
+    ledger without limit; the oldest entry is evicted first.
+
+    EVICTION IS A FIFO HEURISTIC, NOT A LIVENESS GUARANTEE (adversarial/security
+    review, v0.13.0). The oldest-registered id is the one MOST LIKELY already
+    complete, so FIFO is a reasonable proxy for "drop the dead one" — but it is a
+    proxy. A sub-agent registers ONCE at start (not per command), so a still-live
+    early agent that is evicted after ``_MAX_AGENT_SESSIONS`` later distinct
+    registrations falls out of the set and the destructive backstop goes dark for
+    it, reverting to the prompt-carried constraints (§4.6) as the only guard. The
+    cap is set well above a realistic run's session count (fan-out cap 16 per
+    wave, idempotent retries don't grow the set), so eviction should never fire in
+    a normal run; if it does, that run is anomalous. This is defense-in-depth
+    against a MISBEHAVING agent, not a sandbox against a MALICIOUS one — an agent
+    with Bash can edit the ledger JSON directly regardless.
 
     I-1: read + membership check + append happen inside ONE
     ``_with_locked_ledger`` call. Two sub-agents registering concurrently
     serialize; neither loses the other's id.
+
+    CALLER-TRUST: the CLI verb accepts an arbitrary ``session_id`` arg, so it is
+    the CALLER's responsibility to pass its OWN id — the §4.8 dispatch contract
+    has each sub-agent register ``$CLAUDE_CODE_SESSION_ID`` (its own env id), so a
+    sub-agent only ever adds ITSELF. A process that passes a third party's id
+    could gate that bystander (a DoS, not a destructive-command bypass); the
+    env-derived contract is the mitigation.
 
     Does NOT touch ``driving_session_id`` — the boss remains the primary owner,
     and only the boss's session is exempt from the action gate's operator-pause

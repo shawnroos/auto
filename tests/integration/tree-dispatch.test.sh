@@ -298,6 +298,25 @@ PYEOF
 )"
 assert_eq "alive: confirmed=[] state=dispatched | dead: confirmed=['u1'] state=stalled" "$res"
 
+# ─── G. WIRING GUARD: the dispatch contract actually arms the backstop ───────
+# The ownership-set backstop (U8) only reaches a phase sub-agent if that agent
+# calls `register-session` on start — and that call is authored by the §4.8
+# dispatch prompt, not by any Python. tree-ownership.test.sh proves the HOOK
+# gates a registered session, but it injects the registration via a test helper;
+# it cannot catch the production step going missing. This guard does: if §4.8's
+# prompt contract stops telling the sub-agent to register itself, the backstop is
+# silently dark in the tree and this fails. (Adversarial review, v0.13.0.)
+it_dispatch_contract_names_register_session() {
+  local skill="${AUTO_ROOT}/skills/auto/SKILL.md"
+  if grep -q 'register-session <run> "\$CLAUDE_CODE_SESSION_ID"' "$skill" \
+     && grep -qi 'FIRST line of every phase sub-agent prompt' "$skill"; then
+    PASS=$((PASS + 1)); printf "  ok %d - §4.8 dispatch contract arms the backstop (register-session, own session id)\n" "$PASS"
+  else
+    FAIL=$((FAIL + 1)); printf "  not ok - §4.8 dispatch contract no longer tells the sub-agent to register-session: backstop dark in the tree\n"
+  fi
+}
+it_dispatch_contract_names_register_session
+
 # ─────────────────────────────────────────────────────────────────────────────
 printf "%s: %d passed, %d failed\n" "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

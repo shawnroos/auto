@@ -315,7 +315,12 @@ def _cli_steering(cmd, argv):
                     "ledger.py: add-unit depends_on must be a JSON array\n"
                 )
                 return 2
-        phase = argv[4] if len(argv) > 4 else None
+        # Mirror `init`'s `and argv[4]` guard: an explicit EMPTY phase arg must
+        # read as absent (-> None -> the run-phase default in _normalize_unit),
+        # not as phase="" — a unit with phase "" is in neither the current-phase
+        # nor the terminal-phase eval set, so it silently drops out of the
+        # terminality check and is never dispatched (correctness review, v0.13.0).
+        phase = argv[4] if len(argv) > 4 and argv[4] else None
         add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
         return 0
     if cmd == "reshape-deps":
