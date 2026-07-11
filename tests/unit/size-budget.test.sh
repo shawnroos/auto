@@ -76,8 +76,9 @@ ALLOWED_FUNCTIONS=(
   # a schema field's only home is this chokepoint, and the field is what
   # lets the destructive backstop reach the sub-agent tree. The verb-surface
   # work DID decompose where decomposition was real: ledger_mutators.py's
-  # steering verbs moved to ledger_steering.py and ledger.py::_cli's agent
-  # verbs moved to _cli_steering, both back under budget without a waiver.
+  # steering verbs moved to ledger_steering.py, and ledger.py's whole CLI
+  # collapsed into the _VERBS registry with per-verb _h_* handlers (no function
+  # over 40 LOC), both back under budget without a waiver.
   "lib/ledger_core.py:init_ledger:231"
   # (_try_iteration_check waiver retired: the recipe-bug + iteration-crash
   # except branches were collapsed into the shared `_wedge_done_stop` helper,
