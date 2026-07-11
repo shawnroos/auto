@@ -121,11 +121,13 @@ GATING_SEVERITIES = ("blocker", "major")  # severities that block terminality/do
 #
 # The agent-driven force-skip edges (`pending -> terminal-skip`,
 # `verdict-returned -> terminal-skip`) are deliberately NOT here — see
-# `ledger_mutators._FORCE_SKIP_SOURCE_STATES`. Putting them in this table would
-# let the findings-free, reason-free `transition()` reach `terminal-skip`,
-# silently bypassing the mandatory skip-reason (R20). Same asymmetry, and for the
-# same reason, as `_VERDICT_WRITABLE_STATES`: a wider edge set owned by the one
-# mutator that enforces the extra precondition.
+# `ledger_steering._FORCE_SKIP_SOURCE_STATES`. Adding THOSE TWO edges here would
+# let the findings-free, reason-free `transition()` reach `terminal-skip` from
+# pending/verdict-returned, silently bypassing the mandatory skip-reason (R20).
+# (The `stalled -> terminal-skip` edge below is intentionally reason-free — the
+# operator `auto-resume.py skip` path — and stays in the grammar.) Same asymmetry,
+# and for the same reason, as `_VERDICT_WRITABLE_STATES`: a wider edge set owned
+# by the one mutator that enforces the extra precondition.
 ALLOWED_TRANSITIONS = {
     "pending": {"dispatched"},
     "dispatched": {"verdict-returned", "stalled"},

@@ -70,11 +70,10 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
-    AGENT_SESSIONS_KEY,
-    DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
+    session_membership,
     test_hatch_enabled,
 )
 
@@ -402,10 +401,7 @@ def _owns_session(led, *, session_id):
         return False
     if not session_id:
         return False
-    driving = led.get(DRIVING_SESSION_KEY)
-    is_driving = bool(driving) and driving == session_id
-    registered = led.get(AGENT_SESSIONS_KEY)
-    is_agent = isinstance(registered, list) and session_id in registered
+    is_driving, is_agent = session_membership(led, session_id)
     if not (is_driving or is_agent):
         return False
     loop = led.get("loop") or {}

@@ -273,6 +273,31 @@ DRIVING_SESSION_KEY = "driving_session_id"
 AGENT_SESSIONS_KEY = "agent_session_ids"
 
 
+def session_membership(led, session_id):
+    """Return ``(is_driving, is_agent)`` for ``session_id`` against ONE ledger.
+
+    The single source of truth for the ownership-set membership computation both
+    PreToolUse gates key on (U8/R21). Extracted here — next to the two key
+    constants it reads — so the two hooks cannot drift on a safety-critical
+    check: a future change to how membership is decided (e.g. the
+    ``agent_session_ids`` type guard) is made once, not copy-kept in two files.
+
+    It returns the two booleans SEPARATELY on purpose, and does NOT decide
+    ownership. The gates' divergent policy stays in the gates: the action hook
+    fails CLOSED and exempts an operator pause ONLY for the driving session (a
+    sub-agent is never the operator), so it needs ``is_driving`` distinct from
+    ``is_agent``; the askuser hook fails OPEN and its own ``driver == "self"``
+    conjunct already excludes paused runs, so it just ORs the two. Merging that
+    policy in here would erase the fail-open/fail-closed asymmetry — this helper
+    is deliberately policy-free.
+    """
+    driving = led.get(DRIVING_SESSION_KEY)
+    is_driving = bool(driving) and driving == session_id
+    registered = led.get(AGENT_SESSIONS_KEY)
+    is_agent = isinstance(registered, list) and session_id in registered
+    return is_driving, is_agent
+
+
 # The plugin-qualified tick command — the ONE copy of the string AND its hazard
 # note (v0.6.5). A programmatically fired plugin slash command must resolve as
 # `/<plugin>:<command>`: the bare `/auto-tick` is "Unknown command" under

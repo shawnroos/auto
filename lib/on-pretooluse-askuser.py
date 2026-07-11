@@ -50,11 +50,10 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
-    AGENT_SESSIONS_KEY,
-    DRIVING_SESSION_KEY,
     iter_worktree_ledgers,
     load_ledger,
     load_lib_module,
+    session_membership,
     test_hatch_enabled,
 )
 
@@ -113,11 +112,8 @@ def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, n
     # `driver == "self"` conjunct above already excludes every paused run.
     if not session_id:
         return False
-    driving = led.get(DRIVING_SESSION_KEY)
-    if bool(driving) and driving == session_id:
-        return True
-    registered = led.get(AGENT_SESSIONS_KEY)
-    return isinstance(registered, list) and session_id in registered
+    is_driving, is_agent = session_membership(led, session_id)
+    return is_driving or is_agent
 
 
 def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
