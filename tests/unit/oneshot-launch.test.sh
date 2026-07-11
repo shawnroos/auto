@@ -117,6 +117,37 @@ assert_eq "True" "$(get tuned_body_folds)"
 it "a content WITH a prompt_template records the template path on the descriptor"
 assert_eq "True" "$(get tuned_has_tmpl)"
 
+# ── Scenario 4: workspace template WINS over the built-in (pins workspace-first) ─
+# build_oneshot_launch searches (repo, _AUTO_ROOT). A workspace repo carrying the
+# SAME relative template path as a shipped seed must fold the WORKSPACE body — a
+# regression to built-in-first would silently fold the seed's body instead. (The
+# other scenarios pass AUTO_ROOT as the repo, collapsing both bases, so this is
+# the only scenario that actually pins the order.)
+TMPREPO="$(mktemp -d -t auto-oneshot.XXXXXX)"
+mkdir -p "${TMPREPO}/contents"
+printf 'WORKSPACE-OVERRIDE-SENTINEL\n' > "${TMPREPO}/contents/tuned-review.prompt.md"
+OVERRIDE_BODY="$(
+  "$PY" - "$LIB" "$AUTO_ROOT" "$TMPREPO" <<'PYEOF'
+import sys, importlib.util
+lib, auto_root, tmprepo = sys.argv[1], sys.argv[2], sys.argv[3]
+if lib not in sys.path:
+    sys.path.insert(0, lib)
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, f"{lib}/{name}.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+co = load("content_oneshot"); contents = load("contents")
+# built-in seed; its prompt_template is the relative 'contents/tuned-review.prompt.md'
+tuned = contents.load_content("tuned-review", auto_root)
+d = co.build_oneshot_launch(tuned, tmprepo)  # repo=tmprepo -> workspace searched first
+body = d.get("prompt_template_body") or ""
+print("sentinel" if "WORKSPACE-OVERRIDE-SENTINEL" in body else "builtin")
+PYEOF
+)"
+case "$TMPREPO" in */auto-oneshot.*) rm -rf "$TMPREPO" ;; esac
+
+it "a workspace template overrides the built-in seed's (workspace-first order)"
+assert_eq "sentinel" "$OVERRIDE_BODY"
+
 echo ""
 echo "oneshot-launch.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

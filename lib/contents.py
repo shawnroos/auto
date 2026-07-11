@@ -232,6 +232,9 @@ def _cli(argv) -> int:
     if op == "load-validate":
         # argv[1] = content name, argv[2] = repo. Prints OK on a valid resolved
         # content, or the operator-facing ContentError message otherwise.
+        if len(argv) != 3:
+            sys.stderr.write("usage: contents.py load-validate <name> <repo>\n")
+            return 2
         try:
             load_and_validate_content(argv[1], argv[2])
         except ContentError as e:

@@ -3,8 +3,8 @@
 # the `auto-content` skill orchestrates, end to end, WITHOUT a live agent.
 #
 # F1 (the Phase-1 headline) is: load a named content -> propose/ratify criteria
-# -> synthesize a single-unit run -> launch the op ONCE -> resolve criteria
-# inline -> oneshot_verdict -> report + terminate. The live sub-agent launch and
+# -> launch the op ONCE -> resolve criteria inline -> oneshot_verdict on the
+# ratified criteria -> report + terminate. The live sub-agent launch and
 # the propose/ratify CONVERSATION are agent-driven (verified by the skill prose +
 # code review). What is DETERMINISTIC — and what this test pins — is the lib seam
 # the skill drives:

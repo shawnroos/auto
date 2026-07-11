@@ -133,8 +133,8 @@ else
 fi
 
 # ─── content_oneshot DAG: the one-shot verdict stays off the iteration gate ──
-# lib/content_oneshot.py (U2+U4, addressable-step-contents) is the one-shot
-# synthesis + terminal-verdict helper. KTD-1 boundary: the one-shot verdict is a
+# lib/content_oneshot.py (U4, addressable-step-contents) is the one-shot
+# terminal-verdict helper. KTD-1 boundary: the one-shot verdict is a
 # READ-ONLY terminal aggregate over the ratified criteria — it reuses ONLY the
 # pure verification evaluator, and MUST NOT import lib/iteration.py (the
 # iteration-decision-commit module). Importing iteration would silently re-acquire

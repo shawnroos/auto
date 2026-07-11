@@ -152,12 +152,14 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
             # Open directly (one syscall, no TOCTOU): a miss falls through to the
             # next base; a present-but-unreadable file is a hard error.
             try:
-                with open(candidate) as f:
+                with open(candidate, encoding="utf-8") as f:
                     body = f.read()
                 break
             except FileNotFoundError:
                 continue
-            except OSError as e:
+            except (OSError, UnicodeError) as e:
+                # Unreadable OR not valid UTF-8 — a present-but-bad template is a
+                # hard error, not a silent fall-through to the next base.
                 raise RecipeError(
                     f"prompt_template {pt!r} at {candidate} could not be read: {e}"
                 ) from None
@@ -238,22 +240,36 @@ def _cli(argv) -> int:
     op = argv[0]
     if op == "validate-criteria":
         # argv[1] = ratified criteria JSON
+        if len(argv) != 2:
+            sys.stderr.write("usage: content_oneshot.py validate-criteria <criteria-json>\n")
+            return 2
         ok, errs = validate_oneshot_criteria(json.loads(argv[1]))
         print("OK" if ok else "INVALID: " + "; ".join(errs))
         return 0
     if op == "launch":
         # argv[1] = content name, argv[2] = repo. Loads + validates the content
         # (fail closed) before folding its tuning into the launch descriptor.
+        if len(argv) != 3:
+            sys.stderr.write("usage: content_oneshot.py launch <name> <repo>\n")
+            return 2
         contents = load_lib_module("contents")
-        content = contents.load_and_validate_content(argv[1], argv[2])
-        print(json.dumps(build_oneshot_launch(content, argv[2])))
+        # A shape-valid content can still declare a real-but-missing/unreadable
+        # template that only build_oneshot_launch touches — surface either as the
+        # operator-facing INVALID line, never a bare traceback.
+        try:
+            content = contents.load_and_validate_content(argv[1], argv[2])
+            print(json.dumps(build_oneshot_launch(content, argv[2])))
+        except (contents.ContentError, RecipeError) as e:
+            print("INVALID: " + str(e))
         return 0
     if op == "verdict":
         # argv[1]=criteria JSON, argv[2]=programmatic_results JSON, argv[3]=judge_verdicts JSON
-        crits = json.loads(argv[1])
-        pres = json.loads(argv[2])
-        jver = json.loads(argv[3])
-        print(json.dumps(oneshot_verdict(crits, pres, jver)))
+        if len(argv) != 4:
+            sys.stderr.write(
+                "usage: content_oneshot.py verdict <criteria-json> <prog-json> <judges-json>\n"
+            )
+            return 2
+        print(json.dumps(oneshot_verdict(json.loads(argv[1]), json.loads(argv[2]), json.loads(argv[3]))))
         return 0
     sys.stderr.write(f"content_oneshot.py: unknown op {op!r}\n")
     return 2
