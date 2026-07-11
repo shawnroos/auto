@@ -55,6 +55,41 @@ condition phrased to MIRROR auto's exit predicate (so the two gates
 agree) and saves it as a goal doc for the operator to bind by hand —
 auto still never runs `/goal` itself.
 
+## 1.5 Boss goal-doc drive (R12–R17)
+
+The boss may drive from **one editable goal doc as its sole required
+input**. Native `/goal` is opaque and frozen — the agent can neither
+read, edit, nor clear it. A goal *doc* is transparent and agent-owned:
+the boss reads it each pulse, works it, and maintains it. This is the
+agent-native answer to a harness limit, not a workaround bolted on.
+
+- **Full authority (R14).** The boss may rewrite ANY part of the goal
+  doc, including the done-definition, as understanding evolves. Changes
+  are visible in the doc's history; they are not gated.
+- **The done-floor is the ledger predicate, not the prose (R16).** The
+  boss CANNOT make a run done by editing goal-doc text. `met` is
+  computed from real verdicts; any open blocker/major finding keeps it
+  false regardless of what the doc says (AE2). Prose states intent; the
+  predicate states completion.
+- **Drive while the next step is clear; hand back when it isn't (R13).**
+  The fuzzy judgment "is the next step clear?" stays in the model; the
+  CRISP outcome is one of two ledger writes — same split as
+  `goal-route.py` (model classifies, code decides):
+  - **clear →** materialize the next step as a unit via a steering verb
+    (`add-unit`, per R15) and keep driving (`driver` stays `self`, so
+    the Stop hook keeps the session held).
+  - **unclear →** hand back: `python3 lib/auto-resume.py pause <run>
+    "<why the next step is unclear>"`, which flips `driver → manual`.
+    The Stop hook's SEAM/MANUAL carve-out then treats that as a valid
+    stop point. Do NOT guess a step you cannot justify.
+- **The human steers by editing the goal doc (R17).** That is auto's
+  human-in-the-loop channel — the driving session's `AskUserQuestion`
+  is denied by the PreToolUse gate. The boss re-reads the doc each pulse
+  and picks up the edit; the operator never needs a live prompt.
+
+Test the crisp seam (what the boss WROTE — a unit-create or a manual
+pause), never the fuzzy judgment. Full contract: `driver-reference.md`.
+
 ## 2. Arm the tick chain
 
 Fire the first tick. The command is NAMESPACED (`/auto:auto-tick`) — a plugin
