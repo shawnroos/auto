@@ -120,6 +120,25 @@ else
   fail "these consumers bypass the ledger facade: ${violators}— load \"ledger\" instead"
 fi
 
+# ─── contents DAG: the validator stays a light leaf (KTD-2) ─────────────────
+# lib/contents.py (U1, addressable-step-contents) reuses recipe_validate's
+# primitives + the adapter_ops leaf, but MUST NOT import orchestrator.py — that
+# module pulls in the ledger and the whole dispatch surface. Keeping the content
+# validator off the heavy dispatch module is the KTD-2 boundary.
+it "contents.py does NOT import orchestrator (KTD-2 leaf boundary)"
+if loads_sibling "contents.py" "orchestrator"; then
+  fail "contents.py must not import orchestrator — the content validator is a light leaf (KTD-2); import adapter_ops for VALID_ADAPTER_OPS instead"
+else
+  pass
+fi
+
+it "adapter_ops.py imports NO sibling lib module (pure-stdlib leaf)"
+if grep -q "load_lib_module(" "$LIB/adapter_ops.py"; then
+  fail "adapter_ops.py must be a pure-stdlib leaf — it is the shared VALID_ADAPTER_OPS source of truth and must import no sibling"
+else
+  pass
+fi
+
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of ledger_mutators.py with a forbidden facade import added;
 # the loads_sibling check MUST flag it. (We test the predicate directly against
