@@ -378,7 +378,8 @@ produces a terminal pass/fail verdict — WITHOUT the tick loop, a
 **Boundary from the iteration gate (KTD-1).** `oneshot_verdict` reuses
 ONLY the pure `verification.aggregate` evaluator and re-labels its
 advance/iterate SIGNAL to a terminal `pass`/`fail` (all resolved pass →
-`pass`; any resolved fail → `fail`). It is **read-only** over the
+`pass`; any resolved fail → `fail`; **no ratified criteria →
+`unverified`**, never a silent `pass` in a gating mechanism). It is **read-only** over the
 criteria: it does NOT import `lib/iteration.py`, does NOT commit an
 iteration `decision`, and writes nothing onto `dispatch_context`. This is
 distinct from §2's *Reading the decision* path — that is the looping

@@ -16,6 +16,9 @@
 #   4. an advisor_judge verdict folds in (pass AND fail).
 #   5. a human verdict folds in (accept -> pass contribution; reject -> fail).
 #   6. unresolved pending judges at verdict time -> explicit error (not a silent pass).
+#   7. no iteration `decision` written (KTD-1 boundary).
+#   8. no ratified criteria -> "unverified", never a silent pass (review finding).
+#   9. stripped baked criteria (ledger round-trip) -> "unverified", fails loud.
 #   7. no iteration decision is written — the unit's dispatch_context has no
 #      `decision` field after oneshot_verdict (KTD-1 boundary).
 
@@ -123,6 +126,19 @@ dc = u.get("dispatch_context") or {}
 out.append("s7_has_decision=%s" % ("decision" in dc))
 out.append("s7_unit_has_decision=%s" % ("decision" in u))
 
+# ── Scenario 8: NO ratified criteria -> "unverified", never a silent pass ─────
+# A one-shot that verified nothing must not report green (review finding).
+out.append("s8_empty=%s" % verdict_of([], {}, {}))
+out.append("s8_none=%s" % verdict_of(None, {}, {}))
+
+# ── Scenario 9: a unit whose baked criteria were stripped (exactly what a ledger
+# round-trip through ledger_core._normalize_unit does — it drops the top-level
+# one_shot_verification key) verdicts "unverified", failing LOUD rather than as a
+# vacuous pass. This is the guard behind KTD-4's "do not persist the unit". ─────
+stripped = synth([crit("p1", "programmatic")])
+stripped.pop(co.ONE_SHOT_VERIFICATION_KEY, None)
+out.append("s9=%s" % verdict_fn(stripped, {"p1": "pass"}, {})["verdict"])
+
 print(";".join(out))
 PYEOF
 }
@@ -165,6 +181,15 @@ assert_eq "False" "$(get s7_has_decision)"
 
 it "oneshot_verdict writes no top-level decision on the unit (KTD-1 boundary)"
 assert_eq "False" "$(get s7_unit_has_decision)"
+
+it "no ratified criteria -> verdict unverified (empty list; not a silent pass)"
+assert_eq "unverified" "$(get s8_empty)"
+
+it "no ratified criteria -> verdict unverified (None)"
+assert_eq "unverified" "$(get s8_none)"
+
+it "stripped baked criteria (ledger round-trip) -> unverified, not a silent pass"
+assert_eq "unverified" "$(get s9)"
 
 echo ""
 echo "one-shot-verdict.test.sh: ${PASS} passed, ${FAIL} failed"

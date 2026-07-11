@@ -105,11 +105,22 @@ ephemeral (R2/A2).
 
 ### 3. Synthesize the single-unit run (U2)
 
-Turn the loaded content + the ratified criteria into ONE work-phase unit
-(`co.synthesize_oneshot_unit(content, ratified)`): the content's `invokes` rides
-on `dispatch_context`; the criteria bake onto a top-level `one_shot_verification`
-key; there is NO `iteration` block and NO `phase_transitions` — the one-shot
-never loops (KTD-3/KTD-4).
+Turn the loaded content + the ratified criteria into ONE work-phase unit: the
+content's `invokes` rides on `dispatch_context`; the criteria bake onto a
+top-level `one_shot_verification` key; there is NO `iteration` block and NO
+`phase_transitions` — the one-shot never loops (KTD-3/KTD-4). Emit the unit as
+JSON — this is the `<unit-json>` step 6 consumes; hold it in this run, do NOT
+persist it via the ledger (`_normalize_unit` would drop the criteria):
+
+```
+python3 -c '
+import sys, json; sys.path.insert(0, sys.argv[1])
+from _bootstrap import load_lib_module
+contents = load_lib_module("contents"); co = load_lib_module("content_oneshot")
+c = contents.load_content(sys.argv[2], sys.argv[3])
+print(json.dumps(co.synthesize_oneshot_unit(c, json.loads(sys.argv[4]))))
+' "${CLAUDE_PLUGIN_ROOT}/lib" "<content-name>" "$PWD" '<ratified-criteria-json>'
+```
 
 ### 4. Launch the content's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
@@ -145,7 +156,17 @@ With the sub-agent's result in hand, resolve each criterion — **all in this on
 synchronous pass**, per `references/one-shot-verification.md`:
 
 - **`programmatic`** → run in-process via `verification.evaluate_programmatic`;
-  record `{criterion_id: status}` into `programmatic_results`.
+  record `{criterion_id: status}` into `programmatic_results`:
+
+  ```
+  python3 -c '
+  import sys, json; sys.path.insert(0, sys.argv[1])
+  from _bootstrap import load_lib_module
+  v = load_lib_module("verification")
+  r = v.evaluate_programmatic(json.loads(sys.argv[2]), sys.argv[3])
+  print(json.dumps(r))
+  ' "${CLAUDE_PLUGIN_ROOT}/lib" '<criterion-json>' "$PWD"
+  ```
 - **`model_judge`** → read the dispatched sub-agent's own pass/fail.
 - **`advisor_judge`** → consult the `advisor` (blocking), map its prose to
   pass/fail (§4.6/§4.7 pattern).
@@ -168,15 +189,17 @@ print(json.dumps(v))
 ' "${CLAUDE_PLUGIN_ROOT}/lib" '<unit-json>' '<programmatic_results-json>' '<judge_verdicts-json>'
 ```
 
-`oneshot_verdict` maps **all-resolved-pass → `pass`; any-resolved-fail → `fail`**
-(KTD-1 — a read-only terminal aggregate, never an iteration decision). Because
-every type was resolved in step 5, no judges are pending; if any were, it raises
-`OneShotIncomplete` rather than passing silently.
+`oneshot_verdict` maps **all-resolved-pass → `pass`; any-resolved-fail → `fail`;
+NO ratified criteria → `unverified`** (KTD-1 — a read-only terminal aggregate,
+never an iteration decision). A one-shot that verified nothing is `unverified`,
+never a green — do not present it as a pass. Because every type was resolved in
+step 5, no judges are pending; if any were, it raises `OneShotIncomplete` rather
+than passing silently.
 
 Then **surface the content's output and the verdict distinctly** — the review /
-build result the sub-agent produced, and the `pass`/`fail` with which criteria
-drove it. The run is terminal: **no tick is armed, no `/goal` is bound, nothing
-to resume.** Report and stop.
+build result the sub-agent produced, and the `pass`/`fail`/`unverified` with
+which criteria drove it. The run is terminal: **no tick is armed, no `/goal` is
+bound, nothing to resume.** Report and stop.
 
 ## What this skill does NOT do
 

@@ -106,6 +106,10 @@ A1_BUILTIN = {
 #   a2 "Parallel Theories + Judge"               → parallel-theories
 #   a4 "Adversarial Pair + Comparator"           → adversarial-pair
 #   w  "Work-only"                               → work-only
+# RESERVED NAMES: the four legible keys below are rewritten to their stem BEFORE
+# any tier file lookup, so a user recipe literally named e.g. `work-only.json`
+# would be shadowed (it resolves to `w`). These names are reserved aliases — do
+# not author a custom recipe under one of them.
 _ALIASES = {
     "plan-build-review": "a1",
     "parallel-theories": "a2",

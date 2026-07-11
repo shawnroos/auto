@@ -132,6 +132,14 @@ def synthesize_oneshot_unit(content: dict, ratified_criteria) -> dict:
     ``content`` is expected to be a validated content dict (see
     ``lib/contents.py::validate_content``); ``ratified_criteria`` is a list of
     typed verification criteria (possibly empty or None).
+
+    IN-PROCESS ONLY — do NOT persist this unit through ``init_ledger`` /
+    ``add_units``: ``ledger_core._normalize_unit`` rebuilds a unit from a fixed
+    key whitelist and would silently drop the top-level ``one_shot_verification``
+    key, discarding the ratified criteria. The one-shot skill holds this unit in
+    memory from synthesis (here) straight to ``oneshot_verdict``. The failure is
+    not silent even if this is ever violated: a criteria-stripped unit verdicts
+    ``unverified`` (not a spurious ``pass``) — see ``oneshot_verdict``.
     """
     invokes = content.get("invokes") or {}
     dispatch_context = {"adapter_op": invokes.get("adapter_op")}
@@ -233,9 +241,11 @@ def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict
     Reads the ratified criteria baked on ``unit`` (KTD-4), folds them plus the
     supplied resolved results into a single ``verification.aggregate`` call, and
     maps the aggregator's advance/iterate SIGNAL to a terminal ``pass``/``fail``:
-    all resolved criteria pass → ``pass``; any resolved fail → ``fail``. (A run
-    with no criteria aggregates to advance → ``pass`` — a vacuous pass, same fold
-    the evaluator applies to an empty gate.)
+    all resolved criteria pass → ``pass``; any resolved fail → ``fail``. A run
+    with NO ratified criteria verified nothing, so it is reported as
+    ``unverified`` — never ``pass``. A gating verdict that greens with nothing
+    checked is a silent pass, so an empty check is honestly labelled rather than
+    folded (with the evaluator's empty-gate ``advance``) into a green.
 
     ``programmatic_results`` / ``judge_verdicts`` are ``{criterion_id: "pass"|"fail"}``
     maps the CALLER resolved inline (KTD-3): programmatic in-process, model_judge
@@ -244,8 +254,8 @@ def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict
     be no ``pending_judges`` here — if there are, that is a caller error and we
     raise ``OneShotIncomplete`` rather than silently passing.
 
-    Returns ``{"verdict": "pass"|"fail", "signal": <raw aggregate signal>,
-    "criteria_count": int}``. Does NOT mutate ``unit`` and NEVER writes a
+    Returns ``{"verdict": "pass"|"fail"|"unverified", "signal": <raw aggregate
+    signal>, "criteria_count": int}``. Does NOT mutate ``unit`` and NEVER writes a
     ``decision`` field (KTD-1 boundary — this is verdict reporting, not an
     iteration-decision commit).
     """
@@ -266,9 +276,15 @@ def oneshot_verdict(unit: dict, programmatic_results: dict, judge_verdicts: dict
         )
 
     signal = agg.get("signal")
-    # Re-label the loop's advance/iterate signal as a terminal pass/fail — do NOT
-    # leak "iterate" semantics into the one-shot verdict (KTD-1).
-    verdict = "pass" if signal == "advance" else "fail"
+    # An empty ratified-criteria list verified nothing: report "unverified", never
+    # "pass". aggregate([], ...) folds to advance (empty-gate) — mapping that to a
+    # green would be a silent pass in a gating mechanism (review finding).
+    if not criteria:
+        verdict = "unverified"
+    else:
+        # Re-label the loop's advance/iterate signal as a terminal pass/fail — do
+        # NOT leak "iterate" semantics into the one-shot verdict (KTD-1).
+        verdict = "pass" if signal == "advance" else "fail"
     return {
         "verdict": verdict,
         "signal": signal,
