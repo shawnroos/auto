@@ -48,6 +48,25 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
+# The auto plugin root (lib/'s parent) — where the built-in `contents/` seeds and
+# their `prompt_template` files ship. `build_oneshot_launch` resolves a content's
+# relative prompt_template against this first (built-in), then the workspace repo.
+_AUTO_ROOT = os.path.dirname(_LIB_DIR)
+
+# `recipe_validate` is the pure-stdlib validation DAG root (imports no heavy
+# sibling — same leaf discipline `contents.py` relies on). We reuse TWO primitives:
+#   - `_validate_verification` — the SAME taxonomy-shape check a recipe's
+#     `verification` block passes, so U3's ratify gate rejects a malformed
+#     proposed criterion with the exact rules the engine enforces (KTD-2 reuse).
+#   - `_check_prompt_template` — the SAME path-bounding a recipe's prompt_template
+#     passes, re-applied defensively before U5 reads a template off disk.
+# NOTE the KTD-1 boundary is unaffected: `iteration` is STILL never imported here
+# (import-topology enforces it); `recipe_validate` is a different, gate-free leaf.
+_recipe_validate = load_lib_module("recipe_validate")
+_validate_verification = _recipe_validate._validate_verification
+_check_prompt_template = _recipe_validate._check_prompt_template
+RecipeError = _recipe_validate.RecipeError
+
 # The synthesized unit's fixed id. A one-shot run has exactly one unit; a stable
 # legible id keeps the ledger record + any observability legible.
 _ONE_SHOT_UNIT_ID = "one-shot"
@@ -63,6 +82,34 @@ class OneShotIncomplete(Exception):
     ratified criterion inline BEFORE asking for a verdict, so a pending judge at
     verdict time is a caller error, NOT a silent pass. Distinct exception type so
     the caller can tell "incomplete resolution" apart from a real fail verdict."""
+
+
+def validate_oneshot_criteria(criteria) -> tuple:
+    """Validate a RATIFIED one-shot criteria list against the verification
+    taxonomy (U3 / R5). Returns ``(ok: bool, errors: list[str])`` — it COLLECTS
+    rather than raises so the skill can surface the problem and re-ratify.
+
+    This is the pre-dispatch gate: the criteria the operator accepted (possibly
+    EDITED — AE2) are checked BEFORE they are baked into the one-shot unit
+    (``synthesize_oneshot_unit``). It REUSES ``recipe_validate._validate_verification``
+    (KTD-2 reuse discipline) — the SAME shape check the recipe validator applies
+    at both write time and engine-load time — by wrapping the list in a synthetic
+    unit. So a malformed proposed criterion (a `programmatic` with a shell string
+    instead of an argv list, an unknown `type`, >16 criteria, a per-type unknown
+    field) is rejected here with the exact same rules the engine would enforce.
+
+    ``criteria`` may be ``None`` or ``[]`` — a one-shot with no criteria is a
+    valid (vacuous-pass) run, so an empty/None list validates ``ok``.
+    """
+    # `_validate_verification` reads `u["id"]` + `u.get("verification")` and
+    # RAISES RecipeError on the first violation. A synthetic unit adapts the
+    # raise-on-first-error contract to the collect-and-return one this gate wants.
+    synthetic_unit = {"id": _ONE_SHOT_UNIT_ID, "verification": criteria}
+    try:
+        _validate_verification(synthetic_unit)
+    except RecipeError as e:
+        return False, [str(e)]
+    return True, []
 
 
 def synthesize_oneshot_unit(content: dict, ratified_criteria) -> dict:
@@ -108,6 +155,64 @@ def synthesize_oneshot_unit(content: dict, ratified_criteria) -> dict:
         unit[ONE_SHOT_VERIFICATION_KEY] = list(ratified_criteria)
 
     return unit
+
+
+def build_oneshot_launch(content: dict, repo: str) -> dict:
+    """Build the launch descriptor for a one-shot content (U5 / KTD-5).
+
+    DRIVER-SIDE ONLY. The one-shot is driver-orchestrated (KTD-3), so the load-
+    bearing site for "a content's tuning reaches the dispatched agent" is the
+    DRIVER launch, NOT an adapter edit — ``orchestrator.dispatch_batch`` never
+    consults the adapter (driver-reference §7). This helper is what the
+    ``auto-content`` skill calls to assemble that launch:
+
+      - it always names the content's ``adapter_op``;
+      - when the content declares a ``prompt_template``, it folds the template's
+        BODY into the descriptor (``prompt_template`` = the path, ``prompt_template_body``
+        = the file text) so the skill can splice the tuning into the sub-agent's
+        prompt;
+      - when the content declares NO ``prompt_template``, the descriptor is the
+        plain op invocation — no template keys at all (regression-safe: a
+        template-less content launches exactly as before).
+
+    The relative ``prompt_template`` path is re-path-bounded (defensively — same
+    ``_check_prompt_template`` the recipe/content validators use) and resolved
+    against the auto plugin root first (where built-in seeds ship), then the
+    workspace ``repo``. A declared-but-unreadable template FAILS CLOSED with a
+    ``RecipeError`` rather than launching a half-tuned agent.
+
+    Returns ``{"adapter_op": <op>[, "prompt_template": <path>,
+    "prompt_template_body": <text>]}``. Pure w.r.t. ``content`` — mutates nothing.
+    """
+    invokes = content.get("invokes") or {}
+    descriptor = {"adapter_op": invokes.get("adapter_op")}
+
+    pt = invokes.get("prompt_template")
+    if pt:
+        # Re-bound defensively before touching the filesystem (the load path does
+        # not run validate_content, so this helper cannot assume it was checked).
+        _check_prompt_template(pt, "invokes")
+        body = None
+        for base in (_AUTO_ROOT, repo):
+            candidate = os.path.join(base, pt)
+            if os.path.isfile(candidate):
+                try:
+                    with open(candidate) as f:
+                        body = f.read()
+                except OSError as e:
+                    raise RecipeError(
+                        f"prompt_template {pt!r} at {candidate} could not be read: {e}"
+                    ) from None
+                break
+        if body is None:
+            raise RecipeError(
+                f"prompt_template {pt!r} not found; searched: "
+                + ", ".join(os.path.join(b, pt) for b in (_AUTO_ROOT, repo))
+            )
+        descriptor["prompt_template"] = pt
+        descriptor["prompt_template_body"] = body
+
+    return descriptor
 
 
 def _read_baked_criteria(unit: dict) -> list:
