@@ -55,7 +55,8 @@ auto_root = sys.argv[1]
 # Optional extra file path (the deliberate-fail control passes a temp module).
 extra = sys.argv[2] if len(sys.argv) > 2 else None
 
-ALLOWED = {"phase-grammar.py", "ledger_core.py", "ledger_mutators.py", "ledger_emitters.py"}
+ALLOWED = {"phase-grammar.py", "ledger_core.py", "ledger_mutators.py",
+           "ledger_emitters.py", "ledger_steering.py"}
 LITERAL = "loop_phase"
 
 def offenders_in(path):

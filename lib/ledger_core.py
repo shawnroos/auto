@@ -118,6 +118,16 @@ SEVERITIES = ("blocker", "major", "minor")
 GATING_SEVERITIES = ("blocker", "major")  # severities that block terminality/done.
 
 # State grammar (§3 of the contract). A unit may move ONLY along these edges.
+#
+# The agent-driven force-skip edges (`pending -> terminal-skip`,
+# `verdict-returned -> terminal-skip`) are deliberately NOT here — see
+# `ledger_steering._FORCE_SKIP_SOURCE_STATES`. Adding THOSE TWO edges here would
+# let the findings-free, reason-free `transition()` reach `terminal-skip` from
+# pending/verdict-returned, silently bypassing the mandatory skip-reason (R20).
+# (The `stalled -> terminal-skip` edge below is intentionally reason-free — the
+# operator `auto-resume.py skip` path — and stays in the grammar.) Same asymmetry,
+# and for the same reason, as `_VERDICT_WRITABLE_STATES`: a wider edge set owned
+# by the one mutator that enforces the extra precondition.
 ALLOWED_TRANSITIONS = {
     "pending": {"dispatched"},
     "dispatched": {"verdict-returned", "stalled"},
@@ -630,6 +640,8 @@ def init_ledger(
             # top-level (run-identity, not liveness) + match on equality. Always
             # present at init (None included); the mutator's clear path pops it.
             "driving_session_id": driving_session_id,
+            # U8 ownership set the hooks gate on (see _bootstrap.AGENT_SESSIONS_KEY).
+            "agent_session_ids": [],
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": now_iso()},
@@ -661,6 +673,10 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
             u.get("stall_threshold_seconds", DEFAULT_STALL_THRESHOLD_SECONDS)
         ),
         "last_error": u.get("last_error"),
+        # R20: why this unit was force-skipped. None for every unit that was not
+        # skipped by an agent. Additive / backward-compatible: an old ledger
+        # without the key normalizes to None.
+        "skip_reason": u.get("skip_reason"),
         # Bug #6 (attempt-identity): the dispatch generation counter. Each
         # pending->dispatched bump increments it; record_verdict carries the
         # attempt it is writing for and a verdict whose attempt is OLDER than this

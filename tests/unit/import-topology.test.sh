@@ -103,8 +103,11 @@ violators=""
 for f in "$LIB"/*.py; do
   base="$(basename "$f")"
   # The split files themselves are allowed to import their DAG siblings.
+  # ledger_steering (v0.13.0) is a facade LAYER, not a consumer: it holds the
+  # agent-facing steering verbs and imports ledger_mutators for the two graph
+  # helpers add_unit/reshape_deps reuse (core ← mutators ← steering ← facade).
   case "$base" in
-    ledger.py|ledger_core.py|ledger_mutators.py|ledger_emitters.py) continue ;;
+    ledger.py|ledger_core.py|ledger_mutators.py|ledger_emitters.py|ledger_steering.py) continue ;;
   esac
   if grep -q 'load_lib_module("ledger_mutators")' "$f" \
      || grep -q 'load_lib_module("ledger_emitters")' "$f"; then

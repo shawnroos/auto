@@ -223,6 +223,21 @@ def _liveness(ledger, led: dict) -> str:
     return f"{last_beat} ({age}s ago, GRACE={grace}s){flag}"
 
 
+def _print_skip_reason(unit: dict, state: str) -> None:
+    """R20: render a force-skipped unit's reason as a sub-bullet under the unit.
+
+    A skip is auditable in the operator's face, never silent (mirrors the finding
+    / bound_exit sub-bullet shape). Only `terminal-skip` units carry a
+    `skip_reason`; a legacy ledger or a never-skipped unit reads None and prints
+    nothing. Extracted from `_print_run` to keep it inside the function budget.
+    """
+    if state != "terminal-skip":
+        return
+    reason = unit.get("skip_reason")
+    if reason:
+        sys.stdout.write(f"        skip_reason: {reason}\n")
+
+
 def _print_run(ledger, run_id: str, led: dict) -> None:
     loop = led.get("loop") or {}
     epr = led.get("exit_predicate_result") or {}
@@ -299,6 +314,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
             deps = u.get("depends_on") or []
             dep_note = f"  depends_on={deps}" if deps else ""
             sys.stdout.write(f"    - {uid}: {state}  [{mark}]{dep_note}\n")
+            _print_skip_reason(u, state)
             for f in u.get("findings") or []:
                 sys.stdout.write(
                     f"        finding: {f.get('severity')} — {f.get('note', '')}\n"

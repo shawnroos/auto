@@ -6,10 +6,13 @@ docs/contracts/ledger-schema.md for the authoritative spec). Every function here
 routes through ``ledger_core._with_locked_ledger`` (the one RMW primitive), which
 recomputes the predicate in the SAME atomic snapshot as the write (I-1). Each is a
 single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
-``set_gaps_open``, ``set_enumerated_units``, ``set_winner_unit_id``,
+``set_gaps_open``,
+``set_enumerated_units``, ``set_winner_unit_id``,
 ``set_verdict_decision``, ``set_bound_override``, ``set_driving_session_id``,
 ``append_advisor_audit``, ``set_exit_reason``, ``accumulate_active_time``,
-``increment_iteration_attempts``.
+``increment_iteration_attempts``. The AGENT-facing steering verbs
+(``force_skip``, ``add_unit``, ``reshape_deps``, ``register_session``) live in
+``ledger_steering``, which imports this module for its two graph helpers.
 
 Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← emitters ← facade):
 imports ledger_core for constants, errors, the lock primitive, and the pure

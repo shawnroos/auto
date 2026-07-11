@@ -16,8 +16,7 @@ One action line per branch. Dispatch. Do not narrate.
 
 ## Load the hypothesis
 
-Set `CLAUDE_AUTO_CONVERSATION_SIGNAL=1` inline when THIS session is worth routing
-on (a just-built plan / imperative about existing work) so it preempts stale plans; else drop it:
+Set `CLAUDE_AUTO_CONVERSATION_SIGNAL=1` inline when THIS session is worth routing on (a just-built plan / imperative about existing work) so it preempts stale plans; else drop it:
 
 ```
 CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
@@ -25,10 +24,7 @@ CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh
 
 If the detector yields no parseable envelope (empty/non-zero env hiccup), don't stall — treat as `raw`.
 
-Returns one JSON object with `situation`, `summary`, `ambiguity`,
-`single_plan`, `multi_plan`, `in_flight`, `workspace`,
-`workspace_action`, `recommendation` (driver-filled, U2). Surface
-`summary`; act on `situation` + `ambiguity`:
+Returns one JSON object (`situation`, `summary`, `ambiguity`, `single_plan`, `multi_plan`, `in_flight`, `workspace`, `workspace_action`, `recommendation`). Surface `summary`; act on `situation` + `ambiguity`:
 
 | situation         | ambiguity null → dispatch                                                    | ambiguity non-null → AskUserQuestion |
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
@@ -41,70 +37,27 @@ Returns one JSON object with `situation`, `summary`, `ambiguity`,
 
 ## Goal-aware plan routing (pre-step)
 
-Runs for `reviewed-plan` and `multi-plan` **only**, and **only on interactive
-runs** (`driving_session_id` null — self-driven/headless runs skip this whole
-step and take the row above unchanged; the confirm gate that makes it safe
-cannot fire on them). Full rubric: `references/goal-plan-relevance-rubric.md`.
+For `reviewed-plan` / `multi-plan`, **interactive runs only** (`driving_session_id`
+null — self-driven/headless runs skip this whole step, take the row above
+unchanged). Recover THIS invocation's goal: the typed `/auto` intent or a session
+`/goal`'s text (read only — never query/run/bind/clear it);
+else infer from the session (advisory). Weight the plans (the fuzzy judgment is
+yours → ordered matched paths), hand verdicts to the crisp router, run its `reason`
+(map + guardrails: `driver-reference.md` §17; rubric `goal-plan-relevance-rubric.md`):
 
-1. **Recover the goal for THIS invocation** from the context window: the typed
-   `/auto` intent, or the text of a `/goal <…>` bound in the current session for
-   this invocation (explicit); else infer from the session (advisory). Read
-   `/goal` text only — never query/run/bind/clear it. Ignore a `/goal` bound for
-   a prior completed run (the ~2-day `ce-sessions` lookback is for session
-   classification, not goal recovery). If a bound `/goal`'s text is not reliably
-   recoverable, degrade to inferred/no-goal.
-2. **Weight the plans** (`multi_plan.paths` / `single_plan.path`) against the
-   goal using the rubric's observable match bar: a plan matches when its stated
-   Objective/Summary names the goal's target outcome (not filename or freshness).
-   This step — the fuzzy judgment — is yours; produce the ordered list of
-   matched plan paths (best first).
-3. **Route deterministically.** Hand your verdicts to the crisp router; do not
-   decide the branch yourself. It owns the routing logic and **enforces** the
-   guardrails in code — it will not emit a fan-out suppression unless the goal is
-   `explicit` AND the run is interactive, so a self-driven run or an inferred
-   goal can never bypass the confirm gate:
+```
+python "${CLAUDE_PLUGIN_ROOT}/lib/goal-route.py" \
+  '{"authority":"<explicit|inferred|none>","matches":[<ordered matched paths>],
+    "all_plans":[<multi_plan.paths>],"interactive":<driving_session_id is null>}'
+```
 
-   ```
-   python "${CLAUDE_PLUGIN_ROOT}/lib/goal-route.py" \
-     '{"authority":"<explicit|inferred|none>","matches":[<ordered matched paths>],
-       "all_plans":[<multi_plan.paths>],"interactive":<driving_session_id is null>}'
-   ```
+Reason markers (§17): `explicit-suppress`, `inferred-re-rank`, `no-match-unchanged`, `no-goal-unchanged`.
 
-   Execute the returned `reason`:
-   - `explicit-suppress` → goal-ranked pick-one `AskUserQuestion` over `ranked`
-     (`path` → `auto.sh "<path>"`), `preselect` on top, **fan-out-all
-     suppressed** (`suppress_fanout: true`), confirm even on a single match.
-   - `inferred-re-rank` → same ask over `ranked` (matches on top), `preselect`
-     on top, but **keep** the fan-out-all option.
-   - `no-match-unchanged` / `no-goal-unchanged` / `self-driven-unchanged`
-     (`action: passthrough`) → act on the row above unchanged (the detector's
-     freshness verdict, fan-out-all offered per its own rules).
+**Argument-aware freeform**: a plan path → `auto-launch` → `auto.sh "<path> --recipe
+w"`; else classify with `lib/verb-classify.py` → the `auto-launch` chooser —
+freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
 
-The detector (`lib/auto-detect.py`) is untouched by this — it still emits
-`reviewed-plan`/`multi-plan` on freshness; this pre-step reshapes the routing
-before dispatch and never changes the detector's verdict. The branch logic and
-its guardrails live in `lib/goal-route.py` (truth-tested by
-`tests/unit/goal-route.test.sh`), not in this prose.
-
-**Argument-aware freeform** (pre-hypothesis): a plan-file path → load `auto-launch`
-→ `auto.sh "<path> --recipe w"`. Else classify with `lib/verb-classify.py`, then hand
-to the `auto-launch` chooser (self-driven → silent-apply) for the class's route —
-work the freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan` (§14, §15).
-
-**Workspace handling** (plan 004): branch on `workspace_action`.
-`create`/`recreate`: chain in ONE Bash call so the workspace id
-propagates: `WS=$(python lib/auto-workspace.py create <repo> [--force]
---print-id) && CMUX_WORKSPACE_ID="$WS" python lib/auto-spawn.py fanout`.
-`use`/`none`: dispatch. `ambiguous`: ask switch/create/one-off.
-
-**Conversation-context** (signal set at load above; full detail in
-`driver-reference.md` §11): classify the session (transcript + ~2-day
-`ce-sessions` lookback, NOT raw compaction) → `python lib/recommender.py
-<state> <confidence>`. `escalate`/ambiguous → one AskUserQuestion, no run.
-`kind=skill` → recommend the ce command. `kind=recipe` → `auto-author-goal`
-(bind auto's OWN predicate, NEVER native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
-
-**Unknown situation** (defensive guard): treat as `raw`.
+**Workspace / conversation-context / unknown** (§17): branch `workspace_action`; unknown → `raw`.
 
 ## Dispatch grammar (reference)
 
@@ -116,6 +69,5 @@ propagates: `WS=$(python lib/auto-workspace.py create <repo> [--force]
 - Resume: `bash lib/auto-resume.sh "<continue|abort|retry|skip>
   [<run-id>] [<unit>]"`
 
-Theory + edge cases: `docs/contracts/driver-reference.md` covers
-prepare/execute, goal binding, tick/seam/fan-out, exit reasons, and
-conversation-context (§11) — load only when not covered inline.
+Theory + edge cases (`docs/contracts/driver-reference.md`): prepare/execute, goal
+binding, tick/seam/fan-out, exit reasons, goal-aware routing (§17) — load on demand.

@@ -1061,6 +1061,98 @@ PYEOF
 )"
 assert_eq "ok" "$got"
 
+# ─── U3 (R4): `init` CLI verb — create a run + units from the tool surface ──
+# The plan-loop/work-loop steering family (force-skip/add-unit/reshape-deps)
+# auto-resolves the repo via resolve_repo() and takes only the run-id; `init`
+# joins that family so a run can be CREATED — not just mutated — from the CLI.
+LEDGER_CLI="$LEDGER_PY"
+
+it "init: CLI verb creates a readable ledger (predicate met==false, phase plan)"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliinit1 '[{"id":"u1"}]' ce plan \
+  >/dev/null 2>&1
+assert_eq "False|plan" \
+  "$(ledger_field cliinit1 '"%s|%s" % (L["exit_predicate_result"]["met"], L["loop_phase"])')"
+
+it "init: against an existing run-id fails (exit!=0) and leaves the ledger byte-identical"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliexist '[{"id":"u1"}]' ce plan \
+  >/dev/null 2>&1
+LPX="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" path "$REPO" cliexist)"
+before="$(cat "$LPX")"
+# Re-init with a DIFFERENT spec must be rejected AND must not touch the file.
+if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init cliexist '[{"id":"DIFFERENT"}]' native work \
+     >/dev/null 2>&1; then
+  fail "init succeeded against an existing run-id (should raise LedgerExists)"
+else
+  # byte-for-byte file contents (mtime-independent; stat is not compared).
+  [ "$before" = "$(cat "$LPX")" ] && pass \
+    || fail "a rejected init modified/truncated the existing ledger"
+fi
+
+it "init: an invalid adapter is rejected (exit!=0, no ledger file created)"
+LPBAD="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" path "$REPO" clibad)"
+if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clibad '[{"id":"u1"}]' bogus plan \
+     >/dev/null 2>&1; then
+  fail "invalid adapter accepted at the CLI"
+else
+  [ ! -f "$LPBAD" ] && pass || fail "invalid adapter left a ledger file on disk"
+fi
+
+it "init: units passed as JSON are normalized (state=pending, phase set, attempt counter)"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clinorm '[{"id":"n1"}]' ce plan \
+  >/dev/null 2>&1
+assert_eq "pending|True|True" \
+  "$(ledger_field clinorm '"%s|%s|%s" % (L["units"][0]["state"], "phase" in L["units"][0], "attempt" in L["units"][0])')"
+
+# ── U4: the `describe` self-orientation verb ────────────────────────────────
+# describe emits the stable operating contract as ONE JSON object so a driving
+# agent stops re-deriving "what is auto" from ~2000 lines of skill prose each
+# session (R6/R7). The completeness check is the load-bearing one: every CLI verb
+# must be documented, or an agent reading `describe` gets an incomplete surface.
+
+it "describe: emits exactly one valid JSON object (no surrounding prose)"
+describe_out="$("$PY" "$LEDGER_PY" describe 2>/dev/null)"
+one_obj="$("$PY" - "$describe_out" <<'PYEOF'
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print("ok" if isinstance(d, dict) else "not-object")
+except Exception as e:
+    print(f"parse-fail: {e}")
+PYEOF
+)"
+assert_eq "ok" "$one_obj"
+
+it "describe: COMPLETENESS — describe's verb catalog IS the _VERBS registry"
+# Dispatch and docs share one source (_VERBS): _cli routes through it and describe
+# derives its catalog from it, so drift is structurally impossible. This asserts
+# that invariant directly — describe's verbs must equal _VERBS.keys(). It fails if
+# a future change re-hardcodes describe or breaks _describe_surface's derivation.
+verb_diff="$("$PY" - "$LEDGER_PY" "$describe_out" <<'PYEOF'
+import json, sys, importlib.util
+ledger_py, describe_out = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+registered = set(m._VERBS)
+described = set(json.loads(describe_out).get("verbs", {}))
+print(json.dumps({"missing": sorted(registered - described),
+                  "extra": sorted(described - registered)}))
+PYEOF
+)"
+assert_eq '{"missing": [], "extra": []}' "$verb_diff"
+
+it "describe: each steering verb names a rejection mode"
+rej="$("$PY" - "$describe_out" <<'PYEOF'
+import json, sys
+d = json.loads(sys.argv[1])
+verbs = d.get("verbs", {})
+need = ["force-skip", "add-unit", "reshape-deps", "record-verdict"]
+bad = [v for v in need
+       if not (isinstance(verbs.get(v), dict) and verbs[v].get("rejects"))]
+print("ok" if not bad else f"missing-rejects: {bad}")
+PYEOF
+)"
+assert_eq "ok" "$rej"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "ledger.test.sh: ${PASS} passed, ${FAIL} failed"

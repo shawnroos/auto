@@ -259,6 +259,54 @@ CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 # that one string in sync with this constant.
 DRIVING_SESSION_KEY = "driving_session_id"
 
+# U8 (R21/KTD-7) — the OWNERSHIP SET. The loop's phase work runs in background
+# sub-agents, which carry their own CLAUDE_CODE_SESSION_ID; a scalar
+# `driving_session_id` therefore matched none of them and BOTH PreToolUse hooks
+# went dark inside the tree. A dispatched sub-agent registers its session id here
+# (via `ledger.register_session`) and the hooks test MEMBERSHIP of
+# {driving_session_id} ∪ agent_session_ids.
+#
+# Membership is opt-IN by registration, never by mere co-location: an unrelated
+# Claude session in the same worktree is not in the set and is never gated. The
+# same "keep the literal in sync" caveat as DRIVING_SESSION_KEY applies to
+# ledger_core.py.
+AGENT_SESSIONS_KEY = "agent_session_ids"
+
+
+def session_membership(led, session_id):
+    """Return ``(is_driving, is_agent)`` for ``session_id`` against ONE ledger.
+
+    The single source of truth for the ownership-set membership computation both
+    PreToolUse gates key on (U8/R21). Extracted here — next to the two key
+    constants it reads — so the two hooks cannot drift on a safety-critical
+    check: a future change to how membership is decided (e.g. the
+    ``agent_session_ids`` type guard) is made once, not copy-kept in two files.
+
+    It returns the two booleans SEPARATELY on purpose, and does NOT decide
+    ownership. The gates' divergent policy stays in the gates: the action hook
+    fails CLOSED and exempts an operator pause ONLY for the driving session (a
+    sub-agent is never the operator), so it needs ``is_driving`` distinct from
+    ``is_agent``; the askuser hook fails OPEN and its own ``driver == "self"``
+    conjunct already excludes paused runs, so it just ORs the two. Merging that
+    policy in here would erase the fail-open/fail-closed asymmetry — this helper
+    is deliberately policy-free.
+
+    ``is_agent`` fails SAFE on a malformed set (INTENTIONAL, security review): a
+    missing or non-list ``agent_session_ids`` reads as ``is_agent=False``, so a
+    corrupted set de-gates the SUB-AGENT tree back to the prompt-carried
+    constraints — but it never weakens the DRIVING-session backstop, which comes
+    from the ``driving_session_id`` scalar and is unaffected. So the worst case is
+    a revert to pre-U8 tree coverage, never below it. This helper stays PURE (it
+    is called per-ledger in the hot-path worktree scan on every tool call); it
+    does not warn on corruption, because per-call stderr from a benign
+    legacy-shaped ledger would be worse than the quiet fail-safe.
+    """
+    driving = led.get(DRIVING_SESSION_KEY)
+    is_driving = bool(driving) and driving == session_id
+    registered = led.get(AGENT_SESSIONS_KEY)
+    is_agent = isinstance(registered, list) and session_id in registered
+    return is_driving, is_agent
+
 
 # The plugin-qualified tick command — the ONE copy of the string AND its hazard
 # note (v0.6.5). A programmatically fired plugin slash command must resolve as
