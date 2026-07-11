@@ -110,14 +110,18 @@ def load_content(name: str, repo: str) -> dict:
 
     for _tier, d in _tier_dirs(repo):
         path = os.path.join(d, f"{name}.json")
-        if os.path.isfile(path):
-            try:
-                with open(path) as f:
-                    return json.load(f)
-            except (OSError, ValueError) as e:
-                raise ContentError(
-                    f"content {name!r} at {path} failed to load: {e}"
-                ) from None
+        # Open directly rather than isfile-then-open: one syscall instead of two,
+        # and no TOCTOU window. A missing file at this tier falls through to the
+        # next; a present-but-unreadable/unparseable file is a hard error.
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as e:
+            raise ContentError(
+                f"content {name!r} at {path} failed to load: {e}"
+            ) from None
 
     searched = ", ".join(os.path.join(d, f"{name}.json") for _, d in _tier_dirs(repo))
     raise ContentError(f"content {name!r} not found; searched: {searched}")

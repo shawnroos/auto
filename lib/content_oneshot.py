@@ -195,15 +195,18 @@ def build_oneshot_launch(content: dict, repo: str) -> dict:
         body = None
         for base in (_AUTO_ROOT, repo):
             candidate = os.path.join(base, pt)
-            if os.path.isfile(candidate):
-                try:
-                    with open(candidate) as f:
-                        body = f.read()
-                except OSError as e:
-                    raise RecipeError(
-                        f"prompt_template {pt!r} at {candidate} could not be read: {e}"
-                    ) from None
+            # Open directly (one syscall, no TOCTOU): a miss falls through to the
+            # next base; a present-but-unreadable file is a hard error.
+            try:
+                with open(candidate) as f:
+                    body = f.read()
                 break
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                raise RecipeError(
+                    f"prompt_template {pt!r} at {candidate} could not be read: {e}"
+                ) from None
         if body is None:
             raise RecipeError(
                 f"prompt_template {pt!r} not found; searched: "
