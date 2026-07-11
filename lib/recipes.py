@@ -64,6 +64,13 @@ V1_EMITTER_NAMES = recipe_validate.V1_EMITTER_NAMES
 # before the split keep resolving.
 _bad = recipe_validate._bad
 _validate_recipe_name = recipe_validate._validate_recipe_name
+# The reserved-alias-name gate lives in recipe_validate (the DAG root that both
+# validate() and validate_and_lint() funnel through). It holds a copy of the
+# _ALIASES map below; a recipe authored under one of those legible names is
+# rejected at validate time (fail fast) instead of being silently shadowed by
+# resolve()'s alias→stem rewrite. Re-exported so the drift-guard test can assert
+# `_ALIASES == _RESERVED_ALIAS_STEMS` (the two copies never diverge).
+_RESERVED_ALIAS_STEMS = recipe_validate._RESERVED_ALIAS_STEMS
 _check_prompt_template = recipe_validate._check_prompt_template
 _lint_verification_placement = recipe_validate._lint_verification_placement
 _builtin_names = recipe_validate._builtin_names
@@ -118,6 +125,21 @@ _ALIASES = {
 }
 
 
+def canonical_name(name):
+    """Rewrite a legible alias to its shorthand stem; identity for a non-alias.
+
+    The SINGLE public accessor for the alias→stem rewrite (SSOT: ``_ALIASES``).
+    ``resolve()`` routes through it, and ``recommender.py --check-agrees``
+    canonicalizes the agent's recommended value through it BEFORE the stem-
+    equality / skip-eligibility comparison — so an alias-form recommendation
+    (`plan-build-review`) resolves to its stem (`a1`) and can reach the skip tier
+    exactly where the bare stem would. Keeping this one function the only rewrite
+    site is what lets ``launch-gate.SKIP_ELIGIBLE_RECIPES`` hold STEMS ONLY (no
+    dead alias entries): aliases are folded to stems here, upstream of the check.
+    """
+    return _ALIASES.get(name, name)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # U3: three-tier registry — workspace → global → built-in, first-wins.
 
@@ -160,7 +182,7 @@ def resolve(name: str, repo_root: str):
     # resolves to the stem's recipe at every tier AND inherits the stem's
     # A1_BUILTIN fallback. Validation runs on the ORIGINAL name first (defense);
     # a non-alias name passes through unchanged.
-    name = _ALIASES.get(name, name)
+    name = canonical_name(name)
     for tier, d in _tier_dirs(repo_root):
         path = os.path.join(d, f"{name}.json")
         if os.path.isfile(path):

@@ -241,6 +241,15 @@ def _cli(argv):
         import os
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from _bootstrap import load_lib_module
+        # The launch agent (skills/auto-launch §2) now promotes the LEGIBLE names
+        # (`plan-build-review`/`work-only`) as the primary recommendation, with the
+        # shorthand `a1`/`w` as aliases — so <stem> may arrive in either form.
+        # Canonicalize it to its shorthand stem BEFORE the equality / eligibility
+        # check (the ONE alias→stem SSOT is recipes.canonical_name). Without this,
+        # an alias-form recommendation could never string-equal the router's bare
+        # stem pick and could never reach the skip tier. SKIP_ELIGIBLE_RECIPES
+        # holds STEMS ONLY precisely because the fold-to-stem happens here.
+        stem = load_lib_module("recipes").canonical_name(stem)
         eligible = load_lib_module("launch-gate").SKIP_ELIGIBLE_RECIPES
         agree = pick is not None and pick == stem and pick in eligible
         sys.stdout.write("true\n" if agree else "false\n")
