@@ -1122,20 +1122,20 @@ PYEOF
 )"
 assert_eq "ok" "$one_obj"
 
-it "describe: COMPLETENESS — every CLI verb appears in describe's verb list"
-# Authoritative set = the cmd literals across BOTH _cli and _cli_steering. A verb
-# added later without documenting it in describe MUST fail here (set-equality,
-# not subset).
+it "describe: COMPLETENESS — describe's verb catalog IS the _VERBS registry"
+# Dispatch and docs share one source (_VERBS): _cli routes through it and describe
+# derives its catalog from it, so drift is structurally impossible. This asserts
+# that invariant directly — describe's verbs must equal _VERBS.keys(). It fails if
+# a future change re-hardcodes describe or breaks _describe_surface's derivation.
 verb_diff="$("$PY" - "$LEDGER_PY" "$describe_out" <<'PYEOF'
-import json, re, sys
+import json, sys, importlib.util
 ledger_py, describe_out = sys.argv[1], sys.argv[2]
-src = open(ledger_py).read()
-cli_verbs = set(re.findall(r'cmd == "([a-z-]+)"', src))
-described = json.loads(describe_out).get("verbs", {})
-described_verbs = set(described.keys()) if isinstance(described, dict) else set(described)
-missing = cli_verbs - described_verbs      # a CLI verb describe forgot
-extra = described_verbs - cli_verbs         # describe lists a verb that isn't real
-print(json.dumps({"missing": sorted(missing), "extra": sorted(extra)}))
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+registered = set(m._VERBS)
+described = set(json.loads(describe_out).get("verbs", {}))
+print(json.dumps({"missing": sorted(registered - described),
+                  "extra": sorted(described - registered)}))
 PYEOF
 )"
 assert_eq '{"missing": [], "extra": []}' "$verb_diff"

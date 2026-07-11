@@ -174,16 +174,18 @@ def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Agent orientation surface (R6/R7). `describe` emits this as ONE JSON object so
-# a driving agent reads the stable operating contract on demand instead of
-# re-deriving it from ~2000 lines of skill prose every session. The prose home
-# is docs/contracts/agent-tool-surface.md; this is the machine-readable mirror.
+# Agent orientation surface (R6/R7). `describe` emits ONE JSON object so a
+# driving agent reads the stable operating contract on demand instead of
+# re-deriving it from ~2000 lines of skill prose every session. Prose home:
+# docs/contracts/agent-tool-surface.md.
 #
-# COMPLETENESS IS TESTED: tests/unit/ledger.test.sh asserts set-equality between
-# the `cmd == "..."` literals in this file and _AGENT_TOOL_SURFACE["verbs"], so a
-# verb added to the CLI without a describe entry fails CI. Keep them in lockstep.
+# The `verbs` catalog is NOT hand-maintained here — it is DERIVED from the
+# `_VERBS` registry below (the same dict that drives CLI dispatch), so the
+# self-description and the dispatch surface cannot drift. Adding a verb to
+# `_VERBS` wires BOTH its dispatch and its docs in one place; no completeness
+# test is needed to hold two hand-kept copies in lockstep.
 
-_AGENT_TOOL_SURFACE = {
+_TOOL_SURFACE_PREAMBLE = {
     "contract": (
         "Read freely. Every write commits through a verb that revalidates its "
         "precondition INSIDE the flock and can REJECT. The model never holds the "
@@ -200,254 +202,271 @@ _AGENT_TOOL_SURFACE = {
             "noop": '{"action":"noop","reason":"lock-held-by-live-tick"}',
         },
     },
-    "verbs": {
-        # read / inspection (no mutation)
-        "read": {"args": "<repo> <run>", "reads": True},
-        "path": {"args": "<repo> <run>", "reads": True},
-        "is-orphaned": {"args": "<repo> <run>", "reads": True},
-        "describe": {"args": "(none)", "reads": True},
-        # verdict-feedback (engine's own write path)
-        "record-verdict": {
-            "args": "<run> <unit> <findings-json> [attempt]",
-            "rejects": "StaleVerdict if attempt is older than the unit's current "
-            "dispatch generation; InvalidTransition from a non-verdict-writable state.",
-        },
-        "set-gaps-open": {"args": "<run> <n>"},
-        "set-enumerated-units": {"args": "<run> <unit> <payload-json>"},
-        "set-verdict-decision": {"args": "<run> <gate-unit> <decision>"},
-        # agent steering verbs (the reshape surface)
-        "init": {
-            "args": "<run> <units-json> [adapter] [loop-phase]",
-            "rejects": "LedgerExists if the run-id already exists (existing ledger "
-            "untouched); LedgerError on an unknown adapter.",
-        },
-        "force-skip": {
-            "args": "<run> <unit> <reason>",
-            "rejects": "LedgerError on a blank reason (R20); InvalidTransition from a "
-            "state with no terminal-skip edge. A skip cannot bury an existing finding.",
-        },
-        "add-unit": {
-            "args": "<run> <unit-id> [depends-on-json] [phase]",
-            "rejects": "LedgerError on a duplicate id or a dependency on an unknown unit.",
-        },
-        "reshape-deps": {
-            "args": "<run> <unit-id> <depends-on-json>",
-            "rejects": "LedgerError on a dependency cycle or an edge to an unknown unit.",
-        },
-        "register-session": {
-            "args": "<run>  (registers $CLAUDE_CODE_SESSION_ID — the caller's own)",
-            "rejects": "exit 2 if CLAUDE_CODE_SESSION_ID is unset. Idempotent otherwise.",
-        },
-        "transition": {
-            "args": "<repo> <run> <unit> <state>",
-            "rejects": "InvalidTransition for any edge not in ALLOWED_TRANSITIONS; "
-            "LedgerError if used to write findings (use record-verdict).",
-        },
-    },
 }
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # CLI (thin; lib/ledger.sh routes through this). $ARGUMENTS-safe: all parsing
 # is positional here, never string-interpolated into shell.
+#
+# ONE registry (`_VERBS`) is the single source of truth for the CLI surface: each
+# verb binds its handler (dispatch), its argument doc + rejection modes (what
+# `describe` emits), and its read/write class. `_cli` dispatches through it and
+# `describe` derives its catalog from it, so the two cannot drift.
+#
+# REPO RESOLUTION splits the verbs into two families:
+#   * the READ verbs + `transition` take an explicit `<repo>` argv (the legacy
+#     shape auto.sh / tick.py pass);
+#   * the FEEDBACK + STEERING write verbs auto-resolve the repo from
+#     cwd/$CLAUDE_AUTO_REPO (`resolve_repo`) so the model passes only the run-id
+#     it already holds from the tick intent — its ONLY ledger-write tool is this
+#     CLI; it cannot call the Python mutators directly.
 
 
-def _cli_steering(cmd, argv):
-    """Dispatch the AGENT-facing verbs. Returns an exit code, or None if unhandled.
+class _Verb:
+    """One CLI verb: its dispatch handler plus its self-description for `describe`.
 
-    Split out of ``_cli`` when it crossed the 120-LOC function budget. The cut is
-    conceptual, not arbitrary: these are the verbs the agent-native runtime exposes
-    as tools — create a run, add/reshape/retire a unit, join the hook ownership set
-    — as against the engine's own read + verdict-feedback verbs, which stay in
-    ``_cli``. All of them resolve the repo via ``resolve_repo()`` rather than an
-    explicit repo argv, because the model drives them with a run-id it already has.
-
-    ``None`` on an unrecognized command so ``_cli`` continues its own chain and
-    keeps emitting the single unknown-subcommand error. LedgerError propagates;
-    ``_cli`` owns the except clauses.
+    ``handler(argv) -> int`` returns the process exit code (0 ok, 2 bad-args); it
+    may raise LedgerError / IndexError / ValueError, which ``_cli`` maps to exit
+    1 / 2. ``args`` and ``rejects`` are the human-facing docs `describe` emits;
+    ``reads`` marks a non-mutating verb.
     """
-    if cmd == "register-session":
-        # register-session <run>   (U8/R21 — a dispatched phase sub-agent joins
-        # the ownership set so the fail-closed destructive backstop and the
-        # advisor gate reach it. Idempotent.)
-        #
-        # The joined id is the CALLER's OWN session, read from the environment —
-        # NEVER a positional arg. This closes the cross-session-capture surface
-        # (security review): a process cannot register a THIRD-PARTY session to
-        # grief its run or gate a bystander, because it can only ever contribute
-        # the id the harness put in its own env. A missing env id is a hard error
-        # (the caller isn't a real session) rather than a silent no-op.
-        run = argv[1]
-        sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-        if not sid:
-            sys.stderr.write(
-                "ledger.py: register-session needs CLAUDE_CODE_SESSION_ID in the "
-                "environment (a sub-agent registers its OWN session)\n"
-            )
-            return 2
-        register_session(resolve_repo(), run, sid)
-        return 0
-    if cmd == "init":
-        # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run
-        # from the tool surface; init_ledger was Python-API-only, so a sub-agent
-        # could read/mutate the ledger through the CLI but never open one.)
-        # units-json: JSON array of partial unit dicts (each at least {"id": ...});
-        # init_ledger normalizes each (fills state=pending, phase, attempt, ...).
-        # adapter defaults to "ce", loop-phase to "plan". Adapter/loop-phase are
-        # validated inside init_ledger against its authoritative sets BEFORE any
-        # write — an invalid one raises LedgerError (surfaced here as exit 1, no
-        # file written), so we do NOT re-guess the allowed set at the CLI.
-        # An existing run-id raises LedgerExists (a LedgerError) from init_ledger's
-        # under-lock existence check, which leaves the on-disk ledger untouched.
-        run = argv[1]
-        units = None
-        if len(argv) > 2 and argv[2]:
-            units = json.loads(argv[2])
-            if not isinstance(units, list):
-                sys.stderr.write("ledger.py: init units must be a JSON array\n")
-                return 2
-        adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
-        loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
-        init_ledger(
-            resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase
+
+    __slots__ = ("handler", "args", "reads", "rejects")
+
+    def __init__(self, handler, args, *, reads=False, rejects=None):
+        self.handler = handler
+        self.args = args
+        self.reads = reads
+        self.rejects = rejects
+
+    def as_doc(self):
+        doc = {"args": self.args}
+        if self.reads:
+            doc["reads"] = True
+        if self.rejects:
+            doc["rejects"] = self.rejects
+        return doc
+
+
+def _json_array(raw, what):
+    """Parse a JSON-array CLI arg or raise ValueError (→ _cli's exit-2 path).
+
+    The write verbs all take a JSON array and reject a non-array the same way;
+    centralizing the parse+guard keeps each handler a straight-line call.
+    """
+    value = json.loads(raw)
+    if not isinstance(value, list):
+        raise ValueError(f"{what} must be a JSON array")
+    return value
+
+
+# ── read / inspection handlers (explicit <repo> <run>; no mutation) ──
+
+
+def _h_describe(argv):
+    # R6/R7: the whole stable operating contract as ONE JSON object, so an agent
+    # orients without loading the skill corpus. No repo, no mutation.
+    json.dump(_describe_surface(), sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def _h_read(argv):
+    repo, run = argv[1], argv[2]
+    json.dump(read_ledger(repo, run), sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def _h_path(argv):
+    print(ledger_path(argv[1], argv[2]))
+    return 0
+
+
+def _h_is_orphaned(argv):
+    repo, run = argv[1], argv[2]
+    print("true" if is_orphaned(read_ledger(repo, run)) else "false")
+    return 0
+
+
+def _h_transition(argv):
+    repo, run, unit, state = argv[1], argv[2], argv[3], argv[4]
+    transition(repo, run, unit, state)
+    return 0
+
+
+# ── feedback / verdict handlers (resolve_repo; <run> …) ──
+
+
+def _h_set_gaps_open(argv):
+    run, n = argv[1], argv[2]
+    set_gaps_open(resolve_repo(), run, int(n))
+    return 0
+
+
+def _h_set_enumerated_units(argv):
+    # set-enumerated-units <run> <plan-unit-id> <json-array>
+    # json-array: [{"id": "...", "invokes": {...}, "dispatch_context"?: {...}}, ...]
+    run, unit, payload = argv[1], argv[2], argv[3]
+    set_enumerated_units(resolve_repo(), run, unit, _json_array(payload, "payload"))
+    return 0
+
+
+def _h_record_verdict(argv):
+    # record-verdict <run> <unit> <json-findings> [attempt]
+    run, unit, payload = argv[1], argv[2], argv[3]
+    findings = _json_array(payload, "findings")
+    attempt = int(argv[4]) if len(argv) > 4 else None
+    record_verdict(resolve_repo(), run, unit, findings, attempt=attempt)
+    return 0
+
+
+def _h_set_verdict_decision(argv):
+    # set-verdict-decision <run> <gate-unit> <decision> [json-payload]
+    run, gate_unit, decision = argv[1], argv[2], argv[3]
+    payload = json.loads(argv[4]) if len(argv) > 4 else None
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+    set_verdict_decision(resolve_repo(), run, gate_unit, decision, payload=payload)
+    return 0
+
+
+# ── steering handlers (resolve_repo; the agent's reshape surface) ──
+
+
+def _h_init(argv):
+    # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run from
+    # the tool surface). adapter/loop-phase are validated INSIDE init_ledger
+    # against its authoritative sets before any write (invalid → LedgerError, no
+    # file), and an existing run-id raises LedgerExists leaving the ledger
+    # untouched — so the CLI never re-guesses the allowed set.
+    run = argv[1]
+    units = _json_array(argv[2], "units") if len(argv) > 2 and argv[2] else None
+    adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
+    loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
+    init_ledger(resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase)
+    return 0
+
+
+def _h_force_skip(argv):
+    # force-skip <run> <unit> <reason>   (R3/R20 — reason mandatory; the mutator
+    # rejects a blank one under the lock).
+    run, unit, reason = argv[1], argv[2], argv[3]
+    force_skip(resolve_repo(), run, unit, reason)
+    return 0
+
+
+def _h_add_unit(argv):
+    # add-unit <run> <unit-id> [json-depends-on] [phase]. The `and argv[4]` guard
+    # mirrors init: an explicit EMPTY phase reads as absent (→ the run-phase
+    # default in _normalize_unit), not phase="" — a "" unit is in neither the
+    # current- nor terminal-phase eval set and would silently never dispatch.
+    run, unit = argv[1], argv[2]
+    depends_on = _json_array(argv[3], "depends_on") if len(argv) > 3 and argv[3] else None
+    phase = argv[4] if len(argv) > 4 and argv[4] else None
+    add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
+    return 0
+
+
+def _h_reshape_deps(argv):
+    # reshape-deps <run> <unit-id> <json-depends-on>
+    run, unit, payload = argv[1], argv[2], argv[3]
+    reshape_deps(resolve_repo(), run, unit, _json_array(payload, "depends_on"))
+    return 0
+
+
+def _h_register_session(argv):
+    # register-session <run>   (U8/R21 — a dispatched phase sub-agent joins the
+    # ownership set so the fail-closed destructive backstop and the advisor gate
+    # reach it). The joined id is the CALLER's OWN session, read from the env —
+    # NEVER a positional arg — so a process can only ever register itself, closing
+    # the cross-session-capture surface (security review). A missing env id is a
+    # hard error (the caller isn't a real session), not a silent no-op.
+    run = argv[1]
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not sid:
+        sys.stderr.write(
+            "ledger.py: register-session needs CLAUDE_CODE_SESSION_ID in the "
+            "environment (a sub-agent registers its OWN session)\n"
         )
-        return 0
-    if cmd == "force-skip":
-        # force-skip <run> <unit> <reason>   (R3/R20 — reason is mandatory;
-        # the mutator rejects a blank one under the lock)
-        run, unit, reason = argv[1], argv[2], argv[3]
-        force_skip(resolve_repo(), run, unit, reason)
-        return 0
-    if cmd == "add-unit":
-        # add-unit <run> <unit-id> [json-depends-on] [phase]
-        run, unit = argv[1], argv[2]
-        depends_on = None
-        if len(argv) > 3 and argv[3]:
-            depends_on = json.loads(argv[3])
-            if not isinstance(depends_on, list):
-                sys.stderr.write(
-                    "ledger.py: add-unit depends_on must be a JSON array\n"
-                )
-                return 2
-        # Mirror `init`'s `and argv[4]` guard: an explicit EMPTY phase arg must
-        # read as absent (-> None -> the run-phase default in _normalize_unit),
-        # not as phase="" — a unit with phase "" is in neither the current-phase
-        # nor the terminal-phase eval set, so it silently drops out of the
-        # terminality check and is never dispatched (correctness review, v0.13.0).
-        phase = argv[4] if len(argv) > 4 and argv[4] else None
-        add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
-        return 0
-    if cmd == "reshape-deps":
-        # reshape-deps <run> <unit-id> <json-depends-on>
-        run, unit, payload = argv[1], argv[2], argv[3]
-        depends_on = json.loads(payload)
-        if not isinstance(depends_on, list):
-            sys.stderr.write(
-                "ledger.py: reshape-deps depends_on must be a JSON array\n"
-            )
-            return 2
-        reshape_deps(resolve_repo(), run, unit, depends_on)
-        return 0
-    return None
+        return 2
+    register_session(resolve_repo(), run, sid)
+    return 0
+
+
+_VERBS = {
+    # read / inspection
+    "describe": _Verb(_h_describe, "(none)", reads=True),
+    "read": _Verb(_h_read, "<repo> <run>", reads=True),
+    "path": _Verb(_h_path, "<repo> <run>", reads=True),
+    "is-orphaned": _Verb(_h_is_orphaned, "<repo> <run>", reads=True),
+    "transition": _Verb(
+        _h_transition,
+        "<repo> <run> <unit> <state>",
+        rejects="InvalidTransition for any edge not in ALLOWED_TRANSITIONS; "
+        "LedgerError if used to write findings (use record-verdict).",
+    ),
+    # verdict-feedback (engine's own write path)
+    "record-verdict": _Verb(
+        _h_record_verdict,
+        "<run> <unit> <findings-json> [attempt]",
+        rejects="StaleVerdict if attempt is older than the unit's current dispatch "
+        "generation; InvalidTransition from a non-verdict-writable state.",
+    ),
+    "set-gaps-open": _Verb(_h_set_gaps_open, "<run> <n>"),
+    "set-enumerated-units": _Verb(_h_set_enumerated_units, "<run> <unit> <payload-json>"),
+    "set-verdict-decision": _Verb(_h_set_verdict_decision, "<run> <gate-unit> <decision>"),
+    # agent steering verbs (the reshape surface)
+    "init": _Verb(
+        _h_init,
+        "<run> <units-json> [adapter] [loop-phase]",
+        rejects="LedgerExists if the run-id already exists (existing ledger "
+        "untouched); LedgerError on an unknown adapter.",
+    ),
+    "force-skip": _Verb(
+        _h_force_skip,
+        "<run> <unit> <reason>",
+        rejects="LedgerError on a blank reason (R20); InvalidTransition from a state "
+        "with no terminal-skip edge. A skip cannot bury an existing finding.",
+    ),
+    "add-unit": _Verb(
+        _h_add_unit,
+        "<run> <unit-id> [depends-on-json] [phase]",
+        rejects="LedgerError on a duplicate id or a dependency on an unknown unit.",
+    ),
+    "reshape-deps": _Verb(
+        _h_reshape_deps,
+        "<run> <unit-id> <depends-on-json>",
+        rejects="LedgerError on a dependency cycle or an edge to an unknown unit.",
+    ),
+    "register-session": _Verb(
+        _h_register_session,
+        "<run>  (registers $CLAUDE_CODE_SESSION_ID — the caller's own)",
+        rejects="exit 2 if CLAUDE_CODE_SESSION_ID is unset. Idempotent otherwise.",
+    ),
+}
+
+
+def _describe_surface():
+    """The full `describe` payload: the static preamble + the verb catalog derived
+    from `_VERBS`, so dispatch and docs share one source."""
+    return {
+        **_TOOL_SURFACE_PREAMBLE,
+        "verbs": {name: verb.as_doc() for name, verb in _VERBS.items()},
+    }
 
 
 def _cli(argv):
     if not argv:
         sys.stderr.write("usage: ledger.py <subcommand> ...\n")
         return 2
-    cmd = argv[0]
-    try:
-        if cmd == "describe":
-            # R6/R7: the whole stable operating contract as ONE JSON object, so an
-            # agent orients without loading the skill corpus. No repo, no mutation.
-            json.dump(_AGENT_TOOL_SURFACE, sys.stdout, indent=2, sort_keys=True)
-            sys.stdout.write("\n")
-            return 0
-        if cmd == "read":
-            repo, run = argv[1], argv[2]
-            json.dump(read_ledger(repo, run), sys.stdout, indent=2, sort_keys=True)
-            sys.stdout.write("\n")
-            return 0
-        if cmd == "path":
-            print(ledger_path(argv[1], argv[2]))
-            return 0
-        if cmd == "transition":
-            repo, run, unit, state = argv[1], argv[2], argv[3], argv[4]
-            transition(repo, run, unit, state)
-            return 0
-        if cmd == "is-orphaned":
-            repo, run = argv[1], argv[2]
-            print("true" if is_orphaned(read_ledger(repo, run)) else "false")
-            return 0
-        # v0.4.3: the plan-loop FEEDBACK channel — the surface the model uses to
-        # report structured results back through Bash (its only ledger-write tool
-        # is this CLI; it cannot call the Python mutators directly). Repo is
-        # auto-resolved from cwd/$CLAUDE_AUTO_REPO (resolve_repo) so the model
-        # passes only the run-id it already has from the tick intent — matching
-        # auto.sh / auto-resume.sh ergonomics. Without these, the plan-loop's
-        # set_gaps_open guidance and the v0.4.3 enumerate handshake surface
-        # instructions the model literally cannot execute (the run would spin).
-        if cmd == "set-gaps-open":
-            run, n = argv[1], argv[2]
-            set_gaps_open(resolve_repo(), run, int(n))
-            return 0
-        if cmd == "set-enumerated-units":
-            # set-enumerated-units <run> <plan-unit-id> <json-array>
-            # json-array: [{"id": "...", "invokes": {...}, "dispatch_context"?: {...}}, ...]
-            run, unit, payload = argv[1], argv[2], argv[3]
-            units = json.loads(payload)
-            if not isinstance(units, list):
-                sys.stderr.write(
-                    "ledger.py: set-enumerated-units payload must be a JSON array\n"
-                )
-                return 2
-            set_enumerated_units(resolve_repo(), run, unit, units)
-            return 0
-        # v0.6.8: the work-loop VERDICT channel — the surface the model/operator
-        # uses to write a unit's verdict and a gate's advance/iterate/exit
-        # decision back through Bash (its only ledger-write tool is this CLI; it
-        # cannot call the Python mutators directly). Repo auto-resolved from
-        # cwd/$CLAUDE_AUTO_REPO (resolve_repo), matching the set-* feedback verbs
-        # above — without these the work-loop is drivable only via the Python API.
-        if cmd == "record-verdict":
-            # record-verdict <run> <unit> <json-findings> [attempt]
-            # json-findings: [{"severity": "...", "note": "..."}, ...]
-            run, unit, payload = argv[1], argv[2], argv[3]
-            findings = json.loads(payload)
-            if not isinstance(findings, list):
-                sys.stderr.write(
-                    "ledger.py: record-verdict findings must be a JSON array\n"
-                )
-                return 2
-            attempt = int(argv[4]) if len(argv) > 4 else None
-            record_verdict(resolve_repo(), run, unit, findings, attempt=attempt)
-            return 0
-        if cmd == "set-verdict-decision":
-            # set-verdict-decision <run> <gate-unit> <decision> [json-payload]
-            # decision: one of advance | iterate | exit
-            run, gate_unit, decision = argv[1], argv[2], argv[3]
-            decision_payload = json.loads(argv[4]) if len(argv) > 4 else None
-            if decision_payload is not None and not isinstance(decision_payload, dict):
-                sys.stderr.write(
-                    "ledger.py: set-verdict-decision payload must be a JSON object\n"
-                )
-                return 2
-            set_verdict_decision(
-                resolve_repo(), run, gate_unit, decision, payload=decision_payload
-            )
-            return 0
-        # U2 STEERING channel — the surface the driving agent uses to operate the
-        # bookkeeping through Bash (its only ledger-write tool is this CLI; it
-        # cannot call the Python mutators directly). Repo auto-resolved from
-        # cwd/$CLAUDE_AUTO_REPO (resolve_repo), matching the record-verdict /
-        # set-* feedback verbs above — force-skip/add-unit/reshape-deps are the
-        # same "model drives, ledger revalidates under the lock" family, so they
-        # take the run-id the agent already has and never an explicit repo arg.
-        rc = _cli_steering(cmd, argv)
-        if rc is not None:
-            return rc
-        sys.stderr.write(f"ledger.py: unknown subcommand {cmd!r}\n")
+    verb = _VERBS.get(argv[0])
+    if verb is None:
+        sys.stderr.write(f"ledger.py: unknown subcommand {argv[0]!r}\n")
         return 2
+    try:
+        return verb.handler(argv)
     except LedgerError as e:
         sys.stderr.write(f"ledger.py: {e}\n")
         return 1

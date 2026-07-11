@@ -105,12 +105,17 @@ env -u CLAUDE_CODE_SESSION_ID "$PY" "$LEDGER_PY" register-session spike >/dev/nu
 assert_eq "2" "$?"
 
 # ─── 6. describe stays complete (orientation surface) ────────────────────────
+# The CLI verb set is the _VERBS registry (single source of truth for dispatch +
+# describe). Assert describe's catalog IS that registry — a verb reachable in the
+# CLI but absent from the agent's self-description surface would be an orientation
+# hole this guard exists to catch.
 it "describe documents every CLI verb (no undocumented surface)"
 diff="$("$PY" - "$LEDGER_PY" <<'PYEOF'
-import sys, re, json, subprocess
+import sys, json, subprocess, importlib.util
 ledger_py = sys.argv[1]
-src = open(ledger_py).read()
-cli = set(re.findall(r'cmd == "([a-z-]+)"', src))
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+cli = set(m._VERBS)
 out = subprocess.run([sys.executable, ledger_py, "describe"], capture_output=True, text=True).stdout
 described = set(json.loads(out).get("verbs", {}).keys())
 print(json.dumps({"missing": sorted(cli - described), "extra": sorted(described - cli)}))
