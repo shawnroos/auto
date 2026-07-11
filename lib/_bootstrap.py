@@ -290,6 +290,16 @@ def session_membership(led, session_id):
     conjunct already excludes paused runs, so it just ORs the two. Merging that
     policy in here would erase the fail-open/fail-closed asymmetry — this helper
     is deliberately policy-free.
+
+    ``is_agent`` fails SAFE on a malformed set (INTENTIONAL, security review): a
+    missing or non-list ``agent_session_ids`` reads as ``is_agent=False``, so a
+    corrupted set de-gates the SUB-AGENT tree back to the prompt-carried
+    constraints — but it never weakens the DRIVING-session backstop, which comes
+    from the ``driving_session_id`` scalar and is unaffected. So the worst case is
+    a revert to pre-U8 tree coverage, never below it. This helper stays PURE (it
+    is called per-ledger in the hot-path worktree scan on every tool call); it
+    does not warn on corruption, because per-call stderr from a benign
+    legacy-shaped ledger would be worse than the quiet fail-safe.
     """
     driving = led.get(DRIVING_SESSION_KEY)
     is_driving = bool(driving) and driving == session_id

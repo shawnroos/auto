@@ -235,8 +235,8 @@ _AGENT_TOOL_SURFACE = {
             "rejects": "LedgerError on a dependency cycle or an edge to an unknown unit.",
         },
         "register-session": {
-            "args": "<run> <session-id>",
-            "rejects": "LedgerError on an empty session-id. Idempotent otherwise.",
+            "args": "<run>  (registers $CLAUDE_CODE_SESSION_ID — the caller's own)",
+            "rejects": "exit 2 if CLAUDE_CODE_SESSION_ID is unset. Idempotent otherwise.",
         },
         "transition": {
             "args": "<repo> <run> <unit> <state>",
@@ -267,10 +267,24 @@ def _cli_steering(cmd, argv):
     ``_cli`` owns the except clauses.
     """
     if cmd == "register-session":
-        # register-session <run> <session-id>   (U8/R21 — a dispatched phase
-        # sub-agent joins the ownership set so the fail-closed destructive
-        # backstop and the advisor gate reach it. Idempotent.)
-        run, sid = argv[1], argv[2]
+        # register-session <run>   (U8/R21 — a dispatched phase sub-agent joins
+        # the ownership set so the fail-closed destructive backstop and the
+        # advisor gate reach it. Idempotent.)
+        #
+        # The joined id is the CALLER's OWN session, read from the environment —
+        # NEVER a positional arg. This closes the cross-session-capture surface
+        # (security review): a process cannot register a THIRD-PARTY session to
+        # grief its run or gate a bystander, because it can only ever contribute
+        # the id the harness put in its own env. A missing env id is a hard error
+        # (the caller isn't a real session) rather than a silent no-op.
+        run = argv[1]
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        if not sid:
+            sys.stderr.write(
+                "ledger.py: register-session needs CLAUDE_CODE_SESSION_ID in the "
+                "environment (a sub-agent registers its OWN session)\n"
+            )
+            return 2
         register_session(resolve_repo(), run, sid)
         return 0
     if cmd == "init":

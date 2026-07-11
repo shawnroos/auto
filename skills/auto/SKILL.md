@@ -390,15 +390,15 @@ Each pulse, on a `rearm` intent in the work phase:
    verdict on completion** via `bash lib/ledger.py record-verdict <run> <unit>
    '<json-findings>' <attempt>`.
    - **FIRST line of every phase sub-agent prompt (R21 — LOAD-BEARING SAFETY):**
-     `bash lib/ledger.py register-session <run> "$CLAUDE_CODE_SESSION_ID"`. A
-     dispatched sub-agent carries its OWN `session_id`, so until it registers into
-     the run's ownership set the destructive-command backstop and the advisor gate
-     are DARK for it — including the `fix` phase, which writes code and runs Bash.
-     Registration MUST be the sub-agent's first action, before any Bash, so the
-     fail-closed gate is armed before it can run anything destructive. It
-     registers `$CLAUDE_CODE_SESSION_ID` (its own id from the env) — never a
-     literal, so a sub-agent can only ever add ITSELF to the set. Omitting this
-     line silently reverts U8: the backstop never reaches the tree.
+     `bash lib/ledger.py register-session <run>`. A dispatched sub-agent carries
+     its OWN `session_id`, so until it registers into the run's ownership set the
+     destructive-command backstop and the advisor gate are DARK for it —
+     including the `fix` phase, which writes code and runs Bash. Registration MUST
+     be the sub-agent's first action, before any Bash, so the fail-closed gate is
+     armed before it can run anything destructive. The verb reads
+     `$CLAUDE_CODE_SESSION_ID` from the env itself — no id is passed as an arg, so
+     a sub-agent can only ever add ITSELF to the set (never a third party).
+     Omitting this line silently reverts U8: the backstop never reaches the tree.
    - **Source the sub-agent's operating contract from the `describe` CLI verb**
      (`bash lib/ledger.py describe`, shipping in U4) — NOT a `SKILL.md` line-range
      citation. Hardcoding line ranges is the orientation tax this runtime removes

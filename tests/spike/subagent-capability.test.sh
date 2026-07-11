@@ -93,11 +93,16 @@ PYEOF
 # terminal(clean)=True, terminal(blocker)=True, but the blocker is still COUNTED (=1)
 assert_eq "True|True|1" "$verdict"
 
-# ─── 5. the ownership set exists + register-session joins it ─────────────────
-it "register-session joins the agent_session_ids ownership set the hooks gate on"
-"$PY" "$LEDGER_PY" register-session spike sess-KID >/dev/null 2>&1
+# ─── 5. the ownership set exists + register-session joins the CALLER's own id ─
+# The CLI reads $CLAUDE_CODE_SESSION_ID from the env (never an arg), so a process
+# can only ever register ITSELF — the cross-session-capture guard (security review).
+it "register-session joins the caller's own env session id into agent_session_ids"
+CLAUDE_CODE_SESSION_ID=sess-KID "$PY" "$LEDGER_PY" register-session spike >/dev/null 2>&1
 owners="$("$PY" "$LEDGER_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('agent_session_ids'))")"
 assert_eq "['sess-KID']" "$owners"
+it "register-session with no CLAUDE_CODE_SESSION_ID in env is a hard error (exit 2)"
+env -u CLAUDE_CODE_SESSION_ID "$PY" "$LEDGER_PY" register-session spike >/dev/null 2>&1
+assert_eq "2" "$?"
 
 # ─── 6. describe stays complete (orientation surface) ────────────────────────
 it "describe documents every CLI verb (no undocumented surface)"

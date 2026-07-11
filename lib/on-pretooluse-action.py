@@ -364,13 +364,30 @@ def _owns_session(led, *, session_id):
     caused: ``_pause_run`` sets ``backstop_latched=True`` atomically with the
     pause, so a second destructive command in the same autonomous turn still
     matches (no self-disarm). The latch is STICKY across an agent-run
-    ``auto-resume pause`` (that path does not clear it), so a self-driven agent
-    cannot reach the exempt state with one benign command — only an operator
+    ``auto-resume pause`` (that path does not clear it), so once the backstop has
+    FIRED a self-driven agent cannot re-disarm it — only an operator
     ``continue``/``abort`` clears it (continue clears the latch; abort ends the
     run). Trade-off (documented, surfaced to the operator in the deny reason): a
     run that ALREADY tripped the backstop keeps blocking the operator's own
     destructive commands during a *pause* — they must ``continue`` or ``abort``
     first; ``abort`` → ``phase=done`` is the clean full-release cleanup path.
+
+    KNOWN RESIDUAL — pre-latch self-disarm (adversarial review, v0.13.0;
+    PRE-EXISTING, not introduced by U8). The stickiness above closes the
+    POST-fire retry, not the FIRST destructive command. A self-driven agent that
+    has not yet tripped the backstop can run a benign ``auto-resume pause`` (which
+    calls ``apply_pause`` with the default ``backstop_latched=False``) and then a
+    destructive command in the same turn — the exemption fires because
+    ``driver=="manual"`` and the latch is unset. A clean fix requires
+    distinguishing an AGENT-initiated pause from an OPERATOR-initiated one, but at
+    the CLI both run in the driving session with the same ``session_id`` and both
+    set ``driver=="manual"`` — they are not distinguishable without a new,
+    agent-honest signal (and a prompt-injected agent would just omit it). U6's
+    boss hand-back also legitimately calls ``auto-resume pause``, so latching on
+    EVERY pause would gate the operator's own post-hand-back cleanup — a real UX
+    regression. Left as a documented residual rather than a half-fix; the backstop
+    is defense-in-depth against a MISBEHAVING agent (an agent with Bash edits the
+    ledger directly regardless), not a sandbox against a MALICIOUS one.
 
     Dimension #2 (a concurrent STANDALONE ce-skill is not gated) is preserved by
     the ``session_id`` MEMBERSHIP conjunct alone — a standalone skill is neither

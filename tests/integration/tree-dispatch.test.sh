@@ -308,8 +308,9 @@ assert_eq "alive: confirmed=[] state=dispatched | dead: confirmed=['u1'] state=s
 # silently dark in the tree and this fails. (Adversarial review, v0.13.0.)
 it_dispatch_contract_names_register_session() {
   local skill="${AUTO_ROOT}/skills/auto/SKILL.md"
-  if grep -q 'register-session <run> "\$CLAUDE_CODE_SESSION_ID"' "$skill" \
-     && grep -qi 'FIRST line of every phase sub-agent prompt' "$skill"; then
+  if grep -q 'register-session <run>' "$skill" \
+     && grep -qi 'FIRST line of every phase sub-agent prompt' "$skill" \
+     && grep -q 'CLAUDE_CODE_SESSION_ID` from the env' "$skill"; then
     PASS=$((PASS + 1)); printf "  ok %d - §4.8 dispatch contract arms the backstop (register-session, own session id)\n" "$PASS"
   else
     FAIL=$((FAIL + 1)); printf "  not ok - §4.8 dispatch contract no longer tells the sub-agent to register-session: backstop dark in the tree\n"
