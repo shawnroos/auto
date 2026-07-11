@@ -80,12 +80,18 @@ blank questionnaire.
 Reason over the four built-in shapes — this is the model judgment
 `lib/recommender.py` cannot express (it only ever reaches `a1`/`w`):
 
-- **`a1`** — plan-loop. Clear single-track intent that needs planning then work.
-- **`w`** — work-only. A reviewed plan that goes straight to the work-loop.
-- **`a2`** — Parallel Theories + Judge. High-uncertainty design space worth
-  running N competing plans and judging the winner (declares a `judge` gate unit).
-- **`a4`** — Adversarial Pair + Comparator. One plan, two biased builders, a
-  comparator picks/merges (declares a `compare` gate unit).
+Each shape has a legible name; the shorthand still works as an alias
+(`lib/recipes.py::_ALIASES` resolves either form to the same recipe):
+
+- **`plan-build-review`** (alias `a1`) — plan-loop. Clear single-track intent
+  that needs planning then work.
+- **`work-only`** (alias `w`) — work-only. A reviewed plan that goes straight to
+  the work-loop.
+- **`parallel-theories`** (alias `a2`) — Parallel Theories + Judge.
+  High-uncertainty design space worth running N competing plans and judging the
+  winner (declares a `judge` gate unit).
+- **`adversarial-pair`** (alias `a4`) — Adversarial Pair + Comparator. One plan,
+  two biased builders, a comparator picks/merges (declares a `compare` gate unit).
 
 Ground the pick in the `auto-design` rubrics (above). When **no built-in fits**
 (the work needs a gate point no built-in expresses — e.g. a spike-before-build

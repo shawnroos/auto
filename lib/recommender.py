@@ -80,6 +80,16 @@ KIND_SKILL = "skill"
 # the state-INTRINSIC shape (which step, which recipe/skill, on the spine or not).
 #
 # Field meanings:
+# U6 (R9) — legible-alias choice: the taxonomy KEEPS the bare shorthand STEMS
+# ("a1"/"w"/"pipeline"/"review") rather than emitting the legible aliases. This is
+# the minimal change that makes BOTH forms route: aliasing lives in ONE place
+# (lib/recipes.py::_ALIASES, consulted inside resolve() before the file lookup),
+# so a stem passed here resolves directly and a legible name passed anywhere
+# (e.g. an operator's `--recipe plan-build-review`) resolves to the same recipe.
+# Emitting aliases here instead would force `launch-gate.SKIP_ELIGIBLE_RECIPES`
+# and the `--check-agrees` stem-equality to switch to the alias form too, for no
+# gain — the router's pick is compared as an opaque token either way.
+#
 #   ce_step         the ce-family step this state maps to (operator-facing label).
 #   recipe_or_entry the recipe NAME (kind=recipe) or the skill COMMAND (kind=skill).
 #   entry           the entry phase for a recipe dispatch (None for skill recs).

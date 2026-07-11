@@ -95,6 +95,26 @@ A1_BUILTIN = {
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# U6 (R9): legible names that ALIAS the a1/a2/a4/w shorthand. A PURE alias layer
+# — each legible name resolves to the SAME recipe as its stem. `resolve()`
+# rewrites a legible name to its stem BEFORE the file lookup, so a legible name
+# lands on the stem's recipe at whichever tier it resolves AND inherits the
+# stem's fallback (e.g. `plan-build-review` → `a1`, which still falls back to
+# A1_BUILTIN when no a1.json resolves). The stem files and A1_BUILTIN are NEVER
+# renamed (KTD-6). Each name is confirmed against the recipe's `description`:
+#   a1 "Classic CE Stack — plan, build, review"  → plan-build-review
+#   a2 "Parallel Theories + Judge"               → parallel-theories
+#   a4 "Adversarial Pair + Comparator"           → adversarial-pair
+#   w  "Work-only"                               → work-only
+_ALIASES = {
+    "plan-build-review": "a1",
+    "parallel-theories": "a2",
+    "adversarial-pair": "a4",
+    "work-only": "w",
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # U3: three-tier registry — workspace → global → built-in, first-wins.
 
 
@@ -131,6 +151,12 @@ def resolve(name: str, repo_root: str):
     path construction (fail closed before touching the filesystem).
     """
     _validate_recipe_name(name, source="--recipe argument")
+    # U6 (R9): rewrite a legible alias to its shorthand stem BEFORE any path
+    # construction or the `name == "a1"` constant fallback — so a legible name
+    # resolves to the stem's recipe at every tier AND inherits the stem's
+    # A1_BUILTIN fallback. Validation runs on the ORIGINAL name first (defense);
+    # a non-alias name passes through unchanged.
+    name = _ALIASES.get(name, name)
     for tier, d in _tier_dirs(repo_root):
         path = os.path.join(d, f"{name}.json")
         if os.path.isfile(path):
