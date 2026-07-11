@@ -1087,3 +1087,57 @@ every pulse (the tick's `beat=True` write); `lib/on-stop.py` treats a chain stal
 past `DRIVER_SELF_STALE_SECONDS` (3900s) as dead. The sub-agent prompt-builder
 sources its operating contract from the `describe` CLI verb (U4), not a line-range
 citation into this file, so R6/R7 hold where the work actually runs.
+
+## 17. Goal-aware plan routing — the pre-step detail (v0.11.0)
+
+The `auto-driver` skill runs a goal-aware pre-step for the `reviewed-plan` and
+`multi-plan` situations, **interactive runs only** (`driving_session_id` null —
+self-driven/headless runs skip it; the confirm gate that makes it safe cannot
+fire on them). The skill carries the operational skeleton; the mechanism detail
+lives here so the skill stays inside its size budget. Full rubric:
+`skills/auto-driver/references/goal-plan-relevance-rubric.md`.
+
+### Step 1 — recover the goal for THIS invocation
+
+From the context window: the typed `/auto` intent, or the text of a `/goal <…>`
+bound in the current session for this invocation (explicit); else infer from the
+session (advisory). Read `/goal` text ONLY — never query/run/bind/clear it. Ignore
+a `/goal` bound for a prior completed run (the ~2-day `ce-sessions` lookback is for
+session classification, not goal recovery). If a bound `/goal`'s text is not
+reliably recoverable, degrade to inferred/no-goal.
+
+### Step 2 — weight the plans (the fuzzy judgment)
+
+Weight `multi_plan.paths` / `single_plan.path` against the goal using the rubric's
+observable match bar: a plan matches when its stated Objective/Summary names the
+goal's target outcome (NOT filename or freshness). This is the model's call;
+produce the ordered list of matched plan paths, best first.
+
+### Step 3 — route deterministically via `goal-route.py`
+
+Hand the verdicts to the crisp router; do NOT decide the branch in prose. It owns
+the routing logic and enforces the guardrails in code — it will not emit a fan-out
+suppression unless the goal is `explicit` AND the run is interactive, so a
+self-driven run or an inferred goal can never bypass the confirm gate (truth-tested
+by `tests/unit/goal-route.test.sh`). The reason → action map the driver executes:
+
+- `explicit-suppress` → goal-ranked pick-one `AskUserQuestion` over `ranked`
+  (`path` → `auto.sh "<path>"`), `preselect` on top, **fan-out-all suppressed**
+  (`suppress_fanout: true`), confirm even on a single match.
+- `inferred-re-rank` → same ask over `ranked` (matches on top), `preselect` on
+  top, but **keep** the fan-out-all option.
+- `no-match-unchanged` / `no-goal-unchanged` / `self-driven-unchanged`
+  (`action: passthrough`) → act on the detector's row unchanged (its freshness
+  verdict; fan-out-all offered per its own rules).
+
+The detector (`lib/auto-detect.py`) is untouched by this — it still emits
+`reviewed-plan`/`multi-plan` on freshness; the pre-step reshapes the routing before
+dispatch and never changes the detector's verdict.
+
+### Conversation-context routing (situation `conversation-context`, §11)
+
+Classify the session (transcript + ~2-day `ce-sessions` lookback, NOT raw
+compaction) → `python lib/recommender.py <state> <confidence>`.
+`escalate`/ambiguous → one `AskUserQuestion`, no run. `kind=skill` → recommend the
+ce command. `kind=recipe` → `auto-author-goal` (bind auto's OWN predicate, NEVER
+native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
