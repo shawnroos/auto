@@ -2,10 +2,10 @@
 name: auto
 description: >
   Drive an auto run: chain the plan-loop → seam → work-loop using the
-  self-pacing tick (lib/tick.py), the agent-managed dispatcher
+  self-pacing pulse (lib/pulse.py), the agent-managed dispatcher
   (lib/dispatcher.py), and a deliberate-stop /goal binding. Use when
   invoked via /auto, when continuing after a seam, or when resuming a
-  run. This skill IS the driving agent: arms the tick chain, decides
+  run. This skill IS the driving agent: arms the pulse chain, decides
   the work-loop fan-out cap per wave (resizable in flight), reads the
   ledger's cached exit predicate to know when the loop is done. NEVER
   re-evaluates the predicate itself.
@@ -14,7 +14,7 @@ description: >
 # auto (loop driver)
 
 **Prepare/execute, ledger-anchored.** This skill PREPARES intents; the
-model EXECUTES them. Re-ticking without running the prepared
+model EXECUTES them. Re-pulsing without running the prepared
 invocation is a no-op. Source of truth is the disk ledger at
 `<repo>/.claude/auto/<run>.json`; the conversation is advisory. Full
 contract + traps (bash-loop, deepen↔review livelock):
@@ -90,50 +90,50 @@ agent-native answer to a harness limit, not a workaround bolted on.
 Test the crisp seam (what the boss WROTE — a unit-create or a manual
 pause), never the fuzzy judgment. Full contract: `driver-reference.md`.
 
-## 2. Arm the tick chain
+## 2. Arm the pulse chain
 
-Fire the first tick. The command is NAMESPACED (`/auto:auto-tick`) — a plugin
+Fire the first pulse. The command is NAMESPACED (`/auto:auto-pulse`) — a plugin
 slash command fired programmatically (ScheduleWakeup / loop) only resolves in
-its `/<plugin>:<command>` form; the bare `/auto-tick` is "Unknown command":
+its `/<plugin>:<command>` form; the bare `/auto-pulse` is "Unknown command":
 
 ```
-ScheduleWakeup(delay=60, prompt="/auto:auto-tick <run>")
+ScheduleWakeup(delay=60, prompt="/auto:auto-pulse <run>")
 ```
 
-`ScheduleWakeup` clamps delay to `[60, 3600]s`. Each tick returns a
+`ScheduleWakeup` clamps delay to `[60, 3600]s`. Each pulse returns a
 re-arm intent dict on stdout; the driver acts on it. Phase-aware
 dispatch:
 
 | `action` | phase | what you do |
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
-| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a tick fires even while work is in flight. A verdict landing first makes the heartbeat tick a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
+| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `seam-pause` → surface seam (§3) |
-| `noop`   | any   | another live tick holds the lock; do nothing |
+| `noop`   | any   | another live pulse holds the lock; do nothing |
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop.
 
-**stdout is exactly one JSON object.** Every tick AND every
+**stdout is exactly one JSON object.** Every pulse AND every
 `/auto-resume` re-arm path writes a single JSON object to stdout and
 nothing else — parse the WHOLE of stdout with `json.loads`; there is no
 prose to strip and no leading/trailing lines to skip. (The two surfaces
-use different `action` values — a tick emits `action: "rearm"`,
-`/auto-resume` emits `action: "arm-tick"` — but both are exactly one
+use different `action` values — a pulse emits `action: "rearm"`,
+`/auto-resume` emits `action: "arm-pulse"` — but both are exactly one
 JSON object.) All human-readable status, diagnostics, and the prose
 `operator_guidance`/`note` text ride *inside* that object (as fields) or
 on **stderr**, never as loose stdout lines. If you ever see "non-JSON
 noise" on stdout, you are reading stderr merged in — parse stdout alone.
 
 **The `plan-enumerate-pending` handshake is NOT ceremony.** This is a
-*tick* intent (not a resume one): when the plan closes, the tick fires a
+*pulse* intent (not a resume one): when the plan closes, the pulse fires a
 normal `action: "rearm"` intent whose `advance.advanced ==
 "plan-enumerate-pending"` (with a prose `operator_guidance` field
 describing the prepare op). (`/auto-resume advance` on a plan-phase run
-doesn't emit this itself — it emits its own `arm-tick` to arm the tick
+doesn't emit this itself — it emits its own `arm-pulse` to arm the pulse
 that THEN surfaces the handshake.) The handshake is an instruction, not
 noise: run the enumerate prepare op and stash the work units via
-`ledger.py set-enumerated-units`, **then re-arm the tick**. The NEXT
-tick — once units are stashed — flips `plan → work`. Do NOT read the
+`ledger.py set-enumerated-units`, **then re-arm the pulse**. The NEXT
+pulse — once units are stashed — flips `plan → work`. Do NOT read the
 envelope as "done planning, start building" and skip the re-arm: skipping
 it leaves the run at `plan` with the work-loop never armed.
 
@@ -141,12 +141,12 @@ it leaves the run at `plan` with the work-loop never armed.
 
 When plan predicate met:
 
-- **Not `auto`** (operator passed `--review-plan`): tick writes
+- **Not `auto`** (operator passed `--review-plan`): pulse writes
   `loop_phase = "seam"`, `seam_paused = true`, returns `stop`,
   `reason == "seam-pause"`. Surface the plan + parallelism analysis.
   Resume via `/auto-resume continue <run>` (→ work) or
   `/auto-resume abort <run>` (→ done).
-- **`auto`** (v0.4.0 default): tick that closes plan predicate flips
+- **`auto`** (v0.4.0 default): pulse that closes plan predicate flips
   `plan → work` directly and keeps re-arming. No pause.
 
 ## 4. Work-loop fan-out (event-driven)
@@ -166,29 +166,29 @@ IS the wake signal. Per wave:
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
 4. YIELD for verdicts — end the turn — AND arm ONE watchdog-heartbeat
-   `ScheduleWakeup(watchdog_wakeup_delay(ledger), "/auto:auto-tick <run>")`
+   `ScheduleWakeup(watchdog_wakeup_delay(ledger), "/auto:auto-pulse <run>")`
    at dispatch. This single long wakeup (~the soonest in-flight stall
-   threshold, clamped to `[60, 3600]s`) fires a tick even while work is
+   threshold, clamped to `[60, 3600]s`) fires a pulse even while work is
    in flight, so `detect_and_halt_stalled` reaps a wedged-but-alive
    agent that never returns a verdict. It is NOT a sub-minute poll: a
-   verdict landing first re-invokes you and the heartbeat tick then
+   verdict landing first re-invokes you and the heartbeat pulse then
    finds nothing past-threshold and is a self-cancelling no-op.
 5. On re-invocation: `dispatcher.converge(repo, run)` reads landed
    verdicts. Predicate met → exit (§5); ready_units → next wave;
    work in flight → yield again.
-6. Ticks apply fixes (`verdict-returned → fixed → pending`); re-
+6. Pulses apply fixes (`verdict-returned → fixed → pending`); re-
    dispatch; re-review. Loop terminates only when every unit reaches
    a clean terminal verdict.
 
 **Death path (event-driven reap).** When you observe a background
 agent has DIED — a crash, auth-churn silent death, or a completion
 that lands with no verdict written — reconcile that unit at once by
-calling `tick_advance.reap_unit(<run>, <unit>, <the dispatched
+calling `pulse_advance.reap_unit(<run>, <unit>, <the dispatched
 attempt>)` (the attempt-gated reap) rather than waiting out the stall
 threshold. It flips the unit `dispatched → stalled` only when the unit
 is still `dispatched` at that attempt, then the stalled-node policy
 (reap → retry → escalate) takes over. This is idempotent with the
-watchdog-heartbeat timeout path above: a later tick that also sees the
+watchdog-heartbeat timeout path above: a later pulse that also sees the
 unit is a no-op because it is already `stalled`, and the attempt gate
 means a death event from an already-superseded attempt can never stall
 a fresh retry — the two paths converge on exactly one stall per
@@ -203,7 +203,7 @@ it there), apply this per stalled node:
 1. **Reap the live agent.** The reap is model-side (there is NO reaping
    primitive in `lib/`): `TaskStop` the agent, then `kill -TERM` its
    process (the reap sequence — TaskStop then SIGTERM).
-2. **Clear the marker.** `tick_advance.clear_reap_pending(<run>,
+2. **Clear the marker.** `pulse_advance.clear_reap_pending(<run>,
    <unit>)` right after issuing the kill — the `dispatched → stalled`
    flip set `reap_pending=True` to record that a kill was owed; clearing
    it confirms you issued it (see below).
@@ -227,8 +227,8 @@ still surfaces the individual wedged node for visibility.
 
 **`reap_pending` semantics.** The stalled transition sets
 `reap_pending`; the driver clears it (step 2) after the kill;
-`tick_advance.units_awaiting_reap(ledger)` returns the `stalled` units
-whose marker is still set — an **uncleared marker on a later tick means
+`pulse_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+whose marker is still set — an **uncleared marker on a later pulse means
 "kill owed but unconfirmed"** (a possible zombie agent). It is the only
 Python-visible handle on a kill that is otherwise entirely model-side.
 
@@ -371,7 +371,7 @@ access to that tool — its `launch_fn` is and REMAINS a no-op
 (`dispatcher._default_launch_fn` returns `None`; the `dispatcher.py dispatch`
 CLI uses it). So **the boss (this session) issues the spawns itself, in-turn** —
 `dispatch_batch` performs ONLY the `pending → dispatched` ledger transition. This
-matches auto's standing "the tick PREPARES, YOU EXECUTE" contract
+matches auto's standing "the pulse PREPARES, YOU EXECUTE" contract
 (`driver-reference.md` §1, §16). `lib/dispatcher.py` is unchanged.
 
 Each pulse, on a `rearm` intent in the work phase:
@@ -415,7 +415,7 @@ Each pulse, on a `rearm` intent in the work phase:
    property, proved by `tests/integration/tree-dispatch.test.sh`). Reading
    verdicts from the ledger — not from returned prose — is what keeps the boss
    context flat across pulses (RISK-3).
-4. **Stamp `last_beat_at` every pulse (R19).** The tick's `beat=True` write is
+4. **Stamp `last_beat_at` every pulse (R19).** The pulse's `beat=True` write is
    the boss's keep-alive; it is what lets `lib/on-stop.py` tell a live boss from a
    dead tree. If the chain goes stale past `DRIVER_SELF_STALE_SECONDS` (3900s)
    with no beat, the Stop hook treats it as dead and releases the session.
@@ -429,9 +429,9 @@ threshold`).
 
 ## 5. Exit
 
-Loop exits when tick returns `stop` with `predicate-met` reason and
+Loop exits when pulse returns `stop` with `predicate-met` reason and
 ledger shows `loop_phase == "done"`. Read `exit_predicate_result.met`
-from the ledger; never re-derive. Tick supplies a `report` in its
+from the ledger; never re-derive. Pulse supplies a `report` in its
 stop intent; surface it (lists remaining minor findings for operator
 promotion). If `exit_reason` is non-null the loop did NOT exit
 cleanly — surface kind + error. Full taxonomy:
@@ -459,7 +459,7 @@ predicate is met (provisional sidecars ignored). Mechanism:
 - **Re-arm only on `action == "rearm"`.** `stop` and `noop` end the
   chain.
 - **Driver owns cap; engine owns advance.** Never hardcode
-  concurrency; never dispatch from the tick; never write verdicts
+  concurrency; never dispatch from the pulse; never write verdicts
   from the driver.
 - **Always goaled.** No run proceeds without an active deliberate-stop
   goal/status.

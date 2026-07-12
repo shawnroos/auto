@@ -54,7 +54,7 @@ open(plan, "w").write("# plan\n")
 
 # Map argv: first token is the literal "PLAN" placeholder → the temp plan path.
 real_argv = [plan if t == "PLAN" else t for t in argv]
-# a.run() prints the arm-tick INTENT to stdout (its real job — the model reads
+# a.run() prints the arm-pulse INTENT to stdout (its real job — the model reads
 # it); silence it so only our signal CSV reaches the caller.
 with contextlib.redirect_stdout(io.StringIO()):
     rc = a.run(real_argv)

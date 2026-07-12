@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto U1 (v0.3.0): the ONE iteration-decision module.
 
-Every site that reads a gate unit's `decision` field — the tick's iteration
+Every site that reads a gate unit's `decision` field — the pulse's iteration
 check, `recompute_predicate`'s iteration_pending computation, `/auto-status`'s
 reporting — routes through THIS module. The AST lint
 (`tests/unit/iteration-ast-lint.test.sh`) forbids the string literal "decision"
@@ -29,16 +29,16 @@ from __future__ import annotations
 
 import math
 
-# Kill-switch parity with tick.advance_iteration_loop (G1 / rel-r2-1).
+# Kill-switch parity with pulse.advance_iteration_loop (G1 / rel-r2-1).
 # `_bootstrap` is on sys.path before this module loads: every caller of
-# `load_lib_module("iteration")` (tick.py at module top, ledger.py via
+# `load_lib_module("iteration")` (pulse.py at module top, ledger.py via
 # `_lazy_load`) prepends lib/ to sys.path first. Importing the symbol here is
-# the same shape tick.py uses at line 60. The fence has to hold on the READ
+# the same shape pulse.py uses at line 60. The fence has to hold on the READ
 # side (compute_pending_state) too — without it, a kill-switched mid-iteration
 # run still computes iteration_pending=True from the gate's stale "iterate"
 # verdict, which blocks the predicate's `met` branch via the AND-NOT clause
 # and leaves /auto-resume abort as the only escape. F5 unfenced the write
-# side (tick.py:624); G1 mirrors it on the read side so the standard
+# side (pulse.py:624); G1 mirrors it on the read side so the standard
 # predicate-met flow takes over when the operator flips the switch.
 from _bootstrap import is_iteration_disabled  # noqa: E402
 
@@ -187,7 +187,7 @@ def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None
     previously persisted on ``dispatch_context.judge_verdicts`` by the driver in
     U5), and returns ``{"signal", "pending_judges", "programmatic_results"}``.
 
-    The CALLER (tick/driver) commits a non-None ``signal`` as the gate's decision
+    The CALLER (pulse/driver) commits a non-None ``signal`` as the gate's decision
     via ``ledger_mutators.set_verdict_decision`` — keeping the decision write
     centralized (``tests/unit/iteration-ast-lint.test.sh``). When
     ``pending_judges`` is non-empty the signal is None: the gate cannot decide
@@ -222,7 +222,7 @@ def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None
 
 
 def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> dict:
-    """Compute the iteration decision the engine should honor THIS tick.
+    """Compute the iteration decision the engine should honor THIS pulse.
 
     Reads the gate unit's `dispatch_context.decision` (via `read_decision`) AND
     the ledger's `iteration.bound` block, then composes them: `iterate` under
@@ -239,13 +239,13 @@ def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> di
 
     `now_monotonic` is reserved for future use (a wall-time-from-now bound
     check that doesn't depend on the ledger's `active_wall_seconds` accumulator
-    — useful for emergency stop in long-running ticks). v0.3.0 reads the
+    — useful for emergency stop in long-running pulses). v0.3.0 reads the
     accumulator off the ledger and ignores `now_monotonic`.
 
     The bound check fires on the ATTEMPTS COUNTER PRE-INCREMENT — if
     iteration_attempts is already at max_attempts when the gate writes
     iterate, that next iterate would be the (max_attempts+1)-th attempt;
-    engine overrides to exit. The caller (tick's advance_iteration_loop)
+    engine overrides to exit. The caller (pulse's advance_iteration_loop)
     increments iteration_attempts ONLY when honoring an iterate (not when
     overriding to exit), so the counter tracks honored iterations.
     """
@@ -350,7 +350,7 @@ def compute_pending_state(ledger: dict) -> bool:
 
     THE central iteration-bound logic — every caller (the
     ``recompute_predicate`` -> ``_atomic_write`` chokepoint AND the engine's
-    tick.advance_iteration_loop) reads the SAME rule through this module.
+    pulse.advance_iteration_loop) reads the SAME rule through this module.
     Mirrors ``evaluate_decision``'s bound math without surfacing the
     ``decision_effective``/``bound_type`` envelope ``recompute_predicate``
     doesn't need.
@@ -381,7 +381,7 @@ def compute_pending_state(ledger: dict) -> bool:
 
     Kill-switch parity (G1 / rel-r2-1): when ``CLAUDE_AUTO_DISABLE_ITERATION=1``
     is set, return False unconditionally — symmetric with the write-side
-    short-circuit at ``tick.advance_iteration_loop`` (lib/tick.py:624).
+    short-circuit at ``pulse.advance_iteration_loop`` (lib/pulse.py:624).
     Without this, a kill-switched mid-iteration run can't exit via the
     standard predicate-met path: the gate's stale ``decision="iterate"``
     still composes ``iteration_pending=True`` into the predicate, blocking

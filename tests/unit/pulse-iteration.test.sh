@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# auto U4 unit test: lib/tick.py — one ScheduleWakeup-paced advance
-# of the ledger. The tick reads ALL loop state from the disk ledger, does ONE
+# auto U4 unit test: lib/pulse.py — one ScheduleWakeup-paced advance
+# of the ledger. The pulse reads ALL loop state from the disk ledger, does ONE
 # smallest-useful advance inside a try/except, persists atomically via
 # ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
 # ScheduleWakeup — that is a model tool, not a CLI).
@@ -10,23 +10,23 @@
 # source claude-modes' test-helpers nor auto shared helpers (those
 # are U2's, not yet present). When U2 lands, this file may migrate to them.
 #
-# Scenarios (mapped to the U4 plan, tested against tick.py's ACTUAL surface):
-#   1. predicate NOT met -> tick advances one step + signals re-arm (action=rearm)
+# Scenarios (mapped to the U4 plan, tested against pulse.py's ACTUAL surface):
+#   1. predicate NOT met -> pulse advances one step + signals re-arm (action=rearm)
 #   2. predicate met -> emits report, action=stop, does NOT re-arm
 #   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. backend raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#   4. backend raises mid-pulse -> unit.last_error recorded + unit marked stalled;
 #      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
-#   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
+#   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
 #      fixed) but makes NO dispatch call and writes NO finding
-#   6. non-stateless safety: invoke the tick twice from FRESH processes against
+#   6. non-stateless safety: invoke the pulse twice from FRESH processes against
 #      the same ledger -> it advances purely from ledger state
 #   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
-#      ACROSS fresh-process ticks WITHOUT re-planning. The tick persists the
-#      executed plan_step (schema §3.1) so the next tick reads it instead of
+#      ACROSS fresh-process pulses WITHOUT re-planning. The pulse persists the
+#      executed plan_step (schema §3.1) so the next pulse reads it instead of
 #      re-reading null and re-running "plan" forever. Includes a deliberate-fail
 #      control (env-gated no-persist) proving the test goes RED without the write.
 #   8. Bug #5 gap-write: advance_plan_loop persists gaps_open from a DICT
@@ -47,8 +47,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TICK_PY="${AUTO_ROOT}/lib/tick.py"
-TICK_SH="${AUTO_ROOT}/lib/tick.sh"
+PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
+PULSE_SH="${AUTO_ROOT}/lib/pulse.sh"
 LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -119,7 +119,7 @@ PYEOF
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-echo "tick-iteration.test.sh"
+echo "pulse-iteration.test.sh"
 
 # ════════════════════════════════════════════════════════════════════════════
 # v0.3.0 U4 — advance_iteration_loop + finally + kill-switch fence + R9
@@ -132,7 +132,7 @@ echo "tick-iteration.test.sh"
 
 # Test driver: a python helper that seeds a ledger with an iteration block,
 # optionally walks the gate unit to a desired state + decision, then runs
-# dispatch_tick and prints a JSON blob with the post-tick state.
+# dispatch_pulse and prints a JSON blob with the post-pulse state.
 u4_driver() {
   "$PY" - "$AUTO_ROOT" "$REPO" "$@" <<'PYEOF'
 import json, sys, os, importlib.util
@@ -141,7 +141,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
 t_spec = importlib.util.spec_from_file_location(
-    "tick_under_test", os.path.join(auto_root, "lib", "tick.py"))
+    "pulse_under_test", os.path.join(auto_root, "lib", "pulse.py"))
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 op = sys.argv[3]
 
@@ -218,7 +218,7 @@ if op == "advance":
     # short-circuit at lines 564-576 should fire normally (work phase, met
     # composed against not-iteration_pending which is False here).
     init_a2("u4-advance", decision="advance", attempts=0)
-    r = t.dispatch_tick(repo, "u4-advance")
+    r = t.dispatch_pulse(repo, "u4-advance")
     led = m.read_ledger(repo, "u4-advance")
     print(json.dumps({
         "action": r.get("action"),
@@ -229,12 +229,12 @@ if op == "advance":
 
 elif op == "iterate-under-bound":
     # GREEN: gate says iterate, attempts < max. advance_iteration_loop calls
-    # atomic_iterate_step (increment + emit 2 units + reset). After the tick
+    # atomic_iterate_step (increment + emit 2 units + reset). After the pulse
     # the gate is pending again, attempts=2, two new plan units appear,
-    # gate depends_on now includes them, and the tick re-arms.
+    # gate depends_on now includes them, and the pulse re-arms.
     init_a2("u4-iter-under", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
-    r = t.dispatch_tick(repo, "u4-iter-under")
+    r = t.dispatch_pulse(repo, "u4-iter-under")
     led = m.read_ledger(repo, "u4-iter-under")
     plan_ids = sorted(u["id"] for u in led["units"] if u.get("phase") == "plan")
     judge = next(u for u in led["units"] if u["id"] == "judge")
@@ -256,7 +256,7 @@ elif op == "iterate-over-attempts":
     # carries bound_override + best_so_far (the gate's decision_payload).
     init_a2("u4-bound-attempts", decision="iterate", attempts=5,
             max_attempts=5, emit_count=2)
-    r = t.dispatch_tick(repo, "u4-bound-attempts")
+    r = t.dispatch_pulse(repo, "u4-bound-attempts")
     led = m.read_ledger(repo, "u4-bound-attempts")
     judge = next(u for u in led["units"] if u["id"] == "judge")
     dc = judge.get("dispatch_context") or {}
@@ -277,7 +277,7 @@ elif op == "iterate-over-wall":
     # type names max_wall_seconds.
     init_a2("u4-bound-wall", decision="iterate", attempts=1,
             active_wall=1900, max_attempts=5, max_wall=1800, emit_count=1)
-    r = t.dispatch_tick(repo, "u4-bound-wall")
+    r = t.dispatch_pulse(repo, "u4-bound-wall")
     led = m.read_ledger(repo, "u4-bound-wall")
     judge = next(u for u in led["units"] if u["id"] == "judge")
     override = (judge.get("dispatch_context") or {}).get("bound_override") or {}
@@ -288,20 +288,20 @@ elif op == "iterate-over-wall":
     }))
 
 elif op == "finally-crash-accumulates":
-    # R5 / finally: _tick_body raises mid-flight (BoomBackend inside the
+    # R5 / finally: _pulse_body raises mid-flight (BoomBackend inside the
     # plan-loop). The finally clause must accumulate the active-time delta
-    # regardless. We measure: before tick: active_wall_seconds=A0; tick
-    # raises; after tick: active_wall_seconds > A0. Because the inner
-    # try/except in _tick_body_inner CATCHES the backend raise and converts
-    # it to a recorded stall (so _tick_body returns normally), we instead
+    # regardless. We measure: before pulse: active_wall_seconds=A0; pulse
+    # raises; after pulse: active_wall_seconds > A0. Because the inner
+    # try/except in _pulse_body_inner CATCHES the backend raise and converts
+    # it to a recorded stall (so _pulse_body returns normally), we instead
     # force the raise INSIDE the finally region by monkey-patching ledger
     # read to raise after the body started. Simpler: prove the finally fires
     # on the NORMAL return path too — accumulate_active_time fires once per
-    # tick regardless of return path. We probe a regular tick + a tick whose
-    # backend raises (the try/except path inside _tick_body_inner).
+    # pulse regardless of return path. We probe a regular pulse + a pulse whose
+    # backend raises (the try/except path inside _pulse_body_inner).
     init_a1("u4-fin-crash")
     before = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
-    t.dispatch_tick(repo, "u4-fin-crash")
+    t.dispatch_pulse(repo, "u4-fin-crash")
     after_clean = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
     # Now drive a raise via a BoomBackend on a plan-phase ledger (the inner
     # try/except converts it to a stall; the finally still fires).
@@ -315,7 +315,7 @@ elif op == "finally-crash-accumulates":
     class Boom:
         def next_plan_step(self, led):
             raise RuntimeError("boom")
-    t.dispatch_tick(repo, "u4-fin-raise", backend=Boom())
+    t.dispatch_pulse(repo, "u4-fin-raise", backend=Boom())
     after_raise = m.read_ledger(repo, "u4-fin-raise").get("active_wall_seconds", 0)
     print(json.dumps({
         "clean_advanced": after_clean > before,
@@ -332,7 +332,7 @@ elif op == "shortcircuit-suppressed-by-iteration":
     # met would be True. With it, met=False and the loop iterates.
     led = m.read_ledger(repo, "u4-shortcircuit")
     pred_before = led.get("exit_predicate_result") or {}
-    r = t.dispatch_tick(repo, "u4-shortcircuit")
+    r = t.dispatch_pulse(repo, "u4-shortcircuit")
     print(json.dumps({
         "iteration_pending_before": pred_before.get("iteration_pending"),
         "met_before": pred_before.get("met"),
@@ -342,14 +342,14 @@ elif op == "shortcircuit-suppressed-by-iteration":
 
 elif op == "a1-early-return":
     # R7 a1: no iteration block → advance_iteration_loop returns None at
-    # step 1. Zero ledger writes from the helper. The tick proceeds as
+    # step 1. Zero ledger writes from the helper. The pulse proceeds as
     # v0.2.1 (a fix-applied advance on the verdict-returned+blocker unit).
     init_a1("u4-a1")
     before = json.dumps(m.read_ledger(repo, "u4-a1")["units"][0], sort_keys=True)
     # Probe the helper directly to assert it returns None.
     led = m.read_ledger(repo, "u4-a1")
-    direct = t.tick_advance.advance_iteration_loop(repo, "u4-a1", led)
-    r = t.dispatch_tick(repo, "u4-a1")
+    direct = t.pulse_advance.advance_iteration_loop(repo, "u4-a1", led)
+    r = t.dispatch_pulse(repo, "u4-a1")
     after_state = m.read_ledger(repo, "u4-a1")["units"][0].get("state")
     print(json.dumps({
         "direct_is_none": direct is None,
@@ -368,23 +368,23 @@ elif op == "w-early-return":
                   units=[{"id": "W1", "state": "verdict-returned",
                           "findings": [{"severity": "blocker", "note": "x"}]}])
     led = m.read_ledger(repo, "u4-w")
-    direct = t.tick_advance.advance_iteration_loop(repo, "u4-w", led)
+    direct = t.pulse_advance.advance_iteration_loop(repo, "u4-w", led)
     print(json.dumps({"direct_is_none": direct is None}))
 
 elif op == "r9-last-attempt-guidance":
     # R9: iteration_attempts == max_attempts → INTENT carries "last attempt
     # before bound" guidance. The NEXT iterate decision (read at
     # attempts_made==max_attempts) will be overridden to exit by
-    # iteration.evaluate_decision (lib/iteration.py:136). We tick a non-
+    # iteration.evaluate_decision (lib/iteration.py:136). We pulse a non-
     # iterating ledger (decision=None with attempts=5 == max=5) so the
     # rearm path fires; the helper's branch 2 sees attempts==max and
     # prepends the warning to the operator_guidance body.
     # v0.3.0 F2 (ADV-3 off-by-one): pre-F2 this seeded attempts=4 (one
-    # tick too early — at attempts=4 with max=5, two more iterates would
+    # pulse too early — at attempts=4 with max=5, two more iterates would
     # be honored before bound trip, so the "next iterate trips bound"
     # text was a lie).
     init_a2("u4-r9-last", decision=None, attempts=5, max_attempts=5)
-    # Add a verdict-returned blocker unit so the tick produces a rearm.
+    # Add a verdict-returned blocker unit so the pulse produces a rearm.
     def seed(L):
         L["units"].append({
             "id": "X1", "state": "verdict-returned", "phase": "work",
@@ -395,7 +395,7 @@ elif op == "r9-last-attempt-guidance":
             "verdict_at": None, "dispatched_at": None, "attempt": 0,
         })
     m._with_locked_ledger(repo, "u4-r9-last", seed)
-    r = t.dispatch_tick(repo, "u4-r9-last")
+    r = t.dispatch_pulse(repo, "u4-r9-last")
     guidance = r.get("operator_guidance") or ""
     print(json.dumps({
         "action": r.get("action"),
@@ -403,20 +403,20 @@ elif op == "r9-last-attempt-guidance":
     }))
 
 elif op == "r9-bound-override-guidance":
-    # R9: bound_override just written on this tick. operator_guidance must
+    # R9: bound_override just written on this pulse. operator_guidance must
     # name WHICH bound + best-so-far. This is a stop intent (bound-exit),
     # NOT a rearm — but operator_guidance is built only for rearm. The
     # actual surface is the report.bound_override + report.best_so_far,
     # which IS in the bound-exit return value. Also, immediately AFTER the
-    # bound-exit a follow-up tick reads the same gate with bound_override
+    # bound-exit a follow-up pulse reads the same gate with bound_override
     # written; if it were to re-arm (a contrived scenario), guidance would
     # surface. For test purposes we probe the helper _iteration_guidance_
     # prefix directly with a primed ledger.
     init_a2("u4-r9-override", decision="iterate", attempts=5, max_attempts=5,
             emit_count=1)
-    # Run the tick — it bound-exits. The next call to _operator_guidance_for
+    # Run the pulse — it bound-exits. The next call to _operator_guidance_for
     # would surface the override; we probe the helper directly.
-    r = t.dispatch_tick(repo, "u4-r9-override")
+    r = t.dispatch_pulse(repo, "u4-r9-override")
     led = m.read_ledger(repo, "u4-r9-override")
     prefix = t._iteration_guidance_prefix(led)
     print(json.dumps({
@@ -428,7 +428,7 @@ elif op == "r9-bound-override-guidance":
 elif op == "kill-switch":
     # Kill-switch: CLAUDE_AUTO_DISABLE_ITERATION=1 alone (v0.3.0 F5 unfenced
     # this — no harness sentinel required) → advance_iteration_loop returns
-    # None at step 2. The iterate decision on disk is UNTOUCHED. Tick
+    # None at step 2. The iterate decision on disk is UNTOUCHED. Pulse
     # proceeds as if iteration didn't exist.
     init_a2("u4-killswitch", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
@@ -436,7 +436,7 @@ elif op == "kill-switch":
     os.environ["CLAUDE_AUTO_DISABLE_ITERATION"] = "1"
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
-        direct = t.tick_advance.advance_iteration_loop(repo, "u4-killswitch", led)
+        direct = t.pulse_advance.advance_iteration_loop(repo, "u4-killswitch", led)
     finally:
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
         # Don't unset the sentinel — tests/run.sh exports it for the whole
@@ -453,11 +453,11 @@ elif op == "kill-switch":
 
 elif op == "integration-a2-iterate":
     # Production-path drive: init A2-shape ledger; gate writes record_verdict
-    # + set_verdict_decision("iterate", payload={emit_count: 2}); tick re-
+    # + set_verdict_decision("iterate", payload={emit_count: 2}); pulse re-
     # emits plan-4/5 + resets judge. Mirrors v0.2.0 fix-pass I's pattern.
     init_a2("u4-int-a2", decision="iterate", attempts=0, max_attempts=5,
             emit_count=2)
-    t.dispatch_tick(repo, "u4-int-a2")
+    t.dispatch_pulse(repo, "u4-int-a2")
     led = m.read_ledger(repo, "u4-int-a2")
     new_plans = sorted(u["id"] for u in led["units"]
                        if u.get("phase") == "plan" and u["id"] not in
@@ -472,7 +472,7 @@ elif op == "integration-a2-iterate":
 elif op == "integration-a4-iterate":
     # A4-shape: 1 plan unit, 2 builders ("build-clarity", "build-perf"), and
     # a "compare" gate. Comparator writes decision="iterate" with emit_count=
-    # 1 → tick re-emits a 3rd builder + resets compare with extended
+    # 1 → pulse re-emits a 3rd builder + resets compare with extended
     # depends_on.
     p = m.ledger_path(repo, "u4-int-a4")
     if os.path.exists(p): os.unlink(p)
@@ -503,7 +503,7 @@ elif op == "integration-a4-iterate":
     m.record_verdict(repo, "u4-int-a4", "compare", [])
     m.set_verdict_decision(repo, "u4-int-a4", "compare", "iterate",
                             payload={"emit_count": 1})
-    t.dispatch_tick(repo, "u4-int-a4")
+    t.dispatch_pulse(repo, "u4-int-a4")
     led = m.read_ledger(repo, "u4-int-a4")
     builders = sorted(u["id"] for u in led["units"] if (u.get("id") or "").startswith("build-"))
     cmp_unit = next(u for u in led["units"] if u["id"] == "compare")
@@ -633,7 +633,7 @@ direct_is_none="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['direc
 assert_eq "True" "$direct_is_none"
 
 # ─── U4 Scenario 9: R9 last-attempt guidance ─────────────────────────────────
-it "U4 R9 last-attempt: tick at attempts == max surfaces 'last attempt before bound' in operator_guidance"
+it "U4 R9 last-attempt: pulse at attempts == max surfaces 'last attempt before bound' in operator_guidance"
 res="$(u4_driver r9-last-attempt-guidance)"
 has="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['guidance_has_last_attempt'])" "$res")"
 assert_eq "True" "$has"
@@ -663,7 +663,7 @@ else
 fi
 
 # ─── U4 Scenario 12: Integration A2 ITERATE (production write path) ──────────
-it "U4 Integration A2 ITERATE: record_verdict + set_verdict_decision(iterate, emit_count=2) → tick re-emits + resets"
+it "U4 Integration A2 ITERATE: record_verdict + set_verdict_decision(iterate, emit_count=2) → pulse re-emits + resets"
 res="$(u4_driver integration-a2-iterate)"
 new_plans="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['new_plan_ids']))" "$res")"
 attempts="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['iteration_attempts'])" "$res")"
@@ -701,25 +701,25 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 # U4 DELIBERATE-FAILS — Hand-Edit reverts that prove each new behavior is
 # load-bearing. Per memory feedback_deliberate_fail_revert_via_edit_not_inscript:
-# we Edit tick.py to a buggy shape, re-run the relevant test, restore via Edit.
-# Each control loads tick.py from a TMP COPY (so we don't mutate the canonical
+# we Edit pulse.py to a buggy shape, re-run the relevant test, restore via Edit.
+# Each control loads pulse.py from a TMP COPY (so we don't mutate the canonical
 # file on disk and risk parallel test pollution). The patch is a Python file
 # we drop into a tmpdir + invoke; this keeps the bash quoting trivial.
 # ════════════════════════════════════════════════════════════════════════════
 
-# Helper: copy tick.py to a tmp file, run the named patch (a python script in
+# Helper: copy pulse.py to a tmp file, run the named patch (a python script in
 # tests/unit/_df_patches/ — written inline below), then drive the probe op.
-u4_df_with_patched_tick() {
+u4_df_with_patched_pulse() {
   local patch_script="$1" probe_op="$2"
   local tmpdir; tmpdir="$(mktemp -d -t u4-df.XXXXXX)"
-  # B4: the tick is split across tick.py + tick_advance.py + tick_guidance.py.
+  # B4: the pulse is split across pulse.py + pulse_advance.py + pulse_guidance.py.
   # A DF anchor may live in any of the three, so copy all three into the tmpdir
   # and let the patch script (which takes the DIR) edit whichever file holds its
-  # anchor. The probe pre-loads the patched siblings so the patched tick picks
+  # anchor. The probe pre-loads the patched siblings so the patched pulse picks
   # them up instead of the canonical on-disk copies.
-  cp "$TICK_PY" "$tmpdir/tick.py"
-  cp "$AUTO_ROOT/lib/tick_advance.py" "$tmpdir/tick_advance.py"
-  cp "$AUTO_ROOT/lib/tick_guidance.py" "$tmpdir/tick_guidance.py"
+  cp "$PULSE_PY" "$tmpdir/pulse.py"
+  cp "$AUTO_ROOT/lib/pulse_advance.py" "$tmpdir/pulse_advance.py"
+  cp "$AUTO_ROOT/lib/pulse_guidance.py" "$tmpdir/pulse_guidance.py"
   "$PY" "$patch_script" "$tmpdir"
   local patch_rc=$?
   if [ "$patch_rc" -ne 0 ]; then
@@ -727,16 +727,16 @@ u4_df_with_patched_tick() {
     fail "DF patch script $patch_script failed with rc=$patch_rc"
     return 0
   fi
-  TICK_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
+  PULSE_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-tmpdir = os.environ["TICK_PY_OVERRIDE_DIR"]
-# Pre-load the patched siblings under the names tick.py looks up, masking
+tmpdir = os.environ["PULSE_PY_OVERRIDE_DIR"]
+# Pre-load the patched siblings under the names pulse.py looks up, masking
 # __file__ so load_lib_module's path-keyed cache accepts them (the canonical
-# tick.py does `load_lib_module("tick_advance")` etc.; the cache check requires
+# pulse.py does `load_lib_module("pulse_advance")` etc.; the cache check requires
 # the cached module's __file__ to equal the canonical lib path).
 def _preload(name):
     spec = importlib.util.spec_from_file_location(name, os.path.join(tmpdir, name + ".py"))
@@ -745,10 +745,10 @@ def _preload(name):
     spec.loader.exec_module(mod)
     mod.__file__ = os.path.join(auto_root, "lib", name + ".py")
     return mod
-_preload("tick_guidance")
-_preload("tick_advance")
-t_path = os.path.join(tmpdir, "tick.py")
-t_spec = importlib.util.spec_from_file_location("tick_patched", t_path)
+_preload("pulse_guidance")
+_preload("pulse_advance")
+t_path = os.path.join(tmpdir, "pulse.py")
+t_spec = importlib.util.spec_from_file_location("pulse_patched", t_path)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 # Re-use the production seeds from above; for brevity we re-init inline.
@@ -788,15 +788,15 @@ if op == "df-bound-skip":
     # iterates instead of bound-exiting → action should be rearm, not stop.
     _init_iter("u4-df-bound", decision="iterate", attempts=5,
                 max_attempts=5, emit_count=1)
-    r = t.dispatch_tick(repo, "u4-df-bound")
+    r = t.dispatch_pulse(repo, "u4-df-bound")
     print(json.dumps({"action": r.get("action"), "reason": r.get("reason")}))
 
 elif op == "df-shortcircuit-no-suppression":
     # Without iteration_pending in the short-circuit, the work-loop's
     # met=True (computed against all_units_terminal) would fire EARLY —
-    # tick exits "predicate-met" / "done" before iteration runs.
+    # pulse exits "predicate-met" / "done" before iteration runs.
     # NOTE: the predicate composition itself is in ledger.py and sets
-    # iteration_pending; the tick's short-circuit then must AND-NOT it.
+    # iteration_pending; the pulse's short-circuit then must AND-NOT it.
     # Since the composition has already ANDed met=False, the patched
     # short-circuit going via pred["met"] alone would still see False.
     # Instead, this DF tests the SECONDARY scenario: by editing the
@@ -806,7 +806,7 @@ elif op == "df-shortcircuit-no-suppression":
     # firing, the helper exits "predicate-met" instead of iterating.
     _init_iter("u4-df-shortcir", decision="iterate", attempts=0,
                 max_attempts=5, emit_count=1)
-    r = t.dispatch_tick(repo, "u4-df-shortcir")
+    r = t.dispatch_pulse(repo, "u4-df-shortcir")
     print(json.dumps({"action": r.get("action"), "reason": r.get("reason")}))
 
 elif op == "df-killswitch-ignored":
@@ -816,17 +816,17 @@ elif op == "df-killswitch-ignored":
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
         led = m.read_ledger(repo, "u4-df-kill")
-        direct = t.tick_advance.advance_iteration_loop(repo, "u4-df-kill", led)
+        direct = t.pulse_advance.advance_iteration_loop(repo, "u4-df-kill", led)
     finally:
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
     print(json.dumps({"direct_is_none": direct is None,
                        "action": (direct or {}).get("action")}))
 
 elif op == "df-finally-skipped":
-    # Patched tick.py removes the finally accumulate; a backend raise
-    # leaves active_wall_seconds unchanged. We drive a raise-tick (the
-    # inner try/except in _tick_body_inner captures the backend raise so
-    # the tick returns; the finally would otherwise still accumulate).
+    # Patched pulse.py removes the finally accumulate; a backend raise
+    # leaves active_wall_seconds unchanged. We drive a raise-pulse (the
+    # inner try/except in _pulse_body_inner captures the backend raise so
+    # the pulse returns; the finally would otherwise still accumulate).
     p = m.ledger_path(repo, "u4-df-fin")
     if os.path.exists(p): os.unlink(p)
     m.init_ledger(repo, "u4-df-fin", backend="ce", loop_phase="plan",
@@ -838,7 +838,7 @@ elif op == "df-finally-skipped":
         def next_plan_step(self, led):
             raise RuntimeError("boom")
     try:
-        t.dispatch_tick(repo, "u4-df-fin", backend=Boom())
+        t.dispatch_pulse(repo, "u4-df-fin", backend=Boom())
     except Exception:
         pass
     after = m.read_ledger(repo, "u4-df-fin").get("active_wall_seconds", 0)
@@ -854,7 +854,7 @@ PYEOF
 }
 
 # Write the patch scripts to disk (one per DF). Each script takes a single
-# argv ($1 = path to the temp tick.py) and rewrites it in place. Plain
+# argv ($1 = path to the temp pulse.py) and rewrites it in place. Plain
 # `src.replace(...)`, no regex — anchors are the exact source strings we ship.
 DF_DIR="$(mktemp -d -t u4-df-scripts.XXXXXX)"
 trap 'cleanup; rm -rf "$DF_DIR"' EXIT
@@ -864,7 +864,7 @@ cat > "$DF_DIR/df1_skip_bound.py" <<'PYEOF'
 even at attempts==max. After the patched advance_iteration_loop reads the
 result, it always takes the iterate branch — bound is functionally skipped."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
+p = os.path.join(sys.argv[1], "pulse_advance.py")  # B4: anchor moved to pulse_advance
 src = open(p).read()
 old = 'eval_result = iteration.evaluate_decision(\n        led, gate_unit_id, now_monotonic=time.monotonic()\n    )'
 new = (old + '\n'
@@ -879,7 +879,7 @@ PYEOF
 
 cat > "$DF_DIR/df2_short_circuit_no_suppress.py" <<'PYEOF'
 """DF#2: drop the `not pred.get("iteration_pending", False)` guard from the
-short-circuit at tick.py:564-576. The short-circuit then fires on raw
+short-circuit at pulse.py:564-576. The short-circuit then fires on raw
 `met` alone — but `recompute_predicate` ANDs iteration_pending into met (U2
 KTD §B), so even without the local guard, met is False on an iterate-
 pending ledger. To prove the GUARD is load-bearing in isolation, we ALSO
@@ -891,9 +891,9 @@ circuit to ALSO accept iteration_pending=True as a trigger, then disable
 the iteration helper. With both disabled, an iterate-pending ledger exits
 'predicate-met' instead of iterating."""
 import os, sys
-# B4: anchor 1 (advance_iteration_loop no-op) is in tick_advance.py; anchor 2
-# (the predicate-met short-circuit) is in tick.py's _try_predicate_met_shortcircuit.
-pa = os.path.join(sys.argv[1], "tick_advance.py")
+# B4: anchor 1 (advance_iteration_loop no-op) is in pulse_advance.py; anchor 2
+# (the predicate-met short-circuit) is in pulse.py's _try_predicate_met_shortcircuit.
+pa = os.path.join(sys.argv[1], "pulse_advance.py")
 src_a = open(pa).read()
 old_def = 'def advance_iteration_loop(repo_root, run_id, led):\n    """'
 new_def = 'def advance_iteration_loop(repo_root, run_id, led):\n    return None  # DF#2 PATCH\n    """'
@@ -902,7 +902,7 @@ if old_def not in src_a:
 src_a = src_a.replace(old_def, new_def, 1)
 open(pa, "w").write(src_a)
 
-pt = os.path.join(sys.argv[1], "tick.py")
+pt = os.path.join(sys.argv[1], "pulse.py")
 src_t = open(pt).read()
 old_sc = ('if pred.get("met") and not pred.get("iteration_pending", False) \\\n'
           '            and phase_grammar.is_terminal_phase(led, phase):')
@@ -917,7 +917,7 @@ PYEOF
 cat > "$DF_DIR/df3_no_fence.py" <<'PYEOF'
 """DF#3: remove the kill-switch fence so the env hatch is ignored."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
+p = os.path.join(sys.argv[1], "pulse_advance.py")  # B4: anchor moved to pulse_advance
 src = open(p).read()
 old = 'if is_iteration_disabled():\n        return None'
 new = 'if False:  # DF#3 PATCH — kill-switch removed\n        return None'
@@ -927,13 +927,13 @@ open(p, "w").write(src.replace(old, new))
 PYEOF
 
 cat > "$DF_DIR/df4_no_finally.py" <<'PYEOF'
-"""DF#4: remove the try/finally wrapping _tick_body_inner so the crashed-
-tick path no longer accumulates active_wall_seconds."""
+"""DF#4: remove the try/finally wrapping _pulse_body_inner so the crashed-
+pulse path no longer accumulates active_wall_seconds."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick.py")  # B4: _tick_body stays in tick.py
+p = os.path.join(sys.argv[1], "pulse.py")  # B4: _pulse_body stays in pulse.py
 src = open(p).read()
-old1 = "    t_start = time.monotonic()\n    try:\n        return _tick_body_inner("
-new1 = "    t_start = time.monotonic()\n    if True:\n        return _tick_body_inner("
+old1 = "    t_start = time.monotonic()\n    try:\n        return _pulse_body_inner("
+new1 = "    t_start = time.monotonic()\n    if True:\n        return _pulse_body_inner("
 if old1 not in src:
     sys.exit("DF#4 anchor 1 not found")
 src = src.replace(old1, new1)
@@ -957,7 +957,7 @@ PYEOF
 # DF#1 — Skip the bound check in advance_iteration_loop. Without it, the
 # iterate-over-attempts test would re-arm (iterate) instead of bound-exit.
 it "U4 DELIBERATE-FAIL #1: skipping the bound check → iterate at attempts==max re-iterates (NOT bound-exit)"
-res="$(u4_df_with_patched_tick "$DF_DIR/df1_skip_bound.py" df-bound-skip)"
+res="$(u4_df_with_patched_pulse "$DF_DIR/df1_skip_bound.py" df-bound-skip)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res")"
 # In the DF the bound is skipped → iterate path fires → action=rearm.
 if [ "$action" = "rearm" ]; then
@@ -971,7 +971,7 @@ fi
 # "predicate-met" (the suppression is no longer load-bearing). Proves the
 # iteration check + short-circuit-suppression contract.
 it "U4 DELIBERATE-FAIL #2: skipping the iteration check + dropping the AND-NOT clause → iterate ledger exits predicate-met"
-res="$(u4_df_with_patched_tick "$DF_DIR/df2_short_circuit_no_suppress.py" df-shortcircuit-no-suppression)"
+res="$(u4_df_with_patched_pulse "$DF_DIR/df2_short_circuit_no_suppress.py" df-shortcircuit-no-suppression)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res")"
 reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['reason'])" "$res")"
 if [ "$action" = "stop" ] && [ "$reason" = "predicate-met" ]; then
@@ -983,7 +983,7 @@ fi
 # DF#3 — Ignore the kill-switch. Without the fence, iteration runs even
 # with CLAUDE_AUTO_DISABLE_ITERATION=1.
 it "U4 DELIBERATE-FAIL #3: ignoring the kill-switch fence → iteration runs despite the env hatch"
-res="$(u4_df_with_patched_tick "$DF_DIR/df3_no_fence.py" df-killswitch-ignored)"
+res="$(u4_df_with_patched_pulse "$DF_DIR/df3_no_fence.py" df-killswitch-ignored)"
 none="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['direct_is_none'])" "$res")"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res")"
 if [ "$none" = "False" ] && [ "$action" = "iterate" ]; then
@@ -995,8 +995,8 @@ fi
 # DF#4 — Move accumulate_active_time out of the finally clause. With the
 # finally removed, a backend-raise return path doesn't call accumulate, so
 # active_wall_seconds stays at 0.
-it "U4 DELIBERATE-FAIL #4: moving accumulate_active_time out of finally → crashed-tick active_wall_seconds stays unchanged"
-res="$(u4_df_with_patched_tick "$DF_DIR/df4_no_finally.py" df-finally-skipped)"
+it "U4 DELIBERATE-FAIL #4: moving accumulate_active_time out of finally → crashed-pulse active_wall_seconds stays unchanged"
+res="$(u4_df_with_patched_pulse "$DF_DIR/df4_no_finally.py" df-finally-skipped)"
 advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res")"
 if [ "$advanced" = "False" ]; then
   pass
@@ -1011,19 +1011,19 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 
 # DF#5 patch: remove the try/except around advance_iteration_loop in
-# _tick_body_inner so an iteration-check raise propagates straight up. Without
-# the wrap, a malformed iterate ledger raises out of dispatch_tick → _cli
-# (which catches only TickError/LedgerError) → no JSON intent, wedge.
+# _pulse_body_inner so an iteration-check raise propagates straight up. Without
+# the wrap, a malformed iterate ledger raises out of dispatch_pulse → _cli
+# (which catches only PulseError/LedgerError) → no JSON intent, wedge.
 cat > "$DF_DIR/df5_no_iteration_try.py" <<'PYEOF'
 """DF#5: strip the try/except around advance_iteration_loop in
-_try_iteration_check (tick.py, post-B4) so a non-Ledger raise propagates
+_try_iteration_check (pulse.py, post-B4) so a non-Ledger raise propagates
 instead of being converted into a stop intent."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick.py")  # B4: the try/except is in _try_iteration_check (tick.py)
+p = os.path.join(sys.argv[1], "pulse.py")  # B4: the try/except is in _try_iteration_check (pulse.py)
 src = open(p).read()
 old = (
     "    try:\n"
-    "        iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)\n"
+    "        iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)\n"
     "    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
 )
 if old not in src:
@@ -1038,7 +1038,7 @@ end_idx = src.find(end_marker, start)
 if end_idx < 0:
     sys.exit("DF#5 anchor 2 not found")
 replacement = (
-    "    iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)\n"
+    "    iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)\n"
 )
 open(p, "w").write(src[:start] + replacement + src[end_idx:])
 PYEOF
@@ -1052,7 +1052,7 @@ cat > "$DF_DIR/df6_no_optional_emit.py" <<'PYEOF'
 unconditionally hardcodes producer=iterate_template. With a recipe that
 omits iteration.emit_template, iterate_template raises RecipeError."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
+p = os.path.join(sys.argv[1], "pulse_advance.py")  # B4: anchor moved to pulse_advance
 src = open(p).read()
 old = (
     '        if (led.get("iteration") or {}).get("emit_template"):\n'
@@ -1090,9 +1090,9 @@ PYEOF
 # attempts count.
 cat > "$DF_DIR/df7_off_by_one.py" <<'PYEOF'
 """DF#7: revert the off-by-one fix in _iteration_guidance_prefix so the
-"last attempt before bound" warning fires one tick too early."""
+"last attempt before bound" warning fires one pulse too early."""
 import os, sys
-p = os.path.join(sys.argv[1], "tick_guidance.py")  # B4: anchor moved to tick_guidance
+p = os.path.join(sys.argv[1], "pulse_guidance.py")  # B4: anchor moved to pulse_guidance
 src = open(p).read()
 old = 'if max_attempts is not None and attempts == int(max_attempts):'
 new = 'if max_attempts is not None and attempts == int(max_attempts) - 1:  # DF#7 PATCH'
@@ -1101,16 +1101,16 @@ if old not in src:
 open(p, "w").write(src.replace(old, new))
 PYEOF
 
-# Extend the u4_df_with_patched_tick probes with F2-specific ops. Rather than
+# Extend the u4_df_with_patched_pulse probes with F2-specific ops. Rather than
 # editing the inline heredoc above (which would require restructuring the
 # helper), define a sibling driver for the F2 probes — same shape, F2-only ops.
-f2_df_with_patched_tick() {
+f2_df_with_patched_pulse() {
   local patch_script="$1" probe_op="$2"
   local tmpdir; tmpdir="$(mktemp -d -t f2-df.XXXXXX)"
-  # B4: same three-file copy + sibling pre-load pattern as u4_df_with_patched_tick.
-  cp "$TICK_PY" "$tmpdir/tick.py"
-  cp "$AUTO_ROOT/lib/tick_advance.py" "$tmpdir/tick_advance.py"
-  cp "$AUTO_ROOT/lib/tick_guidance.py" "$tmpdir/tick_guidance.py"
+  # B4: same three-file copy + sibling pre-load pattern as u4_df_with_patched_pulse.
+  cp "$PULSE_PY" "$tmpdir/pulse.py"
+  cp "$AUTO_ROOT/lib/pulse_advance.py" "$tmpdir/pulse_advance.py"
+  cp "$AUTO_ROOT/lib/pulse_guidance.py" "$tmpdir/pulse_guidance.py"
   "$PY" "$patch_script" "$tmpdir"
   local patch_rc=$?
   if [ "$patch_rc" -ne 0 ]; then
@@ -1118,13 +1118,13 @@ f2_df_with_patched_tick() {
     fail "F2 DF patch script $patch_script failed with rc=$patch_rc"
     return 0
   fi
-  TICK_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
+  PULSE_PY_OVERRIDE_DIR="$tmpdir" "$PY" - "$AUTO_ROOT" "$REPO" "$probe_op" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-tmpdir = os.environ["TICK_PY_OVERRIDE_DIR"]
+tmpdir = os.environ["PULSE_PY_OVERRIDE_DIR"]
 def _preload(name):
     spec = importlib.util.spec_from_file_location(name, os.path.join(tmpdir, name + ".py"))
     mod = importlib.util.module_from_spec(spec)
@@ -1132,10 +1132,10 @@ def _preload(name):
     spec.loader.exec_module(mod)
     mod.__file__ = os.path.join(auto_root, "lib", name + ".py")
     return mod
-_preload("tick_guidance")
-_preload("tick_advance")
-t_path = os.path.join(tmpdir, "tick.py")
-t_spec = importlib.util.spec_from_file_location("tick_patched", t_path)
+_preload("pulse_guidance")
+_preload("pulse_advance")
+t_path = os.path.join(tmpdir, "pulse.py")
+t_spec = importlib.util.spec_from_file_location("pulse_patched", t_path)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
@@ -1207,12 +1207,12 @@ def _init_iter_bad_decision(run):
     m._with_locked_ledger(repo, run, corrupt)
 
 if op == "df-iteration-raise-unwrapped":
-    # DF#5: tick.py has no try/except around advance_iteration_loop. A
+    # DF#5: pulse.py has no try/except around advance_iteration_loop. A
     # raise inside iteration.evaluate_decision propagates out of dispatch
-    # _tick — we observe it as a Python exception, NOT a stop-intent.
+    # _pulse — we observe it as a Python exception, NOT a stop-intent.
     _init_iter_bad_decision("f2-df-raise")
     try:
-        r = t.dispatch_tick(repo, "f2-df-raise")
+        r = t.dispatch_pulse(repo, "f2-df-raise")
         # If no raise, the DF didn't trigger — buggy if dispatch returned a
         # stop intent (the F2 fix would produce one; the DF should NOT).
         print(json.dumps({"raised": False, "action": (r or {}).get("action"),
@@ -1224,10 +1224,10 @@ if op == "df-iteration-raise-unwrapped":
 elif op == "df-no-emit-raises":
     # DF#6: iterate_template ALWAYS called; on a no-emit_template recipe
     # this raises RecipeError. With the F2 fix, the iterate path uses the
-    # no-op producer instead and the tick re-arms cleanly.
+    # no-op producer instead and the pulse re-arms cleanly.
     _init_iter_no_emit("f2-df-noemit", attempts=0, max_attempts=5)
     try:
-        r = t.dispatch_tick(repo, "f2-df-noemit")
+        r = t.dispatch_pulse(repo, "f2-df-noemit")
         print(json.dumps({"raised": False, "action": (r or {}).get("action"),
                           "reason": (r or {}).get("reason")}))
     except Exception as exc:
@@ -1258,14 +1258,14 @@ PYEOF
 
 # DF#5 — Strip the try/except around advance_iteration_loop. A raise from
 # iteration.evaluate_decision (corrupted gate decision) propagates out of
-# dispatch_tick; the call site re-raises rather than emitting a stop intent.
+# dispatch_pulse; the call site re-raises rather than emitting a stop intent.
 it "F2 DELIBERATE-FAIL #5 (rel-1): WITHOUT the iteration try/except → a malformed-decision raise propagates instead of converting to a stop intent"
-res="$(f2_df_with_patched_tick "$DF_DIR/df5_no_iteration_try.py" df-iteration-raise-unwrapped)"
+res="$(f2_df_with_patched_pulse "$DF_DIR/df5_no_iteration_try.py" df-iteration-raise-unwrapped)"
 raised="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raised'])" "$res")"
 if [ "$raised" = "True" ]; then
   pass
 else
-  fail "DF#5 expected raised=True (the iteration check raises out of dispatch_tick); got $res"
+  fail "DF#5 expected raised=True (the iteration check raises out of dispatch_pulse); got $res"
 fi
 
 # DF#6 — Revert the F2 emit_template-optional branch. With the iterate path
@@ -1275,7 +1275,7 @@ fi
 # left intact — so the visible effect is a stop intent with
 # reason="iteration-check-failed". We assert EXACTLY that observable.
 it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op producer branch → an iterate path on a recipe missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
-res="$(f2_df_with_patched_tick "$DF_DIR/df6_no_optional_emit.py" df-no-emit-raises)"
+res="$(f2_df_with_patched_pulse "$DF_DIR/df6_no_optional_emit.py" df-no-emit-raises)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('action',''))" "$res")"
 reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('reason',''))" "$res")"
 if [ "$action" = "stop" ] && [ "$reason" = "iteration-check-failed" ]; then
@@ -1288,7 +1288,7 @@ fi
 # buggy version fires the "last attempt before bound" warning; the F2 fix
 # returns "" because attempts != max.
 it "F2 DELIBERATE-FAIL #7 (ADV-3): reverting the bound-warning fix → 'last attempt before bound' fires at attempts==max-1 (the F2-fixed code does NOT warn there)"
-res="$(f2_df_with_patched_tick "$DF_DIR/df7_off_by_one.py" df-off-by-one-warns-early)"
+res="$(f2_df_with_patched_pulse "$DF_DIR/df7_off_by_one.py" df-off-by-one-warns-early)"
 warns_early="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['warns_early'])" "$res")"
 attempts="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['attempts'])" "$res")"
 if [ "$warns_early" = "True" ] && [ "$attempts" = "4" ]; then
@@ -1300,7 +1300,7 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 # v0.3.0 G2 — exit_reason persistence (AN-W1) + LedgerError-subclass narrow
 # catch (rel-r2-2). Two GREEN-path tests + one DF cycle each. Both run against
-# the PRODUCTION tick.py (not a patched copy) so the assertions verify the
+# the PRODUCTION pulse.py (not a patched copy) so the assertions verify the
 # fix is wired in the canonical source. The DF cycles are documented as
 # operator-run Edit-revert recipes — the existing DF#5 sibling already
 # enforces the try/except's presence; G2's narrower contract is the
@@ -1314,15 +1314,15 @@ fi
 # Exception branch). The contract: exit_reason.kind == "iteration-check-failed"
 # AND exit_reason.error carries {type, message}. DF cycle (operator probe):
 # comment out the `ledger.set_exit_reason(...)` call in the Exception branch
-# of lib/tick.py → this test reports exit_reason=None.
+# of lib/pulse.py → this test reports exit_reason=None.
 it "G2 AN-W1: iteration-check crash persists exit_reason on the ledger (kind=iteration-check-failed)"
-g2_anw1="$("$PY" - "$AUTO_ROOT" "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+g2_anw1="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import json, sys, os, importlib.util
-auto_root, repo, tick_py, ledger_py = sys.argv[1:5]
+auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-t_spec = importlib.util.spec_from_file_location("tick", tick_py)
+t_spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 run = "g2-anw1"
@@ -1356,7 +1356,7 @@ def corrupt(L):
             dc["decision"] = "GARBAGE"
 m._with_locked_ledger(repo, run, corrupt)
 
-r = t.dispatch_tick(repo, run)
+r = t.dispatch_pulse(repo, run)
 after = m.read_ledger(repo, run)
 er = after.get("exit_reason") or {}
 err = er.get("error") or {}
@@ -1387,19 +1387,19 @@ fi
 # catch it via the NARROWED branch and emit reason="recipe-bug". The bare
 # `except ledger.LedgerError: raise` MUST come AFTER the subclass tuple, or
 # the parent catch would shadow the subclasses (they ARE LedgerError).
-# We monkey-patch advance_iteration_loop on the production tick module to
+# We monkey-patch advance_iteration_loop on the production pulse module to
 # raise UnknownUnit directly — same shape as a recipe-bug field bug.
-# DF cycle (operator probe): swap the except-order in lib/tick.py so the
+# DF cycle (operator probe): swap the except-order in lib/pulse.py so the
 # bare LedgerError catch precedes the subclass tuple → this test sees the
 # raise propagate (no stop intent, no exit_reason on the ledger).
 it "G2 rel-r2-2: ledger.UnknownUnit from advance_iteration_loop → stop reason=recipe-bug + exit_reason persisted"
-g2_recipe="$("$PY" - "$AUTO_ROOT" "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+g2_recipe="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import json, sys, os, importlib.util
-auto_root, repo, tick_py, ledger_py = sys.argv[1:5]
+auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 m = load_lib_module("ledger")
-t_spec = importlib.util.spec_from_file_location("tick", tick_py)
+t_spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 run = "g2-relr22"
@@ -1408,7 +1408,7 @@ if os.path.exists(p): os.unlink(p)
 # Plan-loop ledger so the iteration check normally returns None — but the
 # monkey-patched advance_iteration_loop forces an UnknownUnit raise
 # regardless of ledger shape. We seed it with one pending plan unit so
-# dispatch_tick reaches the iteration check.
+# dispatch_pulse reaches the iteration check.
 units = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
 m.init_ledger(repo, run, backend="ce", loop_phase="plan",
               phase_order=["plan","work"], terminal_phase="work",
@@ -1416,18 +1416,18 @@ m.init_ledger(repo, run, backend="ce", loop_phase="plan",
 
 # Monkey-patch the advance helper — replace advance_iteration_loop with one
 # that raises ledger.UnknownUnit. Post-B4 the function lives in the sibling
-# tick_advance module and the dispatcher calls it qualified
-# (tick_advance.advance_iteration_loop), so we patch it THERE (patching the
-# tick-module re-export alias would not affect the qualified call site). The
-# narrowed except in _tick_body_inner refers to the same `ledger` module
+# pulse_advance module and the dispatcher calls it qualified
+# (pulse_advance.advance_iteration_loop), so we patch it THERE (patching the
+# pulse-module re-export alias would not affect the qualified call site). The
+# narrowed except in _pulse_body_inner refers to the same `ledger` module
 # (shared via load_lib_module's __file__-keyed cache), so the isinstance
 # check matches.
 def _boom(repo_root, run_id, led):
     raise m.UnknownUnit("recipe-bug: gate_unit refers to a unit not in units[]")
-t.tick_advance.advance_iteration_loop = _boom
+t.pulse_advance.advance_iteration_loop = _boom
 
 try:
-    r = t.dispatch_tick(repo, run)
+    r = t.dispatch_pulse(repo, run)
     raised = False
     exc_type = None
 except Exception as exc:
@@ -1463,5 +1463,5 @@ fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "tick-iteration.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "pulse-iteration.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

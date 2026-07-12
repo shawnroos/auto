@@ -274,7 +274,7 @@ def load(name):
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
 orch = load("dispatcher"); ledger = load("ledger")
-ta = load("tick_advance")
+ta = load("pulse_advance")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)  # dispatched_at = now
 led = ledger.read_ledger(repo, run)

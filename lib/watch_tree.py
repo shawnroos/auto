@@ -56,7 +56,7 @@ def _parse_iso(value):
 def _seconds_between(start_iso, now_dt) -> int:
     """Whole seconds from `start_iso` to `now_dt`; -1 when start is unparseable.
 
-    Mirrors tick_advance._seconds_since (parse-then-diff), but takes an already-
+    Mirrors pulse_advance._seconds_since (parse-then-diff), but takes an already-
     parsed `now` so the render pass parses `now` exactly once.
     """
     started = _parse_iso(start_iso)

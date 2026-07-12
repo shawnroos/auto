@@ -182,7 +182,7 @@ rm -rf "$R4b"
 
 # ── Scenario 4c: sub-run with driver=self + stale last_beat → ALLOW
 # Regression for review round 1 finding C-1: the batch loop must apply
-# the dead-self-chain staleness gate. A sub-run whose tick chain died
+# the dead-self-chain staleness gate. A sub-run whose pulse chain died
 # (driver=self, last_beat far in the past) must NOT block stop forever.
 auto_test::it "committed batch with stale self-driven sub-run allows stop"
 R4c="$(make_fixture)"

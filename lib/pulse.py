@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """auto U4: one ScheduleWakeup-paced advance of the ledger.
 
-A *tick* is the unit of execution. Each tick does exactly ONE smallest-useful
+A *pulse* is the unit of execution. Each pulse does exactly ONE smallest-useful
 advance of the loop, then re-arms its own successor via `ScheduleWakeup`. The
-tick reads ALL loop state from the disk ledger (the durable source of truth) —
+pulse reads ALL loop state from the disk ledger (the durable source of truth) —
 it runs in a subprocess and treats conversation context as irrelevant, so it is
-safe under the non-stateless re-injection of a `ScheduleWakeup`-fired tick.
+safe under the non-stateless re-injection of a `ScheduleWakeup`-fired pulse.
 
 THE RE-ARM BOUNDARY (read this — it is the load-bearing seam):
 
-    `ScheduleWakeup` is a MODEL TOOL, not a CLI. tick.py CANNOT call it.
-    Instead, tick.py COMPUTES the re-arm intent and emits it on stdout as a
+    `ScheduleWakeup` is a MODEL TOOL, not a CLI. pulse.py CANNOT call it.
+    Instead, pulse.py COMPUTES the re-arm intent and emits it on stdout as a
     JSON object:
 
-        {"action": "rearm",  "delay": 60, "prompt": "/auto:auto-tick <run>", ...}
+        {"action": "rearm",  "delay": 60, "prompt": "/auto:auto-pulse <run>", ...}
         {"action": "stop",   "reason": "predicate-met" | "seam-pause", ...}
-        {"action": "noop",   "reason": "lock-held-by-live-tick"}
+        {"action": "noop",   "reason": "lock-held-by-live-pulse"}
 
-    The shell/driver layer (the model driving the tick) reads this and, when
+    The shell/driver layer (the model driving the pulse) reads this and, when
     action == "rearm", issues the actual `ScheduleWakeup(delay, prompt)` tool
     call. Do NOT look for a ScheduleWakeup binary — there isn't one.
 
-The tick NEVER dispatches (the dispatcher owns `pending → dispatched`) and
+The pulse NEVER dispatches (the dispatcher owns `pending → dispatched`) and
 NEVER writes verdicts (each background agent self-writes its own `findings[]`).
-The tick only:
+The pulse only:
   * reads the ledger,
   * detects stalled units and halts them + their transitive dependents while
     advancing independent siblings (the parallel-fan-out promise),
@@ -58,7 +58,7 @@ import time
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
-    build_tick_prompt,
+    build_pulse_prompt,
     load_ledger,
     load_lib_module,
     test_hatch_enabled,
@@ -72,12 +72,12 @@ phase_grammar = load_lib_module("phase-grammar")
 # B4: the advance + stall-detection logic (advance_plan_loop / advance_work_loop
 # / advance_iteration_loop / detect_and_halt_stalled / _maybe_seam / …) and the
 # guidance + report builders (_operator_guidance_for / _build_report / …) live
-# in sibling modules. tick.py is the dispatcher that orchestrates them; the
-# dependency is one-way (tick.py → tick_advance → tick_guidance; no back-edge).
-tick_advance = load_lib_module("tick_advance")
-tick_guidance = load_lib_module("tick_guidance")
+# in sibling modules. pulse.py is the dispatcher that orchestrates them; the
+# dependency is one-way (pulse.py → pulse_advance → pulse_guidance; no back-edge).
+pulse_advance = load_lib_module("pulse_advance")
+pulse_guidance = load_lib_module("pulse_guidance")
 
-# Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
+# Re-arm delay between pulses. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
 # allows. The driver MAY override via --delay (e.g. coarsen under pressure).
 DEFAULT_REARM_DELAY_SECONDS = 60
@@ -95,7 +95,7 @@ def watchdog_wakeup_delay(ledger_dict):
     `ScheduleWakeup` at dispatch time so `detect_and_halt_stalled` fires while
     work is in flight (not only "when nothing is in flight"). This helper gives
     that wakeup a deterministic delay: the MINIMUM `stall_threshold_seconds`
-    (falling back to the default) across all `dispatched` units, so the tick
+    (falling back to the default) across all `dispatched` units, so the pulse
     fires no later than the soonest in-flight unit's stall deadline. The result
     is CLAMPED to `[60, 3600]s` (the ScheduleWakeup bound). When NO unit is
     `dispatched`, returns None — a no-op sentinel the driver reads as "arm
@@ -115,62 +115,62 @@ def watchdog_wakeup_delay(ledger_dict):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Errors. TickError is DEFINED in tick_advance (raised by advance_plan_loop);
+# Errors. PulseError is DEFINED in pulse_advance (raised by advance_plan_loop);
 # re-exported here so the single class identity is shared — resolve_backend
 # below and _cli's catch both reference the same class as advance_plan_loop's
 # raises.
 
-TickError = tick_advance.TickError
+PulseError = pulse_advance.PulseError
 
 # PRODUCTION re-exports (U18: the test-only alias block was deleted). The pure
 # advance/stall helpers (advance_plan_loop, advance_work_loop,
 # advance_brainstorm_loop, advance_iteration_loop, detect_and_halt_stalled,
-# _maybe_seam) live in tick_advance; internal callers in this file already reach
-# them through the qualified module name (tick_advance.X) so the dependency stays
-# grep-visible, and the tests now reach them the same way (t.tick_advance.X).
+# _maybe_seam) live in pulse_advance; internal callers in this file already reach
+# them through the qualified module name (pulse_advance.X) so the dependency stays
+# grep-visible, and the tests now reach them the same way (t.pulse_advance.X).
 # Only two genuine cross-module re-exports survive here:
-#   * advance_to_phase — lib/auto-resume.py calls tick.advance_to_phase on the
+#   * advance_to_phase — lib/auto-resume.py calls pulse.advance_to_phase on the
 #     manual seam→work resume path (a production dependency).
 #   * _iteration_guidance_prefix — the guidance-surface re-export.
-advance_to_phase = tick_advance.advance_to_phase
-_iteration_guidance_prefix = tick_guidance._iteration_guidance_prefix
+advance_to_phase = pulse_advance.advance_to_phase
+_iteration_guidance_prefix = pulse_guidance._iteration_guidance_prefix
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Tick-level double-drive lock (DISTINCT from ledger.py's internal RMW lock).
+# Pulse-level double-drive lock (DISTINCT from ledger.py's internal RMW lock).
 #
 # ledger.py's flock guards individual read-modify-write operations (the
-# lost-update guard). THIS lock is the engine's "another live tick is already
-# driving this run" guard: held for the WHOLE tick, acquired NON-BLOCKING, so a
-# second concurrent tick returns a no-op instead of queueing behind the first.
+# lost-update guard). THIS lock is the engine's "another live pulse is already
+# driving this run" guard: held for the WHOLE pulse, acquired NON-BLOCKING, so a
+# second concurrent pulse returns a no-op instead of queueing behind the first.
 # It is process-bound — released on exit (clean OR crash), so a cleanly-exited
-# seam/predicate-met tick leaves NO stale wedge.
+# seam/predicate-met pulse leaves NO stale wedge.
 
 
-def _tick_lock_path(repo_root: str, run_id: str) -> str:
+def _pulse_lock_path(repo_root: str, run_id: str) -> str:
     # Sibling of the ledger / RMW-lock files; keyed by the same slug.
     lpath = ledger.lock_path(repo_root, run_id)
-    return lpath[: -len(".lock")] + ".tick.lock"
+    return lpath[: -len(".lock")] + ".pulse.lock"
 
 
-class _TickLockHeld(Exception):
-    """Raised when another live tick already holds the run's tick lock."""
+class _PulseLockHeld(Exception):
+    """Raised when another live pulse already holds the run's pulse lock."""
 
 
-class _tick_lock:
-    """Context manager: non-blocking exclusive flock for the duration of a tick.
+class _pulse_lock:
+    """Context manager: non-blocking exclusive flock for the duration of a pulse.
 
-    Honors CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 (test-only) to skip acquisition,
+    Honors CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 (test-only) to skip acquisition,
     so a deliberate-fail test can prove the double-drive guard is real. The
     hatch is FENCED: only honored when CLAUDE_AUTO_TEST_HARNESS=1 is ALSO set
     (sentinel exported by tests/run.sh — task #31). A stray production export
-    of NO_TICK_LOCK alone has no effect.
+    of NO_PULSE_LOCK alone has no effect.
     """
 
     def __init__(self, repo_root: str, run_id: str):
-        self._path = _tick_lock_path(repo_root, run_id)
+        self._path = _pulse_lock_path(repo_root, run_id)
         self._fh = None
-        self._no_lock = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_TICK_LOCK")
+        self._no_lock = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_PULSE_LOCK")
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self._path) or ".", mode=0o700, exist_ok=True)
@@ -187,8 +187,8 @@ class _tick_lock:
             except OSError:
                 self._fh.close()
                 self._fh = None
-                raise _TickLockHeld(
-                    f"another live tick holds the lock for run {run_id_of(self._path)!r}"
+                raise _PulseLockHeld(
+                    f"another live pulse holds the lock for run {run_id_of(self._path)!r}"
                 )
         return self
 
@@ -204,20 +204,20 @@ class _tick_lock:
         return False
 
 
-def run_id_of(tick_lock_path: str) -> str:
-    base = os.path.basename(tick_lock_path)
-    return base[: -len(".tick.lock")] if base.endswith(".tick.lock") else base
+def run_id_of(pulse_lock_path: str) -> str:
+    base = os.path.basename(pulse_lock_path)
+    return base[: -len(".pulse.lock")] if base.endswith(".pulse.lock") else base
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Backend boundary (six-op interface, per the plan / U6a contract).
 #
 # For U4 the backend call boundary is STUBBABLE: a backend is any object
-# exposing the ops the tick needs. The tick only ever calls:
+# exposing the ops the pulse needs. The pulse only ever calls:
 #   * next_plan_step(ledger) -> "plan" | "deepen" | "review_plan" | "done"
 #   * plan(scope) / deepen(plan) / review_plan(plan)   (the chosen step)
-# Work-loop ticks apply a fix as a pure ledger state transition and do NOT need
-# a backend op (the fix's *content* is produced out-of-band; the tick records
+# Work-loop pulses apply a fix as a pure ledger state transition and do NOT need
+# a backend op (the fix's *content* is produced out-of-band; the pulse records
 # only the state change — verdict-returned → fixed).
 #
 # U6b ships the real `native` / `ce` backends. U4 resolves a backend via
@@ -228,7 +228,7 @@ def resolve_backend(name: str):
     """Resolve a named backend to a callable object.
 
     U6b provides real backends (`lib/backend-native.py`, `lib/backend-ce.py`).
-    Until then, a missing backend module raises a clean TickError — the tick's
+    Until then, a missing backend module raises a clean PulseError — the pulse's
     try/except converts that into a recorded `last_error` + `stalled` rather
     than crashing the run (so a half-built engine fails legibly, not silently).
     """
@@ -238,10 +238,10 @@ def resolve_backend(name: str):
     }
     fname = candidates.get(name)
     if fname is None:
-        raise TickError(f"unknown backend: {name!r}")
+        raise PulseError(f"unknown backend: {name!r}")
     apath = os.path.join(_LIB_DIR, fname)
     if not os.path.exists(apath):
-        raise TickError(
+        raise PulseError(
             f"backend {name!r} not yet implemented (expected {fname}; U6b provides it)"
         )
     spec = importlib.util.spec_from_file_location(f"backend_{name}", apath)
@@ -255,16 +255,16 @@ def resolve_backend(name: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# The tick's public re-arm/stop/noop envelope (the contract at the top of this
+# The pulse's public re-arm/stop/noop envelope (the contract at the top of this
 # file). ONE constructor per action so every emit site shares the exact key set
 # and order the stdout-contract tests assert. NOTE: the iteration channel's
-# advance/iterate/stop returns (tick_advance.advance_iteration_loop) are a
-# SEPARATE decision surface — tick.py consumes them unchanged, never builds them.
+# advance/iterate/stop returns (pulse_advance.advance_iteration_loop) are a
+# SEPARATE decision surface — pulse.py consumes them unchanged, never builds them.
 
 
 def _rearm_intent(run_id, *, delay, prompt, advance, stalled, halted,
                   operator_guidance):
-    """The ``rearm`` envelope — "schedule the next tick after ``delay`` s"."""
+    """The ``rearm`` envelope — "schedule the next pulse after ``delay`` s"."""
     return {
         "action": "rearm",
         "run": run_id,
@@ -295,15 +295,15 @@ def _stop_intent(run_id, reason, *, error=None, report=None, advance=None):
 
 
 def _noop_intent(run_id, reason):
-    """The ``noop`` envelope — a live tick already holds the lock."""
+    """The ``noop`` envelope — a live pulse already holds the lock."""
     return {"action": "noop", "reason": reason, "run": run_id}
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# The tick.
+# The pulse.
 
 
-def dispatch_tick(
+def dispatch_pulse(
     repo_root,
     run_id,
     *,
@@ -314,40 +314,40 @@ def dispatch_tick(
     """Perform ONE ScheduleWakeup-paced advance. Returns the re-arm intent dict.
 
     The returned dict's `action` is one of:
-      * "noop"  — another live tick holds the lock (double-drive guard); no
-                  ledger mutation happened this tick.
+      * "noop"  — another live pulse holds the lock (double-drive guard); no
+                  ledger mutation happened this pulse.
       * "stop"  — the chain ends (predicate met, or a seam pause). The driver
                   does NOT issue a ScheduleWakeup.
       * "rearm" — the driver SHOULD issue ScheduleWakeup(delay, prompt) for the
-                  next tick.
+                  next pulse.
 
     NOTE: this function does NOT call ScheduleWakeup (it is a model tool, not a
     CLI). It only computes the intent; the driver layer issues the tool call.
     """
     try:
-        with _tick_lock(repo_root, run_id):
-            return _tick_body(
+        with _pulse_lock(repo_root, run_id):
+            return _pulse_body(
                 repo_root, run_id, backend=backend, auto=auto, delay=delay
             )
-    except _TickLockHeld:
-        # Another live tick is driving this run — no-op (the double-drive guard).
-        return _noop_intent(run_id, "lock-held-by-live-tick")
+    except _PulseLockHeld:
+        # Another live pulse is driving this run — no-op (the double-drive guard).
+        return _noop_intent(run_id, "lock-held-by-live-pulse")
 
 
-def _tick_body(repo_root, run_id, *, backend, auto, delay):
-    # The plugin-qualified re-arm command (see _bootstrap.TICK_COMMAND for the
-    # "must be `/auto:auto-tick`, not bare `/auto-tick`" hazard).
-    rearm_prompt = build_tick_prompt(run_id)
+def _pulse_body(repo_root, run_id, *, backend, auto, delay):
+    # The plugin-qualified re-arm command (see _bootstrap.PULSE_COMMAND for the
+    # "must be `/auto:auto-pulse`, not bare `/auto-pulse`" hazard).
+    rearm_prompt = build_pulse_prompt(run_id)
     now = _now_dt()
     now_iso = ledger.now_iso()
     # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of
-    # _tick_body so the `finally` clause below can accumulate the delta on
-    # EVERY return path INCLUDING the except path (crashed-tick deltas land in
+    # _pulse_body so the `finally` clause below can accumulate the delta on
+    # EVERY return path INCLUDING the except path (crashed-pulse deltas land in
     # the ledger). The finally wraps the whole body; release happens inside
-    # the tick lock (dispatch_tick owns the lock, _tick_body runs inside).
+    # the pulse lock (dispatch_pulse owns the lock, _pulse_body runs inside).
     t_start = time.monotonic()
     try:
-        return _tick_body_inner(
+        return _pulse_body_inner(
             repo_root, run_id, backend=backend, auto=auto, delay=delay,
             rearm_prompt=rearm_prompt, now=now, now_iso=now_iso,
         )
@@ -363,7 +363,7 @@ def _tick_body(repo_root, run_id, *, backend, auto, delay):
             pass
 
 
-def _tick_body_inner(
+def _pulse_body_inner(
     repo_root, run_id, *, backend, auto, delay, rearm_prompt, now, now_iso
 ):
     """Flat dispatcher over short-circuit helpers (B6 decomposition).
@@ -398,7 +398,7 @@ def _tick_body_inner(
             repo_root, run_id, led, phase=phase)) is not None:
         return intent
 
-    led, halted_ids, newly_stalled = tick_advance.detect_and_halt_stalled(
+    led, halted_ids, newly_stalled = pulse_advance.detect_and_halt_stalled(
         repo_root, run_id, led, now
     )
 
@@ -490,7 +490,7 @@ def _try_iteration_check(
     inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
     malformed gate decision, KeyError on a missing gate unit, RecipeError on
     a misshapen emit_template) DOES NOT propagate to _cli — which catches
-    only (TickError, LedgerError) and exits with no JSON intent (the harness
+    only (PulseError, LedgerError) and exits with no JSON intent (the harness
     never sees a rearm and the run wedges). Instead, we mark the loop done +
     manual (so an orphan check never mistakes a wedged run for a live one)
     AND emit a stop intent carrying the diagnostic. LedgerError is re-raised
@@ -502,7 +502,7 @@ def _try_iteration_check(
     produce one, not silently exit.
     """
     try:
-        iteration_result = tick_advance.advance_iteration_loop(repo_root, run_id, led)
+        iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)
     except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
         # v0.3.0 G2 / rel-r2-2: recipe-bug LedgerError subclasses signal a
         # mis-built caller (unknown gate unit id, illegal transition, stale
@@ -542,10 +542,10 @@ def _try_iteration_check(
         action = iteration_result.get("action")
         if action == "stop":
             # Bound-exit: the loop is "done" already; the finally still fires
-            # to accumulate the active-time delta for this tick.
+            # to accumulate the active-time delta for this pulse.
             return iteration_result, led
         if action == "iterate":
-            # New units emitted + gate reset to pending; the next tick will
+            # New units emitted + gate reset to pending; the next pulse will
             # see fresh pending units for the dispatcher to dispatch. Re-
             # read the ledger to surface the iteration in the rearm intent
             # (operator-diagnostics + so /auto-status sees the new units).
@@ -562,7 +562,7 @@ def _try_iteration_check(
                 },
                 stalled=[],
                 halted=[],
-                operator_guidance=tick_guidance._operator_guidance_for(phase, None, led_now),
+                operator_guidance=pulse_guidance._operator_guidance_for(phase, None, led_now),
             ), led
         # action == "advance": fall through to the standard flow. The gate
         # said "advance"; the existing predicate-met short-circuit (now
@@ -584,7 +584,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
       * WORK-met (or seam) → done (terminal exit, emit report).
       * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
         it to seam (manual) or work (auto); `done` is NEVER a plan exit.
-    A seam-phase tick has its own branch below (re-affirm pause).
+    A seam-phase pulse has its own branch below (re-affirm pause).
 
     v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
     layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
@@ -613,7 +613,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
-        report = tick_guidance._build_report(led)
+        report = pulse_guidance._build_report(led)
         return _stop_intent(run_id, "predicate-met", report=report)
     return None
 
@@ -623,7 +623,7 @@ def _dispatch_phase_advance(
 ):
     """Step 3 — the ONE advance, inside try/except.
 
-    Returns (advance_result, terminal_intent_or_None). A seam-phase tick
+    Returns (advance_result, terminal_intent_or_None). A seam-phase pulse
     short-circuits with a terminal intent; every other phase returns an
     advance_result for the dispatcher to carry forward. No refreshed `led` is
     returned: the caller's downstream steps (beat re-stamp, post-advance
@@ -639,13 +639,13 @@ def _dispatch_phase_advance(
         if phase == "plan":
             if backend is None:
                 backend = resolve_backend(led.get("adapter"))  # "adapter": format-v1 key; flips in U6
-            advance_result = tick_advance.advance_plan_loop(
+            advance_result = pulse_advance.advance_plan_loop(
                 repo_root, run_id, led, backend
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
             # whether the plan step closed the gaps.
             led = ledger.read_ledger(repo_root, run_id)
-            advance_result = tick_advance._maybe_seam(
+            advance_result = pulse_advance._maybe_seam(
                 repo_root, run_id, led, auto=auto, advance_result=advance_result
             )
         elif phase == "brainstorm":
@@ -653,20 +653,20 @@ def _dispatch_phase_advance(
             # predicate-met exit (KTD-3); it advances to plan ONLY via the U8
             # producer. advance_brainstorm_loop fires that producer when the
             # brainstorm unit is complete + has its requirements-doc, else
-            # returns {"advanced":"none"} so this tick re-arms (the model is
+            # returns {"advanced":"none"} so this pulse re-arms (the model is
             # still working the brainstorm step). Mirrors the plan→work flip.
-            advance_result = tick_advance.advance_brainstorm_loop(
+            advance_result = pulse_advance.advance_brainstorm_loop(
                 repo_root, run_id, led
             )
             # The producer (re)wrote loop_phase + plan unit; the caller's
             # downstream beat re-stamp + rearm intent re-read by (repo, run),
             # so no led refresh is needed here.
         elif phase == "work":
-            advance_result = tick_advance.advance_work_loop(
+            advance_result = pulse_advance.advance_work_loop(
                 repo_root, run_id, led, halted_ids
             )
         elif phase == "seam":
-            # A seam tick should not normally fire (the seam does not re-arm),
+            # A seam pulse should not normally fire (the seam does not re-arm),
             # but if one does, re-affirm the pause and stop.
             ledger.set_loop(
                 repo_root,
@@ -685,10 +685,10 @@ def _dispatch_phase_advance(
         # Find the unit that was in flight (best-effort: the most recently
         # dispatched unit). For a plan-step raise with no unit dispatched, we
         # still record the error on the run via the seam/manual path.
-        in_flight = tick_guidance._most_recently_dispatched(led)
+        in_flight = pulse_guidance._most_recently_dispatched(led)
         recorded = False
         if in_flight is not None:
-            recorded = tick_advance.record_stall_error(
+            recorded = pulse_advance.record_stall_error(
                 repo_root, run_id, in_flight, call, message, now_iso
             )
         advance_error = {
@@ -721,12 +721,12 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
     field, never re-derive). PHASE-AWARE (gap #4): only a TERMINAL-phase
     predicate routes to `done`, decided by phase_grammar.is_terminal_phase
     (KTD-3) so a non-work-terminal recipe stops at ITS terminal phase (the old
-    `phase == "work"` allowlist never stopped a non-work terminal). A plan tick
+    `phase == "work"` allowlist never stopped a non-work terminal). A plan pulse
     already routed through `_maybe_seam` (seam/auto-flip); never let the
     post-advance met-check turn a met PLAN predicate into `done` (that would
     skip the seam). After an auto-flip the ledger phase is now "work", but this
-    tick STARTED in plan, so we gate on the start-of-tick `phase` to leave the
-    just-flipped work loop to its own first work tick.
+    pulse STARTED in plan, so we gate on the start-of-pulse `phase` to leave the
+    just-flipped work loop to its own first work pulse.
     """
     led = ledger.read_ledger(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
@@ -737,7 +737,7 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
         return _stop_intent(
             run_id,
             "predicate-met-after-advance",
-            report=tick_guidance._build_report(led),
+            report=pulse_guidance._build_report(led),
             advance=advance_result,
         )
     return None
@@ -752,7 +752,7 @@ def _build_rearm_intent(
     v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
     reading the INTENT can't miss the prepare/execute contract. The plan-loop
     is the most common operator trap (field bug 2026-05-25, second report:
-    agent ticked 5 times expecting units to materialize; ledger stayed at
+    agent pulsed 5 times expecting units to materialize; ledger stayed at
     units=[] because they never ran the prepared /ce-plan invocation). The
     guidance is phase-aware: plan-loop names the invocation + the gaps_open
     guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
@@ -765,11 +765,11 @@ def _build_rearm_intent(
         advance=advance_result,
         stalled=newly_stalled,
         halted=halted_ids,
-        operator_guidance=tick_guidance._operator_guidance_for(
+        operator_guidance=pulse_guidance._operator_guidance_for(
             phase, advance_result, led_now
         ),
     )
-    gap_guard = tick_guidance._gaps_open_guard(phase, led_now)
+    gap_guard = pulse_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
         intent["gaps_open_guard"] = gap_guard
     return intent
@@ -780,12 +780,12 @@ def _now_dt():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# CLI (lib/tick.sh routes through this). Positional + flags; never interpolates
+# CLI (lib/pulse.sh routes through this). Positional + flags; never interpolates
 # into a shell. Emits the re-arm intent as JSON on stdout.
 
 
 def _cli(argv):
-    parser = argparse.ArgumentParser(prog="tick.py", add_help=True)
+    parser = argparse.ArgumentParser(prog="pulse.py", add_help=True)
     parser.add_argument("run_id", help="the run id to advance")
     parser.add_argument(
         "--repo",
@@ -805,17 +805,17 @@ def _cli(argv):
         return int(exc.code or 2)
 
     try:
-        result = dispatch_tick(
+        result = dispatch_pulse(
             args.repo,
             args.run_id,
             auto=args.auto,
             delay=args.delay,
         )
     except ledger.LedgerNotFound as exc:
-        sys.stderr.write(f"tick.py: {exc}\n")
+        sys.stderr.write(f"pulse.py: {exc}\n")
         return 1
-    except (TickError, ledger.LedgerError) as exc:
-        sys.stderr.write(f"tick.py: {exc}\n")
+    except (PulseError, ledger.LedgerError) as exc:
+        sys.stderr.write(f"pulse.py: {exc}\n")
         return 1
 
     json.dump(result, sys.stdout, indent=2, sort_keys=True)

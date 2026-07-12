@@ -8,13 +8,13 @@ Show the ledger and health of an auto run.
 `/auto-status` reads the durable ledger at
 `<repo>/.claude/auto/<run-slug>.json` and reports the loop phase, the
 cached exit-predicate result (blockers / majors / minors / gaps_open and
-whether it is met), per-unit states, the driver (`self` while a tick chain
+whether it is met), per-unit states, the driver (`self` while a pulse chain
 is self-pacing, `manual` when paused awaiting resume), and liveness
 (`last_beat_at` vs the orphan GRACE). It surfaces stalled units with their
 `last_error` cause and, at exit, the remaining minors report for operator
 promotion.
 
-It is read-only — it never mutates the ledger or arms a tick.
+It is read-only — it never mutates the ledger or arms a pulse.
 
 ### Iteration section (v0.3.0)
 
@@ -38,13 +38,13 @@ units list. Fields:
 - `iteration_pending` — the cached
   `exit_predicate_result.iteration_pending` bool (KTD §B / U2): true iff
   the gate's effective decision is `iterate` and the bound is unbreached,
-  which short-circuits an otherwise-met predicate so the tick yields back
+  which short-circuits an otherwise-met predicate so the pulse yields back
   for another work pass.
 - `kill_switch` — rendered when the operator has set
   `CLAUDE_AUTO_DISABLE_ITERATION=1` (post-F5 unfence; the test-harness
   sentinel is no longer required). Printed as `DISABLED via
   CLAUDE_AUTO_DISABLE_ITERATION`. Indicates the iteration check is
-  short-circuited at every tick — the recipe behaves as v0.2.x for the
+  short-circuited at every pulse — the recipe behaves as v0.2.x for the
   duration the env var is set.
 
 Each unit's listing also gains a `bound_exit:` sub-bullet (alongside
@@ -77,7 +77,7 @@ diagnostic). The line carries `kind: <error-type>: <message>`. Two
 `loop_phase=done` write, so the operator surface can distinguish a
 crash-marked-done run from a clean exit. The transient harness stop
 intent (`{action: "stop", reason: "..."}`) carries the same `kind` —
-both are written by `lib/tick.py`'s F2 / G2 catches.
+both are written by `lib/pulse.py`'s F2 / G2 catches.
 
 ## Argument handling (dispatcher routes BEFORE invoking the script)
 

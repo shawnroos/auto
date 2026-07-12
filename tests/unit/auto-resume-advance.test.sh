@@ -5,8 +5,8 @@
 # advance is the general affordance for auto's missing concept of phase-
 # satisfaction: the driving agent tells auto a phase is already done so it stops
 # re-deriving finished work. Phase-aware:
-#   * plan  → mark satisfied (plan_step=review_plan, gaps_open=0) + arm a tick;
-#             the next tick enumerates straight to work, no re-planning.
+#   * plan  → mark satisfied (plan_step=review_plan, gaps_open=0) + arm a pulse;
+#             the next pulse enumerates straight to work, no re-planning.
 #   * seam  → identical to continue (seam→work).
 #   * work  → no-op (work advances by unit verdicts, not by fiat).
 
@@ -43,7 +43,7 @@ def load(name, path):
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
 resume = load("auto_resume", os.path.join(auto_root, "lib", "auto-resume.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 # v0.6.x: advance re-arms a self-driven run, so it re-records the driving session
@@ -75,13 +75,13 @@ if scenario == "plan":
     led = read()
     epr = led.get("exit_predicate_result") or {}
     emitted = out.getvalue().strip()
-    is_arm = '"action": "arm-tick"' in emitted or '"action":"arm-tick"' in emitted
-    # Then a tick (model stashed the enumerated units) → should reach work.
+    is_arm = '"action": "arm-pulse"' in emitted or '"action":"arm-pulse"' in emitted
+    # Then a pulse (model stashed the enumerated units) → should reach work.
     ledger.set_enumerated_units(repo, run_id, "plan", [
         {"id": "u-x", "invokes": {"adapter_op": "do_unit"}},
     ])
     with contextlib.redirect_stdout(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
     led2 = read()
     work = sorted(u["id"] for u in led2["units"] if u.get("phase") == "work")
     print("%s|%s|%s|%s|%s" % (
@@ -106,7 +106,7 @@ elif scenario == "seam":
         rc = resume._cmd_advance(ledger, repo, run_id)
     after = read()["loop_phase"]
     emitted = out.getvalue().strip()
-    is_arm = '"action": "arm-tick"' in emitted or '"action":"arm-tick"' in emitted
+    is_arm = '"action": "arm-pulse"' in emitted or '"action":"arm-pulse"' in emitted
     print("%s|%s" % (after, is_arm))
 
 elif scenario == "pause_operator":
@@ -125,7 +125,7 @@ elif scenario == "pause_operator":
     with contextlib.redirect_stdout(cont):
         resume._cmd_continue(ledger, repo, run_id)
     emitted = cont.getvalue()
-    is_arm = '"action": "arm-tick"' in emitted or '"action":"arm-tick"' in emitted
+    is_arm = '"action": "arm-pulse"' in emitted or '"action":"arm-pulse"' in emitted
     print("%s|%s|%s|%s|%s|%s" % (
         loop.get("driver"), latched, led.get("loop_phase"), rc, goal_note, is_arm,
     ))
@@ -161,8 +161,8 @@ elif scenario == "pause_done":
 PYEOF
 }
 
-# ─── plan-phase advance: marks satisfied, ticks straight to work ────────────
-it "advance(plan): sets plan_step=review_plan + gaps_open=0, arms a tick, reaches work"
+# ─── plan-phase advance: marks satisfied, pulses straight to work ────────────
+it "advance(plan): sets plan_step=review_plan + gaps_open=0, arms a pulse, reaches work"
 res="$(run_scenario plan)"
 IFS='|' read -r step gaps arm phase work <<EOF
 $res
@@ -180,8 +180,8 @@ EOF
 [ "$b_before" = "work" ] && [ "$b_after" = "work" ] && [ "$b_rc" = "0" ] \
   && pass || fail "expected work|work|0, got ${res_w}"
 
-# ─── seam advance: behaves like continue (→ work, arms tick) ────────────────
-it "advance(seam): flips seam→work and arms a tick (== continue)"
+# ─── seam advance: behaves like continue (→ work, arms pulse) ────────────────
+it "advance(seam): flips seam→work and arms a pulse (== continue)"
 res_s="$(run_scenario seam)"
 IFS='|' read -r s_phase s_arm <<EOF
 $res_s

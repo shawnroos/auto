@@ -270,7 +270,7 @@ backends. The mechanics:
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<spec> --recipe <builtin>-<run-slug> --teardown-recipe-after-init"`.
    The `--teardown-recipe-after-init` flag makes `auto.py` delete the run-scoped
    workspace recipe **itself, atomically once `init_ledger` returns** — the engine
-   is recipe-blind thereafter (`recipe-format.md` §1: tick, dispatch, predicate,
+   is recipe-blind thereafter (`recipe-format.md` §1: pulse, dispatch, predicate,
    and *resume* all operate off the ledger; phase_order / phase_transitions /
    iteration / emit_templates are persisted onto it, never the recipe file). So on
    the success path you do **not** delete it yourself and you do **not** infer

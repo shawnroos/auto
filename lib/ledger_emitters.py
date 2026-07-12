@@ -188,7 +188,7 @@ def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -
           the union; this mutator just writes).
       (c) ``dispatch_context.decision`` and ``dispatch_context.decision_payload``
           CLEARED (closes round-3 P0-R3-1: without the clear, a subsequent
-          tick re-reads the stale ``iterate`` decision and re-fires the
+          pulse re-reads the stale ``iterate`` decision and re-fires the
           iteration loop before the gate re-verdicts, double-incrementing
           iteration_attempts until bound trip).
       (d) ``verdict_at`` cleared.
@@ -214,7 +214,7 @@ def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -
     dc = gate.setdefault("dispatch_context", {})
     # Round-3 P0-R3-1: clearing the decision is load-bearing. A surviving
     # `decision: "iterate"` would re-fire the iteration loop on the NEXT
-    # tick before the gate has re-verdicted, double-incrementing
+    # pulse before the gate has re-verdicted, double-incrementing
     # iteration_attempts until bound trip. Centralizing the clear here
     # (single owner) is cleaner than a per-read-site guard.
     dc.pop("decision", None)

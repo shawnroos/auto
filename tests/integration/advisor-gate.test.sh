@@ -210,7 +210,7 @@ out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
 # ─── askuser: driver==manual (seam/blocked pause) -> allow ────────────────────
-it "askuser: a manual-driver (paused) run -> allow (not a live tick chain)"
+it "askuser: a manual-driver (paused) run -> allow (not a live pulse chain)"
 REPO="$(mkrepo askuser-manual)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
@@ -676,7 +676,7 @@ assert_eq "manual" "$(rd_loop "$REPO" rrun driver)"
 
 # ─── seam->work branch ALSO re-records (different write path) ─────────────────
 # _cmd_continue records the session BEFORE branching, but seam->work routes
-# through tick.advance_to_phase -> ledger.transition_and_emit (a DIFFERENT write
+# through pulse.advance_to_phase -> ledger.transition_and_emit (a DIFFERENT write
 # path than the blocked-pause set_loop). transition_and_emit does an in-place
 # locked RMW (it never reconstructs the dict), so the top-level
 # driving_session_id survives the phase advance. This asserts that explicitly so

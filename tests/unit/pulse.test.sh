@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# auto U4 unit test: lib/tick.py — one ScheduleWakeup-paced advance
-# of the ledger. The tick reads ALL loop state from the disk ledger, does ONE
+# auto U4 unit test: lib/pulse.py — one ScheduleWakeup-paced advance
+# of the ledger. The pulse reads ALL loop state from the disk ledger, does ONE
 # smallest-useful advance inside a try/except, persists atomically via
 # ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
 # ScheduleWakeup — that is a model tool, not a CLI).
@@ -10,23 +10,23 @@
 # source claude-modes' test-helpers nor auto shared helpers (those
 # are U2's, not yet present). When U2 lands, this file may migrate to them.
 #
-# Scenarios (mapped to the U4 plan, tested against tick.py's ACTUAL surface):
-#   1. predicate NOT met -> tick advances one step + signals re-arm (action=rearm)
+# Scenarios (mapped to the U4 plan, tested against pulse.py's ACTUAL surface):
+#   1. predicate NOT met -> pulse advances one step + signals re-arm (action=rearm)
 #   2. predicate met -> emits report, action=stop, does NOT re-arm
 #   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. backend raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#   4. backend raises mid-pulse -> unit.last_error recorded + unit marked stalled;
 #      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
-#   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
+#   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
 #      fixed) but makes NO dispatch call and writes NO finding
-#   6. non-stateless safety: invoke the tick twice from FRESH processes against
+#   6. non-stateless safety: invoke the pulse twice from FRESH processes against
 #      the same ledger -> it advances purely from ledger state
 #   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
-#      ACROSS fresh-process ticks WITHOUT re-planning. The tick persists the
-#      executed plan_step (schema §3.1) so the next tick reads it instead of
+#      ACROSS fresh-process pulses WITHOUT re-planning. The pulse persists the
+#      executed plan_step (schema §3.1) so the next pulse reads it instead of
 #      re-reading null and re-running "plan" forever. Includes a deliberate-fail
 #      control (env-gated no-persist) proving the test goes RED without the write.
 #   8. Bug #5 gap-write: advance_plan_loop persists gaps_open from a DICT
@@ -47,8 +47,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TICK_PY="${AUTO_ROOT}/lib/tick.py"
-TICK_SH="${AUTO_ROOT}/lib/tick.sh"
+PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
+PULSE_SH="${AUTO_ROOT}/lib/pulse.sh"
 LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -119,22 +119,22 @@ PYEOF
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-echo "tick.test.sh"
+echo "pulse.test.sh"
 
 # ─── Scenario 1: predicate NOT met -> advance one step + signal re-arm ────────
 # A work-loop with one verdict-returned unit carrying an open blocker: the
-# predicate is NOT met (blocker present). The tick should apply ONE fix
+# predicate is NOT met (blocker present). The pulse should apply ONE fix
 # (verdict-returned -> fixed) and signal re-arm. The blocker remains (R8: a fix
-# does not close findings), so met stays false and the chain keeps ticking.
-it "predicate NOT met: tick advances one step (fix applied) and signals re-arm"
+# does not close findings), so met stays false and the chain keeps pulsing.
+it "predicate NOT met: pulse advances one step (fix applied) and signals re-arm"
 ledger_init "rearm-run" '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"open"}]}]' \
   >/dev/null 2>&1
-res1="$("$PY" - "$REPO" "rearm-run" "$TICK_PY" <<'PYEOF'
+res1="$("$PY" - "$REPO" "rearm-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-r = t.dispatch_tick(repo, run)
+r = t.dispatch_pulse(repo, run)
 print(json.dumps({
     "action": r.get("action"),
     "delay": r.get("delay"),
@@ -148,7 +148,7 @@ delay="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['delay'])" "$re
 prompt="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['prompt'])" "$res1")"
 advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res1")"
 st1="$(ledger_field "rearm-run" 'L["units"][0]["state"]')"
-if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto:auto-tick rearm-run" ] \
+if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto:auto-pulse rearm-run" ] \
    && [ "$advanced" = "fix-applied" ] && [ "$st1" = "fixed" ]; then
   pass
 else
@@ -157,17 +157,17 @@ fi
 
 # ─── Scenario 2: predicate met -> emit report, action=stop, NO re-arm ─────────
 # A terminal, defect-free, single-unit work-loop: init_ledger's atomic write
-# recomputes the predicate, so met is already true at read time. The tick must
+# recomputes the predicate, so met is already true at read time. The pulse must
 # stop (reason=predicate-met) and emit a report; it must NOT re-arm.
-it "predicate met: tick emits report, action=stop (predicate-met), does NOT re-arm"
+it "predicate met: pulse emits report, action=stop (predicate-met), does NOT re-arm"
 ledger_init "met-run" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
 met_at_read="$(ledger_field "met-run" 'L["exit_predicate_result"]["met"]')"
-res2="$("$PY" - "$REPO" "met-run" "$TICK_PY" <<'PYEOF'
+res2="$("$PY" - "$REPO" "met-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-r = t.dispatch_tick(repo, run)
+r = t.dispatch_pulse(repo, run)
 print(json.dumps({
     "action": r.get("action"),
     "reason": r.get("reason"),
@@ -196,12 +196,12 @@ DISP_AT="$(now_minus 3600)"
 ledger_init "stall-run" \
   "$(printf '[{"id":"Ua","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10},{"id":"Ub","state":"pending","depends_on":["Ua"]},{"id":"Uc","state":"verdict-returned","findings":[{"severity":"major","note":"open"}]}]' "$DISP_AT")" \
   >/dev/null 2>&1
-res3="$("$PY" - "$REPO" "stall-run" "$TICK_PY" <<'PYEOF'
+res3="$("$PY" - "$REPO" "stall-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-r = t.dispatch_tick(repo, run)
+r = t.dispatch_pulse(repo, run)
 print(json.dumps({
     "action": r.get("action"),
     "stalled": sorted(r.get("stalled") or []),
@@ -226,9 +226,9 @@ else
   fail "st_ua=$st_ua stalled=[$stalled_list] halted=[$halted_list] adv=$adv_kind/$adv_unit st_uc=$st_uc (expected stalled / Ua / Ua,Ub / fix-applied/Uc / fixed)"
 fi
 
-# ─── Scenario 4: backend raises mid-tick -> last_error recorded + stalled ─────
+# ─── Scenario 4: backend raises mid-pulse -> last_error recorded + stalled ─────
 # A plan-loop with one dispatched unit. We inject a backend whose next_plan_step
-# raises. The tick's try/except must convert the raise into a recorded
+# raises. The pulse's try/except must convert the raise into a recorded
 # last_error on the in-flight unit + mark it stalled, WITHOUT crashing and
 # WITHOUT leaving a half-written ledger.
 it "backend raise: try/except records last_error + marks unit stalled; ledger stays valid (no half-write)"
@@ -236,18 +236,18 @@ DISP4="$(now_minus 5)"
 ledger_init "raise-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":600}]' "$DISP4")" \
   ce plan >/dev/null 2>&1
-res4="$("$PY" - "$REPO" "raise-run" "$TICK_PY" <<'PYEOF'
+res4="$("$PY" - "$REPO" "raise-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 
 class BoomBackend:
     def next_plan_step(self, ledger):
         raise RuntimeError("backend exploded mid-step")
 
-# The tick must NOT propagate the raise; it returns a normal intent dict.
-r = t.dispatch_tick(repo, run, backend=BoomBackend())
+# The pulse must NOT propagate the raise; it returns a normal intent dict.
+r = t.dispatch_pulse(repo, run, backend=BoomBackend())
 print(json.dumps({
     "action": r.get("action"),
     "advanced": (r.get("advance") or {}).get("advanced"),
@@ -269,7 +269,7 @@ else
 fi
 
 it "deliberate-fail control: the injected backend genuinely raises (proves S4's clean return is real try/except capture, not a benign no-op)"
-# If we call the backend op directly — OUTSIDE the tick's try/except — it MUST
+# If we call the backend op directly — OUTSIDE the pulse's try/except — it MUST
 # propagate. This proves the backend is not silently benign, so the prior test's
 # clean return + recorded last_error is meaningful (the try/except did the work).
 raised="$("$PY" - <<'PYEOF'
@@ -285,68 +285,68 @@ PYEOF
 )"
 assert_eq "raised" "$raised"
 
-# ─── Scenario 5: tick NEVER dispatches and NEVER writes verdicts ──────────────
-# A work-loop tick that sees a self-written verdict (verdict-returned + open
+# ─── Scenario 5: pulse NEVER dispatches and NEVER writes verdicts ──────────────
+# A work-loop pulse that sees a self-written verdict (verdict-returned + open
 # major) applies ONE fix (-> fixed) but makes NO dispatch call and writes NO
 # finding. Assert: (a) the fix-due unit becomes fixed; (b) its findings are
 # byte-identical to setup (a fix does not touch findings — R8); (c) no pending
-# sibling was moved to dispatched (the tick never owns pending -> dispatched).
-it "tick never dispatches / never writes verdicts: applies a fix, leaves findings + pending siblings untouched"
+# sibling was moved to dispatched (the pulse never owns pending -> dispatched).
+it "pulse never dispatches / never writes verdicts: applies a fix, leaves findings + pending siblings untouched"
 ledger_init "no-dispatch-run" \
   '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"major","note":"fix me"}]},{"id":"U2","state":"pending"}]' \
   >/dev/null 2>&1
 findings_before="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
-"$PY" - "$REPO" "no-dispatch-run" "$TICK_PY" <<'PYEOF' >/dev/null
+"$PY" - "$REPO" "no-dispatch-run" "$PULSE_PY" <<'PYEOF' >/dev/null
 import sys, importlib.util
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-t.dispatch_tick(repo, run)
+t.dispatch_pulse(repo, run)
 PYEOF
 st_u1="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
 st_u2="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
 findings_after="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
-# U1 fixed (fix applied); U2 still pending (NEVER dispatched by the tick);
-# U1 findings unchanged (NO verdict written by the tick).
+# U1 fixed (fix applied); U2 still pending (NEVER dispatched by the pulse);
+# U1 findings unchanged (NO verdict written by the pulse).
 if [ "$st_u1" = "fixed" ] && [ "$st_u2" = "pending" ] && [ "$findings_before" = "$findings_after" ]; then
   pass
 else
   fail "st_u1=$st_u1 st_u2=$st_u2 findings_changed=$([ "$findings_before" = "$findings_after" ] && echo no || echo YES)"
 fi
 
-# ─── Scenario 6: non-stateless safety — two FRESH-process ticks, one ledger ───
-# Invoke the tick TWICE via the bash shim (each a separate process; no shared
-# in-memory state). It must advance purely from the disk ledger: tick 1 applies
-# the fix to U1; tick 2, from a clean process, sees U1 already fixed and applies
-# the fix to U2. Proves the tick treats conversation/process context as
+# ─── Scenario 6: non-stateless safety — two FRESH-process pulses, one ledger ───
+# Invoke the pulse TWICE via the bash shim (each a separate process; no shared
+# in-memory state). It must advance purely from the disk ledger: pulse 1 applies
+# the fix to U1; pulse 2, from a clean process, sees U1 already fixed and applies
+# the fix to U2. Proves the pulse treats conversation/process context as
 # irrelevant (re-injection-safe under ScheduleWakeup).
-it "non-stateless: two ticks from FRESH processes advance purely from the disk ledger"
+it "non-stateless: two pulses from FRESH processes advance purely from the disk ledger"
 ledger_init "stateless-run" \
   '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"a"}]},{"id":"U2","state":"verdict-returned","findings":[{"severity":"blocker","note":"b"}]}]' \
   >/dev/null 2>&1
 # First fresh process.
-CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "stateless-run" >/dev/null 2>&1
 st1_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
 st1_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
 # Second fresh process — must observe the first's mutation and advance the next.
-CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "stateless-run" >/dev/null 2>&1
 st2_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
 st2_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
-# After tick 1: one of U1/U2 fixed, the other still verdict-returned.
-# After tick 2: both fixed (the second process picked up where the first left).
+# After pulse 1: one of U1/U2 fixed, the other still verdict-returned.
+# After pulse 2: both fixed (the second process picked up where the first left).
 if [ "$st1_u1" = "fixed" ] && [ "$st1_u2" = "verdict-returned" ] \
    && [ "$st2_u1" = "fixed" ] && [ "$st2_u2" = "fixed" ]; then
   pass
 else
-  fail "after-tick1: U1=$st1_u1 U2=$st1_u2 ; after-tick2: U1=$st2_u1 U2=$st2_u2 (expected fixed/verdict-returned then fixed/fixed)"
+  fail "after-pulse1: U1=$st1_u1 U2=$st1_u2 ; after-pulse2: U1=$st2_u1 U2=$st2_u2 (expected fixed/verdict-returned then fixed/fixed)"
 fi
 
-# ─── Scenario 7: anti-livelock — plan_step advances across fresh-process ticks ─
+# ─── Scenario 7: anti-livelock — plan_step advances across fresh-process pulses ─
 # THE integration-blocking bug this fix closes: next_plan_step is pure over the
-# ledger and each tick is a fresh process. If the tick does not persist the
-# executed plan_step, every tick reads plan_step==null, the backend returns
+# ledger and each pulse is a fresh process. If the pulse does not persist the
+# executed plan_step, every pulse reads plan_step==null, the backend returns
 # "plan", and the plan-loop re-plans forever. With the persist (ledger.set_loop
-# plan_step=...), three fresh-process ticks walk plan -> deepen -> review_plan.
+# plan_step=...), three fresh-process pulses walk plan -> deepen -> review_plan.
 #
 # We use the REAL ce backend (its plan/deepen/review_plan ops are pure
 # envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
@@ -356,16 +356,16 @@ fi
 # coherence guard keys on plan_step=="review_plan" specifically, so it does NOT
 # fire until AFTER a real review_plan step has been persisted — exactly the walk
 # we assert.
-it "anti-livelock: 3 fresh-process plan ticks walk plan -> deepen -> review_plan (step persisted, no re-plan)"
+it "anti-livelock: 3 fresh-process plan pulses walk plan -> deepen -> review_plan (step persisted, no re-plan)"
 ledger_init "antilivelock-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
 step0="$(ledger_field "antilivelock-run" 'L.get("plan_step")')"
-CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "antilivelock-run" >/dev/null 2>&1
 step1="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
-CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "antilivelock-run" >/dev/null 2>&1
 step2="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
-CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "antilivelock-run" >/dev/null 2>&1
 step3="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
-# init -> null; tick1 ran "plan"; tick2 ran "deepen"; tick3 ran "review_plan".
+# init -> null; pulse1 ran "plan"; pulse2 ran "deepen"; pulse3 ran "review_plan".
 # The walk MONOTONICALLY ADVANCES — it never gets stuck re-running "plan".
 if [ "$step0" = "None" ] && [ "$step1" = "plan" ] && [ "$step2" = "deepen" ] \
    && [ "$step3" = "review_plan" ]; then
@@ -375,23 +375,23 @@ else
 fi
 
 it "deliberate-fail control: WITHOUT the persist, plan_step stays stuck at the first step -> livelock (proves the persist is load-bearing)"
-# Run the SAME plan-loop, but neuter the tick's persist by monkeypatching
-# ledger.set_loop to DROP the plan_step kwarg (simulating the pre-fix tick that
-# advanced the step but never wrote it back). Three ticks must then NEVER record
+# Run the SAME plan-loop, but neuter the pulse's persist by monkeypatching
+# ledger.set_loop to DROP the plan_step kwarg (simulating the pre-fix pulse that
+# advanced the step but never wrote it back). Three pulses must then NEVER record
 # a step beyond null — the backend would re-return "plan" every time (livelock).
 # This proves the prior test passes BECAUSE of the persist, not by accident.
-stuck="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+stuck="$("$PY" - "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, tick_py, ledger_py = sys.argv[1:4]
+repo, pulse_py, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(spec); spec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 
 run = "antilivelock-nopersist"
 ledg.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
 
-# Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The tick's
+# Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The pulse's
 # beat write (set_loop(driver="self", beat=True)) still works; only the
 # plan_step persist is dropped — exactly the pre-fix behaviour.
 _real_set_loop = ledg.set_loop
@@ -402,7 +402,7 @@ t.ledger.set_loop = _no_plan_step_set_loop
 
 steps = []
 for _ in range(3):
-    t.dispatch_tick(repo, run)
+    t.dispatch_pulse(repo, run)
     steps.append(ledg.read_ledger(repo, run).get("plan_step"))
 # Without the persist every read is None -> the plan-loop is livelocked.
 print("stuck" if all(s is None for s in steps) else "ADVANCED:%r" % steps)
@@ -418,7 +418,7 @@ assert_eq "stuck" "$stuck"
 # We exercise the DICT path specifically with a stub backend whose review_plan
 # returns {"gap_set": [...]} of length N.
 #
-# Verify-RED: lib/tick.py advance_plan_loop, delete the
+# Verify-RED: lib/pulse.py advance_plan_loop, delete the
 #   `elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):`
 # branch (the dict extraction). gap_set stays None for the dict envelope, the
 # `step == "review_plan" and gap_set is not None` write never fires, gaps_open
@@ -434,12 +434,12 @@ spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.set_loop(repo, run, plan_step="deepen")
 PYEOF
-gaps_dict="$("$PY" - "$REPO" "gaps-dict-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+gaps_dict="$("$PY" - "$REPO" "gaps-dict-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 
 class DictGapBackend:
@@ -450,7 +450,7 @@ class DictGapBackend:
         return {"op": "review_plan", "gap_set": [{"id": "g1"}, {"id": "g2"}, {"id": "g3"}]}
 
 led = ledg.read_ledger(repo, run)
-t.tick_advance.advance_plan_loop(repo, run, led, DictGapBackend())
+t.pulse_advance.advance_plan_loop(repo, run, led, DictGapBackend())
 print(ledg.read_ledger(repo, run)["exit_predicate_result"]["gaps_open"])
 PYEOF
 )"
@@ -481,12 +481,12 @@ spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.set_loop(repo, run, plan_step="deepen")
 PYEOF
-empty_out="$("$PY" - "$REPO" "gaps-empty-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+empty_out="$("$PY" - "$REPO" "gaps-empty-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 # Use the REAL ce backend for next_plan_step (the live sequencer) but feed an
 # empty-gap_set dict via a thin subclass of its review_plan, so the "done"
@@ -501,7 +501,7 @@ class EmptyGapBackend(ace.Backend):
 
 led = ledg.read_ledger(repo, run)
 backend = EmptyGapBackend()
-t.tick_advance.advance_plan_loop(repo, run, led, backend)
+t.pulse_advance.advance_plan_loop(repo, run, led, backend)
 led2 = ledg.read_ledger(repo, run)
 gaps = led2["exit_predicate_result"]["gaps_open"]
 # Now ask the live sequencer for the next step: review_plan persisted +
@@ -544,12 +544,12 @@ spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.set_loop(repo, run, plan_step="deepen")
 PYEOF
-null_out="$("$PY" - "$REPO" "gaps-null-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+null_out="$("$PY" - "$REPO" "gaps-null-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 # REAL ce backend: review_plan returns the live PREPARE envelope, which carries
 # NO gap_set key (the model fills it out-of-band after the engine reads).
@@ -562,7 +562,7 @@ env = backend.review_plan(ledg.read_ledger(repo, run))
 assert isinstance(env, dict) and "gap_set" not in env, "envelope unexpectedly has gap_set: %r" % env
 
 led = ledg.read_ledger(repo, run)
-t.tick_advance.advance_plan_loop(repo, run, led, backend)
+t.pulse_advance.advance_plan_loop(repo, run, led, backend)
 L2 = ledg.read_ledger(repo, run)
 go = L2["exit_predicate_result"]["gaps_open"]
 met = L2["exit_predicate_result"]["met"]
@@ -585,9 +585,9 @@ it "deliberate-fail control: the BUGGY gap_set=[] default for a keyless envelope
 # envelope. This must produce a DIFFERENT outcome from the correct path above:
 # gaps_open=0, plan-met True, next step "done". If this control matched the
 # correct path, the prior test would prove nothing.
-buggy_out="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+buggy_out="$("$PY" - "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, tick_py, ledger_py = sys.argv[1:4]
+repo, pulse_py, ledger_py = sys.argv[1:4]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 import importlib.util as _il
@@ -624,7 +624,7 @@ fi
 # the broadened `except Exception` swallows it and the unit stays `dispatched`
 # with no agent — a phantom. The CLAIM bounding that P3 is that the phantom
 # self-heals: detect_and_halt_stalled reclaims ANY dispatched-past-stall_threshold
-# unit on a later tick. This test proves that bound.
+# unit on a later pulse. This test proves that bound.
 #
 # We simulate the phantom directly (a unit stuck `dispatched` with dispatched_at
 # older than its stall_threshold, no verdict) and run detect_and_halt_stalled.
@@ -639,16 +639,16 @@ ledger_init "phantom-run" \
 # Baseline: the phantom IS dispatched before the reaper runs (the swallowed-rescue
 # state the dispatcher P3 leaves behind).
 st_before="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
-phantom_out="$("$PY" - "$REPO" "phantom-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+phantom_out="$("$PY" - "$REPO" "phantom-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 led = ledg.read_ledger(repo, run)
 now = datetime.datetime.now(datetime.timezone.utc)
-fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 after = ledg.read_ledger(repo, run)
 u = after["units"][0]
 print("%s,%s,%s" % (u["state"], (",".join(newly)) if newly else "-", u.get("last_error")))
@@ -681,10 +681,10 @@ assert_eq "dispatched" "$noreap_state"
 # returns "done" and enumerate_plan_units returns a bare list.
 it "U6: plan-done persists enumerate_plan_units output to dispatch_context"
 ledger_init "enum-run" '[{"id":"plan","phase":"plan","state":"dispatched"}]' ce plan >/dev/null 2>&1
-enum_res="$("$PY" - "$REPO" "enum-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+enum_res="$("$PY" - "$REPO" "enum-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(m)
@@ -695,7 +695,7 @@ class FakeBackend:
         return [{"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]
 
 led = m.read_ledger(repo, run)
-result = t.tick_advance.advance_plan_loop(repo, run, led, FakeBackend())
+result = t.pulse_advance.advance_plan_loop(repo, run, led, FakeBackend())
 after = m.read_ledger(repo, run)
 plan_unit = after["units"][0]
 enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_units") or []
@@ -708,7 +708,7 @@ PYEOF
 assert_eq "plan-done,w1,w2" "$enum_res"
 
 # ─── Fix-pass H: prepare/execute contract is LOUD in rearm intent ────────────
-# Field bug (2026-05-25, second agent): ticked 5 times expecting units to
+# Field bug (2026-05-25, second agent): pulsed 5 times expecting units to
 # materialize; ledger stayed at units=[] because they never executed the
 # prepared invocation. The rearm intent now carries an operator_guidance
 # field naming the contract phase-by-phase, plus a gaps_open_guard when
@@ -718,14 +718,14 @@ assert_eq "plan-done,w1,w2" "$enum_res"
 
 it "fix-pass H: plan-loop rearm carries operator_guidance naming prepare/execute"
 ledger_init "guidance-plan-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
-guidance_plan="$("$PY" - "$REPO" "guidance-plan-run" "$TICK_PY" <<'PYEOF'
+guidance_plan="$("$PY" - "$REPO" "guidance-plan-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 
-# Use the bundled CE backend so a real plan-loop tick fires.
-intent = t.dispatch_tick(repo, run)
+# Use the bundled CE backend so a real plan-loop pulse fires.
+intent = t.dispatch_pulse(repo, run)
 g = intent.get("operator_guidance", "")
 print("ok" if ("prepare/execute contract" in g
                and "YOU must run it" in g
@@ -736,17 +736,17 @@ assert_eq "ok" "$guidance_plan"
 
 it "fix-pass H: gaps_open_guard fires when plan_step==review_plan AND gaps_open is null (Trap 2)"
 ledger_init "gap-guard-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
-guard_msg="$("$PY" - "$REPO" "gap-guard-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+guard_msg="$("$PY" - "$REPO" "gap-guard-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 L = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(L)
 
 # Force the exact trap state: plan_step=review_plan, gaps_open=null (default).
 L.set_loop(repo, run, plan_step="review_plan")
-intent = t.dispatch_tick(repo, run)
+intent = t.dispatch_pulse(repo, run)
 g = intent.get("gaps_open_guard", "")
 print("ok" if ("gaps_open is NULL" in g and "set_gaps_open" in g) else f"BAD:{g[:120]}")
 PYEOF
@@ -755,10 +755,10 @@ assert_eq "ok" "$guard_msg"
 
 it "fix-pass H DELIBERATE-FAIL: gaps_open_guard is ABSENT when gaps_open is set (proves the guard discriminates)"
 ledger_init "gap-set-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
-guard_absent="$("$PY" - "$REPO" "gap-set-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+guard_absent="$("$PY" - "$REPO" "gap-set-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 L = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(L)
@@ -766,7 +766,7 @@ L = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(L)
 # gaps_open populated to a real value → guard MUST NOT fire (it'd be noise).
 L.set_loop(repo, run, plan_step="review_plan")
 L.set_gaps_open(repo, run, 0)
-intent = t.dispatch_tick(repo, run)
+intent = t.dispatch_pulse(repo, run)
 print("absent" if "gaps_open_guard" not in intent else f"PRESENT:{intent.get('gaps_open_guard')[:80]}")
 PYEOF
 )"
@@ -776,13 +776,13 @@ it "fix-pass H: work-loop rearm carries operator_guidance naming dispatch + yiel
 ledger_init "guidance-work-run" \
   '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}]' \
   ce work >/dev/null 2>&1
-guidance_work="$("$PY" - "$REPO" "guidance-work-run" "$TICK_PY" <<'PYEOF'
+guidance_work="$("$PY" - "$REPO" "guidance-work-run" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, pulse_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 
-intent = t.dispatch_tick(repo, run)
+intent = t.dispatch_pulse(repo, run)
 g = intent.get("operator_guidance", "")
 print("ok" if ("YOU drive the" in g
                and "YIELD silently" in g
@@ -793,7 +793,7 @@ assert_eq "ok" "$guidance_work"
 
 
 # ─── U5: both terminal-phase guards route through phase_grammar.is_terminal_phase ─
-# The two hand-rolled terminal-phase guards in tick.py agreed ONLY because every
+# The two hand-rolled terminal-phase guards in pulse.py agreed ONLY because every
 # shipped recipe's terminal_phase == "work":
 #   Guard A (_try_predicate_met_shortcircuit): a DENYLIST — `phase != "plan" and
 #            phase != "seam"` — which stops at ANY phase that isn't plan/seam.
@@ -806,7 +806,7 @@ assert_eq "ok" "$guidance_work"
 # recipe's ACTUAL terminal phase. This is behavior-changing for non-work recipes
 # and behavior-preserving for the shipped work-terminal ones (the regression case).
 #
-# Verify-RED (against pre-fix tick.py): the main-fixture Guard B assertion goes RED
+# Verify-RED (against pre-fix pulse.py): the main-fixture Guard B assertion goes RED
 # (Guard B returns None because brainstorm != "work") AND the converse Guard A
 # assertion goes RED (Guard A's denylist over-fires and stops at a non-terminal
 # brainstorm). After the fix both flip GREEN. The regression assertions pass on
@@ -820,13 +820,13 @@ assert_eq "ok" "$guidance_work"
 #   let init_ledger's recompute set met, so they need no hatch and behave identically
 #   whether this file runs standalone or under run.sh.
 u5_guard() {
-  "$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" "$@" <<'PYEOF'
+  "$PY" - "$REPO" "$PULSE_PY" "$LEDGER_PY" "$@" <<'PYEOF'
 import sys, importlib.util, json
-repo, tick_py, ledger_py = sys.argv[1:4]
+repo, pulse_py, ledger_py = sys.argv[1:4]
 run, units_json, po_json, terminal, loop_phase, phase, guard, stale = sys.argv[4:12]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 ledg.init_ledger(repo, run, backend="ce", units=json.loads(units_json),
                  loop_phase=loop_phase, phase_order=json.loads(po_json),
@@ -907,10 +907,10 @@ assert_eq "stop,done" \
 
 # wwd <units-json>  — print watchdog_wakeup_delay({"units": <units-json>}).
 wwd() {
-  "$PY" - "$TICK_PY" "$1" <<'PYEOF'
+  "$PY" - "$PULSE_PY" "$1" <<'PYEOF'
 import sys, importlib.util, json
-tick_py, units_json = sys.argv[1:3]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+pulse_py, units_json = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 print(t.watchdog_wakeup_delay({"units": json.loads(units_json)}))
 PYEOF
@@ -943,14 +943,14 @@ assert_eq "None" "$(wwd '[{"id":"U1","state":"pending"},{"id":"U2","state":"verd
 # ONE stall per attempt. Covers R3, AE2, AE3.
 
 # reap <run> <unit> <attempt>  — call reap_unit on the on-disk ledger; print its
-# return value (True/False/None). Mirrors scenario 10's t.tick_advance access.
+# return value (True/False/None). Mirrors scenario 10's t.pulse_advance access.
 reap() {
-  "$PY" - "$REPO" "$1" "$2" "$3" "$TICK_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$1" "$2" "$3" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, unit, attempt, tick_py = sys.argv[1:6]
-spec = importlib.util.spec_from_file_location("tick", tick_py)
+repo, run, unit, attempt, pulse_py = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-print(t.tick_advance.reap_unit(repo, run, unit, int(attempt)))
+print(t.pulse_advance.reap_unit(repo, run, unit, int(attempt)))
 PYEOF
 }
 
@@ -1018,22 +1018,22 @@ DISP_D="$(now_minus 3600)"
 ledger_init "reap-double-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$DISP_D")" \
   >/dev/null 2>&1
-double_out="$("$PY" - "$REPO" "reap-double-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+double_out="$("$PY" - "$REPO" "reap-double-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 # Path 1 (native death): reap_unit flips dispatched -> stalled.
-r1 = t.tick_advance.reap_unit(repo, run, "U1", 1)
+r1 = t.pulse_advance.reap_unit(repo, run, "U1", 1)
 # Path 2 (timeout watchdog) fires on the SAME unit: it is already stalled, so
 # detect_and_halt_stalled records NO NEW stall (newly_stalled is empty).
 now = datetime.datetime.now(datetime.timezone.utc)
 led = ledg.read_ledger(repo, run)
-fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 # A re-fire of the death path is also a no-op.
-r2 = t.tick_advance.reap_unit(repo, run, "U1", 1)
+r2 = t.pulse_advance.reap_unit(repo, run, "U1", 1)
 after = ledg.read_ledger(repo, run)
 print("%s,%s,%s,%s" % (r1, (",".join(newly) if newly else "-"), r2, after["units"][0]["state"]))
 PYEOF
@@ -1052,7 +1052,7 @@ fi
 # the kill itself (TaskStop + SIGTERM) is model-side (no reaping primitive in
 # lib/, KTD2), so Python cannot observe it. The driver clears the marker via
 # clear_reap_pending right AFTER issuing the kill; anything still in
-# units_awaiting_reap on a later tick is a forgotten kill ("requested but
+# units_awaiting_reap on a later pulse is a forgotten kill ("requested but
 # unconfirmed"). Covers U3's reap_pending semantics.
 
 it "U3 reap_pending: reap_unit sets reap_pending; unit is in units_awaiting_reap; clear_reap_pending removes it"
@@ -1060,23 +1060,23 @@ DISP_RP="$(now_minus 5)"
 ledger_init "reap-pending-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_RP")" \
   >/dev/null 2>&1
-rp_flow="$("$PY" - "$REPO" "reap-pending-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+rp_flow="$("$PY" - "$REPO" "reap-pending-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 # Reap the dispatched unit at its matching attempt -> stalled + reap_pending set.
-t.tick_advance.reap_unit(repo, run, "U1", 1)
+t.pulse_advance.reap_unit(repo, run, "U1", 1)
 led1 = ledg.read_ledger(repo, run)
 marker_after_reap = led1["units"][0].get("reap_pending")
-awaiting_before = t.tick_advance.units_awaiting_reap(led1)
+awaiting_before = t.pulse_advance.units_awaiting_reap(led1)
 # Driver issues the model-side kill, then clears the marker.
-t.tick_advance.clear_reap_pending(repo, run, "U1")
+t.pulse_advance.clear_reap_pending(repo, run, "U1")
 led2 = ledg.read_ledger(repo, run)
 marker_after_clear = led2["units"][0].get("reap_pending")
-awaiting_after = t.tick_advance.units_awaiting_reap(led2)
+awaiting_after = t.pulse_advance.units_awaiting_reap(led2)
 print("%s|%s|%s|%s" % (
     marker_after_reap,
     ",".join(awaiting_before) or "-",
@@ -1097,18 +1097,18 @@ DISP_DP="$(now_minus 3600)"
 ledger_init "reap-pending-timeout" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$DISP_DP")" \
   >/dev/null 2>&1
-tp_flow="$("$PY" - "$REPO" "reap-pending-timeout" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+tp_flow="$("$PY" - "$REPO" "reap-pending-timeout" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 now = datetime.datetime.now(datetime.timezone.utc)
 led = ledg.read_ledger(repo, run)
-fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 after = ledg.read_ledger(repo, run)
-awaiting = t.tick_advance.units_awaiting_reap(after)
+awaiting = t.pulse_advance.units_awaiting_reap(after)
 print("%s,%s,%s" % (
     after["units"][0]["state"],
     after["units"][0].get("reap_pending"),
@@ -1133,21 +1133,21 @@ RACE_AT="$(now_minus 3600)"
 ledger_init "race-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10,"attempt":1}]' "$RACE_AT")" \
   ce work >/dev/null 2>&1
-race_out="$("$PY" - "$REPO" "race-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+race_out="$("$PY" - "$REPO" "race-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime
-repo, run, tick_py, ledger_py = sys.argv[1:5]
+repo, run, pulse_py, ledger_py = sys.argv[1:5]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
-tspec = importlib.util.spec_from_file_location("tick", tick_py)
+tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-# Snapshot read WHILE dispatched (what the heartbeat tick holds).
+# Snapshot read WHILE dispatched (what the heartbeat pulse holds).
 led = ledg.read_ledger(repo, run)
 # A concurrent healthy sibling lands its verdict on disk AFTER the snapshot.
 ledg.record_verdict(repo, run, "U1", [], attempt=1)
 now = datetime.datetime.now(datetime.timezone.utc)
 newly = []
 try:
-    fresh, halted, newly = t.tick_advance.detect_and_halt_stalled(repo, run, led, now)
+    fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
     crashed = "no"
 except Exception as e:  # noqa: BLE001 — the point is that NOTHING escapes.
     crashed = type(e).__name__
@@ -1164,5 +1164,5 @@ fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "pulse.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

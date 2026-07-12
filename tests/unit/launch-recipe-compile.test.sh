@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U5 unit test: inline gate compilation for gated recipes.
 #
-# Exercises the REAL lib/recipes.py / lib/ledger.py / lib/tick.py surfaces the
+# Exercises the REAL lib/recipes.py / lib/ledger.py / lib/pulse.py surfaces the
 # auto-launch §6.1 compile-and-dispatch step drives — independent of
 # AskUserQuestion (the chooser is prose; this tests the mechanics under it).
 #
@@ -26,7 +26,7 @@
 #      validate_and_lint WARNING (not a hard error), which the agent treats as
 #      blocking; a distinct description clears it.
 #   5. Teardown / recipe-blind-after-init — after init_ledger the run-scoped
-#      recipe file is deleted, yet a post-init drive (dispatch_tick, which
+#      recipe file is deleted, yet a post-init drive (dispatch_pulse, which
 #      resolves producers off the LEDGER, never the recipe file) still advances the
 #      run, read_ledger still carries the topology, and nothing persists in
 #      .claude/auto/recipes/.
@@ -213,10 +213,10 @@ elif op == "desc-warning":
 
 elif op == "teardown":
     # Write the run-scoped recipe, init a ledger from it (the ONLY point the
-    # engine reads the recipe), delete the recipe, then drive a post-init tick
+    # engine reads the recipe), delete the recipe, then drive a post-init pulse
     # purely from ledger state — recipe-blind-after-init (recipe-format §1).
     ledger = load_lib_module("ledger")
-    tick = load_lib_module("tick")
+    pulse = load_lib_module("pulse")
     slug = sys.argv[4]
     # Snapshot the workspace tier BEFORE this run so "nothing accumulates across
     # runs" is measured as net residue (other scenarios in this shared sandbox
@@ -264,11 +264,11 @@ elif op == "teardown":
     topo_ok = int(led_units == expected)
 
     # ...and a post-init drive still advances the run (no recipe file needed).
-    intent = tick.dispatch_tick(repo, run_id)
+    intent = pulse.dispatch_pulse(repo, run_id)
     print(
         f"file_gone={file_gone} net_residue={net_residue} "
         f"resolve_after={resolve_after} topo_ok={topo_ok} "
-        f"tick_action={intent.get('action')}"
+        f"pulse_action={intent.get('action')}"
     )
 
 else:
@@ -327,8 +327,8 @@ it "teardown: resolve() can no longer find the deleted run-scoped recipe"
 assert_eq "missing" "$(field resolve_after "$R")"
 it "teardown: read_ledger still carries the run's persisted topology"
 assert_eq "1" "$(field topo_ok "$R")"
-it "teardown: a post-init dispatch_tick still drives the run (recipe-blind after init)"
-assert_eq "rearm" "$(field tick_action "$R")"
+it "teardown: a post-init dispatch_pulse still drives the run (recipe-blind after init)"
+assert_eq "rearm" "$(field pulse_action "$R")"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo

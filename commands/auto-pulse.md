@@ -3,13 +3,6 @@ argument-hint: "<run> [--auto] [--delay N] [--repo PATH]"
 allowed-tools: Bash, Skill
 ---
 
-DEPRECATED ALIAS of `/auto:auto-pulse` (concept-vocabulary rename U5: tick →
-pulse). Kept one minor version and NOT removable yet: in-flight runs have
-`/auto:auto-tick <run>` persisted inside a `ScheduleWakeup` prompt and in stale
-rearm-intent JSON, so deleting this file would wedge them mid-run. New rearms
-are built as `/auto:auto-pulse <run>` (`lib/_bootstrap.py::PULSE_COMMAND`).
-Same body as `commands/auto-pulse.md`; it runs the SAME engine (`lib/pulse.sh`).
-
 Advance an auto run by ONE pulse — the self-pacing entry the loop re-arms
 into.
 
@@ -45,5 +38,4 @@ dispatch table. The contract in brief:
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop. The
 `prompt` field of a `rearm` intent is itself `/auto:auto-pulse <run>` — that is
-how the loop sustains itself (this alias exists only for the prompts armed
-BEFORE the rename).
+how the loop sustains itself.

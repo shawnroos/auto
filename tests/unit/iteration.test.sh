@@ -221,8 +221,8 @@ elif op == "pending-corrupt-max-wall":
 
 # ─── G1 / rel-r2-1: kill-switch read-side parity ───────────────────────────
 # When the operator sets CLAUDE_AUTO_DISABLE_ITERATION=1, compute_pending_state
-# must short-circuit to False — symmetric with tick.advance_iteration_loop's
-# write-side fence (lib/tick.py:624). Without parity, a kill-switched mid-iter
+# must short-circuit to False — symmetric with pulse.advance_iteration_loop's
+# write-side fence (lib/pulse.py:624). Without parity, a kill-switched mid-iter
 # run still computes iteration_pending=True from the gate's stale "iterate"
 # verdict and blocks the predicate's `met` branch via the AND-NOT clause.
 #
@@ -374,7 +374,7 @@ assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 # ─── G1 / rel-r2-1: kill-switch read-side parity ──────────────────────────
 # Operator sets CLAUDE_AUTO_DISABLE_ITERATION=1; compute_pending_state must
 # return False even on a ledger that would otherwise be iterate-under-bound.
-# This mirrors the write-side check at lib/tick.py:624. The same ledger
+# This mirrors the write-side check at lib/pulse.py:624. The same ledger
 # shape WITHOUT the env var returns True (covered by pending-iterate-under
 # above) — the only difference is the kill-switch, isolating the behavior
 # the test is asserting.
@@ -392,7 +392,7 @@ assert_eq "True" "$(run_iter pending-kill-switch-on)"
 # If ``iteration`` is a non-dict scalar (string, list — torn-write shapes),
 # compute_pending_state MUST return False, NOT raise. A raise here would
 # propagate through _atomic_write → recompute_predicate and block the very
-# ledger writes F2 (lib/tick.py) needs to force-mark the loop done.
+# ledger writes F2 (lib/pulse.py) needs to force-mark the loop done.
 #
 # The DF cycle: comment out the isinstance check in iteration.py → these tests
 # go RED with "raised:AttributeError" (the iteration_block.get('gate_unit')

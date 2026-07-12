@@ -15,7 +15,7 @@
 # unit + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
 # Prime the plan unit's enumerated_units (2 items so the bias-applied builders
 # carry real plan_items), set gaps_open=0 + plan_step=review_plan,
-# dispatch_tick(auto=True). Auto-flip fires the producer which produces:
+# dispatch_pulse(auto=True). Auto-flip fires the producer which produces:
 #   build-clarity (depends_on=[]),
 #   build-perf    (depends_on=[]),
 #   compare       (depends_on=[build-clarity, build-perf]).
@@ -45,7 +45,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Drive a4 from a primed plan-done state through one dispatch_tick. Args:
+# Drive a4 from a primed plan-done state through one dispatch_pulse. Args:
 #   $1 = empty_plan:  "0" | "1" (1 → don't stash any enumerated_units, deliberate-fail)
 #   $2 = producer_off: "0" | "1" (1 → monkey-patch transition_and_emit to a no-op,
 #                                deliberate-fail control parity with a1's test)
@@ -68,7 +68,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -103,18 +103,18 @@ ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 2b (deliberate-fail control parity with a1): monkey-patch
-# transition_and_emit to a no-op BEFORE the tick fires. If the engine routes
+# transition_and_emit to a no-op BEFORE the pulse fires. If the engine routes
 # through this primitive (it does in the green branch), the no-op produces
 # zero new units even though the recipe declares a producer for {to:work}.
 if producer_off:
     def _noop(*a, **kw): pass
     ledger.transition_and_emit = _noop
-    tick.ledger.transition_and_emit = _noop  # tick imports ledger as a module
+    pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
 
-# Step 3: tick. auto=True so _maybe_seam takes the auto-flip branch.
+# Step 3: pulse. auto=True so _maybe_seam takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
 work_units = [u for u in led["units"] if u.get("phase") == "work"]

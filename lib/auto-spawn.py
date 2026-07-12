@@ -25,7 +25,7 @@ Why the cmux primitive (round-4 R4-001):
   The harness's native Agent tool does NOT expose `cwd` or `env`
   parameters. A naive ``bash -lc "claude '/auto:auto <plan>' &"`` fails: the
   claude CLI defaults to an interactive tty-bound session and ``-p``
-  exits after the first response, terminating before a multi-tick
+  exits after the first response, terminating before a multi-pulse
   /auto loop can drive. The cmux app-owned workspace is the ONLY
   working dispatch shape — verified by the U1 cmux spike and by
   v0.3.x's /auto-resume code path in production.

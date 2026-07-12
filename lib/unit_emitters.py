@@ -257,7 +257,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
         is True in Python, and a True payload masquerading as 1 is a
         misshapen payload, not a valid emit_count). 1 ≤ emit_count ≤ 10
         (round-3 P1-R3-4: upper bound prevents a misbehaving gate agent from
-        DOS-emitting 1000 units in one tick).
+        DOS-emitting 1000 units in one pulse).
       - ``ledger.iteration_emit_count`` (default 0 on v0.2.x-shape ledgers)
         → the monotonic id base.
 
@@ -363,10 +363,10 @@ def no_emit(ledger_dict, to_phase):
     gate.depends_on``, preserving the existing dependency graph; the gate is
     reset (verdict-returned → pending, decision cleared) and
     ``iteration_attempts`` increments, so the existing siblings re-engage on
-    the next tick.
+    the next pulse.
 
     Lives here (B10, v0.3.1) — it's a producer and belongs next to the others.
-    NOT in ``REGISTRY``: it's selected by ``tick_advance.advance_iteration_loop``
+    NOT in ``REGISTRY``: it's selected by ``pulse_advance.advance_iteration_loop``
     as the internal fallback when the recipe declares no ``emit_template``;
     promoting it to a recipe-namable producer would duplicate the "omit
     emit_template" recipe shape with no added authoring expressiveness.

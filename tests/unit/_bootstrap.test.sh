@@ -92,21 +92,21 @@ assert_eq "0" "$hits"
 
 # ─── Scenario 5: test_hatch_enabled still fences the other test hatches ─────
 # With BOTH sentinel + var set → True. The helper unchanged for these.
-it "test_hatch_enabled: harness sentinel + NO_TICK_LOCK=1 → True (existing test hatches unaffected)"
-result="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 \
-  probe test_hatch CLAUDE_AUTO_TEST_NO_TICK_LOCK)"
+it "test_hatch_enabled: harness sentinel + NO_PULSE_LOCK=1 → True (existing test hatches unaffected)"
+result="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 \
+  probe test_hatch CLAUDE_AUTO_TEST_NO_PULSE_LOCK)"
 assert_eq "True" "$result"
 
 # ─── Scenario 6: test_hatch_enabled fence — sentinel missing → False ────────
 it "test_hatch_enabled: var alone (no harness sentinel) → False (other hatches still fenced)"
-result="$(unset CLAUDE_AUTO_TEST_HARNESS; CLAUDE_AUTO_TEST_NO_TICK_LOCK=1 \
-  probe test_hatch CLAUDE_AUTO_TEST_NO_TICK_LOCK)"
+result="$(unset CLAUDE_AUTO_TEST_HARNESS; CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 \
+  probe test_hatch CLAUDE_AUTO_TEST_NO_PULSE_LOCK)"
 assert_eq "False" "$result"
 
 # ─── Scenario 7: test_hatch_enabled fence — var missing → False ─────────────
 it "test_hatch_enabled: harness sentinel alone (no var) → False"
-result="$(unset CLAUDE_AUTO_TEST_NO_TICK_LOCK; CLAUDE_AUTO_TEST_HARNESS=1 \
-  probe test_hatch CLAUDE_AUTO_TEST_NO_TICK_LOCK)"
+result="$(unset CLAUDE_AUTO_TEST_NO_PULSE_LOCK; CLAUDE_AUTO_TEST_HARNESS=1 \
+  probe test_hatch CLAUDE_AUTO_TEST_NO_PULSE_LOCK)"
 assert_eq "False" "$result"
 
 # ─── load_ledger_safe / iter_worktree_ledgers (the shared ledger-scan home) ──

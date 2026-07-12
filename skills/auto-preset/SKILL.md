@@ -5,7 +5,7 @@ description: >
   addressable step presets. Use when the operator wants to fire a single tuned
   step (a tuned review, a scoped build) standalone: "run <preset> against
   <target>", "one-shot the tuned-review on this diff", "fire scoped-build on
-  <target>". This skill IS the dispatcher (no tick, no /goal, no re-arm): it
+  <target>". This skill IS the dispatcher (no pulse, no /goal, no re-arm): it
   loads the preset, PROPOSES context-fit verification the operator accepts or
   edits, launches the preset's op ONCE as an awaited sub-agent honoring its
   prompt_template, resolves every criterion inline, folds the ratified criteria
@@ -19,11 +19,11 @@ A **preset** is the pure payload of a step — one `adapter_op` invocation plus 
 optional tuning `prompt_template`, promoted to a first-class named object
 (`lib/presets.py`). This skill runs one preset **one-shot**: grab it by name,
 point it at a target, propose a context-fit check, run it once, get the result
-plus a verdict — no flow armed, no loop, no tick.
+plus a verdict — no flow armed, no loop, no pulse.
 
 This skill is the **entire control path** (KTD-3 / A5). It owns the propose→ratify
 conversation, the single awaited dispatch, inline criterion resolution, and the
-result+verdict presentation. It does **not** enter the engine's tick loop, arm a
+result+verdict presentation. It does **not** enter the engine's pulse loop, arm a
 `ScheduleWakeup`, or bind a `/goal`. That is what makes "the loop runtime is
 unchanged" hold literally.
 
@@ -36,14 +36,14 @@ shape). The thin lib seams this skill drives live in `lib/presets.py` and
 
 ## What stays true throughout
 
-- **Driver-orchestrated, engine untouched.** No tick, no `ScheduleWakeup`, no
+- **Driver-orchestrated, engine untouched.** No pulse, no `ScheduleWakeup`, no
   `/goal`, no re-arm. The skill drives synchronously start to finish.
 - **One preset = one step.** Exactly one `adapter_op` invocation. A multi-step
   reusable sequence is a *flow* of containers (Phase-2, deferred), not a preset.
 - **Verification is generated, never stored.** The ratified criteria live only on
   this run — they are NEVER written back to the preset JSON (R2/A2). A preset
   is pure payload; it carries no built-in gate.
-- **Every criterion resolves inline.** Because there is no next tick,
+- **Every criterion resolves inline.** Because there is no next pulse,
   `advisor_judge` and `human` criteria BLOCK (a blocking `advisor` consult / a
   blocking pause) — they do not defer. See the reference doc.
 
@@ -159,12 +159,12 @@ than passing silently.
 
 Then **surface the preset's output and the verdict distinctly** — the review /
 build result the sub-agent produced, and the `pass`/`fail`/`unverified` with
-which criteria drove it. The run is terminal: **no tick is armed, no `/goal` is
+which criteria drove it. The run is terminal: **no pulse is armed, no `/goal` is
 bound, nothing to resume.** Report and stop.
 
 ## What this skill does NOT do
 
-- It does not arm a loop, a tick, a `ScheduleWakeup`, or a `/goal` — that is
+- It does not arm a loop, a pulse, a `ScheduleWakeup`, or a `/goal` — that is
   `/auto` (`skills/auto`). The one-shot is single-pass and driver-driven.
 - It does not write the ratified criteria back to the preset (R2/A2), and it
   does not edit the preset JSON.
@@ -177,7 +177,7 @@ bound, nothing to resume.** Report and stop.
 
 ## Invariants
 
-- **Driver-orchestrated, engine untouched.** No tick, no `/goal`, no re-arm.
+- **Driver-orchestrated, engine untouched.** No pulse, no `/goal`, no re-arm.
 - **Propose, don't interview.** Seed the criteria from the target; the operator
   accepts or edits; nothing dispatches until they do (AE1); the edited form is
   baked (AE2).

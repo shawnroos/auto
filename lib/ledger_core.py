@@ -61,7 +61,7 @@ GRACE_SECONDS = 4200  # I-3: > 3600s ScheduleWakeup clamp ceiling + slack.
 DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-unit stall timeout default.
 # Bug #9: a `driver=="self"` chain whose last beat is older than THIS is treated
 # as a DEAD chain by the Stop hook (it no longer blocks stop). It sits ABOVE the
-# 3600s ScheduleWakeup max-tick-delay + slack (so a healthy slow chain is never
+# 3600s ScheduleWakeup max-pulse-delay + slack (so a healthy slow chain is never
 # false-flagged as dead and prematurely un-blocked) yet BELOW GRACE_SECONDS (so a
 # dead chain stops blocking stop BEFORE is_orphaned would surface it for resume —
 # the two purposes are reconciled by this ordering: 600 stall < 3900 stop-stale <
@@ -70,11 +70,11 @@ DRIVER_SELF_STALE_SECONDS = 3900
 
 LOOP_PHASES = ("plan", "seam", "work", "done")
 # Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
-# backend reads plan_step to compute the NEXT step; the tick persists the step it
+# backend reads plan_step to compute the NEXT step; the pulse persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
 PLAN_STEPS = ("plan", "deepen", "review_plan")
 # v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
-# set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; tick.py
+# set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; pulse.py
 # spells intent as `ledger.ExitReason.RECIPE_BUG` rather than a string literal
 # (which would create a divergent-literal class the prose claims is a fixed enum
 # but the code only enforces by convention). StrEnum: members ARE strings, so
@@ -591,9 +591,9 @@ def init_ledger(
             # scoped, so the bound check + predicate composition agree on a
             # single storage location.
             #   active_wall_seconds   — accumulator of monotonic-clock deltas
-            #                           per tick (the wall-time bound denominator).
+            #                           per pulse (the wall-time bound denominator).
             #                           Round-3 P1-R3-3: counted from a finally
-            #                           clause in tick.py to cover crashed paths.
+            #                           clause in pulse.py to cover crashed paths.
             #   last_active_at        — ISO timestamp of the most recent
             #                           accumulate_active_time call. Diagnostic
             #                           only; the bound math reads
@@ -613,14 +613,14 @@ def init_ledger(
             "iteration_emit_count": seed_count,
             # v0.3.0 G2 / AN-W1: persisted record of a non-clean run exit. None
             # on a healthy run; populated by ``set_exit_reason`` when F2's
-            # try/except (lib/tick.py) catches an iteration-check raise or a
+            # try/except (lib/pulse.py) catches an iteration-check raise or a
             # recipe-bug LedgerError subclass. ``/auto-status`` renders it
             # alongside loop_phase=done so the operator can distinguish a clean
             # finish from a wedge that was force-marked done.
             "exit_reason": None,
             # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
             # ledger at init so the engine's iteration check (advance_iteration_loop)
-            # and the iterate_template producer find them at every tick. None on a
+            # and the iterate_template producer find them at every pulse. None on a
             # legacy or non-iteration recipe (a1, W, v0.2.x a2/a4); the validators
             # at U5 ensure shape is OK if non-None. Routed through here (not seeded
             # post-init) so the recipe→ledger flow is the production path — the

@@ -13,7 +13,7 @@
 # work-loop state and asserts the producer populated the work-phase units.
 #
 # STRUCTURE: prime the ledger to look like "plan unit is done, enumerated_units
-# stashed, gaps_open=0" (the post-backend-handoff state), call dispatch_tick once
+# stashed, gaps_open=0" (the post-backend-handoff state), call dispatch_pulse once
 # in auto mode, then read the ledger:
 #   - loop_phase must have advanced past "plan" (to "work" via auto-flip)
 #   - new units must appear with phase="work" (the producer ran)
@@ -46,7 +46,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Drive a1 to plan-done, then call dispatch_tick once and read back. Returns CSV:
+# Drive a1 to plan-done, then call dispatch_pulse once and read back. Returns CSV:
 #   loop_phase | work_unit_ids (comma-joined, sorted)
 # producer_off=1 monkey-patches transition_and_emit to a no-op (deliberate-fail
 # control); legacy_no_recipe=1 strips the recipe field to exercise the v0.1.x
@@ -70,7 +70,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -116,17 +116,17 @@ if legacy_no_recipe:
         json.dump(led_raw, f)
 
 # Step 3 (deliberate-fail control): monkey-patch transition_and_emit to a no-op
-# BEFORE the tick fires. If the engine routes through this primitive (it does
+# BEFORE the pulse fires. If the engine routes through this primitive (it does
 # in the green branch), the no-op will produce zero new units even though the
 # recipe declares one.
 if producer_off:
     def _noop(*a, **kw): pass
     ledger.transition_and_emit = _noop
-    tick.ledger.transition_and_emit = _noop  # tick imports ledger as a module
+    pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
 
-# Step 4: tick. auto=True so _maybe_seam takes the auto-flip branch.
+# Step 4: pulse. auto=True so _maybe_seam takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
-    tick.dispatch_tick(repo, run_id, auto=True)
+    pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
 work_units = sorted(u["id"] for u in led["units"] if u.get("phase") == "work")
@@ -136,7 +136,7 @@ PYEOF
 
 it "fix-pass A.2: a1 plan-done → auto-flip fires the producer (work units appear)"
 res="$(drive_plan_to_work 0 0)"
-# After auto-flip the tick reads predicate.met and sets loop_phase="done" (work
+# After auto-flip the pulse reads predicate.met and sets loop_phase="done" (work
 # loop is vacuously met if no work units — but the producer ran FIRST and added
 # u-alpha + u-beta, both pending, so all_units_terminal=false and met=false →
 # stays at work). loop_phase MUST be "work" (or "done" if predicate flipped),
@@ -170,7 +170,7 @@ esac
 # hasn't run the enumerate prepare op) must NOT flip to a work phase with zero
 # units (vacuous-exit → wedged run). The handshake keeps it in the plan phase
 # until units are persisted. Without this, a1's plan→work producer is unrunnable
-# end-to-end (the bug the missing /auto-tick had masked).
+# end-to-end (the bug the missing /auto-pulse had masked).
 it "producer handshake: plan-done with no enumerated units stays in plan (no empty work flip)"
 res_nostash="$(drive_plan_to_work 0 0 1)"
 case "$res_nostash" in

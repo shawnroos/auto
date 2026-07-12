@@ -112,7 +112,13 @@ check_command() {
 check_command "auto.md" "auto.sh"
 check_command "auto-status.md" "auto-status.sh"
 check_command "auto-resume.md" "auto-resume.sh"
-check_command "auto-tick.md" "tick.sh"
+check_command "auto-pulse.md" "pulse.sh"
+# The kept DEPRECATED alias (concept-vocabulary rename U5, KTD-4): in-flight runs
+# have `/auto:auto-tick <run>` persisted inside ScheduleWakeup, so the old command
+# file must survive one minor version AND must dispatch the SAME engine as the
+# canonical command (lib/pulse.sh) — not a stale lib/tick.sh path. Removing this
+# line is part of the alias removal, not of this rename.
+check_command "auto-tick.md" "pulse.sh"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 auto_test::summary

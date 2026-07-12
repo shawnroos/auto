@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # auto v0.3.0 U6 integration test: a2 recipe with iteration block — three
-# scenarios (GREEN/ITERATE/BOUND) driving the full recipe→ledger→tick path.
+# scenarios (GREEN/ITERATE/BOUND) driving the full recipe→ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # Unit tests on iterate_template (producers.test.sh) and advance_iteration_loop
-# (tick.test.sh) cover the iteration primitives in isolation; this file proves
+# (pulse.test.sh) cover the iteration primitives in isolation; this file proves
 # that a recipe DECLARING iteration in JSON actually drives the production
-# init→tick path. Without it, the recipe→ledger→tick wire could silently
+# init→pulse path. Without it, the recipe→ledger→pulse wire could silently
 # regress to recipe-iteration-ignored (the dominant build-bug class — prose
 # claims a transition the code doesn't enforce).
 #
@@ -15,7 +15,7 @@
 #   ="plan-candidate", iteration.bound={max_attempts:5, max_wall_seconds:900}.
 #   plus emit_templates.plan-candidate={phase:"plan", invokes:{adapter_op:
 #   "next_plan_step"}, id_prefix:"plan-"}. auto.run + init_ledger thread these
-#   onto the ledger at init (U6 plumbing). Subsequent ticks drive:
+#   onto the ledger at init (U6 plumbing). Subsequent pulses drive:
 #     - judge decision=advance → standard flow (matches v0.2.x A2 GREEN).
 #     - judge decision=iterate (under bound) → atomic_iterate_step emits a new
 #       plan unit (plan-4), increments iteration_attempts, resets judge to
@@ -26,7 +26,7 @@
 #
 # STRUCTURE: init via auto.run with --recipe a2 (carries iteration to ledger);
 # prime each plan unit's enumerated_units; set gaps_open=0; record_verdict +
-# set_verdict_decision on judge per scenario; dispatch_tick. Assert end-state
+# set_verdict_decision on judge per scenario; dispatch_pulse. Assert end-state
 # (loop_phase, iteration_attempts, ids of newly-emitted plan units, bound_override
 # presence).
 #
@@ -76,7 +76,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 a = load_lib_module("auto")
 ledger = load_lib_module("ledger")
-tick = load_lib_module("tick")
+pulse = load_lib_module("pulse")
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -153,10 +153,10 @@ elif scenario == "bound":
     ledger.set_verdict_decision(repo, run_id, "judge", "iterate",
         payload={"emit_count": 1})
 
-# Step 4: tick. advance_iteration_loop fires at the top of _tick_body_inner.
+# Step 4: pulse. advance_iteration_loop fires at the top of _pulse_body_inner.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = ledger.read_ledger(repo, run_id)
 judge = next(u for u in led["units"] if u["id"] == "judge")
@@ -178,10 +178,10 @@ it "U6 a2 GREEN: judge decision=advance → iteration block doesn't fire, iterat
 res="$(drive_a2 green)"
 # Expected (R7 backward compat): standard A2 GREEN behavior, iteration_attempts
 # unchanged at 0, no new plan units, judge ends up in verdict-returned (with
-# winner_unit_id set), no bound_override. After tick:
+# winner_unit_id set), no bound_override. After pulse:
 #   - loop_phase: standard advance path (the predicate-met short-circuit lifts
 #     to "done" since iteration_pending=False). For A2 with no new winner units
-#     emitted prior to this tick, the work predicate met=True only if all
+#     emitted prior to this pulse, the work predicate met=True only if all
 #     pending work units terminal; here judge_winner_to_work_units emits plan-1's
 #     enumerated set (wA-1 — pending) so met=False and loop stays in work.
 #   - iteration_attempts: 0 (no iterate decision honored).

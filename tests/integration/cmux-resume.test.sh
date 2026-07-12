@@ -12,7 +12,7 @@
 #   - orphaned run -> issues the correct `cmux new-workspace` command
 #     (sleep lead-in + /auto:auto-resume <run> + --focus false), and the
 #     standalone `command` builder produces the same well-formed string.
-#   - DOUBLE-DRIVE: a run whose tick lock is held by a LIVE tick -> auto-resume
+#   - DOUBLE-DRIVE: a run whose pulse lock is held by a LIVE pulse -> auto-resume
 #     NO-OPS (no spawn). This is the load-bearing guard.
 #   - non-orphaned run (driver==self, fresh last_beat_at) -> no spawn.
 #   - done run -> no spawn.
@@ -130,8 +130,8 @@ assert_contains "$cmd" "sleep 1; claude '/auto:auto-resume orphanrun'"
 it "command builder: includes --focus false"
 assert_contains "$cmd" "--focus false"
 
-# ─── DOUBLE-DRIVE: tick lock held by a live tick -> NO spawn ──────────────────
-it "double-drive: a live tick holding the lock makes auto-resume NO-OP (no spawn)"
+# ─── DOUBLE-DRIVE: pulse lock held by a live pulse -> NO spawn ──────────────────
+it "double-drive: a live pulse holding the lock makes auto-resume NO-OP (no spawn)"
 REPO="$(mkrepo doubledrive)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
@@ -140,11 +140,11 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"liverun",driver="manual")  # orphaned by predicate...
 PYEOF
-# Resolve the tick-lock path and HOLD it from a backgrounded Python "live tick".
+# Resolve the pulse-lock path and HOLD it from a backgrounded Python "live pulse".
 LOCK_PATH="$(bash "$CMUX_SOCKET_SH" command "$REPO" liverun >/dev/null 2>&1; \
              CLAUDE_AUTO_PYTHON3="$PY" bash -c '
                source "'"$CMUX_SOCKET_SH"'" 2>/dev/null || true
-               auto::tick_lock_path "'"$REPO"'" liverun')"
+               auto::pulse_lock_path "'"$REPO"'" liverun')"
 assert_nonempty "$LOCK_PATH"
 # Background a process that grabs an exclusive flock and holds it, signalling
 # readiness via a flag file, then waits for a release flag.

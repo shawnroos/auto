@@ -71,7 +71,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # ──────────────────────────────────────────────────────────────────────────
 # DELEGATION (no inline logic). The rubric + validate_findings + next_plan_step
 # state machine + the PREPARE envelopes live ONCE, in backend-native.py — the
-# module tick.py imports. This shim used to re-implement them in an inline Python
+# module pulse.py imports. This shim used to re-implement them in an inline Python
 # heredoc; that meant the contract-load-bearing logic existed in two places and
 # could drift. The shim now pins the interpreter and execs backend-native.py's
 # CLI, which dispatches the same subcommands onto the SAME pure functions. All

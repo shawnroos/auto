@@ -2,7 +2,7 @@
 """auto U10: agent-managed batch fan-out for the work-loop.
 
 The orchestration layer is *agent-driven* and deliberately separate from the
-mechanical tick (U4). The DRIVING AGENT (U5) owns the policy — it reads which
+mechanical pulse (U4). The DRIVING AGENT (U5) owns the policy — it reads which
 units are ready, decides a batch cap for this wave (resizing in flight under
 machine pressure), dispatches, then reconciles landed verdicts. The engine here
 only exposes ready-and-independent units and reconciles durable state; it never
@@ -253,12 +253,12 @@ def pick_next_plan_unit_to_advance(ledger: dict):
     """Round-robin selector for serialized N>1 plan-loop advance (U6 / KTD-4).
 
     With multiple plan-phase units (A2's competing plans), exactly ONE advances
-    per tick so the backend's ``next_plan_step(ledger)`` sees a single logical
+    per pulse so the backend's ``next_plan_step(ledger)`` sees a single logical
     advance-stream and the contract stays unchanged. This picks which one: the
     eligible plan unit with the OLDEST ``last_advanced_at`` (``null`` sorts oldest
     → a never-advanced unit goes first), ties broken by ``units[]`` declaration
     order. State lives in the ledger (``last_advanced_at`` per unit), so resume
-    continues the rotation correctly across ticks.
+    continues the rotation correctly across pulses.
 
     Eligible = phase ``plan`` AND state ``dispatched`` (NOT ``stalled`` — a
     stalled plan unit is excluded from the rotation; adversarial F3). Returns the

@@ -4,8 +4,8 @@
 #
 # WHY THIS TEST EXISTS (memory `feedback_ce_review_structural_blind_spot`):
 # Across three /ce-code-review rounds (33 reviewer runs) reviewing v0.3.0,
-# NONE flagged that lib/tick.py crossed 1k (966→1398) or that
-# _tick_body_inner ballooned to 466 LOC. The personas reason about diff
+# NONE flagged that lib/pulse.py crossed 1k (966→1398) or that
+# _pulse_body_inner ballooned to 466 LOC. The personas reason about diff
 # hunks, not whole-file or function-shape properties. A dedicated
 # thermo-nuclear pass after-the-fact found all four immediately as P0/P1
 # blockers — too late, the debt had compounded.
@@ -88,7 +88,7 @@ ALLOWED_FUNCTIONS=(
   # iterate-over-bound / exit), atomic_iterate_step dispatch. The branches
   # are coherent (one decision tree); further decomposition would just
   # spread the dispatch across helpers without making it smaller.
-  "lib/tick_advance.py:advance_iteration_loop:133"
+  "lib/pulse_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
   # + backend routing + verdict-write. U12 added the per-unit adapter_op
   # validation guard (reject an unknown op before launch), +8 LOC over the

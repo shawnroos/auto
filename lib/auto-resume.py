@@ -8,7 +8,7 @@ Subcommands:
     [<run>]            default continue: re-record the driving session (so the
                        advisor gates own the re-armed run — fix-round-6 P1),
                        flip a paused seam -> work, then emit a re-arm INTENT
-                       (the model fires /auto:auto-tick).
+                       (the model fires /auto:auto-pulse).
     continue <run>     explicit continue (same as default with a run-id).
     pause <run> [why]  blocked on a human/external action (auth, approval,
                        missing creds): flip driver -> "manual" so the Stop hook
@@ -18,7 +18,7 @@ Subcommands:
     advance <run>      declare the CURRENT phase already satisfied and move on
                        (v0.4.3 KTD-15). The "the plan is done — stop re-planning
                        it" tool: in the plan phase it marks the plan satisfied
-                       (plan_step=review_plan, gaps_open=0) so the next tick goes
+                       (plan_step=review_plan, gaps_open=0) so the next pulse goes
                        straight to enumerate -> work; at a seam it behaves like
                        continue; in the work phase it is a no-op (work advances by
                        unit verdicts, not by fiat).
@@ -30,9 +30,9 @@ Ambiguity: if no run-id is given and >1 run is resumable, list them and ask the
 operator to disambiguate (exit 0 — surfacing, not an error).
 
 DOUBLE-DRIVE: state transitions route through ledger.py (RMW flock); the
-arm-a-tick path emits intent only — the tick's own non-blocking process-held
-_tick_lock is the double-drive guard. No new flock here (would deadlock the
-tick). No file sentinel.
+arm-a-pulse path emits intent only — the pulse's own non-blocking process-held
+_pulse_lock is the double-drive guard. No new flock here (would deadlock the
+pulse). No file sentinel.
 
 rel-001-ish: a clean usage/disambiguation message exits 0; only a genuine bad
 transition exits non-zero (so the operator sees the error).
@@ -49,7 +49,7 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     DRIVING_SESSION_KEY,
     build_arm_intent,
-    build_tick_prompt,
+    build_pulse_prompt,
     iter_active_runs,
     iter_worktree_ledgers,
     load_ledger,
@@ -60,10 +60,10 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
-# v0.2.0 fix-pass A.2: the manual seam→work resume routes through tick.py's
+# v0.2.0 fix-pass A.2: the manual seam→work resume routes through pulse.py's
 # centralized advance helper so it fires the recipe's producer the same way the
-# auto-flip does. tick.py uses a hyphenless name so plain import works.
-import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
+# auto-flip does. pulse.py uses a hyphenless name so plain import works.
+import pulse  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
 # fix-round-6 P1: the resume re-arm path RE-records driving_session_id (the
 # advisor-gate ownership key) so a run resumed from a DIFFERENT interactive
@@ -99,9 +99,9 @@ def _resumable_runs(ledger, repo_root: str):
 
 
 def _emit_rearm(run_id: str, note: str) -> int:
-    """Emit the re-arm INTENT — the model fires the actual /auto:auto-tick."""
+    """Emit the re-arm INTENT — the model fires the actual /auto:auto-pulse."""
     json.dump(
-        build_arm_intent(run_id, build_tick_prompt(run_id), note),
+        build_arm_intent(run_id, build_pulse_prompt(run_id), note),
         sys.stdout,
     )
     sys.stdout.write("\n")
@@ -178,7 +178,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
 
 
 def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
-    """Flip a paused seam -> work (if applicable), then arm a tick."""
+    """Flip a paused seam -> work (if applicable), then arm a pulse."""
     try:
         led = ledger.read_ledger(repo_root, run_id)
     except ledger.LedgerNotFound as exc:
@@ -195,15 +195,15 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     if rc != 0:
         return rc
     if phase == "seam":
-        # seam -> work: route through tick.advance_to_phase so the recipe's
+        # seam -> work: route through pulse.advance_to_phase so the recipe's
         # producer fires the same way it does on the auto-flip path (P0 #1
         # fix-pass A.2 — without this the manual resume would silently skip
         # emission and the work-loop would start with empty units). Legacy
         # ledgers (no recipe) fall through to set_loop inside the helper,
         # preserving v0.1.x behavior. seam_paused=False is written by both
         # paths inside the helper.
-        tick.advance_to_phase(repo_root, run_id, led, to_phase="work")
-        return _emit_rearm(run_id, "seam -> work; arm a fresh tick chain")
+        pulse.advance_to_phase(repo_root, run_id, led, to_phase="work")
+        return _emit_rearm(run_id, "seam -> work; arm a fresh pulse chain")
     # Orphaned, or resuming a blocked-pause: re-arm cleanly off the durable
     # ledger. driver -> "self" reactivates the Stop hook; clear blocked_on (the
     # human acted, so the pause reason no longer applies). Clear backstop_latched
@@ -214,7 +214,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     ledger.set_loop(
         repo_root, run_id, driver="self", blocked_on=None, backstop_latched=False
     )
-    return _emit_rearm(run_id, "resume run; arm a fresh tick chain")
+    return _emit_rearm(run_id, "resume run; arm a fresh pulse chain")
 
 
 def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
@@ -263,9 +263,9 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     ③). This verb is that affordance, phase-aware:
 
       * plan  — mark the plan satisfied: plan_step="review_plan" + gaps_open=0,
-        the exact pre-satisfied state W inits with. The next tick's next_plan_step
+        the exact pre-satisfied state W inits with. The next pulse's next_plan_step
         returns "done" → enumerate_plan_units → plan→work, no re-derivation. We
-        arm a tick so the model enumerates the (already-in-context) plan's units.
+        arm a pulse so the model enumerates the (already-in-context) plan's units.
       * seam  — identical to `continue` (seam→work); delegate so there's one
         code path for the seam advance.
       * work  — no-op: the work-loop advances by unit verdicts, not by fiat;
@@ -307,7 +307,7 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     ledger.set_gaps_open(repo_root, run_id, 0)
     return _emit_rearm(
         run_id,
-        "plan declared satisfied (advance); arm a tick to enumerate work units",
+        "plan declared satisfied (advance); arm a pulse to enumerate work units",
     )
 
 

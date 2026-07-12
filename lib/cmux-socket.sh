@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U8: automatic cross-session resume via the cmux control socket.
 #
-# When a run is ORPHANED (its self-paced ScheduleWakeup tick chain died with a
+# When a run is ORPHANED (its self-paced ScheduleWakeup pulse chain died with a
 # prior session), this spawns a FRESH cmux workspace running `/auto-resume
 # <run>` so the loop continues WITHOUT the operator manually typing it. U7's
 # on-session-start.py only SURFACES a resume hint; U8 makes resume AUTOMATIC.
@@ -18,14 +18,14 @@
 #     shell settle so the command runs reliably.
 #
 # DOUBLE-DRIVE GUARD (the load-bearing piece): before spawning, this probes the
-# SAME per-run tick lock that lib/tick.py::_tick_lock holds (the `.tick.lock`
-# sibling of the ledger). If a LIVE tick already holds it, a driver is already
+# SAME per-run pulse lock that lib/pulse.py::_pulse_lock holds (the `.pulse.lock`
+# sibling of the ledger). If a LIVE pulse already holds it, a driver is already
 # running — auto-resume NO-OPS (it must never spawn a competing driver). The
 # probe is a non-blocking flock-then-release; the spawned /auto-resume will
-# itself contend for that same lock, so any tick that arrives after the probe
+# itself contend for that same lock, so any pulse that arrives after the probe
 # window simply loses non-blockingly. We derive the lock base from the PUBLIC
-# ledger.lock_path() and swap `.lock` -> `.tick.lock` (we do NOT import tick.py's
-# private _tick_lock_path).
+# ledger.lock_path() and swap `.lock` -> `.pulse.lock` (we do NOT import pulse.py's
+# private _pulse_lock_path).
 #
 # RUNAWAY PREVENTION (auto-resume must never spawn runaway workspaces):
 #   1. OPT-IN: does nothing unless CLAUDE_AUTO_RESUME_ENABLE=1. Default OFF —
@@ -33,7 +33,7 @@
 #      it up (see INTEGRATION GAP below).
 #   2. SPAWN-IN-FLIGHT sentinel: a per-run `<slug>.spawn.attempt` file, mtime-
 #      gated (default 60s). The flock probe alone is insufficient because the
-#      spawned terminal takes time to reach its FIRST tick (and grab the lock);
+#      spawned terminal takes time to reach its FIRST pulse (and grab the lock);
 #      back-to-back invocations inside that window would otherwise double-spawn.
 #      The sentinel closes that window.
 #
@@ -53,7 +53,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (parity: lib/auto-resume.sh:41,
-# lib/ledger.sh, lib/tick.sh).
+# lib/ledger.sh, lib/pulse.sh).
 
 set -uo pipefail
 
@@ -68,10 +68,10 @@ _cmux_socket::script_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 }
 
-# auto::tick_lock_path <repo> <run>
-#   Echo the per-run tick-lock path (the .tick.lock sibling of the ledger),
+# auto::pulse_lock_path <repo> <run>
+#   Echo the per-run pulse-lock path (the .pulse.lock sibling of the ledger),
 #   derived from the PUBLIC ledger.lock_path(). Empty on slugify failure.
-auto::tick_lock_path() {
+auto::pulse_lock_path() {
   local repo="$1" run="$2" script_dir
   script_dir="$(_cmux_socket::script_dir)"
   "$CLAUDE_AUTO_PYTHON3" - "$repo" "$run" "${script_dir}/ledger.py" <<'PYEOF'
@@ -83,20 +83,20 @@ try:
     lpath = L.lock_path(repo, run)
 except Exception:
     sys.exit(0)  # slugify reject -> empty -> caller treats as un-spawnable.
-# Swap the trailing .lock for .tick.lock (parity with tick.py::_tick_lock_path).
+# Swap the trailing .lock for .pulse.lock (parity with pulse.py::_pulse_lock_path).
 assert lpath.endswith(".lock")
-print(lpath[: -len(".lock")] + ".tick.lock")
+print(lpath[: -len(".lock")] + ".pulse.lock")
 PYEOF
 }
 
-# auto::tick_lock_held <repo> <run>
-#   Exit 0 if a LIVE tick holds the run's tick lock (double-drive guard fires —
+# auto::pulse_lock_held <repo> <run>
+#   Exit 0 if a LIVE pulse holds the run's pulse lock (double-drive guard fires —
 #   do NOT spawn); exit 1 if the lock is free or absent (safe to spawn).
-#   Non-blocking flock-then-release: we never queue behind the live tick.
-auto::tick_lock_held() {
+#   Non-blocking flock-then-release: we never queue behind the live pulse.
+auto::pulse_lock_held() {
   local repo="$1" run="$2" lock_path
-  lock_path="$(auto::tick_lock_path "$repo" "$run")"
-  # No lock file => no tick ever ran for this run => lock is free.
+  lock_path="$(auto::pulse_lock_path "$repo" "$run")"
+  # No lock file => no pulse ever ran for this run => lock is free.
   [ -n "$lock_path" ] && [ -e "$lock_path" ] || return 1
   "$CLAUDE_AUTO_PYTHON3" - "$lock_path" <<'PYEOF'
 import fcntl, sys
@@ -105,7 +105,7 @@ fh = open(path, "a+")
 try:
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 except OSError:
-    sys.exit(0)   # held by a live tick -> guard fires.
+    sys.exit(0)   # held by a live pulse -> guard fires.
 else:
     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)  # release immediately.
     sys.exit(1)   # free -> safe to spawn.
@@ -179,7 +179,7 @@ auto::build_spawn_command() {
 #   This helper deliberately omits the per-run double-drive + in-flight
 #   guards (which are auto::spawn_resume's concern — they don't apply at
 #   fanout-START because each fanout sub-run has a fresh run-id with NO
-#   prior tick lock and NO prior spawn-attempt sentinel). The guards stay
+#   prior pulse lock and NO prior spawn-attempt sentinel). The guards stay
 #   in spawn_resume; this helper is the bare cmux invocation.
 #
 #   Both bash callers (auto::spawn_resume) and Python callers
@@ -249,14 +249,14 @@ auto::cmux_spawn_tab() {
 
 # auto::spawn_resume <repo> <run>
 #   Spawn ONE fresh /auto-resume workspace for an orphaned run, IF safe:
-#     * tick lock free (no live driver) — else NO-OP (double-drive guard).
+#     * pulse lock free (no live driver) — else NO-OP (double-drive guard).
 #     * no recent spawn-in-flight sentinel — else NO-OP (runaway guard).
 #   Returns 0 on spawn, 10 on double-drive no-op, 11 on in-flight no-op.
 auto::spawn_resume() {
   local repo="$1" run="$2"
 
-  # ── Double-drive guard: a live tick is already driving this run. ──────────
-  if auto::tick_lock_held "$repo" "$run"; then
+  # ── Double-drive guard: a live pulse is already driving this run. ──────────
+  if auto::pulse_lock_held "$repo" "$run"; then
     return 10  # NO-OP: do not spawn a competing driver.
   fi
 
@@ -316,7 +316,7 @@ auto::scan() {
 #   cmux-socket.sh spawn <repo> <run>     -> single-run guarded spawn
 #   cmux-socket.sh command <repo> <run>   -> echo the spawn command string
 #   cmux-socket.sh orphans <repo>         -> echo resumable orphan run-ids
-#   cmux-socket.sh lock-held <repo> <run> -> exit 0 if a live tick holds the lock
+#   cmux-socket.sh lock-held <repo> <run> -> exit 0 if a live pulse holds the lock
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   sub="${1:-scan}"; shift || true
   case "$sub" in
@@ -324,7 +324,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     spawn)            auto::spawn_resume "$@" ;;
     command)          auto::build_spawn_command "$@" ;;
     orphans)          auto::resumable_orphans "$@" ;;
-    lock-held)        auto::tick_lock_held "$@" ;;
+    lock-held)        auto::pulse_lock_held "$@" ;;
     # v0.4.0 U2: bare cmux workspace spawn (the dispatch primitive shared by
     # auto-resume + multi-plan fanout). Three positional args: name, cwd,
     # command. Used by lib/auto-spawn.py shelling into this script.

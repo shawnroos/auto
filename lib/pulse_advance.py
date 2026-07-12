@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""auto B4: the tick's advance + stall-detection logic (split out of lib/tick.py).
+"""auto B4: the pulse's advance + stall-detection logic (split out of lib/pulse.py).
 
-These are the functions that perform the ONE smallest-useful advance the tick
+These are the functions that perform the ONE smallest-useful advance the pulse
 owns each beat — the plan-loop step, the work-loop fix/re-enqueue, the
 iteration check, and the stall-detect-and-halt that backs the parallel-fan-out
 promise — plus the seam transition that routes a finished plan-loop to seam
 (manual) or work (auto).
 
-They were extracted VERBATIM from lib/tick.py (B4); no logic changed. The
+They were extracted VERBATIM from lib/pulse.py (B4); no logic changed. The
 dependency graph is one-way:
 
-    tick.py        → tick_advance, tick_guidance
-    tick_advance   → ledger, iteration, producers, phase_grammar, tick_guidance
-    tick_guidance  → ledger, phase_grammar (leaf)
+    pulse.py        → pulse_advance, pulse_guidance
+    pulse_advance   → ledger, iteration, producers, phase_grammar, pulse_guidance
+    pulse_guidance  → ledger, phase_grammar (leaf)
 
-No cycle: nothing here imports tick.py. `TickError` is defined HERE (raised by
-``advance_plan_loop``) and re-exported by tick.py so the single class identity
-is shared — ``resolve_backend`` in tick.py and ``_cli``'s catch both reference
+No cycle: nothing here imports pulse.py. `PulseError` is defined HERE (raised by
+``advance_plan_loop``) and re-exported by pulse.py so the single class identity
+is shared — ``resolve_backend`` in pulse.py and ``_cli``'s catch both reference
 the same class.
 """
 
@@ -26,8 +26,8 @@ import os
 import sys
 import time
 
-# Mirror tick.py's bootstrap dance — the plugin is not pip-installed and lib/ is
-# not guaranteed on sys.path. We do NOT re-import tick.py to share its bootstrap
+# Mirror pulse.py's bootstrap dance — the plugin is not pip-installed and lib/ is
+# not guaranteed on sys.path. We do NOT re-import pulse.py to share its bootstrap
 # (that would create a cycle); each lib/ module does its own _bootstrap load.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
@@ -42,9 +42,9 @@ ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
 import unit_emitters as producers  # noqa: E402
-tick_guidance = load_lib_module("tick_guidance")
+pulse_guidance = load_lib_module("pulse_guidance")
 # v0.6.0 U9: the pure upstream-cluster classifier. A stdlib-only leaf (it imports
-# no lib siblings) — this adds the single DAG edge tick_advance → upstream_cluster.
+# no lib siblings) — this adds the single DAG edge pulse_advance → upstream_cluster.
 # advance_work_loop consults it BEFORE applying a fix, so a flaw inherited from an
 # upstream spine phase escalates to the operator instead of ratcheting fix passes
 # against a gap it cannot close (KTD-6 — detect-and-escalate; rebound is v0.7.0).
@@ -52,11 +52,11 @@ upstream_cluster = load_lib_module("upstream-cluster")
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Errors. Defined here (raised by advance_plan_loop) and re-exported by tick.py.
+# Errors. Defined here (raised by advance_plan_loop) and re-exported by pulse.py.
 
 
-class TickError(Exception):
-    """Base class for tick errors."""
+class PulseError(Exception):
+    """Base class for pulse errors."""
 
 
 # The backend's plan-step ops the engine may execute (the engine never PICKS
@@ -99,7 +99,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     `stall_threshold_seconds` with no verdict. We mark it via ledger.transition
     (so the write goes through the I-1 chokepoint) with last_error preserved as
     null (a plain timeout; a backend raise sets last_error elsewhere). The
-    stalled unit AND its transitive dependents are halted for this tick;
+    stalled unit AND its transitive dependents are halted for this pulse;
     independent siblings still advance.
     """
     newly_stalled = []
@@ -123,7 +123,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         # but-wedged case), so a model-side kill (TaskStop + SIGTERM) is OWED. We
         # record that debt on the SAME atomic write as the stall flip; the driver
         # clears it via clear_reap_pending right after issuing the kill. An
-        # uncleared marker on a later tick is an assertable "kill requested but
+        # uncleared marker on a later pulse is an assertable "kill requested but
         # unconfirmed" (units_awaiting_reap) — the only Python-visible handle on a
         # kill that is otherwise entirely model-side.
         try:
@@ -134,7 +134,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
             # `dispatched` between the snapshot read (ledger_dict) above and this
             # locked transition: a concurrent record_verdict (a healthy sibling
             # landing its verdict) or a death-path reap_unit already resolved it.
-            # Swallow so the tick doesn't crash and wedge the run — the exact hang
+            # Swallow so the pulse doesn't crash and wedge the run — the exact hang
             # this watchdog exists to prevent — and drop the unit from the stalled
             # set; the fresh re-read below reflects the true post-transition state.
             # Mirrors reap_unit's guard: both writers to the dispatched→stalled
@@ -208,7 +208,7 @@ def clear_reap_pending(repo_root, run_id, unit_id):
     reap_unit) sets ``reap_pending=True`` to record that a live-agent kill is
     OWED. The kill itself is model-side — no reaping primitive exists in lib/
     (KTD2) — so Python cannot observe that it happened; instead the driver calls
-    HERE once it has. An UNCLEARED marker on a later tick is therefore an
+    HERE once it has. An UNCLEARED marker on a later pulse is therefore an
     assertable "kill requested but unconfirmed" state (units_awaiting_reap), which
     keeps a forgotten kill (and its zombie agent) from being invisible to tests.
 
@@ -234,7 +234,7 @@ def units_awaiting_reap(ledger_dict):
 
     The assertable "kill requested but unconfirmed" set. The stalled transition
     sets the marker; the driver clears it via clear_reap_pending right after
-    issuing the kill — so anything still here on a later tick is a kill the driver
+    issuing the kill — so anything still here on a later pulse is a kill the driver
     owes but has not confirmed (a possible zombie agent). Python owns this set
     even though the kill is model-side, giving the test suite a handle on a
     forgotten reap.
@@ -283,14 +283,14 @@ def _ready_fix_unit(ledger_dict, halted_ids):
     """Pick ONE unit whose latest verdict is converged and needs a fix applied.
 
     A fix-due unit is `verdict-returned` with an open GATING finding and is NOT
-    in the halted set. The tick applies the fix as a state transition only
+    in the halted set. The pulse applies the fix as a state transition only
     (verdict-returned → fixed); it does NOT touch findings (R8 — closure only via
     a fresh verdict). Returns the unit id or None.
 
     SCALE-AWARE (Bug #3): which severities are fix-due is decided by the SINGLE
     helper ``ledger.gating_severities(scale)``, read off this ledger's
     ``adapter_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
-    blocker-only run: the tick would forever try to fix a major-only unit that
+    blocker-only run: the pulse would forever try to fix a major-only unit that
     re-reviews to the same advisory major, fix→re-enqueue→re-review forever, while
     the predicate already reports met. The fix-class and the terminality class
     MUST share the gating decision so they agree on which units still need work.
@@ -312,7 +312,7 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
 
     After a fix is applied (verdict-returned → fixed) the findings remain stale
     (R8 — only a fresh verdict clears them), so the unit is NOT yet terminal.
-    The tick re-enqueues it (fixed → pending) so the dispatcher re-dispatches
+    The pulse re-enqueues it (fixed → pending) so the dispatcher re-dispatches
     it for a fresh review. Skips halted units. Returns the unit id or None.
 
     SCALE-AWARE (Bug #3): same single-helper gating decision as ``_ready_fix_unit``
@@ -388,7 +388,7 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
 
     Crucially this does NOT move loop_phase backward and writes NO new persisted
     field (driver + blocked_on already exist) — autonomous rebound is v0.7.0
-    (KTD-6). The returned dict carries ``seam_pause: True`` so tick.py's
+    (KTD-6). The returned dict carries ``seam_pause: True`` so pulse.py's
     _try_seam_pause short-circuits BEFORE the standard driver="self" re-stamp +
     rearm (which would otherwise immediately undo this pause).
     """
@@ -409,17 +409,17 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
 def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     """Work-loop advance: apply ONE fix, OR re-enqueue ONE fixed-stale unit.
 
-    Returns a dict describing what advanced (for the tick result). The tick
+    Returns a dict describing what advanced (for the pulse result). The pulse
     NEVER dispatches and NEVER writes verdicts here. The TWO smallest-useful
-    work-loop advances the tick owns (state grammar §3 / closure loop R8):
+    work-loop advances the pulse owns (state grammar §3 / closure loop R8):
 
       1. verdict-returned + gating finding  → fixed   (apply ONE fix)
       2. fixed + STALE gating finding       → pending (re-enqueue for re-review)
 
-    Fix-due takes PRIORITY over re-enqueue-due so a single tick on a fresh
-    verdict-returned+blocker unit applies the fix (one step), and the NEXT tick
+    Fix-due takes PRIORITY over re-enqueue-due so a single pulse on a fresh
+    verdict-returned+blocker unit applies the fix (one step), and the NEXT pulse
     re-enqueues that fixed-with-stale-blocker unit. This MIRRORS the plan_step
-    advance: one persisted advance per fresh-process tick. Without step 2 the
+    advance: one persisted advance per fresh-process pulse. Without step 2 the
     loop livelocks at `fixed` (the stale blocker keeps all_units_terminal false
     forever) — the closure loop is unreachable.
 
@@ -457,11 +457,11 @@ def _persist_enumerated_units(repo_root, run_id, enumerated):
     """Persist the plan's enumerated work units onto the plan unit (U6 producer).
 
     Targets the plan-phase unit being advanced. For A1 (single plan unit) and the
-    per-tick serialized A2 advance, that is the lone plan unit currently at
+    per-pulse serialized A2 advance, that is the lone plan unit currently at
     plan-done; we resolve it from the fresh ledger (the unit whose phase is
     'plan'). If there are multiple plan units (A2), the active one is the one the
-    round-robin advanced this tick — for the V1 testable slice we target the first
-    plan-phase unit lacking enumerated_units, which the serialized one-per-tick
+    round-robin advanced this pulse — for the V1 testable slice we target the first
+    plan-phase unit lacking enumerated_units, which the serialized one-per-pulse
     advance makes unambiguous. Idempotent-safe: re-persist overwrites.
     """
     led = ledger.read_ledger(repo_root, run_id)
@@ -489,8 +489,8 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     CRITICAL (anti-livelock — schema §3.1): after the backend op returns
     SUCCESSFULLY, we PERSIST the executed step to the ledger via
     ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the ledger and
-    each tick is a fresh process reading ALL state from disk; without this write
-    the next tick reads ``plan_step == null``, the backend returns ``"plan"``,
+    each pulse is a fresh process reading ALL state from disk; without this write
+    the next pulse reads ``plan_step == null``, the backend returns ``"plan"``,
     and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
     thus only on success): a step that raised is recorded as a stall by the
     caller's try/except, never as a completed step.
@@ -499,7 +499,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     returns ``"done"`` the plan sequence is complete (gaps closed). The plan-loop
     must NOT re-arm on ``plan``; the caller (``_maybe_seam``) routes the met plan
     predicate to seam (manual) or work (auto). We surface ``{"advanced":
-    "plan-done"}`` so the caller knows the sequence finished this tick.
+    "plan-done"}`` so the caller knows the sequence finished this pulse.
 
     GAPS persist (gap-write, backend-contract §2.2): when the executed step is
     ``review_plan``, its return is the gap-set; the engine reads ONLY its length
@@ -543,10 +543,10 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
                 _persist_enumerated_units(repo_root, run_id, enumerated)
         return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}
     if step not in _PLAN_STEP_OPS:
-        raise TickError(f"backend returned unknown plan step: {step!r}")
+        raise PulseError(f"backend returned unknown plan step: {step!r}")
     op = getattr(backend, step, None)
     if op is None or not callable(op):
-        raise TickError(f"backend missing op {step!r}")
+        raise PulseError(f"backend missing op {step!r}")
     # The backend step is the work-bearing call; the caller wraps this in the
     # try/except so a raise becomes a recorded last_error, not a crash.
     result = op(ledger_dict)
@@ -568,7 +568,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
         gap_set = result["gap_set"]
     if step == "review_plan" and gap_set is not None:
         ledger.set_gaps_open(repo_root, run_id, len(gap_set))
-    # Op succeeded — persist the step so the NEXT fresh-process tick advances
+    # Op succeeded — persist the step so the NEXT fresh-process pulse advances
     # from it instead of re-reading null and re-planning (the livelock).
     ledger.set_loop(repo_root, run_id, plan_step=step)
     return {"advanced": "plan-step", "step": step}
@@ -586,7 +586,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
 def advance_iteration_loop(repo_root, run_id, led):
     """v0.3.0 U4 / KTD §A+§C+§D: the engine-side iteration check.
 
-    Fires in `_tick_body` BEFORE the predicate-met short-circuit at lines
+    Fires in `_pulse_body` BEFORE the predicate-met short-circuit at lines
     564-576. Reads the gate unit's effective decision via
     `iteration.evaluate_decision` and routes:
 
@@ -601,7 +601,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         normal flow.
       * "iterate" under bound → call `ledger.atomic_iterate_step` (one locked
         body: increment + emit + reset). Return {"action": "iterate"}. The
-        caller emits a rearm intent so the next tick dispatches the new units.
+        caller emits a rearm intent so the next pulse dispatches the new units.
       * "exit" OR "iterate over bound" → write `bound_override` on the gate
         unit's dispatch_context, then flip the loop to "done" / driver="manual"
         DIRECTLY via set_loop (NOT through advance_to_phase, which would re-
@@ -610,7 +610,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         "bound-exit", "report": ...}.
 
     Two safety gates fire BEFORE the decision read (no ledger writes on either
-    early-return path — keeps a1/W ticks side-effect-clean):
+    early-return path — keeps a1/W pulses side-effect-clean):
       1. a1/W early-return: `led.get("iteration")` missing OR `gate_unit` is
          None → return None. No call to `evaluate_decision`.
       2. Kill-switch: `_bootstrap.is_iteration_disabled()` True
@@ -674,7 +674,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         # `gate.depends_on + [] = gate.depends_on`) preserves the existing
         # dependency graph. Going through atomic_iterate_step (one locked
         # body) preserves the all-or-nothing contract — splitting into two
-        # writes (increment then reset) would open a window where a tick
+        # writes (increment then reset) would open a window where a pulse
         # could read attempts++ but a still-verdict-returned gate.
         if (led.get("iteration") or {}).get("emit_template"):
             producer = producers.iterate_template
@@ -725,7 +725,7 @@ def _build_bound_exit_report(led, gate_unit_id):
     the last advance) — surfaced for operator diagnostics so the
     operator-guidance branch in R9 can name what we tried before bound trip.
     """
-    base = tick_guidance._build_report(led)
+    base = pulse_guidance._build_report(led)
     gate = next(
         (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
     )
@@ -755,7 +755,7 @@ def _plan_has_enumerated_units(led) -> bool:
 
 
 def _is_auto(auto_flag) -> bool:
-    """Auto mode: the explicit --auto flag. The tick honors only the flag the
+    """Auto mode: the explicit --auto flag. The pulse honors only the flag the
     driver passes; there is no ledger-driven auto marker (the schema has no slot
     for one, and the driver owns the policy). Kept as a named predicate so the
     seam-routing call site reads intentionally."""
@@ -820,7 +820,7 @@ def _brainstorm_unit_ready(led) -> bool:
     doc path is recorded, the U8 producer raises ``RecipeError``, which
     ``_dispatch_phase_advance``'s try/except would mis-record as a unit stall
     (feedback_plan_documents_transition_code_doesnt_wire_it — the producer must
-    only fire when its input is present). Until both hold the brainstorm tick
+    only fire when its input is present). Until both hold the brainstorm pulse
     re-arms (the unit is still being worked by the model).
     """
     for u in led.get("units", []) or []:
@@ -839,16 +839,16 @@ def advance_brainstorm_loop(repo_root, run_id, led):
     The brainstorm phase has NO predicate-met exit (KTD-3 / U7 technical design:
     ``eval_phase == terminal_phase`` is False at brainstorm, so ``met`` stays
     False) — it leaves ONLY via producer-driven forward advance. Without this
-    branch a brainstorm-phase tick falls into ``_dispatch_phase_advance``'s
+    branch a brainstorm-phase pulse falls into ``_dispatch_phase_advance``'s
     ``else`` ({"advanced":"none"}) and re-arms forever (the livelock the U7
     success criterion forbids; feedback_plan_documents_transition_code_doesnt_wire_it
-    — the U8 producer existed but nothing CALLED it on a brainstorm tick).
+    — the U8 producer existed but nothing CALLED it on a brainstorm pulse).
 
     When the brainstorm unit is complete + has its requirements-doc, advance to
     ``plan`` through ``advance_to_phase`` (the single phase-advance chokepoint),
     which resolves the recipe's {to: plan} transition and fires the registered
     ``brainstorm_output_to_plan_unit`` producer atomically. Otherwise return
-    ``{"advanced":"none"}`` so the tick re-arms while the model still works the
+    ``{"advanced":"none"}`` so the pulse re-arms while the model still works the
     brainstorm step. Pairs with the plan→work producer exactly as plan→work pairs
     with seam.
     """
@@ -863,7 +863,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
 
     The plan sequence is complete when EITHER the cached predicate is met
     (plan-phase: gaps_open == 0) OR the backend signalled the sequence finished
-    this tick (``next_plan_step`` returned "done" → advance "plan-done"). The two
+    this pulse (``next_plan_step`` returned "done" → advance "plan-done"). The two
     MUST agree (backend-contract §4.1 coherence guard); we trigger on either so a
     `next_plan_step=="done"` always transitions loop_phase, never re-arming on
     `plan`.
@@ -887,7 +887,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
         and advance_result.get("advanced") == "plan-done"
     )
     if not pred.get("met") and not plan_done:
-        return advance_result  # gaps still open; keep ticking the plan loop.
+        return advance_result  # gaps still open; keep pulsing the plan loop.
     # PRODUCER HANDSHAKE (v0.4.3): the plan is complete, but the work-loop needs
     # units to dispatch. enumerate_plan_units is a PREPARE op the MODEL executes
     # (backend-contract §2.2) — it returns an envelope, then calls
@@ -895,11 +895,11 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     # yet, the model hasn't run it; transitioning now would flip to a work phase
     # with ZERO units (vacuous-exit guard keeps it un-met → the run wedges with
     # nothing to dispatch). So surface the enumerate prepare and do NOT transition
-    # — the next tick, once units are stashed, passes this guard and flips to
+    # — the next pulse, once units are stashed, passes this guard and flips to
     # work. This closes the latent producer gap for a1 too (every other plan op is
-    # surfaced+executed across a tick boundary; enumerate must be as well). Tests
+    # surfaced+executed across a pulse boundary; enumerate must be as well). Tests
     # / synchronous backends that pre-persist enumerated_units pass straight
-    # through. The plan-presatisfied (W) path lands here on its very first tick.
+    # through. The plan-presatisfied (W) path lands here on its very first pulse.
     if not _plan_has_enumerated_units(led):
         out = dict(advance_result or {})
         out["advanced"] = "plan-enumerate-pending"

@@ -4,8 +4,8 @@
 #
 # WHY THIS TEST EXISTS:
 # B5 split lib/ledger.py into a 4-file DAG (ledger_core ← ledger_mutators ←
-# ledger_emitters ← ledger-facade); B4 split lib/tick.py into tick ←
-# {tick_advance, tick_guidance} with tick_advance ← tick_guidance. Those splits
+# ledger_emitters ← ledger-facade); B4 split lib/pulse.py into pulse ←
+# {pulse_advance, pulse_guidance} with pulse_advance ← pulse_guidance. Those splits
 # carefully avoided cycles. But the load_lib_module loader resolves siblings at
 # runtime, so a cycle wouldn't surface as an ImportError at parse time — it
 # would surface as a subtle runtime failure (a half-initialized module, or a
@@ -22,9 +22,9 @@
 #   ledger_mutators → ledger_core
 #   ledger_emitters → ledger_core, ledger_mutators
 #   ledger (facade) → ledger_core, ledger_mutators, ledger_emitters
-#   tick_guidance → ledger (facade), phase-grammar         [leaf]
-#   tick_advance  → ledger, iteration, producers, tick_guidance
-#   tick          → ledger, iteration, producers, tick_advance, tick_guidance
+#   pulse_guidance → ledger (facade), phase-grammar         [leaf]
+#   pulse_advance  → ledger, iteration, producers, pulse_guidance
+#   pulse          → ledger, iteration, producers, pulse_advance, pulse_guidance
 #
 # Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the LEDGER FACADE, never ledger_mutators/ledger_emitters directly — the facade
@@ -79,18 +79,32 @@ else
   pass
 fi
 
-# ─── tick DAG: forbidden back-edges ─────────────────────────────────────────
-it "tick_advance.py does NOT back-import tick"
-if loads_sibling "tick_advance.py" "tick"; then
-  fail "tick_advance.py must not import tick — that closes a cycle"
+# ─── pulse DAG: the pinned family EXISTS (anti-vacuity, F13) ─────────────────
+# loads_sibling greps a file by path: on a MISSING file grep exits non-zero, the
+# `if` takes the else branch, and every negative-grep DAG check below passes
+# VACUOUSLY. A mis-renamed module (the concept-vocabulary rename U5 file moves)
+# would therefore go green while pinning nothing. Assert the three files first.
+for _m in pulse.py pulse_advance.py pulse_guidance.py; do
+  it "lib/${_m} exists (the pinned pulse family — DAG checks below are vacuous without it)"
+  if [ -f "${LIB}/${_m}" ]; then
+    pass
+  else
+    fail "lib/${_m} missing — the pulse DAG checks would pass vacuously"
+  fi
+done
+
+# ─── pulse DAG: forbidden back-edges ─────────────────────────────────────────
+it "pulse_advance.py does NOT back-import pulse"
+if loads_sibling "pulse_advance.py" "pulse"; then
+  fail "pulse_advance.py must not import pulse — that closes a cycle"
 else
   pass
 fi
 
-it "tick_guidance.py does NOT back-import tick or tick_advance (leaf)"
-if loads_sibling "tick_guidance.py" "tick" \
-   || loads_sibling "tick_guidance.py" "tick_advance"; then
-  fail "tick_guidance.py is a leaf — it must not import tick or tick_advance"
+it "pulse_guidance.py does NOT back-import pulse or pulse_advance (leaf)"
+if loads_sibling "pulse_guidance.py" "pulse" \
+   || loads_sibling "pulse_guidance.py" "pulse_advance"; then
+  fail "pulse_guidance.py is a leaf — it must not import pulse or pulse_advance"
 else
   pass
 fi

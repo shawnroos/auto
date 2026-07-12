@@ -5,7 +5,7 @@ READ-ONLY. Parses an optional run-id, reads the durable ledger(s) via ledger.py,
 and prints a human-readable status: loop_phase (+ plan_step), the cached
 exit_predicate_result (blockers / majors / minors / gaps_open / met), per-unit
 states, the driver, last_beat_at + liveness, and any stalled units with their
-last_error cause. It NEVER mutates the ledger or arms a tick.
+last_error cause. It NEVER mutates the ledger or arms a pulse.
 
 Argument forms (parsed HERE, never in the .md body, per memory
 `feedback_slash_command_arg_substitution`):
@@ -59,7 +59,7 @@ def _should_render_iteration(led: dict) -> bool:
     Per F1 task: render WHEN any of:
       • ``iteration`` block is non-null (recipe declared a gate),
       • ``iteration_attempts`` > 0 (the loop has actually iterated),
-      • ``active_wall_seconds`` > 0 (the wall-time accumulator has ticked),
+      • ``active_wall_seconds`` > 0 (the wall-time accumulator has pulsed),
       • any unit carries a ``dispatch_context.bound_override`` (a bound was
         breached at exit).
 
@@ -187,7 +187,7 @@ def _render_iteration_section(led: dict) -> None:
             )
 
         # Kill-switch: render when the operator has set the env var. Routed
-        # through is_iteration_disabled (F5 unfence) — the SAME helper tick.py
+        # through is_iteration_disabled (F5 unfence) — the SAME helper pulse.py
         # uses, so /auto-status and the actual iteration check can never disagree.
         if is_iteration_disabled():
             sys.stdout.write(

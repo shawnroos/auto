@@ -4,7 +4,7 @@
 Given a review verdict's findings + their reviewer-role/lens metadata, decide
 whether they CLUSTER on a single UPSTREAM phase — i.e. the flaw is inherited
 from an earlier creative-spine stage (brainstorm/plan) rather than being a
-local issue in the current phase. The engine (lib/tick_advance.py) calls this
+local issue in the current phase. The engine (lib/pulse_advance.py) calls this
 during a spine run and, on a positive detection, ESCALATES the cluster to the
 operator via the existing pause seam (driver=manual + blocked_on). No backward
 loop_phase move, no new persisted field, no rebound machinery — that autonomous
@@ -40,7 +40,7 @@ PURE + STDLIB-ONLY (import-topology / pure-leaf discipline): this module imports
 NO lib siblings — it takes the current phase + phase order as ARGS (never reads
 ``ledger["loop_phase"]``, which would trip the phase-grammar AST lint) and never
 writes the ledger. That makes it a trivially-testable leaf and adds only the one
-edge ``tick_advance → upstream_cluster`` to the import DAG.
+edge ``pulse_advance → upstream_cluster`` to the import DAG.
 
 DEGRADE-SAFE (never crash a ledger write path): every accessor tolerates a
 malformed/partial finding record (non-dict entries, missing/blank role or phase,

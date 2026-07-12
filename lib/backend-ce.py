@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """auto U6b: the Compound Engineering (CE) backend — Python surface.
 
-This is the module tick.py (U4) imports. `resolve_backend` (tick.py:170-197)
+This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-ce.py`, prefers a module-level ``Backend`` factory if present,
 and calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
 deepen(ledger) / review_plan(ledger) / do_unit(unit) / review(unit)``.
 
 The pure, contract-load-bearing logic (severity mapping + the plan-step state
-machine) is implemented HERE in Python so tick.py can import it directly. The
+machine) is implemented HERE in Python so pulse.py can import it directly. The
 bash sibling ``backend-ce.sh`` exposes the same logic as a CLI for direct
 testing / scripting; the two are intentional mirrors.
 
@@ -15,9 +15,9 @@ A backend is a PURE PROVIDER OF OPERATIONS — it NEVER writes the ledger
 (contract §1). Ops return data; the engine persists it through ledger.py.
 
 PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
-sub-state, schema §3.1) to compute the next step. The tick persists the executed
+sub-state, schema §3.1) to compute the next step. The pulse persists the executed
 step via `set_loop(plan_step=step)` after each plan-loop advance
-(tick_advance.py), so a fresh-process tick reads the real sub-state — the loop
+(pulse_advance.py), so a fresh-process pulse reads the real sub-state — the loop
 advances plan → deepen → review_plan → done and does not livelock. (Historical
 note: an earlier U6b/U3 seam had no schema field for this; the gap was closed
 when `plan_step` became a validated field — see ledger_core.py's PLAN_STEPS.)
@@ -93,16 +93,16 @@ def _next_plan_step(ledger):
     §4.1 coherence guard returns "done" (else livelock). All that per-backend
     logic is now the injected ``_PLAN_SEQUENCE``; the guard + ``plan_step is
     None`` first-step logic live once in ``_bootstrap``. ``plan_step`` is a real
-    validated ledger field (``ledger_core.PLAN_STEPS``) the tick persists.
+    validated ledger field (``ledger_core.PLAN_STEPS``) the pulse persists.
     """
     return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
 
 
 class Backend:
-    """The object tick.py's ``resolve_backend`` instantiates (it prefers a
+    """The object pulse.py's ``resolve_backend`` instantiates (it prefers a
     module-level ``Backend`` factory). Exposes the six ops as methods.
 
-    The four plan-loop ops receive the ledger dict (tick.py:347 calls
+    The four plan-loop ops receive the ledger dict (pulse.py:347 calls
     ``op(ledger_dict)``). `next_plan_step` is fully pure. `plan / deepen /
     review_plan` and the work-loop `do_unit / review` are the live-invocation
     seam: a CLI/model cannot *run* /ce-plan etc., so each prepares an invocation

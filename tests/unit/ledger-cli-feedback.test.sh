@@ -7,7 +7,7 @@
 # the CLI exposed only read/path/transition/is-orphaned, so the operator-guidance
 # instructions to "set_gaps_open" / "enumerate" named functions the model could
 # not invoke — the same uninvokable-instruction bug class as the missing
-# /auto-tick command. This test asserts both feedback subcommands exist, persist
+# /auto-pulse command. This test asserts both feedback subcommands exist, persist
 # correctly, resolve the repo from $CLAUDE_AUTO_REPO (so the model passes only the
 # run-id), and reject malformed input — so the channel can't silently regress.
 

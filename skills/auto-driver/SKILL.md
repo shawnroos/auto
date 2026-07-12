@@ -70,4 +70,4 @@ freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
   [<run-id>] [<unit>]"`
 
 Theory + edge cases (`docs/contracts/driver-reference.md`): prepare/execute, goal
-binding, tick/seam/fan-out, exit reasons, goal-aware routing (§17) — load on demand.
+binding, pulse/seam/fan-out, exit reasons, goal-aware routing (§17) — load on demand.

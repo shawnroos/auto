@@ -93,7 +93,7 @@ _RESERVED_TOPLEVEL = frozenset({"python_hook"})
 # and imports no sibling — recipes.py imports THIS module, so importing recipes
 # back would cycle. recipes.py re-exports this map and a drift-guard test asserts
 # `recipes._ALIASES == _RESERVED_ALIAS_STEMS`, so the two copies never diverge
-# (the "keep the literal in sync" pattern ledger_core uses for TICK_COMMAND).
+# (the "keep the literal in sync" pattern ledger_core uses for PULSE_COMMAND).
 _RESERVED_ALIAS_STEMS = {
     "plan-build-review": "a1",
     "parallel-theories": "a2",
@@ -129,7 +129,7 @@ _KNOWN_TOPLEVEL = frozenset(
         # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe for
         # "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go straight
         # to enumerating its work units" sets this true. The engine inits
-        # plan_step="review_plan" + gaps_open=0 so the first tick's next_plan_step
+        # plan_step="review_plan" + gaps_open=0 so the first pulse's next_plan_step
         # returns "done" → enumerate_plan_units → plan→work, never re-deriving the
         # finished plan. W is the shipped recipe that uses it. ADDITIVE — absent/
         # false validates as before. Coherence checked by _validate_plan_presatisfied.
@@ -153,7 +153,7 @@ _KNOWN_VERIFICATION_KEYS_PROGRAMMATIC = frozenset(
 _KNOWN_VERIFICATION_KEYS_JUDGE = frozenset({"id", "type", "rubric_ref"})
 _KNOWN_VERIFICATION_KEYS_HUMAN = frozenset({"id", "type", "prompt"})
 # Cap the array to bound gate-evaluation cost — a gate that runs 100 programmatic
-# subprocesses per tick is a footgun, not a feature.
+# subprocesses per pulse is a footgun, not a feature.
 _MAX_VERIFICATION_CRITERIA = 16
 # v0.3.0 (U5): the field set an emit_templates ENTRY may carry. Same depth as
 # `_KNOWN_UNIT_KEYS` for `units[]` — mechanical reject of unknown inner keys so

@@ -20,7 +20,7 @@
 >
 > **Reading test:** a backend author should be able to implement a complete
 > backend by reading *only* this file plus its companion `SKILL.md` — never the
-> engine code, the tick, or another backend's source. If something you need is
+> engine code, the pulse, or another backend's source. If something you need is
 > not specified here, that is a contract gap; raise it, don't guess.
 >
 > **Relation to the ledger contract:** this file is self-contained for the
@@ -47,7 +47,7 @@ structural extremes (a bare native workflow vs. a multi-command CE workflow).
 
 **A backend is a pure provider of operations. It NEVER writes the ledger
 directly.** Backend return values flow back through the engine's recording paths
-(the tick's ledger writes; the background agent's `record_verdict`). This is what
+(the pulse's ledger writes; the background agent's `record_verdict`). This is what
 preserves the ledger's atomic-predicate-freshness invariant by construction — an
 backend that wrote the ledger itself could skip the predicate recompute. Backends
 return data; the engine persists it.
@@ -57,39 +57,39 @@ return data; the engine persists it.
 ## 2. The operations (six in v0.1.x; seven since the v0.2.0 re-lock)
 
 Each op is a **distinct, single-step call**. There are no compound black-box
-steps: the engine invokes exactly one op per tick (for plan-loop ops) or one op
+steps: the engine invokes exactly one op per pulse (for plan-loop ops) or one op
 per agent (for work-loop ops), one at a time. This is what makes the loop
 observable — every advance is one named op the ledger can record.
 
 | op | signature | caller | purpose |
 |----|-----------|--------|---------|
-| `plan(scope)` | → `plan` | tick (U4) | initial plan creation from a scope description |
-| `deepen(plan)` | → `plan` (improved, or unchanged = no-op) | tick (U4) | one round of plan deepening |
-| `review_plan(plan)` | → `gap_set` | tick (U4) | one plan-review pass; returns the open gaps |
-| `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | tick (U4) | **the backend owns plan-step sequencing** — the engine never picks the next plan step |
+| `plan(scope)` | → `plan` | pulse (U4) | initial plan creation from a scope description |
+| `deepen(plan)` | → `plan` (improved, or unchanged = no-op) | pulse (U4) | one round of plan deepening |
+| `review_plan(plan)` | → `gap_set` | pulse (U4) | one plan-review pass; returns the open gaps |
+| `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | pulse (U4) | **the backend owns plan-step sequencing** — the engine never picks the next plan step |
 | `do_unit(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
 | `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
-| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | tick (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
+| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | pulse (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
 
 > **v0.2.0 contract re-lock (KTD-4).** The op set grew from six to **seven** with
 > `enumerate_plan_units`. This was a deliberate re-lock, not a drift: v0.1.x had no
 > in-code work-unit producer (the seam paused for off-ledger manual creation), so
 > the recipe producers had no source data (feasibility F4). Both `ce` and `native`
 > backends implement the new op. `next_plan_step`'s signature is UNCHANGED — N>1
-> parallel plan-loops advance serialized (one per tick), so the backend still sees
+> parallel plan-loops advance serialized (one per pulse), so the backend still sees
 > one logical advance-stream. A `unit_id` parameter on `next_plan_step` for
 > concurrent advance is the planned v0.3.0 re-lock, not V1.
 
 ### 2.1 Who calls each op (this is load-bearing for contract coherence)
 
-The phrase "the tick invokes one op at a time" is true only for the **plan-loop
+The phrase "the pulse invokes one op at a time" is true only for the **plan-loop
 ops**. The work-loop ops are invoked by different actors, deliberately:
 
-- **`plan`, `deepen`, `review_plan`, `next_plan_step`** — invoked by the **tick**
-  (U4) during the plan-loop. Each tick asks `next_plan_step(ledger)` which step is
-  next, then calls that one step. The tick does NOT hardcode the plan→deepen→review
+- **`plan`, `deepen`, `review_plan`, `next_plan_step`** — invoked by the **pulse**
+  (U4) during the plan-loop. Each pulse asks `next_plan_step(ledger)` which step is
+  next, then calls that one step. The pulse does NOT hardcode the plan→deepen→review
   order; the backend does (see §4).
-- **`do_unit`** — invoked by the **dispatcher** (U10), NOT the tick. The tick
+- **`do_unit`** — invoked by the **dispatcher** (U10), NOT the pulse. The pulse
   never dispatches work. The dispatcher decides batch size and calls `do_unit`
   for each unit in a wave; `do_unit` returns a dispatch handle the dispatcher
   uses to correlate the in-flight agent.
@@ -100,7 +100,7 @@ ops**. The work-loop ops are invoked by different actors, deliberately:
   backend does not write findings to disk.**
 
 A consequence: a single dispatched unit's lifecycle touches `do_unit` (at
-dispatch) and `review` (at completion), but never the tick. The tick only ever
+dispatch) and `review` (at completion), but never the pulse. The pulse only ever
 reads the recorded verdict and applies fixes.
 
 ### 2.2 Return shapes
@@ -109,7 +109,7 @@ reads the recorded verdict and applies fixes.
 |--------|-------|-----------------|
 | `plan` | **opaque to the engine** — backend-internal state (a doc path, a string, a structured object the backend alone interprets). The engine passes it back into `deepen` / `review_plan` unread. | the backend (round-trips it) |
 | `gap_set` | an **array** of gap descriptors. The engine reads only its **length**: it writes `exit_predicate_result.gaps_open = len(gap_set)`. Empty array ⇒ plan gaps closed. Element shape is backend-defined (the engine never inspects elements). | the engine (length only) |
-| plan-step token | one of the four string literals `"plan"`, `"deepen"`, `"review_plan"`, `"done"`. Anything else is a contract violation. | the tick (drives the plan-loop) |
+| plan-step token | one of the four string literals `"plan"`, `"deepen"`, `"review_plan"`, `"done"`. Anything else is a contract violation. | the pulse (drives the plan-loop) |
 | `dispatch_handle` | an **opaque** correlation token (e.g. a Task id, an agent handle). The dispatcher uses it to track the in-flight agent; the engine never interprets its internals. | the dispatcher |
 | `findings[]` | an array of `{ "severity": "blocker" \| "major" \| "minor", "note": <string> }`. This is the ONE return the engine reads semantically — it counts severities to compute the predicate. See §3. | the engine (severity counts) |
 
@@ -167,7 +167,7 @@ implement `review` correctly:
   `dispatched → verdict-returned` transition). **Nothing else writes findings.**
 - A new verdict **OVERWRITES** the findings array — it does not append. The array
   always reflects exactly the most recent review's view of the unit.
-- A tick applying a fix does **NOT** clear or modify findings inline. Asserting a
+- A pulse applying a fix does **NOT** clear or modify findings inline. Asserting a
   defect is closed without a fresh review is forbidden. The fix is a state change
   only; stale findings remain until the next `review` overwrites them.
 - Therefore closure happens only when a **re-review** returns clean findings:
@@ -184,10 +184,10 @@ The engine does **not** know whether a given workflow deepens its plans, or how
 many review passes it runs. The backend encodes that as a state machine inside
 `next_plan_step(ledger)`:
 
-- The tick calls `next_plan_step(ledger)` at the start of each plan-loop tick.
+- The pulse calls `next_plan_step(ledger)` at the start of each plan-loop pulse.
 - The backend inspects the ledger and returns the **single next step** to run:
   `"plan"`, `"deepen"`, `"review_plan"`, or `"done"`.
-- The tick then calls exactly that one op (or, on `"done"`, ends the plan-loop).
+- The pulse then calls exactly that one op (or, on `"done"`, ends the plan-loop).
 
 Two illustrative sequencers (concrete logic is U6b's deliverable):
 
@@ -266,7 +266,7 @@ Do NOT write the ledger from any op. Return data; the engine records it.
   §6 (`SEVERITIES` and other module constants), §3 (state grammar / who-writes-what).
 - Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md`
   — U6a (this contract), U6b (the two backend implementations), U5 (the driver),
-  U4 (the tick that calls the plan-loop ops), U10 (the dispatcher that calls `do_unit`).
+  U4 (the pulse that calls the plan-loop ops), U10 (the dispatcher that calls `do_unit`).
 
 ---
 

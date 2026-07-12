@@ -4,7 +4,7 @@
 This is the run-creation entry point the engine otherwise lacks: it parses the
 /auto argument string, creates a fresh ledger via ledger.py (so the
 init-time RMW flock + I-1 predicate recompute are inherited — no new flock), and
-emits an arm-first-tick INTENT (the model fires the actual ScheduleWakeup +
+emits an arm-first-pulse INTENT (the model fires the actual ScheduleWakeup +
 /goal). It mirrors resume.py's shape: parse argv positionally, route through
 ledger.py, emit one JSON intent line, exit 0 on a clean surface.
 
@@ -14,25 +14,25 @@ dispatch space-separated subcommands, per memory
 
     <plan-or-spec>                start a run from a plan/spec file (required).
     ... auto                      append `auto` to skip the plan->work seam
-                                  pause (the tick gets --auto).
+                                  pause (the pulse gets --auto).
     ... --backend ce|native       select the workflow backend (default ce).
                                   (`--adapter` accepted as a deprecated alias.)
     ... --goal "<text>"           compound deliberate-stop goal text (the
                                   default is the loop's own exit predicate).
 
 A new run starts at loop_phase="plan" with an EMPTY units[] — the plan-loop
-(backend-driven, via the tick) populates the work units later; /auto does
+(backend-driven, via the pulse) populates the work units later; /auto does
 NOT parse units from the plan. init_ledger's defaults are exactly this shape.
 
 The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
 no slot for any of them, and ledger.py is the locked contract). They ride in the
 EMITTED INTENT as payload the model consumes — the same intent-shape extension
 resume.py uses. The model issues `/goal <text>` and `ScheduleWakeup(60,
-"/auto:auto-tick <run>[ --auto]")`.
+"/auto:auto-pulse <run>[ --auto]")`.
 
 DOUBLE-DRIVE: init_ledger holds the per-run init flock across the
-existence-check + write; the arm-first-tick path emits intent only — the tick's
-own non-blocking process-held _tick_lock is the double-drive guard. No new flock
+existence-check + write; the arm-first-pulse path emits intent only — the pulse's
+own non-blocking process-held _pulse_lock is the double-drive guard. No new flock
 here. No file sentinel.
 
 rel-001-ish: empty args / a usage surface exits 0 (surfacing, not an error);
@@ -49,7 +49,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import build_arm_intent, build_tick_prompt, load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import build_arm_intent, build_pulse_prompt, load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE driving-session identity helper (KTD-5), shared with the resume
 # re-arm path so arm and re-arm record ownership identically (fix-round-6 P1).
@@ -296,7 +296,7 @@ def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
 
     A plan_presatisfied recipe (W) declares its plan phase already done. The
     engine inits plan_step="review_plan" (here) and gaps_open=0 (post-init, in
-    run()) so the FIRST tick's next_plan_step returns "done" → enumerate_plan_units
+    run()) so the FIRST pulse's next_plan_step returns "done" → enumerate_plan_units
     → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
     "auto re-plans a finished plan" bug). The plan doc path has no top-level
     ledger slot (schema §2), so we bind it to the single plan unit's
@@ -316,16 +316,16 @@ def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
 def _emit_arm(
     run_id: str, *, auto: bool, goal, backend: str, plan: str, loop_phase: str = "plan"
 ) -> int:
-    """Emit the arm-first-tick INTENT — the model fires /goal + ScheduleWakeup.
+    """Emit the arm-first-pulse INTENT — the model fires /goal + ScheduleWakeup.
 
     ``loop_phase`` is the run's ENTRY phase (``phase_order[0]``); it surfaces in
     the note so a non-default-entry recipe (e.g. the v0.6.0 ``pipeline`` spine,
     which enters at ``brainstorm``) reports the true starting phase rather than a
     hardcoded ``plan``.
     """
-    # The plugin-qualified tick command (see _bootstrap.TICK_COMMAND for the
-    # bare-`/auto-tick`-is-"Unknown command" hazard).
-    prompt = build_tick_prompt(run_id)
+    # The plugin-qualified pulse command (see _bootstrap.PULSE_COMMAND for the
+    # bare-`/auto-pulse`-is-"Unknown command" hazard).
+    prompt = build_pulse_prompt(run_id)
     if auto:
         prompt += " --auto"
     intent = build_arm_intent(
@@ -333,7 +333,7 @@ def _emit_arm(
         prompt,
         (
             f"new run created (loop_phase={loop_phase}); set the deliberate-stop "
-            "/goal, then arm the first tick"
+            "/goal, then arm the first pulse"
         ),
         extra={
             "auto": auto,
@@ -353,7 +353,7 @@ def _teardown_run_scoped_recipe(recipes, repo_root: str, name: str) -> None:
     Launch-chooser / agent-native Gap 3: with ``--teardown-recipe-after-init`` the
     chooser hands auto.py ownership of teardown, so the delete is atomic with init
     and the chooser never infers "ledger initialized" from this process's stdout.
-    The engine is recipe-blind post-init (``recipe-format.md`` §1: tick / dispatch
+    The engine is recipe-blind post-init (``recipe-format.md`` §1: pulse / dispatch
     / predicate / resume all read the ledger, never the recipe file), so the file
     is dead weight here. Targets ONLY the workspace-tier path for this name (never
     a built-in / global), and is best-effort — ENOENT (a built-in resolved, or the

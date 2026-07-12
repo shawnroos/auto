@@ -9,7 +9,7 @@
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
 # and HOME isolation inline, mirroring tests/unit/ledger.test.sh and
-# tests/unit/tick.test.sh. It does NOT source claude-modes' test-helpers
+# tests/unit/pulse.test.sh. It does NOT source claude-modes' test-helpers
 # (cross-plugin coupling forbidden) nor auto shared helpers (U2's,
 # not yet present). When U2 lands, this file may migrate to them.
 #
@@ -588,15 +588,15 @@ fi
 # scale at EVERY site at once, and asserts the SAME scenario livelocks. Because all
 # six+ gating consumers route through that one helper, one hatch reverts them all —
 # a green Scenario 10 + a red Scenario 11 means no site bypasses the scale.
-TICK_PY="${AUTO_ROOT}/lib/tick.py"
+PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
 
 it "CLASS-1 (blocker-only): a major-only unit is TERMINAL + its dependent UNBLOCKS + advance_work_loop does NOT churn -> run reaches met=True (no livelock)"
-bo="$("$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+bo="$("$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
+repo, orch_py, ledger_py, pulse_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("pulse",pulse_py)
 
 run="class1-bo"
 # blocker-only run: Ua (will carry a major), Ub depends on Ua.
@@ -621,12 +621,12 @@ conv = o.converge(repo, run)
 led = m.read_ledger(repo, run)
 # advance over the current state: Ua has a major-only verdict -> no fix-due,
 # no re-enqueue-due (the livelock would re-enqueue Ua here under three-tier).
-adv_before = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_before = t.pulse_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 # Finish Ub cleanly so the whole run can be terminal.
 m.transition(repo, run, "Ub", "dispatched", dispatched_at="2026-05-21T14:05:00Z")
 m.record_verdict(repo, run, "Ub", [])
 # One more advance: still nothing to do (no gating findings anywhere).
-adv_after = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
+adv_after = t.pulse_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())
 final = m.read_ledger(repo, run)
 pred = final.get("exit_predicate_result") or {}
 print(json.dumps({
@@ -663,12 +663,12 @@ it "CLASS-1 deliberate-fail: FORCE_THREETIER_GATING reverts ALL sites at once ->
 # no-op for that site; because ALL sites route through the helper, the hatch makes
 # the whole run behave three-tier -> the major now gates at every site. RED proves
 # the helper is load-bearing (the class is closed via the single chokepoint).
-bofail="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$TICK_PY" <<'PYEOF'
+bofail="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING=1 "$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
+repo, orch_py, ledger_py, pulse_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("pulse",pulse_py)
 
 run="class1-bo-fail"
 m.init_ledger(repo, run, backend="native", backend_scale="blocker-only",
@@ -679,7 +679,7 @@ m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z"
 m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"now-gates"}])
 ready = o.ready_units(repo, run)              # Ub should be BLOCKED now.
 conv = o.converge(repo, run)                  # Ua should NOT be terminal now.
-adv = t.tick_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
+adv = t.pulse_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
 pred = (m.read_ledger(repo, run).get("exit_predicate_result") or {})
 print(json.dumps({
     "ready": ready,

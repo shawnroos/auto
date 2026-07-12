@@ -43,12 +43,12 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Staleness off so the freshly-written ledger isn't read as a dead chain; the
-# tick-lock hatch fence needs the harness sentinel too.
+# pulse-lock hatch fence needs the harness sentinel too.
 export CLAUDE_AUTO_TEST_HARNESS=1
 export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
 
 # Drive review.json: init at work, dispatch the review unit, record a verdict
-# (clean if clean=1 else a blocker), tick once, read back. Prints a CSV:
+# (clean if clean=1 else a blocker), pulse once, read back. Prints a CSV:
 #   adapter_op | entry_phase | phase_order | loop_phase_after | unit_state
 drive_review() {
   clean="${1:-1}"
@@ -65,7 +65,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -98,11 +98,11 @@ ledger.transition(repo, run_id, "review", "dispatched")
 findings = [] if clean else [{"severity": "blocker", "note": "flaw"}]
 ledger.record_verdict(repo, run_id, "review", findings)
 
-# Step 3: tick once. Single-phase work loop — a clean verdict drives it to done;
+# Step 3: pulse once. Single-phase work loop — a clean verdict drives it to done;
 # a blocker leaves it at work (all_units_terminal == false). No auto-advance to
 # another phase under any verdict (phase_order is just ["work"]).
 with contextlib.redirect_stdout(io.StringIO()):
-    tick.dispatch_tick(repo, run_id, auto=True)
+    pulse.dispatch_pulse(repo, run_id, auto=True)
 
 after = ld()
 unit_state = next(u for u in after["units"] if u["id"] == "review")["state"]

@@ -233,8 +233,8 @@ auto_test::it "coherence: native gaps_open==0 after review_plan -> done (no live
 auto_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 0)")"
 
 # ════════════════════════════════════════════════════════════════════════════
-# 7. PYTHON BACKEND SURFACE — the modules tick.py (U4) actually imports.
-#    resolve_backend (tick.py:170-197) loads lib/backend-{name}.py, instantiates
+# 7. PYTHON BACKEND SURFACE — the modules pulse.py (U4) actually imports.
+#    resolve_backend (pulse.py:170-197) loads lib/backend-{name}.py, instantiates
 #    module.Backend(), and calls ops as `getattr(backend, step)(ledger)`. We
 #    drive the .py modules the SAME way to prove the import shape matches and the
 #    pure logic mirrors the bash sibling.
@@ -271,8 +271,8 @@ auto_test::assert_eq "2" "$(count_severity "$PY_CE_MAPPED" major)"
 auto_test::it "py native validate: off-scale severity raises"
 auto_test::assert_false "py_backend native 'a.review({\"findings\":[{\"severity\":\"P0\",\"note\":\"x\"}]})'"
 
-# next_plan_step called exactly as tick.py:337 does — getattr(backend, op) shape.
-auto_test::it "py CE next_plan_step: fresh ledger -> plan (tick.py import shape)"
+# next_plan_step called exactly as pulse.py:337 does — getattr(backend, op) shape.
+auto_test::it "py CE next_plan_step: fresh ledger -> plan (pulse.py import shape)"
 auto_test::assert_eq "plan" "$(py_backend ce 'a.next_plan_step({"plan_step":None,"exit_predicate_result":{"gaps_open":0}})')"
 
 auto_test::it "py CE next_plan_step: plan->deepen, then deepen->review_plan"

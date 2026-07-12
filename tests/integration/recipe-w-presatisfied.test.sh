@@ -8,12 +8,12 @@
 # re-plans a finished plan"). The W recipe that should skip the plan-loop was a
 # v0.2.0 stub with no plan→units enumeration. The fix makes W declare its plan
 # phase `plan_presatisfied`: init sets plan_step="review_plan" + gaps_open=0 so
-# the FIRST tick's next_plan_step returns "done" → enumerate_plan_units →
+# the FIRST pulse's next_plan_step returns "done" → enumerate_plan_units →
 # plan→work, with NO plan/deepen/review pass.
 #
 # STRUCTURE: create a real W run via `/auto <plan> --recipe w`, assert the
 # pre-satisfied ledger state, stash the model-enumerated work units (what the
-# model does when it executes the enumerate_plan_units prepare op), tick once in
+# model does when it executes the enumerate_plan_units prepare op), pulse once in
 # auto mode, and assert the run is now in `work` with those units — proving the
 # plan-loop was skipped entirely.
 #
@@ -39,7 +39,7 @@ fail() {
   return 0
 }
 
-# Drive a recipe from /auto creation through one auto-mode tick. Prints CSV:
+# Drive a recipe from /auto creation through one auto-mode pulse. Prints CSV:
 #   init_plan_step | init_gaps_open | init_met | plan_path_bound | post_phase | work_unit_ids
 # recipe arg selects the recipe (w | a1).
 drive_presatisfied() {
@@ -57,7 +57,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -79,13 +79,13 @@ init_met = epr.get("met")
 plan_units = [u for u in led["units"] if u.get("phase") == "plan"]
 plan_path_bound = bool(plan_units) and (plan_units[0].get("dispatch_context") or {}).get("plan_path") == plan
 
-# TICK 1 — the model has NOT enumerated yet (production reality). The producer
+# PULSE 1 — the model has NOT enumerated yet (production reality). The producer
 # handshake must NOT transition to work with zero units: it stays in the plan
 # phase and surfaces the enumerate prepare op.
 with contextlib.redirect_stdout(io.StringIO()):
-    intent1 = tick.dispatch_tick(repo, run_id, auto=True)
+    intent1 = pulse.dispatch_pulse(repo, run_id, auto=True)
 led1 = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-tick1_phase = led1["loop_phase"]
+pulse1_phase = led1["loop_phase"]
 guidance1 = intent1.get("operator_guidance", "")
 enumerate_surfaced = "ENUMERATE" in guidance1 or "enumerate" in guidance1
 
@@ -95,14 +95,14 @@ ledger.set_enumerated_units(repo, run_id, plan_units[0]["id"], [
     {"id": "u-b", "invokes": {"adapter_op": "do_unit"}},
 ])
 
-# TICK 2 — now the units exist, so the handshake passes and we transition.
+# PULSE 2 — now the units exist, so the handshake passes and we transition.
 with contextlib.redirect_stdout(io.StringIO()):
-    tick.dispatch_tick(repo, run_id, auto=True)
+    pulse.dispatch_pulse(repo, run_id, auto=True)
 led2 = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
 work = sorted(u["id"] for u in led2["units"] if u.get("phase") == "work")
 print("%s|%s|%s|%s|%s|%s|%s|%s" % (
     init_step, init_gaps, init_met, plan_path_bound,
-    tick1_phase, enumerate_surfaced, led2["loop_phase"], ",".join(work),
+    pulse1_phase, enumerate_surfaced, led2["loop_phase"], ",".join(work),
 ))
 PYEOF
 }
@@ -120,14 +120,14 @@ it "W inits plan-presatisfied (plan_step=review_plan, gaps_open=0, plan-met)"
 it "W binds the plan doc path to the plan unit (enumerate knows which plan)"
 [ "$g_bound" = "True" ] && pass || fail "plan_path not bound: ${g_bound}"
 
-# THE PRODUCER HANDSHAKE: without it, tick 1 would flip to work with ZERO units
+# THE PRODUCER HANDSHAKE: without it, pulse 1 would flip to work with ZERO units
 # and the run would wedge. The fix keeps it in the plan phase and surfaces the
 # enumerate prepare op until the model stashes units.
-it "W tick 1 (no units yet) stays in plan and surfaces the enumerate prepare (handshake)"
+it "W pulse 1 (no units yet) stays in plan and surfaces the enumerate prepare (handshake)"
 [ "$g_t1phase" = "plan" ] && [ "$g_enum" = "True" ] \
   && pass || fail "expected plan|True (enumerate-pending), got ${g_t1phase}|${g_enum}"
 
-it "W tick 2 (units stashed) transitions to work with the enumerated units"
+it "W pulse 2 (units stashed) transitions to work with the enumerated units"
 [ "$g_phase" = "work" ] && [ "$g_work" = "u-a,u-b" ] \
   && pass || fail "expected work|u-a,u-b, got ${g_phase}|${g_work}"
 

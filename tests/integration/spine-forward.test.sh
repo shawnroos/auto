@@ -42,14 +42,14 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Staleness check off so the freshly-written ledger isn't read as a dead chain;
-# tick-lock hatch fence requires the harness sentinel too.
+# pulse-lock hatch fence requires the harness sentinel too.
 export CLAUDE_AUTO_TEST_HARNESS=1
 export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
 
 # ── Shared driver. Builds a spine run, advances brainstorm→plan→work forward,
-# then optionally injects an upstream cluster and ticks once. Prints a CSV.
+# then optionally injects an upstream cluster and pulses once. Prints a CSV.
 #   inject_cluster=1 → write role-tagged cluster_findings on the work unit.
-# Output CSV: forward_ok | tick_reason | loop_phase | driver | blocked_on_named | top_keys_unchanged | work_unit_state
+# Output CSV: forward_ok | pulse_reason | loop_phase | driver | blocked_on_named | top_keys_unchanged | work_unit_state
 drive_spine() {
   inject_cluster="${1:-0}"
   "$PY" - "$AUTO_ROOT" "$inject_cluster" <<'PYEOF'
@@ -65,7 +65,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -88,12 +88,12 @@ entry = ld()
 forward_ok = (entry.get("loop_phase") == "brainstorm"
               and entry.get("phase_order") == ["brainstorm", "plan", "seam", "work"])
 
-# Step 2: forward advance brainstorm → plan through the REAL per-tick path
+# Step 2: forward advance brainstorm → plan through the REAL per-pulse path
 # (round-1 P1 fix: this leg used to hand-call advance_to_phase, which masked the
 # missing brainstorm advance trigger — the feature livelocked in a real run
 # while the test stayed green). Prime the brainstorm unit verdict-returned with
-# its requirements-doc output, then drive dispatch_tick exactly as the plan→work
-# leg below does. dispatch_tick's brainstorm branch fires the U8
+# its requirements-doc output, then drive dispatch_pulse exactly as the plan→work
+# leg below does. dispatch_pulse's brainstorm branch fires the U8
 # brainstorm_output_to_plan_unit producer on advance to plan (producer-driven, not
 # predicate-met). If the brainstorm trigger is missing this goes RED (the
 # deliberate-fail control for the wiring).
@@ -105,7 +105,7 @@ for u in led["units"]:
 with open(path, "w") as fh:
     json.dump(led, fh)
 with contextlib.redirect_stdout(io.StringIO()):
-    tick.dispatch_tick(repo, run_id, auto=True)
+    pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
 plan_units = [u["id"] for u in led["units"] if u["phase"] == "plan"]
 forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_units) == 1
@@ -120,7 +120,7 @@ ledger.set_enumerated_units(
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 with contextlib.redirect_stdout(io.StringIO()):
-    tick.dispatch_tick(repo, run_id, auto=True)
+    pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
 work_units = [u["id"] for u in led["units"] if u["phase"] == "work"]
 forward_ok = forward_ok and led.get("loop_phase") == "work" and "w-alpha" in work_units
@@ -146,13 +146,13 @@ if inject_cluster:
     with open(path, "w") as fh:
         json.dump(led, fh)
 
-# Snapshot loop_phase + top-level key set BEFORE the work-loop tick.
+# Snapshot loop_phase + top-level key set BEFORE the work-loop pulse.
 before = ld()
 before_phase = before.get("loop_phase")
 before_top = sorted(before.keys())
 
 with contextlib.redirect_stdout(io.StringIO()):
-    intent = tick.dispatch_tick(repo, run_id, auto=True)
+    intent = pulse.dispatch_pulse(repo, run_id, auto=True)
 
 after = ld()
 loop = after.get("loop") or {}
@@ -169,16 +169,16 @@ print("%s|%s|%s|%s|%s|%s|%s" % (
 PYEOF
 }
 
-# ── First-brainstorm-tick dispatch driver (P0 fix-round-3). A REAL first tick:
+# ── First-brainstorm-pulse dispatch driver (P0 fix-round-3). A REAL first pulse:
 # brainstorm unit PENDING, NO requirements_doc — the state advance_brainstorm_loop
 # re-arms on. Asserts the rearm intent's operator_guidance surfaces the DISPATCH
 # half (run /ce-brainstorm + record the doc + self-write verdict-returned), which
 # the pre-seeded forward-advance leg above CANNOT cover (it skips straight to the
 # advance half). Without the brainstorm guidance branch the phase wedges forever
-# (every tick re-arms with only the generic prepare/execute reminder, /ce-brainstorm
+# (every pulse re-arms with only the generic prepare/execute reminder, /ce-brainstorm
 # nowhere) — feedback_plan_documents_transition_code_doesnt_wire_it. Output CSV:
 #   action | has_brainstorm_cmd | has_record_doc_instr | advance_reason
-drive_first_brainstorm_tick() {
+drive_first_brainstorm_pulse() {
   "$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, tempfile, json, io, contextlib, importlib.util, glob
 auto_root = sys.argv[1]
@@ -190,7 +190,7 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -206,7 +206,7 @@ run_id = [os.path.basename(f).rsplit(".json", 1)[0]
           if not f.endswith(".lock")][0]
 
 with contextlib.redirect_stdout(io.StringIO()):
-    intent = tick.dispatch_tick(repo, run_id, auto=True)
+    intent = pulse.dispatch_pulse(repo, run_id, auto=True)
 
 g = intent.get("operator_guidance") or ""
 adv = intent.get("advance") or {}
@@ -219,14 +219,14 @@ print("%s|%s|%s|%s" % (
 PYEOF
 }
 
-# ─── Scenario 0 (P0 fix-round-3): first brainstorm tick surfaces the DISPATCH ──
-res0="$(drive_first_brainstorm_tick)"
+# ─── Scenario 0 (P0 fix-round-3): first brainstorm pulse surfaces the DISPATCH ──
+res0="$(drive_first_brainstorm_pulse)"
 IFS='|' read -r action0 has_cmd has_doc adv_reason <<< "$res0"
 
-it "first brainstorm tick re-arms (pending unit, no requirements_doc yet)"
+it "first brainstorm pulse re-arms (pending unit, no requirements_doc yet)"
 assert_eq "rearm" "$action0"
 
-it "first brainstorm tick advance is brainstorm-pending (advance half not yet ready)"
+it "first brainstorm pulse advance is brainstorm-pending (advance half not yet ready)"
 assert_eq "brainstorm-pending" "$adv_reason"
 
 it "P0: brainstorm operator_guidance surfaces the /ce-brainstorm invocation"
@@ -242,7 +242,7 @@ IFS='|' read -r forward reason phase driver phase_unchanged blocked_named keys <
 it "spine recipe advances brainstorm → plan → work forward (producer-driven)"
 assert_eq "yes" "$forward"
 
-it "injected upstream cluster PAUSES the run (tick stop reason = seam-pause)"
+it "injected upstream cluster PAUSES the run (pulse stop reason = seam-pause)"
 assert_eq "seam-pause" "$reason"
 
 it "escalation flips driver=manual (the existing pause seam)"
@@ -266,7 +266,7 @@ assert_eq "yes" "$f2"
 
 it "DELIBERATE-FAIL: WITHOUT a cluster the work-loop does NOT pause (drives a fix)"
 # No cluster → the work-loop applies the fix and re-arms (driver stays self,
-# the tick re-arms rather than stopping on seam-pause). If this branch ALSO
+# the pulse re-arms rather than stopping on seam-pause). If this branch ALSO
 # showed seam-pause/manual, the pause in scenario 1 would be a priming artifact.
 case "${reason2}:${driver2}" in
   seam-pause:manual) fail "control paused without a cluster — scenario 1's pause is an artifact" ;;

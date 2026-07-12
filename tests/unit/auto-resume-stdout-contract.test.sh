@@ -45,7 +45,7 @@ def load(name, path):
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
 resume = load("auto_resume", os.path.join(auto_root, "lib", "auto-resume.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 # Re-arm paths re-record the driving session (advisor-gate ownership) and REFUSE
@@ -79,13 +79,13 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
 o, e = out.getvalue(), err.getvalue()
 
 # Discriminators: stdout is exactly one JSON object; stderr is empty; the object
-# is the arm-tick intent (proves we captured the re-arm, not a terminal no-op).
+# is the arm-pulse intent (proves we captured the re-arm, not a terminal no-op).
 stdout_is_one_json = False
 is_arm = False
 try:
     obj = json.loads(o.strip())
     stdout_is_one_json = isinstance(obj, dict)
-    is_arm = obj.get("action") == "arm-tick"
+    is_arm = obj.get("action") == "arm-pulse"
 except Exception:
     pass
 stderr_clean = (e.strip() == "")
@@ -94,7 +94,7 @@ PYEOF
 }
 
 # ─── continue (seam→work): one JSON object on stdout, clean stderr ──────────────
-it "continue(seam→work): stdout is exactly one arm-tick JSON object, stderr clean"
+it "continue(seam→work): stdout is exactly one arm-pulse JSON object, stderr clean"
 res="$(run_scenario continue)"
 IFS='|' read -r c_json c_err c_arm c_rc <<EOF
 $res
@@ -103,7 +103,7 @@ EOF
   && pass || fail "expected True|True|True|0, got ${res}"
 
 # ─── advance (plan→enumerate): one JSON object on stdout, clean stderr ──────────
-it "advance(plan→enumerate): stdout is exactly one arm-tick JSON object, stderr clean"
+it "advance(plan→enumerate): stdout is exactly one arm-pulse JSON object, stderr clean"
 res_a="$(run_scenario advance)"
 IFS='|' read -r a_json a_err a_arm a_rc <<EOF
 $res_a

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto U5 (v0.2.0): the ONE phase-grammar decision point.
 
-Every site that used to branch on the `loop_phase` string literal — the tick's
+Every site that used to branch on the `loop_phase` string literal — the pulse's
 phase switch, the seam/phase-advance handler, `recompute_predicate`'s phase-aware
 branch, `_ready_fix_unit`'s phase-awareness, and auto-status's reporting — reads
 through THIS module instead of comparing `ledger["loop_phase"]` to a literal.

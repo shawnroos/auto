@@ -5,7 +5,7 @@ allowed-tools: Bash, AskUserQuestion
 
 Manually resume an auto run — the F4 floor.
 
-A self-paced `ScheduleWakeup` tick chain does NOT survive a full session
+A self-paced `ScheduleWakeup` pulse chain does NOT survive a full session
 exit (in-session only; durable cron is denied by cmux). No work is lost —
 the ledger is on disk and each background agent self-writes its verdict
 atomically — and resume after any suspend is this one cheap command, which
@@ -20,8 +20,8 @@ then invoke the script with exactly that form:
 
 | Canonical                  | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
-| `continue [<run>]`         | Re-acquire, arm a fresh tick chain, flip paused seam to `work`.     |
-| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a tick to enumerate work units. At a seam: same as `continue`. In the work phase: no-op. |
+| `continue [<run>]`         | Re-acquire, arm a fresh pulse chain, flip paused seam to `work`.     |
+| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a pulse to enumerate work units. At a seam: same as `continue`. In the work phase: no-op. |
 | `pause <run> [why]`        | Blocked on a human/external action — flip to manual, record why, stay resumable. NOT a cancellation. |
 | `abort <run>`              | Flip the run to `done` with a cancellation marker. **Destructive.** |
 | `retry <run> <unit>`       | Reset stalled unit to pending, clear `last_error`.                  |
@@ -74,11 +74,11 @@ runs):
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "$ARGUMENTS"`
 
 On the re-arm paths (`continue` / `advance`), the script writes **exactly one
-JSON object** to stdout — the `{"action":"arm-tick", …}` intent. Parse the whole
+JSON object** to stdout — the `{"action":"arm-pulse", …}` intent. Parse the whole
 of stdout with `json.loads`; there is no prose to strip. All human/diagnostic
 text goes to stderr, never to stdout. (Terminal no-op paths — already-done,
 work-phase advance, abort/retry/skip — print a human status line to stdout
-instead and emit no arm-tick intent.)
+instead and emit no arm-pulse intent.)
 
 If you resolved a freeform sentence into a different canonical form
 (`continue X`, `abort X`, `retry X U`, `skip X U`), invoke the Bash tool

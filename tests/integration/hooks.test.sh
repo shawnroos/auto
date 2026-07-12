@@ -11,7 +11,7 @@
 # closed model-judged loop with no external predicate seam, so auto
 # ships its OWN Stop hook. These tests assert THAT hook's deterministic verdict.
 #
-# SELF-CONTAINED harness (inline it/pass/fail) mirroring tests/unit/tick.test.sh
+# SELF-CONTAINED harness (inline it/pass/fail) mirroring tests/unit/pulse.test.sh
 # and the run.sh summary-line format ("<name>.test.sh: N passed, M failed").
 #
 # Scenarios (U7 plan):
@@ -30,7 +30,7 @@
 #   goal-status freshness:
 #     - met flips true->false (re-review reopens) -> status reflects it (no stale done)
 #   resume subcommands:
-#     - continue: seam -> work + arm-tick intent
+#     - continue: seam -> work + arm-pulse intent
 #     - abort: -> done
 #     - retry: stalled -> pending + clears last_error
 #     - skip: stalled -> terminal-skip
@@ -279,7 +279,7 @@ it "on-stop: re-fired stop is SILENT (no systemMessage spam under an external re
 assert_empty "$out"
 
 # ─── on-stop: Bug #9 — dead driver==self chain does NOT stale-block ───────────
-# A tick killed AFTER its beat write but BEFORE re-arm leaves driver==self,
+# A pulse killed AFTER its beat write but BEFORE re-arm leaves driver==self,
 # met==false, and a last_beat_at that ages. WITHOUT a freshness gate this dead
 # chain blocks EVERY session's stop until last_beat_at > GRACE (~70 min). The gate
 # (DRIVER_SELF_STALE_SECONDS=3900) treats a driver==self run whose last_beat_at is
@@ -380,7 +380,7 @@ assert_eq "False" "$(jget "$out2" done)"
 it "goal-status: the reopened status carries the reopened blocker in its reason"
 assert_contains "$out2" "1 blocker"
 
-# ─── resume continue: seam -> work + arm-tick intent ──────────────────────────
+# ─── resume continue: seam -> work + arm-pulse intent ──────────────────────────
 it "resume continue: flips seam -> work"
 REPO="$(mkrepo resume-continue)"
 pyledger "$REPO" <<'PYEOF'
@@ -397,10 +397,10 @@ PYEOF
 out="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue contrun)"
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['loop_phase'])")"
 assert_eq "work" "$phase"
-it "resume continue: emits an arm-tick intent for the model to fire /auto:auto-tick"
-assert_eq "arm-tick" "$(jget "$out" action)"
-it "resume continue: the arm-tick prompt is NAMESPACED (/auto:auto-tick, not bare)"
-assert_eq "/auto:auto-tick contrun" "$(jget "$out" prompt)"
+it "resume continue: emits an arm-pulse intent for the model to fire /auto:auto-pulse"
+assert_eq "arm-pulse" "$(jget "$out" action)"
+it "resume continue: the arm-pulse prompt is NAMESPACED (/auto:auto-pulse, not bare)"
+assert_eq "/auto:auto-pulse contrun" "$(jget "$out" prompt)"
 it "resume continue: clears seam_paused on the seam->work flip"
 sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['seam_paused'])")"
 assert_eq "False" "$sp"
@@ -445,7 +445,7 @@ it "resume continue (after pause): re-arms AND clears blocked_on"
 # fix-round-6 P1: continue re-records driving_session_id (needs the live session
 # id; -u CLAUDE_CODE_CHILD_SESSION simulates the interactive driver).
 cout="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue pauserun)"
-assert_eq "arm-tick" "$(jget "$cout" action)"
+assert_eq "arm-pulse" "$(jget "$cout" action)"
 assert_eq "None" "$(rd "l['loop'].get('blocked_on')")"
 
 # ─── resume retry: stalled -> pending + clears last_error ─────────────────────
@@ -496,7 +496,7 @@ it "resume disambiguation: lists each resumable run by id"
 case "$out" in *alpha*beta*|*beta*alpha*) pass ;; *) fail "expected both alpha and beta listed, got '$out'" ;; esac
 
 # ─── resume single resumable (no run given) -> auto-selects it ────────────────
-it "resume (no run, exactly 1 resumable): auto-selects it and emits arm-tick"
+it "resume (no run, exactly 1 resumable): auto-selects it and emits arm-pulse"
 REPO="$(mkrepo resume-single)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util

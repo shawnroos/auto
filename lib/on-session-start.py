@@ -56,7 +56,7 @@ def surfacing_lines(repo_root: str):
             )
             continue
 
-        # Time/driver-based orphan (the tick chain died with a prior session).
+        # Time/driver-based orphan (the pulse chain died with a prior session).
         try:
             orphaned = ledger.is_orphaned(led)
         except Exception:

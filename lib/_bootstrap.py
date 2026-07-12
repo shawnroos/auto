@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto: the ONE ledger-module loader.
 
-Every consumer module (tick.py, dispatcher.py, on-stop.py, on-session-start.py,
+Every consumer module (pulse.py, dispatcher.py, on-stop.py, on-session-start.py,
 goal-status.py, auto-resume.py, auto.py, auto-status.py) loads the canonical ledger
 module by FILE PATH rather than `import ledger` — the plugin is not pip-installed
 and lib/ is not guaranteed on sys.path. That importlib bootstrap used to be
@@ -308,36 +308,36 @@ def session_membership(led, session_id):
     return is_driving, is_agent
 
 
-# The plugin-qualified tick command — the ONE copy of the string AND its hazard
+# The plugin-qualified pulse command — the ONE copy of the string AND its hazard
 # note (v0.6.5). A programmatically fired plugin slash command must resolve as
-# `/<plugin>:<command>`: the bare `/auto-tick` is "Unknown command" under
+# `/<plugin>:<command>`: the bare `/auto-pulse` is "Unknown command" under
 # ScheduleWakeup / loop re-injection, so every re-arm hit that and the loop never
-# self-paced. The plugin name is `auto`. tick.py / auto.py / auto-resume.py all
-# build their re-arm prompt through build_tick_prompt() so this hazard lives once.
-TICK_COMMAND = "/auto:auto-tick"
+# self-paced. The plugin name is `auto`. pulse.py / auto.py / auto-resume.py all
+# build their re-arm prompt through build_pulse_prompt() so this hazard lives once.
+PULSE_COMMAND = "/auto:auto-pulse"
 
 
-def build_tick_prompt(run_id) -> str:
-    """The re-arm prompt: the plugin-qualified tick command + the run id.
+def build_pulse_prompt(run_id) -> str:
+    """The re-arm prompt: the plugin-qualified pulse command + the run id.
 
-    The ONE builder of the `/auto:auto-tick <run>` string (was three hand-built
-    copies in tick.py / auto.py / auto-resume.py, each re-explaining the
-    plugin-qualification hazard — see TICK_COMMAND).
+    The ONE builder of the `/auto:auto-pulse <run>` string (was three hand-built
+    copies in pulse.py / auto.py / auto-resume.py, each re-explaining the
+    plugin-qualification hazard — see PULSE_COMMAND).
     """
-    return f"{TICK_COMMAND} {run_id}"
+    return f"{PULSE_COMMAND} {run_id}"
 
 
 def build_arm_intent(run_id, prompt, note, extra=None):
-    """The `arm-tick` INTENT envelope emitted by the non-tick arm sites.
+    """The `arm-pulse` INTENT envelope emitted by the non-pulse arm sites.
 
-    Both auto.py (new run) and auto-resume.py (re-arm) emit an ``arm-tick``
-    intent — "schedule the next tick" — with the same ``action``/``run``/
+    Both auto.py (new run) and auto-resume.py (re-arm) emit an ``arm-pulse``
+    intent — "schedule the next pulse" — with the same ``action``/``run``/
     ``prompt`` core and a trailing ``note``. auto.py carries extra keys
     (``auto``/``backend``/``plan``/``goal``) between ``prompt`` and ``note``;
     pass them via ``extra`` (an ordered dict) so the emitted key order stays
     byte-identical to the hand-built envelopes the stdout-contract tests assert.
     """
-    intent = {"action": "arm-tick", "run": run_id, "prompt": prompt}
+    intent = {"action": "arm-pulse", "run": run_id, "prompt": prompt}
     if extra:
         intent.update(extra)
     intent["note"] = note
@@ -439,7 +439,7 @@ def test_hatch_enabled(hatch_var: str) -> bool:
     this one helper. A production user who exports a specific hatch by accident
     will NOT also have ``CLAUDE_AUTO_TEST_HARNESS=1`` exported, so the hatch
     stays inert. tests/run.sh exports the sentinel once at the top of every test
-    invocation, so the existing hatches (NO_TICK_LOCK, NO_REENQUEUE,
+    invocation, so the existing hatches (NO_PULSE_LOCK, NO_REENQUEUE,
     NO_STALENESS_CHECK, FORCE_THREETIER_GATING, NO_RECOMPUTE, NO_LOCK,
     NO_ATTEMPT_CHECK, NO_STALLED_RECOVERY) and any future hatches inherit the
     fence for free. Deterministic, grep-checkable mechanism — composes with
@@ -455,7 +455,7 @@ def is_iteration_disabled() -> bool:
     """Return True iff the operator has set ``CLAUDE_AUTO_DISABLE_ITERATION=1``.
 
     The iteration kill-switch — a REAL operator escape hatch, not a test-only
-    hatch. When set, ``tick.advance_iteration_loop`` short-circuits and the
+    hatch. When set, ``pulse.advance_iteration_loop`` short-circuits and the
     standard predicate-met flow takes over (the run exits as if no iteration
     block existed on the ledger). Useful for emergency rollback of an
     outcomes-gated recipe without redeploying.
@@ -507,7 +507,7 @@ def plan_step_sequencer(ledger, *, sequence):
     ``sequence`` is the per-backend ordered plan steps EXCLUDING the terminal
     ``done`` — CE passes ``("plan", "deepen", "review_plan")`` and native passes
     ``("plan", "review_plan")`` (native has no deepen step). ``plan_step`` is a
-    real validated ledger field (``ledger_core.PLAN_STEPS``) that the tick persists
+    real validated ledger field (``ledger_core.PLAN_STEPS``) that the pulse persists
     via ``set_loop(plan_step=step)``; both backends read it identically and this
     sequencer keeps the ``None``-tolerance native already relied on. No IO — the
     engine persists the returned step; the backend never writes the ledger (§1).

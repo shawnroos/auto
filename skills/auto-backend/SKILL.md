@@ -32,7 +32,7 @@ what keeps the loop's done-detection correct, so honor it strictly.
 
 You implement six ops. Four drive the plan-loop; two drive the work-loop.
 
-### Plan-loop ops (the tick calls these, one per tick)
+### Plan-loop ops (the pulse calls these, one per pulse)
 
 1. **`plan(scope) -> plan`** — turn a scope description into an initial plan. The
    return is **opaque to the engine** — it can be a doc path, a string, or a
@@ -62,10 +62,10 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
    return `"done"` next. Returning `"review_plan"` again would livelock the
    plan-loop.
 
-### Work-loop ops (NOT called by the tick)
+### Work-loop ops (NOT called by the pulse)
 
 5. **`do_unit(unit) -> dispatch_handle`** — called by the **dispatcher**, not
-   the tick. Dispatch one unit for execution and return an **opaque correlation
+   the pulse. Dispatch one unit for execution and return an **opaque correlation
    token** (e.g. a Task id) the dispatcher uses to track the in-flight agent.
 
 6. **`review(unit) -> findings[]`** — called by the **background work agent** on
@@ -118,7 +118,7 @@ and declares `"three-tier"` directly.
 ## The findings-write rule (do not violate)
 
 Findings are written **only** by a `review` verdict. A new verdict **overwrites**
-the findings array (never appends) — it is always the latest review's view. A tick
+the findings array (never appends) — it is always the latest review's view. A pulse
 applying a fix does **not** clear findings inline; that would assert closure
 without a review, which is forbidden. So a defect closes only when a fresh
 `review` returns clean findings. Your job is just to emit accurate findings each

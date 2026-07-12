@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""auto B4: tick guidance + report builders (split out of lib/tick.py).
+"""auto B4: pulse guidance + report builders (split out of lib/pulse.py).
 
-These are the READ-ONLY helpers the tick uses to build the operator-guidance
+These are the READ-ONLY helpers the pulse uses to build the operator-guidance
 block that rides every rearm intent, the gaps_open livelock warning, and the
 exit/most-recently-dispatched reports. They read the ledger snapshot they are
 handed (or re-read via the canonical ledger module) but never mutate it, so
-they form the LEAF of the tick module graph:
+they form the LEAF of the pulse module graph:
 
-    tick.py        → tick_advance, tick_guidance
-    tick_advance   → tick_guidance
-    tick_guidance  → ledger (read-only) + phase_grammar (report shape)
+    pulse.py        → pulse_advance, pulse_guidance
+    pulse_advance   → pulse_guidance
+    pulse_guidance  → ledger (read-only) + phase_grammar (report shape)
 
-No cycle: nothing here imports tick.py or tick_advance.
+No cycle: nothing here imports pulse.py or pulse_advance.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import json
 import os
 import sys
 
-# Mirror tick.py's bootstrap dance — the plugin is not pip-installed and lib/ is
-# not guaranteed on sys.path. We do NOT re-import tick.py to share its bootstrap
+# Mirror pulse.py's bootstrap dance — the plugin is not pip-installed and lib/ is
+# not guaranteed on sys.path. We do NOT re-import pulse.py to share its bootstrap
 # (that would create a cycle); each lib/ module does its own _bootstrap load.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
@@ -30,7 +30,7 @@ from _bootstrap import load_ledger, load_lib_module  # noqa: E402
 ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
 # U12: typed dispatch_context accessors (iteration is a `_bootstrap`-only leaf —
-# no import cycle, and import-topology only forbids the tick/tick_advance edges).
+# no import cycle, and import-topology only forbids the pulse/pulse_advance edges).
 iteration = load_lib_module("iteration")
 
 
@@ -38,14 +38,14 @@ def _operator_guidance_for(phase, advance_result, led):
     """Build the prepare/execute reminder block that rides every rearm intent.
 
     v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
-    field bug where an agent ticked 5 times expecting units to populate. Root
-    cause was invisible contract: the tick prepares invocations; the model
+    field bug where an agent pulsed 5 times expecting units to populate. Root
+    cause was invisible contract: the pulse prepares invocations; the model
     EXECUTES them; if the model doesn't, the ledger doesn't progress. The
     rearm intent now carries this reminder explicitly. Phase-aware so plan-
     loop and work-loop get the right framing.
 
     v0.3.0 R9 (KTD §D operator-diagnostics):
-      * If the gate unit just had `bound_override` written on this tick →
+      * If the gate unit just had `bound_override` written on this pulse →
         prepend a notice naming which bound tripped + the best-so-far state
         from the gate's last decision_payload (OQ2). Operators see WHY the
         loop exited and WHAT we tried before bound.
@@ -72,7 +72,7 @@ def _operator_guidance_for(phase, advance_result, led):
             f"{whence}, produce the work-unit list, then PERSIST it via Bash: "
             "`bash \"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-enumerated-units "
             "<run> <plan-unit-id> '[{\"id\":\"...\",\"invokes\":{...}}]'`. The "
-            "NEXT tick transitions to the work-loop. Re-ticking WITHOUT "
+            "NEXT pulse transitions to the work-loop. Re-pulsing WITHOUT "
             "persisting leaves the run in the plan phase with no units to "
             "dispatch."
         )
@@ -89,7 +89,7 @@ def _operator_guidance_for(phase, advance_result, led):
             "advance the state machine AFTER you feed structured results back "
             "(after /ce-doc-review, persist gaps via `bash "
             "\"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-gaps-open <run> <N>`). "
-            "Re-ticking without running "
+            "Re-pulsing without running "
             f"the invocation is a NO-OP — units will stay []. Just-prepared "
             f"step: {step!r}; expected invocation: {invocation}. "
             "If this plan is ALREADY reviewed and you're re-deriving finished "
@@ -106,7 +106,7 @@ def _operator_guidance_for(phase, advance_result, led):
         # (i) the requirements-doc path on the brainstorm unit's
         # dispatch_context.requirements_doc, AND (ii) self-write that unit
         # `verdict-returned`. Without BOTH, the forward brainstorm→plan producer
-        # never fires and every tick re-arms identically (the livelock the U7
+        # never fires and every pulse re-arms identically (the livelock the U7
         # success criterion forbids; feedback_plan_documents_transition_code_
         # doesnt_wire_it). Mirrors the single-unit plan-phase guidance, not the
         # work-loop fan-out reminder.
@@ -120,7 +120,7 @@ def _operator_guidance_for(phase, advance_result, led):
             "would raise): ledger.transition(repo, run, 'brainstorm', "
             "'dispatched', dispatch_context={'requirements_doc': <path>}) then "
             "ledger.record_verdict(repo, run, 'brainstorm', []). Both conditions "
-            "are required before the spine advances brainstorm→plan. Re-ticking "
+            "are required before the spine advances brainstorm→plan. Re-pulsing "
             "without running /ce-brainstorm and recording the doc is a NO-OP — "
             "the brainstorm phase stays put until both conditions hold."
         )
@@ -133,12 +133,12 @@ def _operator_guidance_for(phase, advance_result, led):
             "prepare/execute contract: in the work-loop YOU drive the "
             "dispatcher fan-out (dispatcher.ready_units + dispatch_batch); "
             "after dispatching, YIELD silently — the harness re-invokes you "
-            "when a verdict lands (fix-pass G). Re-ticking without running "
+            "when a verdict lands (fix-pass G). Re-pulsing without running "
             "dispatch is a no-op."
         )
         return iteration_prefix + body if iteration_prefix else body
     body = (
-        "prepare/execute contract: I prepare; YOU execute. Re-ticking without "
+        "prepare/execute contract: I prepare; YOU execute. Re-pulsing without "
         "running the prepared invocation does not advance the ledger."
     )
     return iteration_prefix + body if iteration_prefix else body
@@ -158,7 +158,7 @@ def _iteration_guidance_prefix(led):
 
     The "best-so-far" payload (OQ2) is the gate's `decision_payload` — the
     payload that rode the LAST advance/iterate decision. On a bound-exit
-    tick, that payload was the iterate that the engine overrode to exit.
+    pulse, that payload was the iterate that the engine overrode to exit.
     """
     iter_block = led.get("iteration") or {}
     gate_id = iter_block.get("gate_unit")
@@ -194,7 +194,7 @@ def _iteration_guidance_prefix(led):
     # atomic_iterate_step, pre-check). So the next iterate trips bound EXACTLY
     # when `attempts == max_attempts` — i.e., max_attempts iterates have been
     # honored and the (max+1)-th would trip. The prior code compared `attempts
-    # == max - 1`, which fires ONE tick early (with max=3, that warns at
+    # == max - 1`, which fires ONE pulse early (with max=3, that warns at
     # attempts=2 even though attempts=2 still has TWO more iterates to honor
     # before bound trip: the iterate at attempts=2 becomes attempts=3, and the
     # iterate read at attempts=3 is the one that trips).
@@ -221,7 +221,7 @@ def _gaps_open_guard(phase, led):
     fires, and units never materialize.
 
     The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
-    ``gaps_open is None``. We do NOT key only on review_plan because the tick
+    ``gaps_open is None``. We do NOT key only on review_plan because the pulse
     PERSISTS plan_step AFTER the step runs (anti-livelock §3.1 fix), so by the
     time this guard reads the ledger the just-completed review_plan has been
     succeeded by a deepen → plan_step="deepen", gaps_open still null. Both

@@ -9,7 +9,7 @@ OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     a question belongs to a live auto run iff, for SOME ledger under
     <repo>/.claude/auto/*.json:
       * current phase != "done"                         (run not finished)
-      * loop.driver == "self"                           (a live tick chain, not
+      * loop.driver == "self"                           (a live pulse chain, not
                                                           a seam/manual pause)
       * loop.last_beat_at fresher than
         ledger.DRIVER_SELF_STALE_SECONDS (3900s)        (not a dead chain)

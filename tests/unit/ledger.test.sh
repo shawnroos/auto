@@ -268,7 +268,7 @@ fi
 # ─── Scenario 7: I-2 closure — fixed with a stale blocker is NOT terminal ────
 it "I-2 closure: a 'fixed' unit with a stale blocker -> all_units_terminal==false"
 ledger_init "i2-closure" '[{"id":"U1","state":"verdict-returned"}]' >/dev/null 2>&1
-# Record a blocker verdict, then a tick applies a fix: verdict-returned -> fixed.
+# Record a blocker verdict, then a pulse applies a fix: verdict-returned -> fixed.
 # Per §4.2 the fix does NOT clear findings, so the stale blocker remains.
 "$PY" - "$REPO" "i2-closure" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util

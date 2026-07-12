@@ -3,7 +3,7 @@
 
 THIN, pure/testable pieces the `auto-preset` skill calls to run a preset
 one-shot (KTD-3 — the skill is the dispatcher; this module holds no control
-flow, no tick, no `/goal`):
+flow, no pulse, no `/goal`):
 
   1. ``validate_oneshot_criteria(criteria)`` (U3) — validate a RATIFIED criteria
      list against the verification taxonomy BEFORE dispatch, reusing the recipe

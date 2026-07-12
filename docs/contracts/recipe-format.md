@@ -34,7 +34,7 @@
 A recipe declares the **initial ledger topology** of an `auto` run: the units,
 their `depends_on` graph, the phase each runs in, the phase ordering, and which
 producer produces work units at a phase boundary. The engine reads the recipe at
-`init_ledger` time and builds the run from it; everything downstream (tick,
+`init_ledger` time and builds the run from it; everything downstream (pulse,
 dispatch, predicate, resume) is recipe-blind once the ledger exists.
 
 Recipes resolve from a three-tier registry (first-wins): **workspace**
@@ -184,9 +184,9 @@ iteration:
     max_wall_seconds: <positive int>  # optional — cap on cumulative active
                                       #   wall-time (`active_wall_seconds`,
                                       #   §2 of ledger-schema.md). Pauses
-                                      #   between ticks don't burn budget; the
-                                      #   accumulator only grows during a tick's
-                                      #   `_tick_body`. Omit for unbounded.
+                                      #   between pulses don't burn budget; the
+                                      #   accumulator only grows during a pulse's
+                                      #   `_pulse_body`. Omit for unbounded.
 ```
 
 **Decision enum** (`lib/iteration.py::DECISIONS`):
@@ -199,7 +199,7 @@ iteration:
   `iterate_template` producer (using `emit_template` when declared) into the
   gate's current phase, then resets the gate unit (`verdict-returned → pending`,
   `depends_on` extended with the new sibling ids, `dispatch_context.decision`
-  cleared so the next tick reads a fresh verdict).
+  cleared so the next pulse reads a fresh verdict).
 - `iterate` (over bound) **or** `exit` — engine writes
   `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
   on the gate unit (audit trail) and flips the loop directly to `done`
@@ -211,8 +211,8 @@ iteration:
 **Bound semantics.** Both bounds are checked against `iteration.evaluate_decision`'s
 view of the ledger BEFORE honoring an iterate. `max_attempts` is checked against
 `iteration_attempts` pre-increment; `max_wall_seconds` is checked against
-`active_wall_seconds` (cumulative tick-active time accumulated from
-`_tick_body`'s `finally` clause so a crashed tick still contributes its delta).
+`active_wall_seconds` (cumulative pulse-active time accumulated from
+`_pulse_body`'s `finally` clause so a crashed pulse still contributes its delta).
 A bound breach is recorded as a decision override, NOT an error — the engine
 proceeds as if the gate said `exit` and surfaces the override on `/auto-status`
 (R9 surface). See `docs/contracts/ledger-schema.md` §2.1 + §2.3 for the
@@ -263,7 +263,7 @@ is the within-phase producer the engine calls; recipes do not choose it.
 gate unit's `dispatch_context.decision_payload.emit_count` at iteration time,
 defaulting to `1`. The producer validates `1 ≤ emit_count ≤ 10` (round-3 P1-R3-4
 upper bound prevents a misbehaving gate from DOS-emitting a thousand units in
-one tick).
+one pulse).
 
 ## 8. `expected_emit_outputs` — declared phase-boundary emit ids (v0.3.0+)
 

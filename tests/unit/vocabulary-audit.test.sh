@@ -58,7 +58,7 @@ TERM_STATUS="\
 orchestrator=done
 emitter=done
 adapter=done
-tick=pending
+tick=done
 seam=pending
 unit=pending
 recipe=pending
@@ -185,6 +185,19 @@ audit_term_hits() {
              | grep -vE '^lib/auto\.py:[0-9]+:.*(--recipe|--teardown-recipe-after-init|[Dd]eprecat)' \
              || true)"
       ;;
+    tick)
+      # PERMANENT (KTD-4, one minor version): the kept forwarding stub `lib/tick.sh`
+      # and the kept alias command `commands/auto-tick.md` are whitelisted BY PATH
+      # above — but the tests that PIN their existence/behavior have to NAME them,
+      # and those test files are NOT whitelisted (any other stale `tick` in them
+      # must still fail). So the exemption is anchored to path AND content: only the
+      # alias-command token `auto-tick` / the stub path `tick.sh` are exempt, only in
+      # the three tests that assert the old surface still resolves. Drop this branch
+      # when the alias + stub are removed next minor.
+      raw="$(printf '%s\n' "$raw" \
+             | grep -vE '^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh):[0-9]+:.*(auto-tick|tick\.sh)' \
+             || true)"
+      ;;
     emitter)
       # TEMP: until U6. U3 renamed the emitter ROLE vocabulary (symbols + prose)
       # to `producer`, but the on-disk KEY cutover is deferred to U6 (KTD-6 — all
@@ -253,9 +266,9 @@ fi
 # NB: this MUST track a term whose real status is still `pending`. Once a term is
 # renamed it no longer produces non-whitelisted hits, so the control would go
 # vacuous itself; each rename unit re-points this to the next still-pending term.
-# U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`,
-# so it now probes `tick` (pending until U5).
-DF_TERM="tick"
+# U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`;
+# U5 renamed `tick`, so it now probes `seam` (pending until U6).
+DF_TERM="seam"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then

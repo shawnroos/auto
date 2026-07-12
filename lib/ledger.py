@@ -195,11 +195,11 @@ _TOOL_SURFACE_PREAMBLE = {
     ),
     "ledger_path": "<repo>/.claude/auto/<run-id>.json — read it, never re-derive.",
     "intent_envelope": {
-        "doc": "lib/tick.py emits ONE of these on stdout; the model issues the tool call.",
+        "doc": "lib/pulse.py emits ONE of these on stdout; the model issues the tool call.",
         "actions": {
-            "rearm": '{"action":"rearm","delay":N,"prompt":"/auto:auto-tick <run>",...}',
+            "rearm": '{"action":"rearm","delay":N,"prompt":"/auto:auto-pulse <run>",...}',
             "stop": '{"action":"stop","reason":"predicate-met"|"seam-pause",...}',
-            "noop": '{"action":"noop","reason":"lock-held-by-live-tick"}',
+            "noop": '{"action":"noop","reason":"lock-held-by-live-pulse"}',
         },
     },
 }
@@ -216,10 +216,10 @@ _TOOL_SURFACE_PREAMBLE = {
 #
 # REPO RESOLUTION splits the verbs into two families:
 #   * the READ verbs + `transition` take an explicit `<repo>` argv (the legacy
-#     shape auto.sh / tick.py pass);
+#     shape auto.sh / pulse.py pass);
 #   * the FEEDBACK + STEERING write verbs auto-resolve the repo from
 #     cwd/$CLAUDE_AUTO_REPO (`resolve_repo`) so the model passes only the run-id
-#     it already holds from the tick intent — its ONLY ledger-write tool is this
+#     it already holds from the pulse intent — its ONLY ledger-write tool is this
 #     CLI; it cannot call the Python mutators directly.
 
 

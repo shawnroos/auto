@@ -25,7 +25,7 @@
 # units + a judge work unit. Prime each plan unit with stashed enumerated_units,
 # set gaps_open=0 + plan_step=review_plan so plan-met fires, dispatch the judge
 # and write its verdict via the PRODUCTION path (record_verdict + set_winner_unit_id —
-# no on-disk sidestep), then dispatch_tick(auto=True). Auto-flip fires
+# no on-disk sidestep), then dispatch_pulse(auto=True). Auto-flip fires
 # judge_winner_to_work_units which reads the winner's enumerated set + emits.
 #
 # Scenarios:
@@ -33,7 +33,7 @@
 #      enumerated units (production path proof).
 #   2. deliberate-fail (no winner): judge records a verdict WITHOUT calling
 #      set_winner_unit_id → dispatch_context.winner_unit_id is absent →
-#      producer raises RecipeError; tick catches it, ledger stays at loop_phase=plan
+#      producer raises RecipeError; pulse catches it, ledger stays at loop_phase=plan
 #      with NO new work units.
 #   3. malformed message: a judge dict with no winner_unit_id on dispatch_context
 #      raises a clear message naming dispatch_context AND set_winner_unit_id so
@@ -62,7 +62,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Drive a2 from a primed post-judge state through one dispatch_tick. Args:
+# Drive a2 from a primed post-judge state through one dispatch_pulse. Args:
 #   $1 = scenario: "green" | "no-winner" | "bad-winner"
 # Returns CSV:
 #   loop_phase | work_unit_ids_in_phase_work (sorted, comma-joined)
@@ -85,7 +85,7 @@ def load(name, path):
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -142,14 +142,14 @@ elif scenario == "bad-winner":
     ledger.record_verdict(repo, run_id, "judge",
         [{"severity": "minor", "note": "winner=ghost (write rejected)"}])
 
-# Step 4: tick. auto=True so _maybe_seam takes the auto-flip branch and routes
+# Step 4: pulse. auto=True so _maybe_seam takes the auto-flip branch and routes
 # advance_to_phase → transition_and_emit → judge_winner_to_work_units.
-# dispatch_tick catches producer exceptions (lib/tick.py:614) and converts them
+# dispatch_pulse catches producer exceptions (lib/pulse.py:614) and converts them
 # to a recorded stall, so the no-winner / bad-winner scenarios still complete
 # the call — the ledger just stays at loop_phase=plan with no new work units.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = ledger.read_ledger(repo, run_id)
 work_units = sorted(u["id"] for u in led["units"] if u.get("phase") == "work")
@@ -173,7 +173,7 @@ esac
 # ─── Scenario 2: deliberate-fail — judge findings have no winner_unit_id ────
 it "fix-pass C T2 DELIBERATE-FAIL: judge findings have no winner_unit_id → producer raises, no work units"
 res_nowin="$(drive_a2 no-winner)"
-# producers.py raises ValueError. tick.py:614 catches it and records a stall,
+# producers.py raises ValueError. pulse.py:614 catches it and records a stall,
 # but the atomic transition_and_emit body raised BEFORE writing — so the ledger
 # stays at loop_phase=plan with no new work units. (Recipe-declared judge work
 # unit stays in the ledger but we exclude it from the emitted set above.)
@@ -186,7 +186,7 @@ esac
 it "fix-pass C T2 MALFORMED: judge winner names non-existent unit → producer raises with right message"
 res_bad="$(drive_a2 bad-winner)"
 # Same behavior as scenario 2: producer raises (different message — "winner
-# 'plan-999' not in ledger"), tick catches, ledger stays at loop_phase=plan,
+# 'plan-999' not in ledger"), pulse catches, ledger stays at loop_phase=plan,
 # no new work units appear. We assert the visible end-state; the raise message
 # is asserted in the dedicated message-check scenario below.
 case "$res_bad" in

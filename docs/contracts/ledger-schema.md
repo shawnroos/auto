@@ -1,7 +1,7 @@
 # Ledger Schema Contract (LOCKED)
 
 > **Status: LOCKED day-zero contract.** This file is the source-of-truth
-> specification for the auto per-unit ledger. U4 (tick), U6a/U6b
+> specification for the auto per-unit ledger. U4 (pulse), U6a/U6b
 > (backends), U7 (hooks), and U10 (dispatcher) build against THIS document.
 > `lib/ledger.py` is the canonical implementation; this spec is authoritative
 > if the two ever disagree. Do not change the JSON shape, the invariants, the
@@ -92,7 +92,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 |-------|------|------------------|
 | `run_id` | string | the human-supplied run identifier; slugified for the filename, stored raw here |
 | `loop_phase` | enum | `"plan"` \| `"seam"` \| `"work"` \| `"done"` |
-| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the backend reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — backends read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Feeds `exit_predicate_result` ONLY in the plan phase: plan-met requires `plan_step == "review_plan"` (the §3.1 coherence guard — a default `gaps_open==0` before any review must not short-circuit). Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
+| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the pulse completed (the backend reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — backends read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Feeds `exit_predicate_result` ONLY in the plan phase: plan-met requires `plan_step == "review_plan"` (the §3.1 coherence guard — a default `gaps_open==0` before any review must not short-circuit). Persisted by the pulse after each plan-loop advance so a fresh pulse is not amnesiac — this is the anti-livelock field (§3.1). |
 | `seam_paused` | bool | `true` ONLY while `loop_phase == "seam"`; the intentional-orphan flag (§5, I-3) |
 | `adapter` | enum | `"ce"` \| `"native"` — which workflow backend drives the run |
 | `adapter_scale` | enum | `"three-tier"` \| `"blocker-only"` — set by U6b's rubric probe; tells the predicate evaluator which severity logic applies |
@@ -102,13 +102,13 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `recipe` | object/null | **(v0.2.0, additive)** `{ "name": str, "source_tier": "workspace"\|"global"\|"built-in" }` — the recipe this run was built from. **`null` on a recipe-blind (v0.1.x) ledger**, which the engine treats as the implicit A1 (classic) topology. The recipe is baked into the ledger at `init_ledger`; resume reads it here, never re-loading the recipe file. |
 | `phase_order` | string[] | **(v0.2.0, additive)** the run's ordered phase sequence. **Defaults to `["plan", "seam", "work"]`** (the v0.1.x grammar) when absent — so a recipe-blind ledger routes phases exactly as before. A recipe may declare a different order; the V1 validator accepts only the default and the work-only `["work"]` (KTD-15), rejecting all other non-default values until v0.2.1 (A3). `terminal_phase` MUST be a member. |
 | `terminal_phase` | string | **(v0.2.0, additive)** the phase whose completion ends the run. **Defaults to `"work"`** when absent. `exit_predicate_result.met` can be `true` only when `loop_phase == terminal_phase`. For all V1 recipes this is `"work"`, so the predicate behaves identically to v0.1.x. |
-| `active_wall_seconds` | int/float | **(v0.3.0, additive)** wall-time accumulator for the iteration `max_wall_seconds` bound (R5 / U2). **Defaults to `0`** on a legacy ledger; all reads use `ledger.get("active_wall_seconds", 0)`. Only `accumulate_active_time` writes it — atomic add-write, never overwrite. Counted from a `finally` clause around `_tick_body` so a crashed tick still contributes its delta. |
+| `active_wall_seconds` | int/float | **(v0.3.0, additive)** wall-time accumulator for the iteration `max_wall_seconds` bound (R5 / U2). **Defaults to `0`** on a legacy ledger; all reads use `ledger.get("active_wall_seconds", 0)`. Only `accumulate_active_time` writes it — atomic add-write, never overwrite. Counted from a `finally` clause around `_pulse_body` so a crashed pulse still contributes its delta. |
 | `last_active_at` | `<iso>`/null | **(v0.3.0, additive)** ISO timestamp of the most recent `accumulate_active_time` call. **Defaults to `null`** on a legacy ledger. Diagnostic only — the bound math reads `active_wall_seconds`. |
 | `iteration_attempts` | int | **(v0.3.0, additive)** count of HONORED iterate decisions (KTD §D / U2). **Defaults to `0`** on a legacy ledger; all reads use `ledger.get("iteration_attempts", 0)`. Incremented atomically by `atomic_iterate_step` (or the standalone `increment_iteration_attempts`). Pre-increment value drives `iteration.evaluate_decision`'s bound check — the Nth attempt is checked BEFORE its decision is honored, so the override path fires when `iteration_attempts == max_attempts` on entry. |
 | `iteration_emit_count` | int | **(v0.3.0, additive)** monotonic emit-id counter (KTD §D / OQ4). **Defaults to `0`** on a legacy ledger. `emit_within_phase` increments it per emitted unit. Drives `iterate_template`'s id assignment via `id_prefix + (counter+1)` — never recounts existing units, so it survives partial-emit crashes that delete units. |
 | `iteration` | object/null | **(v0.3.0, additive — written by U5's recipe wiring)** `{ "gate_unit": str, "emit_template": str?, "bound": { "max_attempts": int, "max_wall_seconds": int? } }`. **`null` on a non-iterating recipe (a1 / W)** — the iteration_pending compute returns `false`, every iteration mutator short-circuits to legacy behavior. The recipe layer writes this at `init_ledger`; U2 only DEFINES the read shape (no init param). |
 | `emit_templates` | object/null | **(v0.3.0, additive — written by U5's recipe wiring)** `{ "<template_name>": { "phase": str, "invokes": object, "id_prefix": str } }` — the recipe's emit-template registry, the source the `iterate_template` producer resolves when the gate's `iteration.emit_template` names a key. **`null` on a recipe that declares no templates** (legacy / non-iterating). Baked into the ledger at `init_ledger` so a resume reads the templates from disk without re-loading the recipe file (mirrors the `phase_transitions` precedent). Validator (`lib/recipes.py::_KNOWN_EMIT_TEMPLATE_KEYS`) rejects unknown inner keys so a typo doesn't silently no-op at emit. |
-| `exit_reason` | object/null | **(v0.3.0, additive — written by `set_exit_reason`)** `{ "kind": str, "error": object, "at": <iso> }` — the diagnostic envelope persisted when `tick.advance_iteration_loop` raises (the F2 catches in `lib/tick.py`). **`null` on a clean run** (predicate-met exit, bound-breach exit via `bound_override`, or any path that doesn't crash the iteration check). `kind` is one of `EXIT_REASON_KINDS` (see §8): `"iteration-check-failed"` for an unexpected raise from `advance_iteration_loop` (typically a malformed iteration block or gate verdict), `"recipe-bug"` for a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escaping the iteration check — that subclass set signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for. `error` carries `{type, message, call}` from the originating exception. Persisted BEFORE the matching `set_loop(loop_phase="done", driver="manual")` so `/auto-status` of the wedge-marked-done run can distinguish a clean exit from a crash exit (memory `feedback_plan_documents_transition_code_doesnt_wire_it` — the durable on-ledger field, not just the transient stop intent). |
+| `exit_reason` | object/null | **(v0.3.0, additive — written by `set_exit_reason`)** `{ "kind": str, "error": object, "at": <iso> }` — the diagnostic envelope persisted when `pulse.advance_iteration_loop` raises (the F2 catches in `lib/pulse.py`). **`null` on a clean run** (predicate-met exit, bound-breach exit via `bound_override`, or any path that doesn't crash the iteration check). `kind` is one of `EXIT_REASON_KINDS` (see §8): `"iteration-check-failed"` for an unexpected raise from `advance_iteration_loop` (typically a malformed iteration block or gate verdict), `"recipe-bug"` for a `LedgerError` subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) escaping the iteration check — that subclass set signals the recipe's `units[]` / `phase_transitions` are mis-shaped relative to what the engine reached for. `error` carries `{type, message, call}` from the originating exception. Persisted BEFORE the matching `set_loop(loop_phase="done", driver="manual")` so `/auto-status` of the wedge-marked-done run can distinguish a clean exit from a crash exit (memory `feedback_plan_documents_transition_code_doesnt_wire_it` — the durable on-ledger field, not just the transient stop intent). |
 | `goal_intent` | string/null | **(v0.4.0, additive — written by `init_ledger` at run-creation time)** one-line user-facing intent sentence, frozen at init. **`null` on a legacy (pre-v0.4.0) ledger.** Derived from the plan's `# H1` headline for `/auto <plan>` runs (fallback: the file stem). For bare `/auto` flows the eventual derivation source is the hypothesis summary (the dirty-tree branch / freeform handoff) or the operator's input text; v0.4.0 ships the `/auto <plan>` derivation, the bare-flow derivations land alongside U4's driver rewrite. Surfaced verbatim by the bare-`/auto` hypothesis funnel when disambiguating between multiple in-flight runs (`auto-detect.sh` → `ambiguous-runs` situation's `ambiguity.options[].description` field), so the operator sees "what was this run started for", not just a slug. Advisory operator surface — NEVER read by any predicate, never gates a transition. |
 | `agent_session_ids` | string[] | **(v0.13.0 U8, additive — appended by `register_session`)** the OWNERSHIP SET the two PreToolUse hooks gate on, alongside `driving_session_id`. When the loop's phase work runs in background sub-agents (each carrying its own `session_id`), a scalar `driving_session_id` match went dark for the whole tree — including `fix`, which writes code and runs Bash. A dispatched sub-agent registers here, and both hooks match MEMBERSHIP of `{driving_session_id} ∪ agent_session_ids` (R21/KTD-7). Membership is opt-IN by registration — an unrelated session in the same worktree is never gated. The action gate's operator-pause exemption stays scoped to `driving_session_id` alone (a sub-agent is never the operator). **Defaults to `[]`**; idempotent; bounded at 256 (oldest evicted). NEVER read by any predicate. |
 | `driving_session_id` | string/null | **(v0.6.0 U5, additive — written by `init_ledger` at arm time, mutated by `set_driving_session_id`)** the DRIVING interactive session's `session_id` (`CLAUDE_CODE_SESSION_ID`; v0.6.4 dropped the earlier `CLAUDE_CODE_CHILD_SESSION`-falsey assertion — the harness sets that var in every Bash-tool subprocess where arm/resume run, so it darkened the backstop on every run and is not a driver-vs-sub-agent signal). The advisor-gate PreToolUse hooks (`lib/on-pretooluse-askuser.py`, `lib/on-pretooluse-action.py`) match a denied `AskUserQuestion` / a destructive Bash·Write to THIS run by testing the hook's stdin `session_id` for MEMBERSHIP of `{driving_session_id} ∪ agent_session_ids` (KTD-5, widened to a set in v0.13.0 U8) — so a concurrent STANDALONE ce-skill in the same worktree (registered in neither) is correctly ignored. **`null` on a legacy ledger or a run armed without the env var present** — read DEFENSIVELY by the hooks: absent → no match → fail-open (question gate) / fail-safe (action gate). Stored top-level (run-identity, NOT liveness — it does NOT live inside `loop`). NEVER read by any predicate. Arm-time only: a run resumed from a DIFFERENT interactive session keeps the arm-time id (accepted v0.6.0 limitation). |
@@ -140,11 +140,11 @@ recompute it.
 | `depends_on` | string[] | unit ids this unit depends on (for fan-out gating; resolved by U10) |
 | `dispatched_at` | `<iso>`/null | when the dispatcher marked it `dispatched`; null until then |
 | `verdict_at` | `<iso>`/null | timestamp of the **latest** verdict self-write (overwrites on re-verdict — latest-only semantics; null until first verdict) |
-| `stall_threshold_seconds` | int | per-unit timeout; backend-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
+| `stall_threshold_seconds` | int | per-unit timeout; backend-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's pulse may mark it `stalled` |
 | `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if a backend raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
 | `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the dispatcher on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
 | `phase` | string | **(v0.2.0, additive)** the unit's phase. When absent, defaults to the run's start phase if that is a plan phase, else `"work"` — matching v0.1.x (plan-phase runs have no work units yet; any pre-declared unit is a work unit). Recipes set it explicitly. |
-| `plan_step` | enum/null | **(v0.2.0, additive)** per-unit plan-step for N>1 parallel plan-loops (R11). `null` default. A1's single plan-loop keeps using the **top-level** `plan_step` scalar (so A1's first-tick ledger stays byte-identical to v0.1.x); this per-unit field is populated only when a recipe declares multiple plan-phase units. |
+| `plan_step` | enum/null | **(v0.2.0, additive)** per-unit plan-step for N>1 parallel plan-loops (R11). `null` default. A1's single plan-loop keeps using the **top-level** `plan_step` scalar (so A1's first-pulse ledger stays byte-identical to v0.1.x); this per-unit field is populated only when a recipe declares multiple plan-phase units. |
 | `gaps_open` | int/null | **(v0.2.0, additive)** per-unit open-gap count for N>1 plan-loops. `null` until a review feeds one back. Same A1-uses-the-scalar rule as `plan_step`. |
 | `dispatch_context` | object | **(v0.2.0, additive)** `{}` default. Recipe-side metadata merged from the recipe unit's `invokes` (e.g. `prompt_template`, `bias`) — after path-bounding validation — plus engine-written keys such as `enumerated_units` (the plan unit's `enumerate_plan_units` output, persisted at `plan-done` so producers read it without re-calling the backend). The backend reads it via its existing `unit` parameter. **(v0.3.0, additive sub-keys on a gate unit's `dispatch_context`):** `decision` ∈ `iteration.DECISIONS` (`"advance" \| "iterate" \| "exit"`) — the gate's verdict-time decision, written by `set_verdict_decision` (replaces the v0.2.x `winner_unit_id` pattern: the gate's outcome lives on `dispatch_context`, never on `findings[]` which `record_verdict` normalizes to `{severity, note}` only; readers MUST go through `lib/iteration.py::read_decision`, the AST lint enforces); `decision_payload` (optional dict) — caller-supplied data accompanying an `iterate` decision (e.g. `emit_count` for `iterate_template`); `bound_override` (object) — `{ "bound": "max_attempts"\|"max_wall_seconds", "original_decision": <enum>, "at": <iso> }`, written by `set_bound_override` when the engine forced `iterate → exit` because the bound was breached. Both `decision`/`decision_payload` are cleared by `reset_for_iteration` so a fresh iteration doesn't read the stale decision (round-3 P0-R3-1). **(v0.7.0, additive sub-key — U4):** `dispatch_context.judge_verdicts` (optional `{criterion_id: "pass"\|"fail"}`) — driver-supplied verdicts for the `advisor_judge`/`model_judge`/`human` criteria, consumed by the gate-resolution pipeline (full mechanism on the `verification` row below). The criteria *themselves* live on the unit's top-level `verification` field, NOT here — `judge_verdicts` is the only verification-related key that is genuinely a `dispatch_context` sub-key. |
 | `last_advanced_at` | `<iso>`/null | **(v0.2.0, additive)** `null` default (sorts oldest → picked first). The round-robin tiebreaker for serialized N>1 plan-loop advance: `dispatcher.pick_next_plan_unit_to_advance` picks the ready plan unit with the oldest `last_advanced_at`, ties broken by `units[]` declaration order. State lives here so resume continues round-robin correctly. |
@@ -155,9 +155,9 @@ recompute it.
 
 | field | type | meaning |
 |-------|------|---------|
-| `driver` | enum | `"self"` = a tick chain is self-pacing via `ScheduleWakeup`; `"manual"` = paused / awaiting `/auto-resume` |
-| `last_beat_at` | `<iso>` | updated each tick; powers orphan detection (§5). There is **no** `next_beat` field — each tick re-arms its own successor, so liveness is inferred from `last_beat_at` + `driver`, not a stored next-fire time |
-| `blocked_on` | string/absent | **(a real `set_loop` kwarg — written via `set_loop(..., blocked_on=...)`)** the human/external reason this run is paused (e.g. `"run \`bf auth login --env dev4\`"`, or an upstream-cluster escalation message — see `docs/contracts/driver-reference.md` §12–§13). Written alongside `driver == "manual"` whenever the run pauses: the operator pause path (`auto-resume.py pause`), the destructive-action backstop (`lib/on-pretooluse-action.py`, KTD-4), and upstream-cluster escalation (`lib/tick_advance.py`, KTD-6) all set it. **Absent (not `null`) when unset** — `set_loop`'s sentinel default leaves it unchanged; `blocked_on=None` `pop`s the key (the resume `continue` path clears it). Purely a legibility field surfaced by `/auto-status` and resume disambiguation — **NEVER read by any predicate**, never gates a transition. |
+| `driver` | enum | `"self"` = a pulse chain is self-pacing via `ScheduleWakeup`; `"manual"` = paused / awaiting `/auto-resume` |
+| `last_beat_at` | `<iso>` | updated each pulse; powers orphan detection (§5). There is **no** `next_beat` field — each pulse re-arms its own successor, so liveness is inferred from `last_beat_at` + `driver`, not a stored next-fire time |
+| `blocked_on` | string/absent | **(a real `set_loop` kwarg — written via `set_loop(..., blocked_on=...)`)** the human/external reason this run is paused (e.g. `"run \`bf auth login --env dev4\`"`, or an upstream-cluster escalation message — see `docs/contracts/driver-reference.md` §12–§13). Written alongside `driver == "manual"` whenever the run pauses: the operator pause path (`auto-resume.py pause`), the destructive-action backstop (`lib/on-pretooluse-action.py`, KTD-4), and upstream-cluster escalation (`lib/pulse_advance.py`, KTD-6) all set it. **Absent (not `null`) when unset** — `set_loop`'s sentinel default leaves it unchanged; `blocked_on=None` `pop`s the key (the resume `continue` path clears it). Purely a legibility field surfaced by `/auto-status` and resume disambiguation — **NEVER read by any predicate**, never gates a transition. |
 | `backstop_latched` | `true`/absent | **(a real `set_loop` kwarg — `set_loop(..., backstop_latched=...)`; v0.6.0 P3-b)** a STICKY marker set to `true` ATOMICALLY with `driver="manual"` **only** by the destructive-action backstop (`lib/on-pretooluse-action.py::_pause_run`). Distinguishes a backstop-initiated pause (latched → the backstop KEEPS gating destructive commands from the driving session, so a second `rm -rf`/force-push in the same autonomous turn cannot self-disarm it) from an OPERATOR pause (`auto-resume.py pause`, NOT latched → the operator's own cleanup commands are allowed). Sticky across an agent-run `auto-resume pause` (that path does not clear it); cleared (`pop`ped) only by the resume `continue` path (`backstop_latched=False`) — `abort` ends the run, which releases the gate via `phase=done`. **Absent (not `false`) when unset.** Read ONLY by the action hook's ownership predicate — **NEVER by any exit/transition predicate**. |
 
 ---
@@ -171,9 +171,9 @@ rejects any transition not in this table (it raises; the ledger is not written).
 pending          → dispatched          (DISPATCHER via dispatch_batch — the ONLY entry transition; non-pending units are rejected)
 dispatched       → verdict-returned    (the BACKGROUND AGENT self-writes its verdict + findings atomically)
 dispatched       → stalled             (past stall_threshold_seconds with no verdict, OR a backend raised mid-dispatch)
-verdict-returned → fixed               (a TICK applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
+verdict-returned → fixed               (a PULSE applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
 verdict-returned → pending             (no fix needed / next round: re-dispatch this unit)
-fixed            → pending             (a TICK that applied fixes re-enqueues for re-review — this is the closure loop)
+fixed            → pending             (a PULSE that applied fixes re-enqueues for re-review — this is the closure loop)
 stalled          → pending             (OPERATOR: /auto-resume retry <unit>; clears last_error)
 stalled          → terminal-skip       (OPERATOR: /auto-resume skip <unit>; counts as terminal for I-2)
 stalled          → verdict-returned     (RECOVERY, record_verdict-ONLY — Bug #7; see below)
@@ -233,7 +233,7 @@ new is the atomic **COMBINATION** the mutator wraps in ONE locked body:
 2. `depends_on` is replaced with the caller-supplied list (the union of the
    gate's prior deps + newly-emitted sibling ids — caller computes the union).
 3. `dispatch_context.decision` and `dispatch_context.decision_payload` are
-   CLEARED. Without this clear, a subsequent tick would re-read the stale
+   CLEARED. Without this clear, a subsequent pulse would re-read the stale
    `decision: "iterate"` and re-fire the iteration loop before the gate
    re-verdicts (double-incrementing `iteration_attempts` until bound trip).
 4. `verdict_at` is cleared.
@@ -251,15 +251,15 @@ in the pre-iterate state).
 **Who writes which transition** (no two writers contend for the same edge):
 - **Dispatcher** (U10) owns `pending → dispatched`.
 - **Background agent** (U10) owns `dispatched → verdict-returned` (self-write; survives the driving session's death) and is the **only writer of `findings[]`**.
-- **Tick** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
+- **Pulse** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
 - **Operator** (U7, via `/auto-resume`) owns the `stalled →` recoveries.
 
 ### 3.1 Plan-step sub-grammar (`plan_step` — the anti-livelock field)
 
-`plan_step` records the LAST plan step the tick completed. It is a sub-state of
+`plan_step` records the LAST plan step the pulse completed. It is a sub-state of
 `loop_phase == "plan"` and is `null` (ignored) in every other phase. The
 **backend** owns the sequencing — it reads `plan_step` (+ `gaps_open`) and
-returns the NEXT step; the **tick** persists the step it just ran. The two
+returns the NEXT step; the **pulse** persists the step it just ran. The two
 backends differ only in whether a `deepen` step exists:
 
 ```
@@ -285,10 +285,10 @@ livelock. Because the guard keys on `plan_step == "review_plan"` specifically, a
 default `gaps_open == 0` BEFORE any review has run (e.g. at `plan` / `deepen`)
 does NOT short-circuit.
 
-**Why it must be persisted.** `next_plan_step` is pure over the ledger. A tick is
-a fresh process that reads ALL state from disk. If the tick does not write back
-the step it ran, the next tick reads `plan_step == null`, the backend returns
-`"plan"`, and the plan-loop re-plans forever (the plan-loop livelock). The tick
+**Why it must be persisted.** `next_plan_step` is pure over the ledger. A pulse is
+a fresh process that reads ALL state from disk. If the pulse does not write back
+the step it ran, the next pulse reads `plan_step == null`, the backend returns
+`"plan"`, and the plan-loop re-plans forever (the plan-loop livelock). The pulse
 therefore persists the executed step via `set_loop(plan_step=...)` AFTER the
 backend op returns successfully (a step that raised is recorded as a stall, not
 as completed).
@@ -322,7 +322,7 @@ so consumers (and the I-2 test) can call it directly.
   most recent review's view of the unit.
 - `findings[]` is written **ONLY** by a background agent's review verdict
   (the `dispatched → verdict-returned` transition). NOTHING else writes it.
-- A tick applying a fix (`verdict-returned → fixed`) does **NOT** clear or modify
+- A pulse applying a fix (`verdict-returned → fixed`) does **NOT** clear or modify
   `findings[]`. Asserting closure without a verdict is forbidden (R8). The fix is
   recorded as a state change only; the stale findings remain until a fresh review
   overwrites them.
@@ -336,7 +336,7 @@ so consumers (and the I-2 test) can call it directly.
 
 ### I-1 — Atomic predicate freshness (generalized to ALL writers)
 
-EVERY ledger write that mutates unit state or findings — whether by a tick (U4),
+EVERY ledger write that mutates unit state or findings — whether by a pulse (U4),
 a background agent's verdict self-write (U10), or the dispatcher's
 `dispatch_batch` (U10) — MUST recompute `exit_predicate_result` (including
 `all_units_terminal`) from the SAME in-memory state and persist both in ONE
@@ -349,7 +349,7 @@ recomputing. Any writer that mutates state via the module API inherits I-1 by
 construction — that is what "generalized to ALL writers" means: U10's callers
 route their mutations through this module and get freshness for free.
 
-All consumers — the tick's stop-check, native `/goal` (via `goal-status.sh`),
+All consumers — the pulse's stop-check, native `/goal` (via `goal-status.sh`),
 U7's hooks — read `exit_predicate_result` directly and NEVER re-derive it.
 
 ### I-2 — Done requires terminal units
@@ -382,8 +382,8 @@ The work-loop predicate closes two failure modes at once:
 
 ### I-3 — Liveness / orphan detection
 
-`loop.last_beat_at` records the last tick time; `loop.driver` is `"self"` while a
-tick chain is self-pacing or `"manual"` when paused / awaiting resume.
+`loop.last_beat_at` records the last pulse time; `loop.driver` is `"self"` while a
+pulse chain is self-pacing or `"manual"` when paused / awaiting resume.
 
 A run is **resumable (orphaned)** iff:
 
@@ -393,9 +393,9 @@ AND ( loop.driver == "manual"
       OR loop.last_beat_at is older than GRACE_SECONDS )
 ```
 
-`GRACE_SECONDS = 4200` (70 min). It MUST exceed the maximum tick delay (3600s,
-the `ScheduleWakeup` clamp ceiling) plus tick-execution slack, so a healthy
-slow-paced tick chain (e.g. last beat 3500s ago, `driver == "self"`) is NEVER
+`GRACE_SECONDS = 4200` (70 min). It MUST exceed the maximum pulse delay (3600s,
+the `ScheduleWakeup` clamp ceiling) plus pulse-execution slack, so a healthy
+slow-paced pulse chain (e.g. last beat 3500s ago, `driver == "self"`) is NEVER
 false-flagged as orphaned — a false flag could induce a double-drive.
 
 `seam_paused == true` is the *intentional* orphan: it is surfaced as a seam (a
@@ -416,7 +416,7 @@ not hardcode copies — hardcoding causes drift.
 | constant | value | meaning |
 |----------|-------|---------|
 | `GRACE_SECONDS` | `4200` | orphan-detection grace window (I-3) |
-| `DRIVER_SELF_STALE_SECONDS` | `3900` | Bug #9 dead-self-chain gate for the Stop hook: a `driver=="self"` run whose `last_beat_at` is older than this is treated as a dead chain and does NOT block stop. Sits ABOVE the 3600s max-tick-delay + slack (a healthy slow chain is never falsely un-blocked) and BELOW `GRACE_SECONDS` (a dead chain stops blocking before `is_orphaned` surfaces it for resume) |
+| `DRIVER_SELF_STALE_SECONDS` | `3900` | Bug #9 dead-self-chain gate for the Stop hook: a `driver=="self"` run whose `last_beat_at` is older than this is treated as a dead chain and does NOT block stop. Sits ABOVE the 3600s max-pulse-delay + slack (a healthy slow chain is never falsely un-blocked) and BELOW `GRACE_SECONDS` (a dead chain stops blocking before `is_orphaned` surfaces it for resume) |
 | `DEFAULT_STALL_THRESHOLD_SECONDS` | `600` | per-unit stall timeout default |
 | `LOOP_PHASES` | `("plan","seam","work","done")` | valid `loop_phase` values |
 | `PLAN_STEPS` | `("plan","deepen","review_plan")` | valid non-null `plan_step` values (`null` is also valid: no step yet) |
@@ -454,7 +454,7 @@ asserts no production file enables them.
 |---------|--------|--------|
 | `CLAUDE_AUTO_TEST_NO_LOCK` | `=1` skips `flock` acquisition | the concurrency test goes RED (lost update) without the lock |
 | `CLAUDE_AUTO_TEST_NO_RECOMPUTE` | `=1` skips the I-1 predicate recompute on write | the I-1 test goes RED (stale `met:true` after a new blocker) without recompute |
-| `CLAUDE_AUTO_TEST_NO_REENQUEUE` | `=1` makes the tick's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/tick.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
+| `CLAUDE_AUTO_TEST_NO_REENQUEUE` | `=1` makes the pulse's work-loop advance SKIP the `fixed → pending` re-enqueue (read by `lib/pulse.py::advance_work_loop`) | the work-loop closure test goes RED (livelock at `fixed` — the stale blocker is never re-reviewed) without the re-enqueue |
 | `CLAUDE_AUTO_TEST_NO_ATTEMPT_CHECK` | `=1` makes `record_verdict` SKIP the Bug #6 attempt-identity rejection | the stall+retry clobber test goes RED (a stale verdict from a superseded attempt overwrites the fresh one) without the attempt check |
 | `CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY` | `=1` makes `record_verdict` reject a verdict from a `stalled` unit (the pre-fix behaviour) | the late-verdict recovery test goes RED (a genuine slow verdict is lost to `InvalidTransition`) without the recovery edge |
 | `CLAUDE_AUTO_TEST_NO_STALENESS_CHECK` | `=1` makes `lib/on-stop.py::_blocking_runs` SKIP the Bug #9 dead-self-chain freshness gate | the stale-block test goes RED (a dead `driver=="self"` chain keeps blocking stop) without the gate |

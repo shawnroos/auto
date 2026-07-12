@@ -270,7 +270,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # the work-loop's terminal check).
         # AC-2 fix: `met` requires loop_phase == terminal_phase (the run doesn't
         # exit until the terminal phase is reached AND its own units are terminal).
-        # Post-terminal: "done" is the exit sentinel set BY a met-triggered tick
+        # Post-terminal: "done" is the exit sentinel set BY a met-triggered pulse
         # (the LAST member of LOOP_PHASES, never a member of any recipe's
         # phase_order). At "done", phase-scoped units would be empty (no unit
         # declares phase=done), so we'd vacuously flip met→false on the recompute
@@ -334,7 +334,7 @@ def recompute_predicate(ledger: dict) -> dict:
 
     # v0.3.0 KTD §B — iteration_pending composition. Compute BEFORE finalizing
     # `met` so the AND-NOT clause can suppress a work-loop met that would
-    # otherwise short-circuit the iteration loop (see KTD §A: the tick's
+    # otherwise short-circuit the iteration loop (see KTD §A: the pulse's
     # predicate-met short-circuit yields when iteration_pending is True).
     iteration_pending = _compute_iteration_pending(ledger)
     met = bool(met) and not iteration_pending

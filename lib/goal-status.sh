@@ -34,7 +34,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/tick.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/pulse.sh).
 #
 # $ARGUMENTS-safe: all parsing is positional; never string-interpolated into a
 # shell (memory `feedback_slash_command_arg_substitution`).

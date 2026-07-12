@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """auto U6b: the native Claude backend — Python surface.
 
-This is the module tick.py (U4) imports. `resolve_backend` (tick.py:170-197)
+This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-native.py`, prefers a module-level ``Backend`` factory, and
 calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
 deepen(ledger) / review_plan(ledger) / do_unit(unit) / review(unit)``.
 
 The pure logic (severity validation + the plan-step state machine) is here so
-tick.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
+pulse.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
 CLI for direct testing. A backend NEVER writes the ledger (contract §1).
 
 ══════════════════════════════════════════════════════════════════════════════
@@ -35,9 +35,9 @@ RUBRIC PROBE OUTCOME (gates this backend — contract §3.1, plan U6b "FIRST"):
 ══════════════════════════════════════════════════════════════════════════════
 
 PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
-sub-state, schema §3.1); the tick persists the executed step via
-`set_loop(plan_step=step)` after each plan-loop advance (tick_advance.py), so a
-fresh-process tick reads the real sub-state and the loop advances rather than
+sub-state, schema §3.1); the pulse persists the executed step via
+`set_loop(plan_step=step)` after each plan-loop advance (pulse_advance.py), so a
+fresh-process pulse reads the real sub-state and the loop advances rather than
 livelocking. (Native never emits "deepen": plan → review_plan → done.)
 
 DECLARED SEVERITY MAPPING (contract §3.1): native reviewers self-tag directly on
@@ -97,14 +97,14 @@ def _next_plan_step(ledger):
     per-backend difference is now the injected ``_PLAN_SEQUENCE``; the guard +
     ``plan_step is None`` first-step logic live once in ``_bootstrap``.
     ``plan_step`` IS a real validated ledger field (``ledger_core.PLAN_STEPS``)
-    that the tick persists — read identically by both backends (there is no
+    that the pulse persists — read identically by both backends (there is no
     native-specific schema gap; the sequencer just keeps native's None-tolerance).
     """
     return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
 
 
 class Backend:
-    """The object tick.py's ``resolve_backend`` instantiates. Exposes the six
+    """The object pulse.py's ``resolve_backend`` instantiates. Exposes the six
     ops as methods. `next_plan_step` and `deepen` are fully pure; `plan /
     review_plan / do_unit / review` are the live-invocation seam (PREPARE an
     envelope/rubric the model acts on, PARSE the structured result)."""

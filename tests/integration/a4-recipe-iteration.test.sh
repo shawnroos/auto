@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # auto v0.3.0 U6 integration test: a4 recipe with iteration block + structural
 # compare — three scenarios (GREEN/ITERATE/BOUND) driving the full recipe→
-# ledger→tick path.
+# ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # After U6, a4's `compare` unit is declared structurally in units[] (with
 # depends_on: [build-clarity, build-perf] forward-referencing the bias-builder
 # emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
-# proves the structural+producer split survives the production init→tick path:
-# the recipe→ledger→tick wire materializes builders AND honors compare as
+# proves the structural+producer split survives the production init→pulse path:
+# the recipe→ledger→pulse wire materializes builders AND honors compare as
 # the iteration gate.
 #
 # CONTRACT (KTD §A+§C+§D — v0.3.0 U6):
@@ -25,9 +25,9 @@
 #   Then compare verdicts per scenario.
 #
 # STRUCTURE: init via auto.run with --recipe a4; prime the plan unit's
-# enumerated_units (2 items so builders carry plan_items); tick auto=True →
+# enumerated_units (2 items so builders carry plan_items); pulse auto=True →
 # auto-flips to work emitting builders; mark builders fixed; record_verdict +
-# set_verdict_decision on compare per scenario; tick again.
+# set_verdict_decision on compare per scenario; pulse again.
 #
 # Scenarios:
 #   1. GREEN — compare decision=advance → no iteration fires; standard work
@@ -71,7 +71,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 a = load_lib_module("auto")
 ledger = load_lib_module("ledger")
-tick = load_lib_module("tick")
+pulse = load_lib_module("pulse")
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
@@ -105,12 +105,12 @@ ledger.set_enumerated_units(repo, run_id, "plan",
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
-# Step 3: tick auto=True → _maybe_seam auto-flips → plan_output_to_paired_builders
+# Step 3: pulse auto=True → _maybe_seam auto-flips → plan_output_to_paired_builders
 # emits build-clarity + build-perf (NOT compare — structural). loop_phase=work.
 # iteration_emit_count increments to 2 (one per emitted builder).
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
 
 # Sanity: builders emitted, compare still structural. NOTE: iteration_emit_count
 # stays 0 here — transition_and_emit (the phase-transition primitive) does NOT
@@ -152,10 +152,10 @@ elif scenario == "bound":
     ledger.set_verdict_decision(repo, run_id, "compare", "iterate",
         payload={"emit_count": 1})
 
-# Step 6: tick. advance_iteration_loop fires at the top of _tick_body_inner.
+# Step 6: pulse. advance_iteration_loop fires at the top of _pulse_body_inner.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
-        tick.dispatch_tick(repo, run_id, auto=True)
+        pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = ledger.read_ledger(repo, run_id)
 compare = next(u for u in led["units"] if u["id"] == "compare")

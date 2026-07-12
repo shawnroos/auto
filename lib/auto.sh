@@ -5,14 +5,14 @@
 # /auto initializes a NEW run from a plan/spec: it creates the durable
 # ledger at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
 # units — the plan-loop populates work units later via the backend), and emits
-# an arm-first-tick INTENT (JSON) that the MODEL acts on by setting the
-# deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-tick.
+# an arm-first-pulse INTENT (JSON) that the MODEL acts on by setting the
+# deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-pulse.
 #
 # Subcommands / flags (Claude Code does not dispatch space-separated
 # subcommands, so the argument string is PARSED HERE — never in the .md body,
 # per memory `feedback_slash_command_arg_substitution`):
 #   <plan-or-spec>            required: start a run from this plan/spec file.
-#   ... auto                  skip the plan->work seam pause (tick gets --auto).
+#   ... auto                  skip the plan->work seam pause (pulse gets --auto).
 #   ... --backend ce|native   workflow backend (default ce).
 #   ... --goal "<text>"       compound deliberate-stop goal (default: the loop's
 #                             own exit predicate).
@@ -20,11 +20,11 @@
 # DOUBLE-DRIVE GUARD: run creation routes through ledger.py::init_ledger, which
 # holds the per-run init flock across the existence-check + atomic write (two
 # concurrent inits cannot both win — one raises LedgerExists). The "arm first
-# tick" path emits a re-arm INTENT (JSON) that the MODEL acts on by firing
-# /auto:auto-tick; the tick then acquires its OWN non-blocking process-held
-# _tick_lock (lib/tick.py::_tick_lock) which is the actual double-drive guard.
-# Adding a flock here would deadlock against the tick. So: init inherits the
-# init flock; arm-first-tick defers to the tick's process-held lock. Both are
+# pulse" path emits a re-arm INTENT (JSON) that the MODEL acts on by firing
+# /auto:auto-pulse; the pulse then acquires its OWN non-blocking process-held
+# _pulse_lock (lib/pulse.py::_pulse_lock) which is the actual double-drive guard.
+# Adding a flock here would deadlock against the pulse. So: init inherits the
+# init flock; arm-first-pulse defers to the pulse's process-held lock. Both are
 # flock-based and released on clean exit — there is NO file sentinel to go stale.
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via

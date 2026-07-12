@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U7: the /auto-resume manual floor (F4).
 #
-# A self-paced ScheduleWakeup tick chain does NOT survive a full session exit.
+# A self-paced ScheduleWakeup pulse chain does NOT survive a full session exit.
 # No work is lost (durable ledger; agents self-write verdicts atomically); resume
 # after any suspend is this one cheap command, reading the durable ledger fresh.
 # Resume is also the routine long-run continuation path, not just the crash path.
@@ -9,9 +9,9 @@
 # Subcommands (Claude Code does not dispatch space-separated subcommands, so the
 # subcommand is PARSED HERE from the argument string — never in the .md body,
 # per memory `feedback_slash_command_arg_substitution`):
-#   [<run>]              default `continue`: arm a fresh tick chain (flips a
+#   [<run>]              default `continue`: arm a fresh pulse chain (flips a
 #                        paused seam -> work first if needed).
-#   continue <run>       explicit continue (seam -> work, arm a tick).
+#   continue <run>       explicit continue (seam -> work, arm a pulse).
 #   abort <run>          flip the run to loop_phase="done" (cancellation).
 #   retry <run> <unit>   stalled unit -> pending; clears last_error.
 #   skip <run> <unit>    stalled unit -> terminal-skip (counts as terminal).
@@ -19,17 +19,17 @@
 # DOUBLE-DRIVE GUARD (process-held flock, released on clean exit — NO stale
 # sentinel file): this script ADDS NO NEW FLOCK. State transitions route through
 # ledger.py (set_loop / transition), which holds the per-run RMW flock for the
-# whole read-modify-write. The "arm a tick" path emits a re-arm INTENT (JSON)
-# that the MODEL acts on by firing /auto:auto-tick; the tick then acquires its
-# OWN non-blocking _tick_lock (lib/tick.py::_tick_lock — process-held, released
+# whole read-modify-write. The "arm a pulse" path emits a re-arm INTENT (JSON)
+# that the MODEL acts on by firing /auto:auto-pulse; the pulse then acquires its
+# OWN non-blocking _pulse_lock (lib/pulse.py::_pulse_lock — process-held, released
 # on exit) which is the actual double-drive guard. Adding a third flock here
-# would deadlock against the tick. So: transitions inherit the RMW lock;
-# arm-a-tick defers to the tick's process-held lock. Both are flock-based and
+# would deadlock against the pulse. So: transitions inherit the RMW lock;
+# arm-a-pulse defers to the pulse's process-held lock. Both are flock-based and
 # released on clean exit — there is NO file sentinel to go stale.
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/tick.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/pulse.sh).
 #
 # $ARGUMENTS-safe: the command .md body's only $-bearing line is
 #   bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "$ARGUMENTS"

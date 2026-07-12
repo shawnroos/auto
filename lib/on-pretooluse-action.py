@@ -358,7 +358,7 @@ def _owns_session(led, *, session_id):
 
     OPERATOR-PAUSE EXEMPTION (P3-b): a run the OPERATOR manually paused
     (``driver=="manual"`` WITHOUT ``loop.backstop_latched``) is under human
-    control — the autonomous tick loop is dormant, so the only actor issuing tool
+    control — the autonomous pulse loop is dormant, so the only actor issuing tool
     calls is the operator, and we must NOT gate their own cleanup (``rm`` etc.).
     The ONE ``driver=="manual"`` state we KEEP gating is a pause THIS backstop
     caused: ``_pause_run`` sets ``backstop_latched=True`` atomically with the

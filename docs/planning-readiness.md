@@ -144,7 +144,7 @@ thresholds are brainstorm/plan work.
 - Orientation: `skills/auto-driver/SKILL.md` (dispatch grammar), `lib/auto-detect.sh`
   (hypothesis former — read-only, must always emit a parseable envelope, all keys
   present even null, exit 0 on any non-fatal path).
-- Loop: `skills/auto/SKILL.md` (§1 goal binding, §4.5 pause), `lib/tick.py`,
+- Loop: `skills/auto/SKILL.md` (§1 goal binding, §4.5 pause), `lib/pulse.py`,
   `lib/dispatcher.py`, `lib/on-stop.py` (Stop hook owns verdict).
 - Phases/recipes: `lib/recipes.py:201` (the lock), `lib/phase-grammar.py`
   (general), `lib/emitters.py` (emitter registry), `recipes/*.json`.

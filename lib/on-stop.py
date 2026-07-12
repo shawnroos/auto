@@ -17,7 +17,7 @@ ACTIVE-RUN POLICY:
     zero) keeps the stop blocked.
 
     The `driver == "self"` conjunct is the SEAM/MANUAL carve-out: the engine
-    blocks premature stop only during ACTIVE work — a live tick chain (driver ==
+    blocks premature stop only during ACTIVE work — a live pulse chain (driver ==
     "self") that expects to keep going. When the engine writes `driver:
     "manual"` it is SIGNALING a valid stop-point awaiting human input (a
     seam pause emits action:"stop" + driver:"manual" deliberately; predicate-met
@@ -42,7 +42,7 @@ predicate (verdict-returned → pending) is reflected on that very write, so the
 hook can never read a stale met:true and allow a premature stop.
 
 STALE-CHAIN CARVE-OUT (Bug #9):
-    The `driver == "self"` block above assumes a LIVE tick chain. But a tick can
+    The `driver == "self"` block above assumes a LIVE pulse chain. But a pulse can
     be killed AFTER it writes the beat and BEFORE it re-arms its successor. That
     leaves a ledger with driver=="self", met==false, and a fresh-ISH last_beat_at
     — a DEAD chain that, without a freshness check, would block EVERY session's
@@ -53,9 +53,9 @@ STALE-CHAIN CARVE-OUT (Bug #9):
     resume by the SessionStart hook instead).
 
     THREE THRESHOLDS, reconciled (smallest → largest, no overlap of purpose):
-      * DEFAULT_STALL_THRESHOLD_SECONDS = 600  — per-UNIT dispatch timeout (tick).
+      * DEFAULT_STALL_THRESHOLD_SECONDS = 600  — per-UNIT dispatch timeout (pulse).
       * DRIVER_SELF_STALE_SECONDS       = 3900 — per-RUN dead-chain gate (THIS
-            hook). Above the 3600s ScheduleWakeup max-tick-delay + slack, so a
+            hook). Above the 3600s ScheduleWakeup max-pulse-delay + slack, so a
             healthy slow-paced chain (last beat ≤3600s ago) is NEVER misread as
             dead and prematurely un-blocked (a false un-block could let a real
             loop stop early). Below GRACE so a dead chain stops blocking BEFORE

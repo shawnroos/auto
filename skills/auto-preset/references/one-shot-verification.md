@@ -3,12 +3,12 @@ One-shot verification reference for the auto-preset skill.
 Extends skills/auto-design/references/verification-taxonomy.md (the authoritative
 criterion-shape contract) to the RUN-TIME, STEP-LEVEL, driver-orchestrated
 one-shot. The criterion SHAPES are identical; what changes is WHO resolves each
-type and WHEN — inline, in one synchronous pass, with no tick and no gate.
+type and WHEN — inline, in one synchronous pass, with no pulse and no gate.
 -->
 
 # One-shot verification — deriving and resolving criteria
 
-A one-shot preset run has no flow, no loop, and no tick. The `auto-preset`
+A one-shot preset run has no flow, no loop, and no pulse. The `auto-preset`
 skill is the whole control path: it PROPOSES a small set of context-fit
 verification criteria, the operator ACCEPTS or EDITS them, the ratified set is
 baked into the single run, and the skill RESOLVES every criterion **inline**
@@ -47,9 +47,9 @@ Worked seeds:
 
 ## The INLINE-resolution rule — every type resolves in one pass (KTD-3)
 
-Because the skill drives synchronously and there is **no next tick**, every
+Because the skill drives synchronously and there is **no next pulse**, every
 ratified criterion must resolve *before* the verdict is computed. There is no
-"pending across ticks" state — a criterion that cannot resolve inline has no
+"pending across pulses" state — a criterion that cannot resolve inline has no
 later chance to. That constrains how each type is satisfied:
 
 - **`programmatic`** — the skill runs it **in-process** via
@@ -63,10 +63,10 @@ later chance to. That constrains how each type is satisfied:
   session makes itself (reusing `skills/auto/SKILL.md` §4.6 / §4.7: `advisor`
   returns prose, the driver maps it to a per-criterion pass/fail). **This
   BLOCKS** — the skill waits for the consult and maps its result before moving
-  on. It does not defer to a later tick, because there is none.
+  on. It does not defer to a later pulse, because there is none.
 - **`human`** — resolved by a **blocking pause**: the skill asks the operator and
   waits. **This BLOCKS** — a `human` criterion on a one-shot is a synchronous
-  checkpoint the run stops at, not a deferred pause that a future tick clears.
+  checkpoint the run stops at, not a deferred pause that a future pulse clears.
 
 State this plainly to anyone proposing criteria: on a one-shot, an
 `advisor_judge` or `human` criterion **stops the run until it is answered**.

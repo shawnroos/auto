@@ -208,7 +208,7 @@ def set_loop(
     blocked_on=ledger_core._UNSET,
     backstop_latched=ledger_core._UNSET,
 ):
-    """Update loop-level phase / liveness / plan-step fields (U4's tick uses this).
+    """Update loop-level phase / liveness / plan-step fields (U4's pulse uses this).
 
     ``beat=True`` stamps ``loop.last_beat_at`` to now. Predicate recomputed +
     atomic (a phase change can flip ``met`` via the plan-loop gaps clause).
@@ -216,8 +216,8 @@ def set_loop(
     ``plan_step`` uses an UNSET sentinel default (NOT ``None``) because ``null``
     is itself a valid stored plan_step (the initial "no step yet"). Omit it to
     leave the field unchanged; pass ``plan_step=None`` to clear it, or a step
-    name (``"plan"`` / ``"deepen"`` / ``"review_plan"``) to record it. The tick
-    calls this with the step it just ran so the NEXT (fresh-process) tick is not
+    name (``"plan"`` / ``"deepen"`` / ``"review_plan"``) to record it. The pulse
+    calls this with the step it just ran so the NEXT (fresh-process) pulse is not
     amnesiac — the anti-livelock persist (schema §3.1). In the plan phase
     ``plan_step`` feeds the predicate (plan-met requires ``plan_step ==
     "review_plan"``), so persisting it can flip ``met`` — the recompute on this
@@ -277,7 +277,7 @@ def set_loop(
 
 def set_gaps_open(repo_root, run_id, gaps_open: int):
     """Persist the plan-loop open-gap count from ``review_plan``'s return (U4's
-    tick uses this). The engine reads ONLY the gap-set length and writes it here
+    pulse uses this). The engine reads ONLY the gap-set length and writes it here
     (backend-contract §2.2 / §5).
 
     The value is written into ``exit_predicate_result.gaps_open`` BEFORE the
@@ -559,7 +559,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
 # Why the surface is wider than round-1 priced: the round-2 doc-review pinned
 # three architectural locks (KTD §A control-flow placement, §B predicate
 # composition, §C gate-unit re-engagement) that require dedicated mutators
-# rather than letting the tick stitch raw writes — see plan U2 §Approach.
+# rather than letting the pulse stitch raw writes — see plan U2 §Approach.
 #
 # The composite/emit paths (emit_within_phase, atomic_iterate_step, etc.) live in
 # ledger_emitters.py; this module holds the scalar-field iteration mutators.
@@ -774,7 +774,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
 
     Writes ``ledger["exit_reason"] = {"kind": kind, "error": error, "at": iso}``
     via the standard locked-RMW path. Called by F2's try/except in
-    ``lib/tick.py`` BEFORE force-marking the loop done, so ``/auto-status`` of
+    ``lib/pulse.py`` BEFORE force-marking the loop done, so ``/auto-status`` of
     a crashed run can distinguish a wedge-marked-done from a clean exit. ``kind``
     is a short tag (e.g. ``"iteration-check-failed"``, ``"recipe-bug"``);
     ``error`` is a dict carrying at minimum ``{"type": ..., "message": ...}``
@@ -820,11 +820,11 @@ def accumulate_active_time(repo_root, run_id, delta_seconds: float):
 
     The FIRST sum-of-deltas accumulator on the ledger — every prior time field
     is overwrite-on-write. The contract is ADD, not OVERWRITE: each call adds
-    its delta to the existing total, so two ticks of 5.0 + 7.5 sum to 12.5.
+    its delta to the existing total, so two pulses of 5.0 + 7.5 sum to 12.5.
     The deliberate-fail #1 test asserts this is real addition, not the trap
     where a future refactor accidentally writes ``= round(delta, 3)``.
 
-    Rounded to 3 decimal places to cap on-disk precision (a tick that runs for
+    Rounded to 3 decimal places to cap on-disk precision (a pulse that runs for
     0.0000001 s is not interesting; the bound check tolerates millisecond
     granularity). Negative deltas are clamped to 0 — wall time only flows
     forward; a clock anomaly should not subtract from the bound budget.
@@ -832,8 +832,8 @@ def accumulate_active_time(repo_root, run_id, delta_seconds: float):
     ``last_active_at`` is the ISO timestamp of THIS call, diagnostic only.
     The bound math reads ``active_wall_seconds``.
 
-    Called from U4's ``finally``-clause around ``_tick_body`` (per round-2
-    doc-review P1) so the crashed-tick delta still lands.
+    Called from U4's ``finally``-clause around ``_pulse_body`` (per round-2
+    doc-review P1) so the crashed-pulse delta still lands.
     """
     delta = float(delta_seconds)
     if delta < 0:
@@ -856,8 +856,8 @@ def increment_iteration_attempts(repo_root, run_id, gate_unit_id):
     (NOT when the bound-override path forces exit — overrides do not count as
     honored attempts). The pre-increment value drives the bound check in
     ``iteration.evaluate_decision`` so the Nth attempt is checked BEFORE its
-    decision is honored: if a tick reads iteration_attempts==max, the override
-    fires; the counter only crosses max via this call when the prior tick
+    decision is honored: if a pulse reads iteration_attempts==max, the override
+    fires; the counter only crosses max via this call when the prior pulse
     honored the (max-1)-th iterate.
 
     Composite path (``atomic_iterate_step``) inlines this increment instead of

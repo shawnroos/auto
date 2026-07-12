@@ -8,7 +8,7 @@
 # liveness vs the orphan GRACE, and any stalled units with their last_error
 # cause. With no run-id and >1 active run, it lists them.
 #
-# READ-ONLY: it never mutates the ledger, never arms a tick, never takes a write
+# READ-ONLY: it never mutates the ledger, never arms a pulse, never takes a write
 # lock. It reads the cached exit_predicate_result field directly and NEVER
 # re-derives it (memory `feedback_loop_monitor_terminal_state_field`).
 #
