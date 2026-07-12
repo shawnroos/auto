@@ -68,7 +68,7 @@ ledger=pending"
 # The shipped trees that must speak only the new vocabulary once a term is
 # done. Historical docs (docs/plans, docs/brainstorms, docs/research) and the
 # top-level CONCEPTS.md are deliberately OUT of scope (never scanned).
-SCAN_ROOTS=(lib skills commands docs/contracts tests recipes)
+SCAN_ROOTS=(lib skills commands docs/contracts tests recipes presets .claude/hooks)
 
 # ─── PERMANENT GLOBAL PATH WHITELIST ────────────────────────────────────────
 # Files that legitimately keep an old identifier for EVERY term. Anchored on
