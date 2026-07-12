@@ -242,13 +242,13 @@ ledger = load_lib_module("ledger")
 producers = load_lib_module("unit_emitters")
 
 repo = tempfile.mkdtemp(); run = "prod-path"
-ledger.init_ledger(repo, run, adapter="ce", units=[
+ledger.init_ledger(repo, run, backend="ce", units=[
     {"id": "plan-1", "phase": "plan"},
     {"id": "plan-2", "phase": "plan"},
     {"id": "judge", "phase": "work", "state": "pending"},
 ])
 # plan-2 is the winner; stash its enumerated_units (would normally come from
-# the plan adapter's enumerate_plan_units output).
+# the plan backend's enumerate_plan_units output).
 ledger.set_enumerated_units(repo, run, "plan-2",
     [{"id": "wB-1", "invokes": {"adapter_op": "do_unit"}},
      {"id": "wB-2", "invokes": {"adapter_op": "do_unit"}}])
@@ -282,7 +282,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 ledger = load_lib_module("ledger")
 repo = tempfile.mkdtemp(); run = "winner-guard"
-ledger.init_ledger(repo, run, adapter="ce", units=[
+ledger.init_ledger(repo, run, backend="ce", units=[
     {"id": "judge", "phase": "work", "state": "pending"},
 ])
 try:
@@ -310,7 +310,7 @@ ledger = load_lib_module("ledger")
 repo = tempfile.mkdtemp(); run = "self-winner"
 # Realistic A2 shape: plan units + judge. The malformed verdict names the
 # judge itself, which used to slip past the guard.
-ledger.init_ledger(repo, run, adapter="ce", units=[
+ledger.init_ledger(repo, run, backend="ce", units=[
     {"id": "plan-1", "phase": "plan"},
     {"id": "judge",  "phase": "work", "state": "pending"},
 ])

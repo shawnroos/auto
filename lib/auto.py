@@ -15,12 +15,13 @@ dispatch space-separated subcommands, per memory
     <plan-or-spec>                start a run from a plan/spec file (required).
     ... auto                      append `auto` to skip the plan->work seam
                                   pause (the tick gets --auto).
-    ... --adapter ce|native       select the workflow adapter (default ce).
+    ... --backend ce|native       select the workflow backend (default ce).
+                                  (`--adapter` accepted as a deprecated alias.)
     ... --goal "<text>"           compound deliberate-stop goal text (the
                                   default is the loop's own exit predicate).
 
 A new run starts at loop_phase="plan" with an EMPTY units[] — the plan-loop
-(adapter-driven, via the tick) populates the work units later; /auto does
+(backend-driven, via the tick) populates the work units later; /auto does
 NOT parse units from the plan. init_ledger's defaults are exactly this shape.
 
 The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
@@ -35,7 +36,7 @@ own non-blocking process-held _tick_lock is the double-drive guard. No new flock
 here. No file sentinel.
 
 rel-001-ish: empty args / a usage surface exits 0 (surfacing, not an error);
-only a genuine failure (missing plan file, ledger already exists, bad adapter)
+only a genuine failure (missing plan file, ledger already exists, bad backend)
 exits non-zero so the operator sees it.
 """
 
@@ -54,8 +55,8 @@ from _bootstrap import build_arm_intent, build_tick_prompt, load_ledger, load_li
 # re-arm path so arm and re-arm record ownership identically (fix-round-6 P1).
 driver_session = load_lib_module("driver_session")
 
-_DEFAULT_ADAPTER = "ce"
-_VALID_ADAPTERS = ("ce", "native")
+_DEFAULT_BACKEND = "ce"
+_VALID_BACKENDS = ("ce", "native")
 
 
 # Repo root resolution is shared with auto-resume.py and auto-status.py; lives
@@ -64,11 +65,12 @@ _resolve_repo = resolve_repo
 
 
 def _parse_args(argv):
-    """Split the /auto arg string into (plan, auto, adapter, goal, recipe).
+    """Split the /auto arg string into (plan, auto, backend, goal, recipe).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
     positional keyword (v0.3.x; redundant under v0.4.0's seam-flip default but
-    accepted for back-compat). Flags: --adapter <ce|native>, --goal <text>,
+    accepted for back-compat). Flags: --backend <ce|native> (deprecated alias
+    --adapter), --goal <text>,
     --recipe <name>, --review-plan. Returns a dict; raises ValueError on a
     malformed flag. ``recipe`` defaults to ``"a1"`` (the classic stack —
     v0.1.x-equivalent default, KTD-1) when no --recipe is given, so bare
@@ -89,7 +91,7 @@ def _parse_args(argv):
     # v0.4.0 KTD-4: default flip. The legacy ``auto`` positional still parses
     # to True; ``--review-plan`` opts out of the new default.
     auto = True
-    adapter = _DEFAULT_ADAPTER
+    backend = _DEFAULT_BACKEND
     goal = None
     recipe = None
     # Launch-chooser U5 / agent-native Gap 3: when set, delete the run-scoped
@@ -105,10 +107,22 @@ def _parse_args(argv):
             teardown_recipe = True
             i += 1
             continue
+        if tok == "--backend":
+            if i + 1 >= len(argv):
+                raise ValueError("--backend requires a value (ce|native)")
+            backend = argv[i + 1]
+            i += 2
+            continue
         if tok == "--adapter":
+            # DEPRECATED alias for --backend (concept-vocabulary rename U4).
+            # Accepted one minor version; emits a single stderr notice. Removed
+            # next minor.
             if i + 1 >= len(argv):
                 raise ValueError("--adapter requires a value (ce|native)")
-            adapter = argv[i + 1]
+            sys.stderr.write(
+                "auto: --adapter is deprecated; use --backend (adapter→backend rename)\n"
+            )
+            backend = argv[i + 1]
             i += 2
             continue
         if tok == "--goal":
@@ -145,7 +159,7 @@ def _parse_args(argv):
 
     # Default recipe is a1 (classic) — bare /auto <plan> is byte-identical to
     # v0.1.x because a1 IS the encoding of the v0.1.x topology (KTD-1).
-    return {"plan": plan, "auto": auto, "adapter": adapter, "goal": goal,
+    return {"plan": plan, "auto": auto, "backend": backend, "goal": goal,
             "recipe": recipe or "a1", "teardown_recipe": teardown_recipe}
 
 
@@ -286,7 +300,7 @@ def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
     → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
     "auto re-plans a finished plan" bug). The plan doc path has no top-level
     ledger slot (schema §2), so we bind it to the single plan unit's
-    dispatch_context.plan_path — the durable home the adapter's
+    dispatch_context.plan_path — the durable home the backend's
     enumerate_plan_units reads to tell the model WHICH plan to enumerate. The
     validator guarantees exactly one plan unit when presatisfied is true.
     """
@@ -300,7 +314,7 @@ def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
 
 
 def _emit_arm(
-    run_id: str, *, auto: bool, goal, adapter: str, plan: str, loop_phase: str = "plan"
+    run_id: str, *, auto: bool, goal, backend: str, plan: str, loop_phase: str = "plan"
 ) -> int:
     """Emit the arm-first-tick INTENT — the model fires /goal + ScheduleWakeup.
 
@@ -323,7 +337,7 @@ def _emit_arm(
         ),
         extra={
             "auto": auto,
-            "adapter": adapter,
+            "backend": backend,
             "plan": plan,
             "goal": goal,  # null => bind /goal to the loop's own exit predicate.
         },
@@ -373,15 +387,15 @@ def run(argv) -> int:
         # Empty args -> usage surface, exit cleanly (no run created).
         sys.stdout.write(
             "auto: usage: /auto <plan-or-spec> [auto] "
-            "[--adapter ce|native] [--goal \"<text>\"] "
+            "[--backend ce|native] [--goal \"<text>\"] "
             "[--recipe <name>]\n"
         )
         return 0
 
-    adapter = args["adapter"]
-    if adapter not in _VALID_ADAPTERS:
+    backend = args["backend"]
+    if backend not in _VALID_BACKENDS:
         sys.stderr.write(
-            f"auto: invalid adapter {adapter!r} (expected ce|native)\n"
+            f"auto: invalid backend {backend!r} (expected ce|native)\n"
         )
         return 2
 
@@ -433,7 +447,7 @@ def run(argv) -> int:
         ledger.init_ledger(
             repo_root,
             run_id,
-            adapter=adapter,
+            backend=backend,
             units=init_units,
             loop_phase=phase_order[0],
             recipe={"name": recipe["name"], "source_tier": source_tier},
@@ -472,7 +486,7 @@ def run(argv) -> int:
         run_id,
         auto=args["auto"],
         goal=args["goal"],
-        adapter=adapter,
+        backend=backend,
         plan=plan,
         loop_phase=phase_order[0],
     )

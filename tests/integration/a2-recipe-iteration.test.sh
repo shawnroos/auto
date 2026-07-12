@@ -254,7 +254,7 @@ ledger = load_ledger()
 with tempfile.TemporaryDirectory() as repo:
     # (a) a2-shape: plan-1/2/3 + id_prefix 'plan-' → expect seed=3
     led_a = ledger.init_ledger(
-        repo, "df-a", adapter="ce",
+        repo, "df-a", backend="ce",
         units=[{"id":"plan-1","phase":"plan"},
                {"id":"plan-2","phase":"plan"},
                {"id":"plan-3","phase":"plan"},
@@ -266,7 +266,7 @@ with tempfile.TemporaryDirectory() as repo:
 
     # (b) no emit_templates → expect seed=0 (F0 is a no-op when emit_templates is None)
     led_b = ledger.init_ledger(
-        repo, "df-b", adapter="ce",
+        repo, "df-b", backend="ce",
         units=[{"id":"plan-1","phase":"plan"},{"id":"plan-2","phase":"plan"}])
     assert led_b["iteration_emit_count"] == 0, f"(b) expected 0, got {led_b['iteration_emit_count']}"
 
@@ -276,7 +276,7 @@ with tempfile.TemporaryDirectory() as repo:
     # those are emitted by plan_output_to_paired_builders. This synthetic
     # scenario probes the F0 isdigit guard directly.
     led_c = ledger.init_ledger(
-        repo, "df-c", adapter="ce",
+        repo, "df-c", backend="ce",
         units=[{"id":"plan","phase":"plan"},
                {"id":"build-clarity","phase":"work","depends_on":["plan"]},
                {"id":"build-perf","phase":"work","depends_on":["plan"]},
@@ -321,7 +321,7 @@ with tempfile.TemporaryDirectory() as repo:
     # but int('²') raises. With G1's isdecimal guard, this unit falls through
     # and seed_count stays at 0. Without the fix, init_ledger crashes.
     led = ledger.init_ledger(
-        repo, "df-g1-unicode", adapter="ce",
+        repo, "df-g1-unicode", backend="ce",
         units=[{"id":"plan-²","phase":"plan"},
                {"id":"judge","phase":"work","depends_on":["plan-²"]}],
         iteration={"gate_unit":"judge","emit_template":"pc",

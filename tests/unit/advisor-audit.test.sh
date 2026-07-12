@@ -74,14 +74,14 @@ def emit(tag, val):
     print(f"{tag}={val}")
 
 # ── 1. init records driving_session_id at arm time ──────────────────────────
-ledger.init_ledger(repo, "armed", adapter="ce", loop_phase="work",
+ledger.init_ledger(repo, "armed", backend="ce", loop_phase="work",
                    units=[{"id": "U1", "state": "pending"}],
                    driving_session_id="sess-ARM")
 L = ledger.read_ledger(repo, "armed")
 emit("init_sid", L.get("driving_session_id"))
 
 # init WITHOUT the kwarg => field present and null (always-present field).
-ledger.init_ledger(repo, "noarm", adapter="ce", loop_phase="work",
+ledger.init_ledger(repo, "noarm", backend="ce", loop_phase="work",
                    units=[{"id": "U1", "state": "pending"}])
 L = ledger.read_ledger(repo, "noarm")
 emit("noarm_has_key", "driving_session_id" in L)
@@ -119,7 +119,7 @@ emit("audit_survives_recompute", before == after and len(after) == 2)
 # ── 4. concurrent record_verdict between appends does not clobber the list ───
 # Init a run, append one audit, do an unrelated locked write, append another:
 # all three end states must coexist (the append-inside-the-lock contract).
-ledger.init_ledger(repo, "concur", adapter="ce", loop_phase="work",
+ledger.init_ledger(repo, "concur", backend="ce", loop_phase="work",
                    units=[{"id": "V1", "state": "pending"}],
                    driving_session_id="sess-C")
 ledger.append_advisor_audit(repo, "concur", kind="advisor",

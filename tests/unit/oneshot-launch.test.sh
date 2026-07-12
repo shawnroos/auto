@@ -3,7 +3,7 @@
 #
 # U5 / KTD-5: for the DRIVER-orchestrated one-shot, the preset's optional
 # `prompt_template` is folded into the launched sub-agent's prompt by the DRIVER,
-# never by an adapter edit. build_oneshot_launch is the thin lib seam the
+# never by a backend edit. build_oneshot_launch is the thin lib seam the
 # auto-preset skill calls to build the launch descriptor: it names the op and,
 # when the preset declares a prompt_template, folds the template's BODY in.
 # Template-less presets produce the plain op invocation (regression-safe).

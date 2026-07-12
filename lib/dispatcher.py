@@ -224,7 +224,7 @@ def ready_units(repo_root: str, run_id: str):
     """
     ledger = read_ledger(repo_root, run_id)
     by_id = _units_by_id(ledger)
-    scale = ledger.get("adapter_scale", "three-tier")
+    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
     return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id, scale)]
 
 
@@ -253,7 +253,7 @@ def pick_next_plan_unit_to_advance(ledger: dict):
     """Round-robin selector for serialized N>1 plan-loop advance (U6 / KTD-4).
 
     With multiple plan-phase units (A2's competing plans), exactly ONE advances
-    per tick so the adapter's ``next_plan_step(ledger)`` sees a single logical
+    per tick so the backend's ``next_plan_step(ledger)`` sees a single logical
     advance-stream and the contract stays unchanged. This picks which one: the
     eligible plan unit with the OLDEST ``last_advanced_at`` (``null`` sorts oldest
     → a never-advanced unit goes first), ties broken by ``units[]`` declaration
@@ -283,7 +283,7 @@ def pick_next_plan_unit_to_advance(ledger: dict):
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
-# The closed set of adapter ops a unit may declare via ``invokes.adapter_op``
+# The closed set of backend ops a unit may declare via ``invokes.adapter_op``
 # (recipe-compiled units carry it on ``dispatch_context`` — ``recipes.unit_for``
 # merges ``invokes`` into ``dispatch_context``, and ``_normalize_unit`` drops the
 # raw ``invokes`` key but preserves ``dispatch_context`` verbatim). Every shipped
@@ -293,14 +293,14 @@ def pick_next_plan_unit_to_advance(ledger: dict):
 # where an unknown op previously flowed straight to ``launch_fn``.
 #
 # v0.14.0 (U1): the frozenset was lifted into the pure-stdlib leaf
-# ``lib/adapter_ops.py`` so ``lib/presets.py::validate_preset`` can check a
+# ``lib/backend_ops.py`` so ``lib/presets.py::validate_preset`` can check a
 # preset's op against the SAME set without importing this heavy dispatch module
 # (KTD-2 DAG boundary). We re-bind it here under the same name, so this module's
-# dispatch guard (``op not in VALID_ADAPTER_OPS`` below) is unchanged.
-VALID_ADAPTER_OPS = load_lib_module("adapter_ops").VALID_ADAPTER_OPS
+# dispatch guard (``op not in VALID_BACKEND_OPS`` below) is unchanged.
+VALID_BACKEND_OPS = load_lib_module("backend_ops").VALID_BACKEND_OPS
 
 
-def _unit_adapter_op(unit: dict):
+def _unit_backend_op(unit: dict):
     """Resolve a unit's declared ``adapter_op``, or None if it declares none.
 
     Reads ``dispatch_context.adapter_op`` FIRST (the durable home on a
@@ -311,7 +311,7 @@ def _unit_adapter_op(unit: dict):
     """
     dc = unit.get("dispatch_context") or {}
     inv = unit.get("invokes") or {}
-    return dc.get("adapter_op") or inv.get("adapter_op")
+    return dc.get("adapter_op") or inv.get("adapter_op")  # format-v1 keys; flip in U6
 
 
 def _default_launch_fn(unit_id: str, attempt: int = 0) -> None:
@@ -393,13 +393,13 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
             # Idempotency guard: already dispatched / verdict-returned / etc.
             results.append((uid, f"rejected:not-pending({unit.get('state')})"))
             continue
-        op = _unit_adapter_op(unit)
-        if op is not None and op not in VALID_ADAPTER_OPS:
+        op = _unit_backend_op(unit)
+        if op is not None and op not in VALID_BACKEND_OPS:
             # A declared-but-unknown adapter_op (typo in a recipe, or a hand-
             # crafted unit) must NOT flow to launch — reject it per-unit,
             # mirroring the not-pending path. Checked BEFORE the cap so a bad op
             # surfaces eagerly rather than being deferred as "over-cap".
-            results.append((uid, "rejected:bad-adapter-op"))
+            results.append((uid, "rejected:bad-backend-op"))
             continue
         if dispatched_count >= cap:
             # Eligible but over the agent-chosen cap for THIS wave; left pending
@@ -507,7 +507,7 @@ def converge(repo_root, run_id):
     # #3 — a scale-blind _unit_is_terminal(unit) here would mark a blocker-only
     # run's major-only unit non-terminal, contradicting the met=True the predicate
     # reports and confusing the driver about done-ness).
-    scale = ledger.get("adapter_scale", "three-tier")
+    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
 
     in_flight = []
     completed = []

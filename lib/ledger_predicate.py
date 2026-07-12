@@ -134,9 +134,9 @@ def _count_severities_by_unit(ledger: dict) -> tuple:
 
 
 def _read_cached_gaps_open(ledger: dict):
-    """B7 helper: read the adapter-supplied ``gaps_open`` from the prior predicate.
+    """B7 helper: read the backend-supplied ``gaps_open`` from the prior predicate.
 
-    gaps_open is adapter-supplied; preserve any existing value (the engine
+    gaps_open is backend-supplied; preserve any existing value (the engine
     never invents it). It is genuinely NULLABLE (Bug #5): `null`/unknown means
     "no real review has reported its gap count yet" and is DISTINCT from `0`
     ("a review ran and found zero gaps"). Only `set_gaps_open` (driven by a real
@@ -181,7 +181,7 @@ def _compute_terminality(ledger: dict) -> dict:
     exit_predicate_result reporting field (downstream consumers may want it).
     """
     phase_grammar = ledger_core._lazy_load("phase-grammar")
-    scale = ledger.get("adapter_scale", "three-tier")
+    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
     current_phase = phase_grammar.current_phase(ledger)
     terminal_phase = ledger.get("terminal_phase") or "work"
     all_units_terminal_global = all(
@@ -210,10 +210,10 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
     cached gap count; ``term`` the dict ``_compute_terminality`` returns.
 
       * ``loop_phase == "plan"`` — plan-loop exit is ``gaps_open == 0 AND
-        plan_step == "review_plan"`` (adapter-contract §5 + schema §3.1). There
+        plan_step == "review_plan"`` (backend-contract §5 + schema §3.1). There
         are no work units yet, so ``all_units_terminal`` is NOT a requirement in
         the plan phase. The ``plan_step == "review_plan"`` conjunct mirrors the
-        adapter coherence guard one-to-one: a DEFAULT ``gaps_open == 0`` BEFORE
+        backend coherence guard one-to-one: a DEFAULT ``gaps_open == 0`` BEFORE
         any review has run (at ``plan`` / ``deepen`` / ``null``) must NOT
         short-circuit the loop to met (schema §3.1) — only a completed
         ``review_plan`` whose gap-set is empty closes the plan loop.
@@ -238,7 +238,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # Plan-loop exit: a REAL review reported zero gaps AND a review_plan
         # actually ran (§3.1). Bug #5: gaps_open must be NON-NULL — a null/unknown
         # gap count means no review has filled it yet, so plan-met cannot fire. The
-        # live CE/native adapters return a PREPARE envelope WITHOUT a gap_set (the
+        # live CE/native backends return a PREPARE envelope WITHOUT a gap_set (the
         # model fills gaps out-of-band), so set_gaps_open is not called and
         # gaps_open stays null; without the `is not None` guard a default 0 would
         # short-circuit plan-met after a SINGLE un-reviewed pass and the deepen-
@@ -251,7 +251,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         )
     else:
         # Work-loop exit, SCALE-AWARE (Bug #3 — adapter_scale was stored but never
-        # read). The native adapter declares adapter_scale="blocker-only": its
+        # read). The native backend declares adapter_scale="blocker-only": its
         # majors are advisory (surfaced at exit) and do NOT gate the loop, so a
         # native run with majors>0 / blockers==0 must still be able to exit.
         # CE (or any missing/unknown value) defaults to the three-tier gate where

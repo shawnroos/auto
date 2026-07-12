@@ -98,7 +98,7 @@ elif op == "resolve-recipe-file":
 elif op == "review-vs-w-distinct":
     # U11: review.json must be MEANINGFULLY distinct from w.json. review is a
     # genuine work-only ["work"] recipe whose single unit invokes the `review`
-    # adapter op (one review/fix loop to P3). w (v0.4.3 KTD-15) is no longer its
+    # backend op (one review/fix loop to P3). w (v0.4.3 KTD-15) is no longer its
     # work-only twin — it's plan_presatisfied, so its plan unit invokes
     # `next_plan_step` (the plan-loop sequencer) and it enumerates a reviewed plan
     # into work. Surface both ops so a silent convergence still trips this.
@@ -1085,12 +1085,12 @@ assert_eq "spoof:0" "$(itr spoof-self-match)"
 it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan"
 assert_eq "clean" "$(itr spoof-builtins-clean)"
 
-# ── U12: every shipped recipe's declared adapter_op ∈ VALID_ADAPTER_OPS ───────
+# ── U12: every shipped recipe's declared adapter_op ∈ VALID_BACKEND_OPS ───────
 # The build-time counterpart to dispatcher.dispatch_batch's runtime guard: a
 # typo in a shipped recipe JSON is caught here, before it can ship. Enumerates
 # EVERY `adapter_op` across recipes/*.json (exhaustive, not a sample) and asserts
-# the set is a subset of dispatcher.VALID_ADAPTER_OPS.
-it "U12: every shipped recipe adapter_op is in dispatcher.VALID_ADAPTER_OPS"
+# the set is a subset of dispatcher.VALID_BACKEND_OPS.
+it "U12: every shipped recipe adapter_op is in dispatcher.VALID_BACKEND_OPS"
 opcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, json, glob, importlib.util
 auto_root = sys.argv[1]
@@ -1117,7 +1117,7 @@ for path in glob.glob(os.path.join(auto_root, "recipes", "*.json")):
         doc = json.load(f)
     for op in walk_ops(doc):
         found.add(op)
-        if op not in o.VALID_ADAPTER_OPS:
+        if op not in o.VALID_BACKEND_OPS:
             unknown.add(op)
 # Must have actually FOUND ops (guards against a vacuous pass if the walk breaks).
 print("ok" if found and not unknown else f"bad:found={sorted(found)}:unknown={sorted(unknown)}")

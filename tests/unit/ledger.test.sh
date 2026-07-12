@@ -63,13 +63,13 @@ mkdir -p "$REPO"
 # ── tiny python helpers run against the module ─────────────────────────────
 # init <run> <json-units>  — create a ledger with given units list
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 
@@ -96,8 +96,8 @@ import json, sys, importlib.util
 repo, run, units_json, scale, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-adapter = "native" if scale == "blocker-only" else "ce"
-m.init_ledger(repo, run, adapter=adapter, adapter_scale=scale,
+backend = "native" if scale == "blocker-only" else "ce"
+m.init_ledger(repo, run, backend=backend, backend_scale=scale,
               units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
@@ -339,7 +339,7 @@ for i,(frm,to) in enumerate(edges):
     import os
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":frm}])
+    m.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":frm}])
     try:
         m.transition(repo, run, "U1", to)
         new = m.read_ledger(repo, run)["units"][0]["state"]
@@ -370,7 +370,7 @@ for i,(frm,to) in enumerate(bad):
     run = f"grammar-bad-{i}"
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":frm}])
+    m.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":frm}])
     try:
         m.transition(repo, run, "U1", to)
         all_rejected = False  # should have raised
@@ -436,7 +436,7 @@ else
 fi
 
 # ─── Scenario 11: Bug #3 — scale-aware met predicate (blocker-only / native) ──
-# Under adapter_scale="blocker-only" (native), majors are ADVISORY: a unit whose
+# Under backend_scale="blocker-only" (native), majors are ADVISORY: a unit whose
 # ONLY finding is a major is terminal, and a work run with majors>0 / blockers==0
 # reaches met==true. A blocker, by contrast, still gates. recompute_predicate
 # reads adapter_scale (the fix); unit_is_terminal uses the SAME scale so the two
@@ -569,7 +569,7 @@ run = "bug6-clobber"
 import os
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 
 # Attempt 1: dispatch (attempt -> 1). Simulate the dispatcher's bump.
@@ -618,7 +618,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "bug6-clobber-nofix"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 m.transition(repo, run, "U1", "stalled")
@@ -659,7 +659,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "bug7-recover"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 # Attempt 1 dispatch, then a plain timeout stall (last_error stays null).
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
@@ -696,7 +696,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "bug7-stale-recover"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 m.transition(repo, run, "U1", "stalled")
@@ -727,7 +727,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "bug7-recover-nofix"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 m.transition(repo, run, "U1", "stalled")
@@ -758,10 +758,10 @@ repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 try:
-    m.init_ledger(repo, run, adapter="native", units=[{"id":"X"}])
+    m.init_ledger(repo, run, backend="native", units=[{"id":"X"}])
     print("ACCEPTED-CLOBBER")
 except m.LedgerExists:
-    # Original must be untouched: still the ce adapter + the original unit.
+    # Original must be untouched: still the ce backend + the original unit.
     led = m.read_ledger(repo, run)
     print("rejected:%s:%s" % (led["adapter"], led["units"][0]["id"]))
 PYEOF
@@ -780,7 +780,7 @@ repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 try:
-    m.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}])
+    m.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}])
     print("won")
 except m.LedgerExists:
     print("exists")
@@ -818,7 +818,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "reverdict-same-attempt"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 # First verdict (attempt 1): a blocker. Unit -> verdict-returned, met False.
@@ -854,7 +854,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "reverdict-stale-self"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 # Bump the unit to attempt 2 and land a clean verdict for it (verdict-returned).
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
@@ -938,7 +938,7 @@ spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 import tempfile
 repo = tempfile.mkdtemp(); run = "defs"
-m.init_ledger(repo, run, adapter="ce", units=[{"id": "U1"}])
+m.init_ledger(repo, run, backend="ce", units=[{"id": "U1"}])
 u = m.read_ledger(repo, run)["units"][0]
 # additive per-unit fields read as their documented defaults.
 print("%s,%s,%s,%s" % (
@@ -957,7 +957,7 @@ spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 import tempfile
 repo = tempfile.mkdtemp(); run = "rcp"
-m.init_ledger(repo, run, adapter="ce",
+m.init_ledger(repo, run, backend="ce",
               recipe={"name": "a1", "source_tier": "built-in"},
               phase_order=["plan", "seam", "work"], terminal_phase="work",
               units=[{"id": "U1"}])
@@ -976,7 +976,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 import tempfile
 repo = tempfile.mkdtemp(); run = "bad"
 try:
-    m.init_ledger(repo, run, adapter="ce",
+    m.init_ledger(repo, run, backend="ce",
                   phase_order=["plan", "seam", "work"], terminal_phase="nope",
                   units=[{"id": "U1"}])
     print("accepted")
@@ -1025,7 +1025,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 run = "vgate"
 crit = [{"id": "c1", "type": "programmatic", "check": "x"},
         {"id": "c2", "type": "advisor_judge", "prompt": "ok?"}]
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id": "G1", "state": "pending", "verification": crit},
                      {"id": "U1", "state": "pending"}],
               iteration={"gate_unit": "G1"})
@@ -1088,13 +1088,13 @@ else
     || fail "a rejected init modified/truncated the existing ledger"
 fi
 
-it "init: an invalid adapter is rejected (exit!=0, no ledger file created)"
+it "init: an invalid backend is rejected (exit!=0, no ledger file created)"
 LPBAD="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" path "$REPO" clibad)"
 if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clibad '[{"id":"u1"}]' bogus plan \
      >/dev/null 2>&1; then
-  fail "invalid adapter accepted at the CLI"
+  fail "invalid backend accepted at the CLI"
 else
-  [ ! -f "$LPBAD" ] && pass || fail "invalid adapter left a ledger file on disk"
+  [ ! -f "$LPBAD" ] && pass || fail "invalid backend left a ledger file on disk"
 fi
 
 it "init: units passed as JSON are normalized (state=pending, phase set, attempt counter)"

@@ -189,7 +189,7 @@ def _check_prompt_template(value, where: str):
     """Path-bounding for `prompt_template` (security-lens Finding 1).
 
     Workspace recipes ship in committed code; an unbounded path would let a
-    malicious recipe set `prompt_template: "../../../etc/passwd"` and the adapter
+    malicious recipe set `prompt_template: "../../../etc/passwd"` and the backend
     would forward that file's contents into LLM context. Reject `..` segments,
     absolute paths, and empty strings. Enforced HERE (not only in the schema doc)
     so it is the load-bearing check, and re-checked in `unit_for` before the value
@@ -636,7 +636,7 @@ def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
             # Mirror existing `units[].invokes` validation depth: invokes must be
             # a dict; prompt_template path-bounded if present. We don't constrain
             # inner keys (no whitelist) — `_KNOWN_UNIT_KEYS` doesn't constrain
-            # `invokes`'s inner keys either. The adapter contract bounds those.
+            # `invokes`'s inner keys either. The backend contract bounds those.
             if not isinstance(tinv, dict):
                 _bad(f"emit_templates[{tmpl_name!r}]: invokes must be an object")
             if "prompt_template" in tinv:
@@ -739,7 +739,7 @@ def _validate_work_only_gap(recipe: dict, phase_order: list) -> None:
     init_ledger time the engine creates a ledger with zero units, the
     work-loop predicate's has_units_in_phase guard is vacuous so met never
     fires, and the engine re-arms forever while the operator sees nothing.
-    The intended runtime path (init-time enumeration via the adapter's
+    The intended runtime path (init-time enumeration via the backend's
     enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
     (KTD-15). Reject mechanically here rather than ship a recipe whose only
     failure mode is silent re-arming."""

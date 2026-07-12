@@ -71,7 +71,7 @@ Shipped seeds today: `tuned-review` (a tuned `review`) and `scoped-build` (a sco
 arc (R-D).** `load_preset` raises `PresetError` listing what it searched —
 surface that, do NOT dump a traceback. If the operator was reaching for a
 multi-step sequence (a "plan then build", a whole pipeline), say plainly: *a
-preset is one step (one adapter op); a plan-then-build is a **flow** of two
+preset is one step (one backend op); a plan-then-build is a **flow** of two
 containers, which is the deferred composition arc — not something a single
 preset can express.* Offer the built-in seeds or `auto-launch` for a real loop.
 
@@ -99,7 +99,7 @@ verdict; there is no persisted unit.
 ### 3. Launch the preset's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
 Build the launch descriptor — the DRIVER folds the preset's tuning in (the
-dispatcher never consults the adapter, driver-reference §7):
+dispatcher never consults the backend, driver-reference §7):
 
 ```
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" launch "<preset-name>" "$PWD"
@@ -170,8 +170,8 @@ bound, nothing to resume.** Report and stop.
   does not edit the preset JSON.
 - It does not compose presets into a flow or swap a container's preset — that
   is the deferred Phase-2 composition arc (R6/R7/R8).
-- It does not touch the adapter (KTD-5): the `prompt_template` is folded at the
-  DRIVER launch, never via an `adapter.do_unit` / `adapter.review` edit.
+- It does not touch the backend (KTD-5): the `prompt_template` is folded at the
+  DRIVER launch, never via an `backend.do_unit` / `backend.review` edit.
 - It does not run a multi-step sequence. One preset is one step; point
   multi-step reuse at the deferred flow arc (step 1).
 

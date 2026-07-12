@@ -16,8 +16,8 @@
 #   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. adapter raises mid-tick -> unit.last_error recorded + unit marked stalled;
-#      ledger never half-written; + deliberate-fail control proving the adapter
+#   4. backend raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [adapter] [phase]  — create a ledger with given units.
+# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 
@@ -226,12 +226,12 @@ else
   fail "st_ua=$st_ua stalled=[$stalled_list] halted=[$halted_list] adv=$adv_kind/$adv_unit st_uc=$st_uc (expected stalled / Ua / Ua,Ub / fix-applied/Uc / fixed)"
 fi
 
-# ─── Scenario 4: adapter raises mid-tick -> last_error recorded + stalled ─────
-# A plan-loop with one dispatched unit. We inject an adapter whose next_plan_step
+# ─── Scenario 4: backend raises mid-tick -> last_error recorded + stalled ─────
+# A plan-loop with one dispatched unit. We inject a backend whose next_plan_step
 # raises. The tick's try/except must convert the raise into a recorded
 # last_error on the in-flight unit + mark it stalled, WITHOUT crashing and
 # WITHOUT leaving a half-written ledger.
-it "adapter raise: try/except records last_error + marks unit stalled; ledger stays valid (no half-write)"
+it "backend raise: try/except records last_error + marks unit stalled; ledger stays valid (no half-write)"
 DISP4="$(now_minus 5)"
 ledger_init "raise-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":600}]' "$DISP4")" \
@@ -242,12 +242,12 @@ repo, run, tick_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 
-class BoomAdapter:
+class BoomBackend:
     def next_plan_step(self, ledger):
-        raise RuntimeError("adapter exploded mid-step")
+        raise RuntimeError("backend exploded mid-step")
 
 # The tick must NOT propagate the raise; it returns a normal intent dict.
-r = t.dispatch_tick(repo, run, adapter=BoomAdapter())
+r = t.dispatch_tick(repo, run, backend=BoomBackend())
 print(json.dumps({
     "action": r.get("action"),
     "advanced": (r.get("advance") or {}).get("advanced"),
@@ -268,16 +268,16 @@ else
   fail "rc=$rc4 state=$st4 err_call=$err_call err_msg_has=$err_msg_has advanced=$adv4 tmpfiles=$tmp_left4"
 fi
 
-it "deliberate-fail control: the injected adapter genuinely raises (proves S4's clean return is real try/except capture, not a benign no-op)"
-# If we call the adapter op directly — OUTSIDE the tick's try/except — it MUST
-# propagate. This proves the adapter is not silently benign, so the prior test's
+it "deliberate-fail control: the injected backend genuinely raises (proves S4's clean return is real try/except capture, not a benign no-op)"
+# If we call the backend op directly — OUTSIDE the tick's try/except — it MUST
+# propagate. This proves the backend is not silently benign, so the prior test's
 # clean return + recorded last_error is meaningful (the try/except did the work).
 raised="$("$PY" - <<'PYEOF'
-class BoomAdapter:
+class BoomBackend:
     def next_plan_step(self, ledger):
-        raise RuntimeError("adapter exploded mid-step")
+        raise RuntimeError("backend exploded mid-step")
 try:
-    BoomAdapter().next_plan_step({})
+    BoomBackend().next_plan_step({})
     print("DID-NOT-RAISE")
 except RuntimeError:
     print("raised")
@@ -344,11 +344,11 @@ fi
 # ─── Scenario 7: anti-livelock — plan_step advances across fresh-process ticks ─
 # THE integration-blocking bug this fix closes: next_plan_step is pure over the
 # ledger and each tick is a fresh process. If the tick does not persist the
-# executed plan_step, every tick reads plan_step==null, the adapter returns
+# executed plan_step, every tick reads plan_step==null, the backend returns
 # "plan", and the plan-loop re-plans forever. With the persist (ledger.set_loop
 # plan_step=...), three fresh-process ticks walk plan -> deepen -> review_plan.
 #
-# We use the REAL ce adapter (its plan/deepen/review_plan ops are pure
+# We use the REAL ce backend (its plan/deepen/review_plan ops are pure
 # envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
 # so the predicate never short-circuits the plan-loop to done. gaps_open stays
 # NULL (Bug #5 fix: the live envelope carries no gap_set, so the engine never
@@ -378,7 +378,7 @@ it "deliberate-fail control: WITHOUT the persist, plan_step stays stuck at the f
 # Run the SAME plan-loop, but neuter the tick's persist by monkeypatching
 # ledger.set_loop to DROP the plan_step kwarg (simulating the pre-fix tick that
 # advanced the step but never wrote it back). Three ticks must then NEVER record
-# a step beyond null — the adapter would re-return "plan" every time (livelock).
+# a step beyond null — the backend would re-return "plan" every time (livelock).
 # This proves the prior test passes BECAUSE of the persist, not by accident.
 stuck="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
@@ -389,7 +389,7 @@ tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 
 run = "antilivelock-nopersist"
-ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
 
 # Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The tick's
 # beat write (set_loop(driver="self", beat=True)) still works; only the
@@ -412,10 +412,10 @@ assert_eq "stuck" "$stuck"
 
 # ─── Scenario 8: Bug #5 — gaps_open persisted from a DICT review_plan return ──
 # advance_plan_loop must persist gaps_open from BOTH a bare list AND a dict
-# envelope carrying `gap_set` (the LIVE adapters return a dict — that branch was
+# envelope carrying `gap_set` (the LIVE backends return a dict — that branch was
 # previously dead, so gaps_open was never written from a real review and plan-met
 # fired after a SINGLE review pass, making the deepen-refinement loop unreachable).
-# We exercise the DICT path specifically with a stub adapter whose review_plan
+# We exercise the DICT path specifically with a stub backend whose review_plan
 # returns {"gap_set": [...]} of length N.
 #
 # Verify-RED: lib/tick.py advance_plan_loop, delete the
@@ -442,15 +442,15 @@ ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 
-class DictGapAdapter:
-    # Live-adapter shape: review_plan returns a DICT envelope carrying gap_set.
+class DictGapBackend:
+    # Live-backend shape: review_plan returns a DICT envelope carrying gap_set.
     def next_plan_step(self, ledger):
         return "review_plan"
     def review_plan(self, ledger):
         return {"op": "review_plan", "gap_set": [{"id": "g1"}, {"id": "g2"}, {"id": "g3"}]}
 
 led = ledg.read_ledger(repo, run)
-t.tick_advance.advance_plan_loop(repo, run, led, DictGapAdapter())
+t.tick_advance.advance_plan_loop(repo, run, led, DictGapBackend())
 print(ledg.read_ledger(repo, run)["exit_predicate_result"]["gaps_open"])
 PYEOF
 )"
@@ -488,25 +488,25 @@ lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-# Use the REAL ce adapter for next_plan_step (the live sequencer) but feed an
+# Use the REAL ce backend for next_plan_step (the live sequencer) but feed an
 # empty-gap_set dict via a thin subclass of its review_plan, so the "done"
 # coherence guard is exercised end-to-end after a real (empty) review.
 import importlib.util as _il
-aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+aspec = _il.spec_from_file_location("backend_ce", ledger_py.replace("ledger.py", "backend-ce.py"))
 ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
 
-class EmptyGapAdapter(ace.Adapter):
+class EmptyGapBackend(ace.Backend):
     def review_plan(self, ledger):
         return {"op": "review_plan", "gap_set": []}
 
 led = ledg.read_ledger(repo, run)
-adapter = EmptyGapAdapter()
-t.tick_advance.advance_plan_loop(repo, run, led, adapter)
+backend = EmptyGapBackend()
+t.tick_advance.advance_plan_loop(repo, run, led, backend)
 led2 = ledg.read_ledger(repo, run)
 gaps = led2["exit_predicate_result"]["gaps_open"]
 # Now ask the live sequencer for the next step: review_plan persisted +
 # gaps_open==0 -> the §4.1 coherence guard returns "done".
-nxt = adapter.next_plan_step(led2)
+nxt = backend.next_plan_step(led2)
 print("%s,%s,%s" % (gaps, led2.get("plan_step"), nxt))
 PYEOF
 )"
@@ -521,7 +521,7 @@ fi
 # ─── Scenario 9: Bug #5 null-path — LIVE PREPARE envelope (NO gap_set key) ────
 # The previous Bug #5 scenarios drive review_plan returns that CARRY a gap_set
 # (dict-with-key, bare list). This scenario covers the OTHER live shape that has
-# no dedicated test: the REAL ce/native adapters' review_plan returns a PREPARE
+# no dedicated test: the REAL ce/native backends' review_plan returns a PREPARE
 # envelope WITHOUT a gap_set key — the model fills it out-of-band AFTER the engine
 # reads. The correct behaviour (the round-2 premature-plan-met fix) is that
 # gaps_open stays NULL (never a default 0), so plan-met does NOT fire after one
@@ -529,7 +529,7 @@ fi
 # defaulted gap_set=[] for the keyless envelope would silently reopen the bug:
 # gaps_open=0 -> plan-met -> the loop exits before a real review reports gaps.
 #
-# We drive advance_plan_loop with the REAL ce adapter (review_plan returns the
+# We drive advance_plan_loop with the REAL ce backend (review_plan returns the
 # live envelope shape, NO gap_set), then assert gaps_open is still null and plan
 # is NOT met after the review pass. The deliberate-fail control below replicates
 # the buggy default-zero extraction and proves it produces a DIFFERENT, plan-met
@@ -551,18 +551,18 @@ lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-# REAL ce adapter: review_plan returns the live PREPARE envelope, which carries
+# REAL ce backend: review_plan returns the live PREPARE envelope, which carries
 # NO gap_set key (the model fills it out-of-band after the engine reads).
 import importlib.util as _il
-aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+aspec = _il.spec_from_file_location("backend_ce", ledger_py.replace("ledger.py", "backend-ce.py"))
 ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
-adapter = ace.Adapter()
+backend = ace.Backend()
 # Guard: confirm the envelope really has NO gap_set key (the shape under test).
-env = adapter.review_plan(ledg.read_ledger(repo, run))
+env = backend.review_plan(ledg.read_ledger(repo, run))
 assert isinstance(env, dict) and "gap_set" not in env, "envelope unexpectedly has gap_set: %r" % env
 
 led = ledg.read_ledger(repo, run)
-t.tick_advance.advance_plan_loop(repo, run, led, adapter)
+t.tick_advance.advance_plan_loop(repo, run, led, backend)
 L2 = ledg.read_ledger(repo, run)
 go = L2["exit_predicate_result"]["gaps_open"]
 met = L2["exit_predicate_result"]["met"]
@@ -591,14 +591,14 @@ repo, tick_py, ledger_py = sys.argv[1:4]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 import importlib.util as _il
-aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+aspec = _il.spec_from_file_location("backend_ce", ledger_py.replace("ledger.py", "backend-ce.py"))
 ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
 
 run = "gaps-null-buggy"
-ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
 ledg.set_loop(repo, run, plan_step="deepen")
-adapter = ace.Adapter()
-result = adapter.review_plan(ledg.read_ledger(repo, run))  # live envelope, NO gap_set
+backend = ace.Backend()
+result = backend.review_plan(ledg.read_ledger(repo, run))  # live envelope, NO gap_set
 # THE BUG: default-zero extraction for a keyless envelope.
 buggy_gap_set = result.get("gap_set", [])
 ledg.set_gaps_open(repo, run, len(buggy_gap_set))
@@ -606,7 +606,7 @@ ledg.set_loop(repo, run, plan_step="review_plan")
 L = ledg.read_ledger(repo, run)
 go = L["exit_predicate_result"]["gaps_open"]
 met = L["exit_predicate_result"]["met"]
-nxt = adapter.next_plan_step(L)
+nxt = backend.next_plan_step(L)
 print("%s,%s,%s" % (go, met, nxt))
 PYEOF
 )"
@@ -629,7 +629,7 @@ fi
 # We simulate the phantom directly (a unit stuck `dispatched` with dispatched_at
 # older than its stall_threshold, no verdict) and run detect_and_halt_stalled.
 # The reaper must transition it to `stalled` (reclaimed) with last_error null
-# (a plain timeout, not an adapter-raise). The deliberate-fail control is the
+# (a plain timeout, not a backend-raise). The deliberate-fail control is the
 # ABSENCE of the reaper call: without it, the phantom stays `dispatched` forever.
 it "phantom-dispatch self-heal: detect_and_halt_stalled reclaims a dispatched-past-threshold phantom -> stalled (last_error null)"
 PHANTOM_AT="$(now_minus 3600)"
@@ -656,7 +656,7 @@ PYEOF
 )"
 st_after="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
 # Before: dispatched (phantom). After the reaper: stalled, newly_stalled=[U1],
-# last_error null (plain timeout — NOT an adapter-raise error object).
+# last_error null (plain timeout — NOT a backend-raise error object).
 if [ "$st_before" = "dispatched" ] && [ "$phantom_out" = "stalled,U1,None" ] \
    && [ "$st_after" = "stalled" ]; then
   pass
@@ -675,9 +675,9 @@ noreap_state="$(ledger_field "phantom-noreap-run" 'L["units"][0]["state"]')"
 assert_eq "dispatched" "$noreap_state"
 
 # ─── U6: plan-done enumerate→persist (the F4 producer wiring) ───────────────
-# At plan-done, advance_plan_loop calls the adapter's enumerate_plan_units and
+# At plan-done, advance_plan_loop calls the backend's enumerate_plan_units and
 # persists the result onto the plan unit's dispatch_context.enumerated_units, so
-# the U5b producer can read it. Drive it with a fake adapter whose next_plan_step
+# the U5b producer can read it. Drive it with a fake backend whose next_plan_step
 # returns "done" and enumerate_plan_units returns a bare list.
 it "U6: plan-done persists enumerate_plan_units output to dispatch_context"
 ledger_init "enum-run" '[{"id":"plan","phase":"plan","state":"dispatched"}]' ce plan >/dev/null 2>&1
@@ -689,13 +689,13 @@ t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(m)
 
-class FakeAdapter:
+class FakeBackend:
     def next_plan_step(self, ledger): return "done"
     def enumerate_plan_units(self, ledger):
         return [{"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]
 
 led = m.read_ledger(repo, run)
-result = t.tick_advance.advance_plan_loop(repo, run, led, FakeAdapter())
+result = t.tick_advance.advance_plan_loop(repo, run, led, FakeBackend())
 after = m.read_ledger(repo, run)
 plan_unit = after["units"][0]
 enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_units") or []
@@ -724,7 +724,7 @@ repo, run, tick_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 
-# Use the bundled CE adapter so a real plan-loop tick fires.
+# Use the bundled CE backend so a real plan-loop tick fires.
 intent = t.dispatch_tick(repo, run)
 g = intent.get("operator_guidance", "")
 print("ok" if ("prepare/execute contract" in g
@@ -828,7 +828,7 @@ lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("tick", tick_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-ledg.init_ledger(repo, run, adapter="ce", units=json.loads(units_json),
+ledg.init_ledger(repo, run, backend="ce", units=json.loads(units_json),
                  loop_phase=loop_phase, phase_order=json.loads(po_json),
                  terminal_phase=terminal)
 led = ledg.read_ledger(repo, run)
@@ -855,7 +855,7 @@ import sys, importlib.util, json
 repo, ledger_py, units_json, po_json = sys.argv[1:5]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, "u5-met", adapter="ce", units=json.loads(units_json),
+m.init_ledger(repo, "u5-met", backend="ce", units=json.loads(units_json),
               loop_phase="brainstorm", phase_order=json.loads(po_json),
               terminal_phase="brainstorm")
 print(m.read_ledger(repo, "u5-met")["exit_predicate_result"]["met"])

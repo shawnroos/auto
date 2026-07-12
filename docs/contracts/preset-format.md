@@ -45,7 +45,7 @@ written back onto the preset.
 | `version` | yes | string | opaque version tag. |
 | `description` | yes | string | one-line human description — what this preset does and when to reach for it. |
 | `invokes` | yes | object | the payload: `{adapter_op, prompt_template?}` and nothing else. |
-| `invokes.adapter_op` | yes | string | one of the closed set `{brainstorm, do_unit, next_plan_step, review}` (shared with recipes via `lib/adapter_ops.py::VALID_ADAPTER_OPS`). |
+| `invokes.adapter_op` | yes | string | one of the closed set `{brainstorm, do_unit, next_plan_step, review}` (shared with recipes via `lib/backend_ops.py::VALID_BACKEND_OPS`). |
 | `invokes.prompt_template` | no | string | a **relative** path (no `..`, no leading `/`) to a tuning prompt. Path-bounded by the same `_check_prompt_template` recipes use. |
 
 ### Forbidden keys (hard errors)
@@ -80,17 +80,17 @@ unenforced schema doc would just duplicate this one.
 
 ## 4. Built-in seeds
 
-- **`tuned-review`** — `review` adapter op + a focused review prompt. Fire it
+- **`tuned-review`** — `review` backend op + a focused review prompt. Fire it
   one-shot against a diff/branch.
-- **`scoped-build`** — `do_unit` adapter op + a tightly-scoped build prompt. Fire
+- **`scoped-build`** — `do_unit` backend op + a tightly-scoped build prompt. Fire
   it one-shot to implement one bounded change.
 
 ## 5. DAG discipline
 
 `lib/presets.py` reuses `lib/recipe_validate.py`'s `_check_prompt_template` and
-`_validate_recipe_name`, and imports `VALID_ADAPTER_OPS` from the pure-stdlib leaf
-`lib/adapter_ops.py`. It **must not** import `lib/dispatcher.py` (the heavy
+`_validate_recipe_name`, and imports `VALID_BACKEND_OPS` from the pure-stdlib leaf
+`lib/backend_ops.py`. It **must not** import `lib/dispatcher.py` (the heavy
 dispatch module that pulls in the ledger) — the validator stays a light DAG leaf.
 `tests/unit/import-topology.test.sh` asserts this boundary, and
-`tests/unit/presets.test.sh` asserts `adapter_ops.VALID_ADAPTER_OPS` equals the
+`tests/unit/presets.test.sh` asserts `backend_ops.VALID_BACKEND_OPS` equals the
 set `dispatcher.py` uses.

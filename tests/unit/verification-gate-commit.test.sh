@@ -93,7 +93,7 @@ def init(run, verification, dispatch_context=None):
     unit = {"id": "gate", "state": "verdict-returned", "verification": verification}
     if dispatch_context is not None:
         unit["dispatch_context"] = dispatch_context
-    ledger.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    ledger.init_ledger(repo, run, backend="ce", loop_phase="work",
                        units=[unit], iteration={"gate_unit": "gate"})
 
 def drive(run, caller_verdicts=None):

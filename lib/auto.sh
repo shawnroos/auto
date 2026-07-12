@@ -4,7 +4,7 @@
 #
 # /auto initializes a NEW run from a plan/spec: it creates the durable
 # ledger at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
-# units — the plan-loop populates work units later via the adapter), and emits
+# units — the plan-loop populates work units later via the backend), and emits
 # an arm-first-tick INTENT (JSON) that the MODEL acts on by setting the
 # deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-tick.
 #
@@ -13,7 +13,7 @@
 # per memory `feedback_slash_command_arg_substitution`):
 #   <plan-or-spec>            required: start a run from this plan/spec file.
 #   ... auto                  skip the plan->work seam pause (tick gets --auto).
-#   ... --adapter ce|native   workflow adapter (default ce).
+#   ... --backend ce|native   workflow backend (default ce).
 #   ... --goal "<text>"       compound deliberate-stop goal (default: the loop's
 #                             own exit predicate).
 #

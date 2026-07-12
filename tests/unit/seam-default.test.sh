@@ -77,8 +77,8 @@ it "--review-plan after legacy auto → auto=False (explicit opt-in wins)"
 assert_eq "False" "$(parse_arg /tmp/plan.md auto --review-plan)"
 
 # ── Scenario 5: --review-plan with other flags interleaved. ──────────────
-it "--review-plan interleaved with --adapter/--recipe → auto=False"
-assert_eq "False" "$(parse_arg /tmp/plan.md --adapter native --review-plan --recipe a1)"
+it "--review-plan interleaved with --backend/--recipe → auto=False"
+assert_eq "False" "$(parse_arg /tmp/plan.md --backend native --review-plan --recipe a1)"
 
 # ── Scenario 6: back-compat stderr notice fires exactly once. ────────────
 # The notice is anchored at `<resolve_shared_dir>/.seam-default-acknowledged`.

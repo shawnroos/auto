@@ -195,7 +195,7 @@ elif op == "atomic-emit":
     # _with_locked_ledger body; a reader between the emit and the advance sees
     # a consistent (predicate-recomputed-post-emit) snapshot.
     repo = tempfile.mkdtemp(); run = "ae"
-    ledger.init_ledger(repo, run, adapter="ce",
+    ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "seam", "work"], terminal_phase="work",
         loop_phase="seam",
@@ -372,7 +372,7 @@ elif op == "iter-tpl-integration":
     # this scenario, both the producer (pure read) and _apply_emit (per-unit
     # bump) could be individually correct but the composition broken.
     repo = tempfile.mkdtemp(); run = "iter-integration"
-    ledger.init_ledger(repo, run, adapter="ce",
+    ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a2", "source_tier": "built-in"},
         phase_order=["plan", "seam", "work"], terminal_phase="work",
         loop_phase="plan",
@@ -419,7 +419,7 @@ elif op == "a1-passthrough":
     # w1; w1 carries none — regression coverage in the same assertion). On
     # CURRENT code Site 1 hardcodes [], so w2's edge is dropped -> "|" (RED).
     repo = tempfile.mkdtemp(); run = "pt"
-    ledger.init_ledger(repo, run, adapter="ce",
+    ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "seam", "work"], terminal_phase="work",
         loop_phase="seam",
@@ -465,14 +465,14 @@ elif op == "origination-ce":
     # never told to produce edges and passthrough carries []. Asserts the
     # contract is real, not just injectable. _bound_plan_path({}) -> None (no
     # plan unit), so the bare-dict no-plan branch is exercised without a crash.
-    ce = load_lib_module("adapter-ce")
-    env = ce.Adapter().enumerate_plan_units({})
+    ce = load_lib_module("backend-ce")
+    env = ce.Backend().enumerate_plan_units({})
     print("yes" if "depends_on" in env["invocation"] else "no")
 
 elif op == "origination-native":
-    # U14 part (i), native counterpart — same contract in adapter-native.py.
-    nat = load_lib_module("adapter-native")
-    env = nat.Adapter().enumerate_plan_units({})
+    # U14 part (i), native counterpart — same contract in backend-native.py.
+    nat = load_lib_module("backend-native")
+    env = nat.Backend().enumerate_plan_units({})
     print("yes" if "depends_on" in env["invocation"] else "no")
 PYEOF
 }

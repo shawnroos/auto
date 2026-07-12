@@ -90,7 +90,7 @@ ALLOWED_FUNCTIONS=(
   # spread the dispatch across helpers without making it smaller.
   "lib/tick_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
-  # + adapter routing + verdict-write. U12 added the per-unit adapter_op
+  # + backend routing + verdict-write. U12 added the per-unit adapter_op
   # validation guard (reject an unknown op before launch), +8 LOC over the
   # prior 132 waiver. The guard is cohesive with the other per-unit
   # pre-filters (not-pending / over-cap) it sits beside. Decomposition
@@ -118,9 +118,9 @@ ALLOWED_FUNCTIONS=(
   # / _validate_phase_transitions / _validate_emit_templates / _validate_iteration
   # / _validate_work_only_gap — with validate() now a ~30-line ordered dispatcher.
   # Each helper is under budget; decompose, don't bump.)
-  # _next_plan_step is the LAST top-level def before `class Adapter` in
-  # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
-  # `class`) attributes the ENTIRE Adapter class body to it. The real
+  # _next_plan_step is the LAST top-level def before `class Backend` in
+  # backend-ce.py, so this awk (which spans column-0 `def`→`def`, not
+  # `class`) attributes the ENTIRE Backend class body to it. The real
   # _next_plan_step is now a ~11-LOC thin wrapper (U10 moved the state-machine
   # body into the shared _bootstrap.plan_step_sequencer) — a MEASUREMENT
   # ARTIFACT, not a complex function. v0.6.0 U7 added the prepare-only
@@ -128,9 +128,9 @@ ALLOWED_FUNCTIONS=(
   # sibling _bound_plan_path helper). Waived (not decomposed) because the
   # function itself is small; U10 shrank the measured span 139 → 125.
   # U14 (KTD-1) added the enumerate op's per-item `depends_on` edge clause to the
-  # `enumerate_plan_units` method (in the Adapter class body the awk attributes
+  # `enumerate_plan_units` method (in the Backend class body the awk attributes
   # here) so the readiness engine can order the producer fan-out — 125 → 137.
-  "lib/adapter-ce.py:_next_plan_step:137"
+  "lib/backend-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation dispatcher (parse → validate recipe
   # → build units → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,

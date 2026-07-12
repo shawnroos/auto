@@ -1,23 +1,23 @@
 ---
-name: auto-adapter
+name: auto-backend
 description: >
-  Author an auto adapter — the thin shim that maps one concrete
-  workflow (native Claude, Compound Engineering, slate-devs, plain /plan, etc.)
-  onto the engine's six fixed operations. Use when adding a new adapter to
-  auto, when implementing the native or CE adapter (U6b), or when
-  asked how an adapter plugs into the auto loop engine. The locked
-  interface lives at docs/contracts/adapter-contract.md; this skill is the
+  Author an auto backend (formerly auto-adapter) — the thin shim that maps one
+  concrete workflow (native Claude, Compound Engineering, slate-devs, plain
+  /plan, etc.) onto the engine's six fixed operations. Use when adding a new
+  backend to auto, when implementing the native or CE backend (U6b), or when
+  asked how a backend plugs into the auto loop engine. The locked
+  interface lives at docs/contracts/backend-contract.md; this skill is the
   how-to-build guide for it.
 ---
 
-# auto-adapter skill
+# auto-backend skill
 
-You are guiding the authoring of a **auto adapter**. The engine runs
-two loops — a plan-loop and a work-loop — but is workflow-blind. An adapter
+You are guiding the authoring of a **auto backend**. The engine runs
+two loops — a plan-loop and a work-loop — but is workflow-blind. A backend
 teaches it one workflow by implementing **six operations**. This skill walks the
-author through building a conforming adapter.
+author through building a conforming backend.
 
-**Source of truth:** `auto/docs/contracts/adapter-contract.md` is the
+**Source of truth:** `auto/docs/contracts/backend-contract.md` is the
 locked interface spec. This skill explains *how* to satisfy it; that file is
 *what* must be satisfied. If they disagree, the contract wins, and the underlying
 `ledger-schema.md` wins over both on shared persistence facts.
@@ -25,8 +25,8 @@ locked interface spec. This skill explains *how* to satisfy it; that file is
 ## The mental model
 
 The engine is a mechanical loop driver. It never plans, deepens, reviews, or does
-work — it delegates each of those to your adapter, one named step at a time, and
-records what you return in a disk ledger. Your adapter is a **pure provider of
+work — it delegates each of those to your backend, one named step at a time, and
+records what you return in a disk ledger. Your backend is a **pure provider of
 operations**: it returns data, it never writes the ledger. That single rule is
 what keeps the loop's done-detection correct, so honor it strictly.
 
@@ -36,7 +36,7 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
 
 1. **`plan(scope) -> plan`** — turn a scope description into an initial plan. The
    return is **opaque to the engine** — it can be a doc path, a string, or a
-   structured object only your adapter understands. The engine round-trips it back
+   structured object only your backend understands. The engine round-trips it back
    into `deepen` and `review_plan` without reading it.
 
 2. **`deepen(plan) -> plan`** — run one deepening round and return the improved
@@ -74,7 +74,7 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
    The agent records these through the engine's verdict path; **you do not write
    them to disk.**
 
-## Severity translation — the heart of an adapter
+## Severity translation — the heart of a backend
 
 There is one shared severity scale with exactly three values:
 
@@ -89,7 +89,7 @@ Your workflow probably speaks a different vocabulary (P0/P1/P2/P3, error/warn/in
 etc.). Your `review` op must **translate every native level onto exactly one of the
 three shared values** before returning. The engine only ever sees the three values.
 
-You must **declare** two things up front — these are fixed adapter properties, not
+You must **declare** two things up front — these are fixed backend properties, not
 per-call decisions:
 
 - **A severity mapping table** — your native vocabulary → `blocker`/`major`/`minor`.
@@ -100,17 +100,17 @@ per-call decisions:
   - `"blocker-only"` — you reliably produce `blocker` but your major/minor
     boundary is unreliable; the predicate then uses blocker-only logic.
 
-### The rubric probe (for model-judged reviewers like the native adapter)
+### The rubric probe (for model-judged reviewers like the native backend)
 
-If your adapter's `review` relies on a model judging findings against a rubric
+If your backend's `review` relies on a model judging findings against a rubric
 (rather than a deterministic command like `/ce-code-review`), run a **rubric probe
-BEFORE writing the adapter**: give a reviewer the blocker/major/minor rubric and
+BEFORE writing the backend**: give a reviewer the blocker/major/minor rubric and
 ~five representative findings, and check whether it tags them consistently across
 three tiers. Three outcomes set your `adapter_scale`:
 
 - **Reliable** → ship `"three-tier"`.
 - **Partial** (blocker solid, major/minor fuzzy) → ship `"blocker-only"`.
-- **Unreliable** → defer this adapter; ship the loop with a known-good adapter only.
+- **Unreliable** → defer this backend; ship the loop with a known-good backend only.
 
 A command-driven reviewer with stable severity output (e.g. CE) skips the probe
 and declares `"three-tier"` directly.
@@ -133,7 +133,7 @@ You never write an exit predicate. You supply inputs; the engine computes:
 
 Get the severities right and the engine's predicate handles the rest. The
 `all_units_terminal` conjunct is purely engine-side (it guards against stalled or
-not-yet-reviewed units) — your adapter does not influence it beyond returning
+not-yet-reviewed units) — your backend does not influence it beyond returning
 verdicts.
 
 ## Build checklist
@@ -150,7 +150,7 @@ verdicts.
 
 ## References
 
-- Locked interface: `auto/docs/contracts/adapter-contract.md`
+- Locked interface: `auto/docs/contracts/backend-contract.md`
 - Ledger contract (authoritative on shared facts): `auto/docs/contracts/ledger-schema.md`
-- The two V1 adapters this skill helps build (U6b): `lib/adapter-native.*`, `lib/adapter-ce.*`
+- The two V1 backends this skill helps build (U6b): `lib/backend-native.*`, `lib/backend-ce.*`
 - Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md` (U6a / U6b)

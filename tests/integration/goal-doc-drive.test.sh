@@ -79,7 +79,7 @@ mk_run() {  # <name> <run> <units-json>
 import sys, json, importlib.util
 repo, run, units_json, ledger_py = sys.argv[1:5]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo, run, adapter="ce", loop_phase="work", units=json.loads(units_json))
+L.init_ledger(repo, run, backend="ce", loop_phase="work", units=json.loads(units_json))
 PYEOF
   printf '%s' "$repo"
 }

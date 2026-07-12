@@ -12,7 +12,7 @@ flow, no tick, no `/goal`):
   2. ``build_oneshot_launch(preset, repo)`` (U5) — build the driver-side launch
      descriptor: the preset's `adapter_op`, plus the `prompt_template` body when
      the preset declares one (KTD-5 — the tuning is folded at the DRIVER launch,
-     never via an adapter edit).
+     never via a backend edit).
 
   3. ``oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)``
      (U4) — the TERMINAL verdict: fold the ratified criteria + resolved results
@@ -111,8 +111,8 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
 
     DRIVER-SIDE ONLY. The one-shot is driver-orchestrated (KTD-3), so the load-
     bearing site for "a preset's tuning reaches the dispatched agent" is the
-    DRIVER launch, NOT an adapter edit — ``dispatcher.dispatch_batch`` never
-    consults the adapter (driver-reference §7). This helper is what the
+    DRIVER launch, NOT a backend edit — ``dispatcher.dispatch_batch`` never
+    consults the backend (driver-reference §7). This helper is what the
     ``auto-preset`` skill calls to assemble that launch:
 
       - it always names the preset's ``adapter_op``;
@@ -139,7 +139,7 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
     "prompt_template_body": <text>]}``. Pure w.r.t. ``preset`` — mutates nothing.
     """
     invokes = preset["invokes"]
-    descriptor = {"adapter_op": invokes["adapter_op"]}
+    descriptor = {"adapter_op": invokes["adapter_op"]}  # format-v1 keys; flip in U6
 
     pt = invokes.get("prompt_template")
     if pt:

@@ -13,7 +13,7 @@
 # work-loop state and asserts the producer populated the work-phase units.
 #
 # STRUCTURE: prime the ledger to look like "plan unit is done, enumerated_units
-# stashed, gaps_open=0" (the post-adapter-handoff state), call dispatch_tick once
+# stashed, gaps_open=0" (the post-backend-handoff state), call dispatch_tick once
 # in auto mode, then read the ledger:
 #   - loop_phase must have advanced past "plan" (to "work" via auto-flip)
 #   - new units must appear with phase="work" (the producer ran)

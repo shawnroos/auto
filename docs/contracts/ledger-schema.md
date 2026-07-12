@@ -2,7 +2,7 @@
 
 > **Status: LOCKED day-zero contract.** This file is the source-of-truth
 > specification for the auto per-unit ledger. U4 (tick), U6a/U6b
-> (adapters), U7 (hooks), and U10 (dispatcher) build against THIS document.
+> (backends), U7 (hooks), and U10 (dispatcher) build against THIS document.
 > `lib/ledger.py` is the canonical implementation; this spec is authoritative
 > if the two ever disagree. Do not change the JSON shape, the invariants, the
 > state grammar, or the module constants without re-locking with all consumers.
@@ -92,9 +92,9 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 |-------|------|------------------|
 | `run_id` | string | the human-supplied run identifier; slugified for the filename, stored raw here |
 | `loop_phase` | enum | `"plan"` \| `"seam"` \| `"work"` \| `"done"` |
-| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the adapter reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — adapters read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Feeds `exit_predicate_result` ONLY in the plan phase: plan-met requires `plan_step == "review_plan"` (the §3.1 coherence guard — a default `gaps_open==0` before any review must not short-circuit). Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
+| `plan_step` | enum/null | `null` \| `"plan"` \| `"deepen"` \| `"review_plan"` — the LAST plan step the tick completed (the backend reads it to compute the NEXT step; `null` = none yet). A plan-phase **sub-state**: meaningless outside `loop_phase == "plan"` (ignored elsewhere — backends read it only under `loop_phase == "plan"`; it retains its last value after the plan→seam/work transition). Feeds `exit_predicate_result` ONLY in the plan phase: plan-met requires `plan_step == "review_plan"` (the §3.1 coherence guard — a default `gaps_open==0` before any review must not short-circuit). Persisted by the tick after each plan-loop advance so a fresh tick is not amnesiac — this is the anti-livelock field (§3.1). |
 | `seam_paused` | bool | `true` ONLY while `loop_phase == "seam"`; the intentional-orphan flag (§5, I-3) |
-| `adapter` | enum | `"ce"` \| `"native"` — which workflow adapter drives the run |
+| `adapter` | enum | `"ce"` \| `"native"` — which workflow backend drives the run |
 | `adapter_scale` | enum | `"three-tier"` \| `"blocker-only"` — set by U6b's rubric probe; tells the predicate evaluator which severity logic applies |
 | `exit_predicate_result` | object | the **cached** loop-done computation; see §2.2. NEVER re-derive downstream — read this field (memory `feedback_loop_monitor_terminal_state_field`) |
 | `units` | array | per-unit ledger entries; see §2.3 |
@@ -118,11 +118,11 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 
 | field | type | meaning |
 |-------|------|---------|
-| `met` | bool | loop is done. **Phase-aware** (I-2) and **scale-aware** (`adapter_scale`): in `loop_phase == "work"` (and seam/done) `met` requires `blockers==0 AND all_units_terminal==true AND units is non-empty`, plus `majors==0` **only when `adapter_scale != "blocker-only"`** (the three-tier default; for `"blocker-only"` runs majors are advisory — surfaced at exit, never gating). The non-empty-`units` conjunct is the vacuous-exit guard: a work phase with ZERO dispatched units must not declare done (`all([])==true` would otherwise short-circuit it before any fan-out). In `loop_phase == "plan"` `met` requires `gaps_open==0 AND plan_step=="review_plan"` ONLY — there are no work units yet, so neither `all_units_terminal` nor the non-empty-`units` guard applies, and the `plan_step=="review_plan"` conjunct mirrors the adapter coherence guard (§3.1): a default `gaps_open==0` before any review has run does NOT short-circuit. |
+| `met` | bool | loop is done. **Phase-aware** (I-2) and **scale-aware** (`adapter_scale`): in `loop_phase == "work"` (and seam/done) `met` requires `blockers==0 AND all_units_terminal==true AND units is non-empty`, plus `majors==0` **only when `adapter_scale != "blocker-only"`** (the three-tier default; for `"blocker-only"` runs majors are advisory — surfaced at exit, never gating). The non-empty-`units` conjunct is the vacuous-exit guard: a work phase with ZERO dispatched units must not declare done (`all([])==true` would otherwise short-circuit it before any fan-out). In `loop_phase == "plan"` `met` requires `gaps_open==0 AND plan_step=="review_plan"` ONLY — there are no work units yet, so neither `all_units_terminal` nor the non-empty-`units` guard applies, and the `plan_step=="review_plan"` conjunct mirrors the backend coherence guard (§3.1): a default `gaps_open==0` before any review has run does NOT short-circuit. |
 | `blockers` | int | count of `blocker`-severity findings across all units' `findings[]` |
 | `majors` | int | count of `major`-severity findings across all units' `findings[]` |
 | `minors` | int | count of `minor`-severity findings (reported at exit, never gate — R5/R6) |
-| `gaps_open` | int | open plan-loop gaps (adapter-supplied); `0` outside plan-loop |
+| `gaps_open` | int | open plan-loop gaps (backend-supplied); `0` outside plan-loop |
 | `all_units_terminal` | bool | `true` iff EVERY unit is terminal (see "terminal" definition, §4, I-2) |
 | `iteration_pending` | bool | **(v0.3.0, additive — KTD §B)** `true` iff the run declares an `iteration` block AND the gate unit's `dispatch_context.decision == "iterate"` AND the bound is unbreached (`iteration_attempts < max_attempts` AND `active_wall_seconds < max_wall_seconds`). The new `met` rule is `met = (existing met conditions) AND NOT iteration_pending` — without this AND-NOT clause, a recipe that emits plan-N units while `loop_phase == "work"` would see work-met fire spuriously (the phase-scoped terminal check ignores plan-N units; they are phase=plan, invisible). A ledger with no `iteration` block reads `iteration_pending = false` and the predicate behaves exactly as v0.2.x. |
 
@@ -140,13 +140,13 @@ recompute it.
 | `depends_on` | string[] | unit ids this unit depends on (for fan-out gating; resolved by U10) |
 | `dispatched_at` | `<iso>`/null | when the dispatcher marked it `dispatched`; null until then |
 | `verdict_at` | `<iso>`/null | timestamp of the **latest** verdict self-write (overwrites on re-verdict — latest-only semantics; null until first verdict) |
-| `stall_threshold_seconds` | int | per-unit timeout; adapter-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
-| `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
+| `stall_threshold_seconds` | int | per-unit timeout; backend-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
+| `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if a backend raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
 | `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the dispatcher on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
 | `phase` | string | **(v0.2.0, additive)** the unit's phase. When absent, defaults to the run's start phase if that is a plan phase, else `"work"` — matching v0.1.x (plan-phase runs have no work units yet; any pre-declared unit is a work unit). Recipes set it explicitly. |
 | `plan_step` | enum/null | **(v0.2.0, additive)** per-unit plan-step for N>1 parallel plan-loops (R11). `null` default. A1's single plan-loop keeps using the **top-level** `plan_step` scalar (so A1's first-tick ledger stays byte-identical to v0.1.x); this per-unit field is populated only when a recipe declares multiple plan-phase units. |
 | `gaps_open` | int/null | **(v0.2.0, additive)** per-unit open-gap count for N>1 plan-loops. `null` until a review feeds one back. Same A1-uses-the-scalar rule as `plan_step`. |
-| `dispatch_context` | object | **(v0.2.0, additive)** `{}` default. Recipe-side metadata merged from the recipe unit's `invokes` (e.g. `prompt_template`, `bias`) — after path-bounding validation — plus engine-written keys such as `enumerated_units` (the plan unit's `enumerate_plan_units` output, persisted at `plan-done` so producers read it without re-calling the adapter). The adapter reads it via its existing `unit` parameter. **(v0.3.0, additive sub-keys on a gate unit's `dispatch_context`):** `decision` ∈ `iteration.DECISIONS` (`"advance" \| "iterate" \| "exit"`) — the gate's verdict-time decision, written by `set_verdict_decision` (replaces the v0.2.x `winner_unit_id` pattern: the gate's outcome lives on `dispatch_context`, never on `findings[]` which `record_verdict` normalizes to `{severity, note}` only; readers MUST go through `lib/iteration.py::read_decision`, the AST lint enforces); `decision_payload` (optional dict) — caller-supplied data accompanying an `iterate` decision (e.g. `emit_count` for `iterate_template`); `bound_override` (object) — `{ "bound": "max_attempts"\|"max_wall_seconds", "original_decision": <enum>, "at": <iso> }`, written by `set_bound_override` when the engine forced `iterate → exit` because the bound was breached. Both `decision`/`decision_payload` are cleared by `reset_for_iteration` so a fresh iteration doesn't read the stale decision (round-3 P0-R3-1). **(v0.7.0, additive sub-key — U4):** `dispatch_context.judge_verdicts` (optional `{criterion_id: "pass"\|"fail"}`) — driver-supplied verdicts for the `advisor_judge`/`model_judge`/`human` criteria, consumed by the gate-resolution pipeline (full mechanism on the `verification` row below). The criteria *themselves* live on the unit's top-level `verification` field, NOT here — `judge_verdicts` is the only verification-related key that is genuinely a `dispatch_context` sub-key. |
+| `dispatch_context` | object | **(v0.2.0, additive)** `{}` default. Recipe-side metadata merged from the recipe unit's `invokes` (e.g. `prompt_template`, `bias`) — after path-bounding validation — plus engine-written keys such as `enumerated_units` (the plan unit's `enumerate_plan_units` output, persisted at `plan-done` so producers read it without re-calling the backend). The backend reads it via its existing `unit` parameter. **(v0.3.0, additive sub-keys on a gate unit's `dispatch_context`):** `decision` ∈ `iteration.DECISIONS` (`"advance" \| "iterate" \| "exit"`) — the gate's verdict-time decision, written by `set_verdict_decision` (replaces the v0.2.x `winner_unit_id` pattern: the gate's outcome lives on `dispatch_context`, never on `findings[]` which `record_verdict` normalizes to `{severity, note}` only; readers MUST go through `lib/iteration.py::read_decision`, the AST lint enforces); `decision_payload` (optional dict) — caller-supplied data accompanying an `iterate` decision (e.g. `emit_count` for `iterate_template`); `bound_override` (object) — `{ "bound": "max_attempts"\|"max_wall_seconds", "original_decision": <enum>, "at": <iso> }`, written by `set_bound_override` when the engine forced `iterate → exit` because the bound was breached. Both `decision`/`decision_payload` are cleared by `reset_for_iteration` so a fresh iteration doesn't read the stale decision (round-3 P0-R3-1). **(v0.7.0, additive sub-key — U4):** `dispatch_context.judge_verdicts` (optional `{criterion_id: "pass"\|"fail"}`) — driver-supplied verdicts for the `advisor_judge`/`model_judge`/`human` criteria, consumed by the gate-resolution pipeline (full mechanism on the `verification` row below). The criteria *themselves* live on the unit's top-level `verification` field, NOT here — `judge_verdicts` is the only verification-related key that is genuinely a `dispatch_context` sub-key. |
 | `last_advanced_at` | `<iso>`/null | **(v0.2.0, additive)** `null` default (sorts oldest → picked first). The round-robin tiebreaker for serialized N>1 plan-loop advance: `dispatcher.pick_next_plan_unit_to_advance` picks the ready plan unit with the oldest `last_advanced_at`, ties broken by `units[]` declaration order. State lives here so resume continues round-robin correctly. |
 | `findings` | array | LATEST review verdict's findings; each `{ "severity": "blocker"\|"major"\|"minor", "note": str }`. See §4 findings semantics |
 | `verification` | array (optional) | **(v0.7.0, additive — U4)** Present **only** on a recipe gate unit that declared typed criteria. A **top-level unit key** — a *sibling* of `dispatch_context`, not a sub-key of it (the `judge_verdicts` verdicts live under `dispatch_context`; the criteria live here). Each entry is a typed criterion `{ "id", "type", … }` where `type` ∈ `programmatic` \| `model_judge` \| `advisor_judge` \| `human` (shape per `recipe-format.md` / `verification-contract.md`). `_normalize_unit` (`lib/ledger_core.py`) preserves it through normalization **conditionally** — appended to the rebuilt unit only when the source unit carries it, so a legacy/non-gate unit stays shapeless (no `verification` key — **not** `[]`/`null`, which would change every ledger's on-disk shape). The copy is **shallow** (`list(...)`, same as `findings` / `dispatch_context`): the list is fresh but the criterion dicts are shared with the source — safe because criteria are read-only downstream (`resolve_gate_verification` never mutates them). `lib/iteration.py::resolve_gate_verification` runs the `programmatic` criteria in-process and folds them with `dispatch_context.judge_verdicts` into an advance/iterate **signal** (keyed `signal`, not `decision`, so the literal stays centralized — see `iteration-ast-lint`); the caller commits a non-None signal as `decision` via `set_verdict_decision`. |
@@ -170,7 +170,7 @@ rejects any transition not in this table (it raises; the ledger is not written).
 ```
 pending          → dispatched          (DISPATCHER via dispatch_batch — the ONLY entry transition; non-pending units are rejected)
 dispatched       → verdict-returned    (the BACKGROUND AGENT self-writes its verdict + findings atomically)
-dispatched       → stalled             (past stall_threshold_seconds with no verdict, OR an adapter raised mid-dispatch)
+dispatched       → stalled             (past stall_threshold_seconds with no verdict, OR a backend raised mid-dispatch)
 verdict-returned → fixed               (a TICK applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
 verdict-returned → pending             (no fix needed / next round: re-dispatch this unit)
 fixed            → pending             (a TICK that applied fixes re-enqueues for re-review — this is the closure loop)
@@ -258,15 +258,15 @@ in the pre-iterate state).
 
 `plan_step` records the LAST plan step the tick completed. It is a sub-state of
 `loop_phase == "plan"` and is `null` (ignored) in every other phase. The
-**adapter** owns the sequencing — it reads `plan_step` (+ `gaps_open`) and
+**backend** owns the sequencing — it reads `plan_step` (+ `gaps_open`) and
 returns the NEXT step; the **tick** persists the step it just ran. The two
-adapters differ only in whether a `deepen` step exists:
+backends differ only in whether a `deepen` step exists:
 
 ```
 CE:      null → plan → deepen → review_plan
                           ↑          │
                           └──────────┘  (gaps_open > 0: another round → deepen)
-         review_plan AND gaps_open == 0  → done   (coherence guard, §4.1 of the adapter contract)
+         review_plan AND gaps_open == 0  → done   (coherence guard, §4.1 of the backend contract)
 
 native:  null → plan → review_plan
                             ↑     │
@@ -276,7 +276,7 @@ native:  null → plan → review_plan
 
 **Round / reset rule.** A "round" is one pass through the sequence ending in a
 `review_plan`. After a `review_plan` whose gap-set is non-empty (`gaps_open > 0`)
-the adapter starts a fresh round by returning `deepen` (CE) / `review_plan`
+the backend starts a fresh round by returning `deepen` (CE) / `review_plan`
 (native) — it does NOT reset to `plan` (re-planning from scratch would discard
 the existing plan; the loop refines it). The loop terminates the moment a
 `review_plan` round returns an empty gap-set (`gaps_open == 0`), at which point
@@ -287,10 +287,10 @@ does NOT short-circuit.
 
 **Why it must be persisted.** `next_plan_step` is pure over the ledger. A tick is
 a fresh process that reads ALL state from disk. If the tick does not write back
-the step it ran, the next tick reads `plan_step == null`, the adapter returns
+the step it ran, the next tick reads `plan_step == null`, the backend returns
 `"plan"`, and the plan-loop re-plans forever (the plan-loop livelock). The tick
 therefore persists the executed step via `set_loop(plan_step=...)` AFTER the
-adapter op returns successfully (a step that raised is recorded as a stall, not
+backend op returns successfully (a step that raised is recorded as a stall, not
 as completed).
 
 ---
@@ -366,11 +366,11 @@ plan-loop  (loop_phase == "plan"):
 
 The plan-loop predicate is gaps-only — there are no work units yet, so
 `all_units_terminal` is NOT a requirement (it would never hold while units are
-still pending). The `plan_step == "review_plan"` conjunct mirrors the adapter
+still pending). The `plan_step == "review_plan"` conjunct mirrors the backend
 coherence guard (§3.1) one-to-one: a default `gaps_open == 0` BEFORE any review
 has run (at `plan` / `deepen` / `null`) must NOT short-circuit the plan loop to
 met. Both `next_plan_step`'s "done" guard and this predicate key on the same
-condition, so they agree (adapter-contract §4.1 / §5).
+condition, so they agree (backend-contract §4.1 / §5).
 
 The work-loop predicate closes two failure modes at once:
 - **stalled-dependency false-done:** a stalled unit with un-dispatched dependents
@@ -468,7 +468,7 @@ Consumers use these; the schema above is what they read/write through them.
 | function | purpose |
 |----------|---------|
 | `ledger_path(repo_root, run_id)` / `lock_path(repo_root, run_id)` | path helpers (§1) |
-| `init_ledger(repo_root, run_id, *, adapter, adapter_scale, units, loop_phase=..., plan_step=None)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write. `plan_step` defaults to `null` (no plan step yet) |
+| `init_ledger(repo_root, run_id, *, backend, adapter_scale, units, loop_phase=..., plan_step=None)` | create a new ledger; rejects if one already exists; recomputes predicate; atomic write. `plan_step` defaults to `null` (no plan step yet) |
 | `read_ledger(repo_root, run_id)` | return the ledger dict; raises a clean error (no partial file) on unknown run-id |
 | `transition(repo_root, run_id, unit_id, new_state, **fields)` | grammar-checked state change under flock; recompute + atomic write |
 | `record_verdict(repo_root, run_id, unit_id, findings, attempt=None)` | `{dispatched, verdict-returned, stalled} → verdict-returned`; OVERWRITES `findings[]`; sets `verdict_at`; clears `last_error`; recompute + atomic write (the verdict-self-write path, U10). `attempt` (Bug #6) is the dispatch generation the verdict is for — a verdict whose attempt is older than the unit's current `attempt` is rejected (`StaleVerdict`); `None` skips the check. Accepts `stalled` as a recovery edge (Bug #7) unless the verdict is stale |

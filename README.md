@@ -77,7 +77,7 @@ one line: **a workflow is an ordered set of steps; each step runs a preset.**
 
 - `docs/contracts/recipe-format.md` — the recipe JSON format (LOCKED v0.3.0).
 - `docs/contracts/ledger-schema.md` — the per-unit ledger (the source of truth).
-- `docs/contracts/adapter-contract.md` — the seven adapter ops a workflow maps onto.
+- `docs/contracts/backend-contract.md` — the seven backend ops a workflow maps onto.
 
 ## Tests
 

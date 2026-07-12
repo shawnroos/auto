@@ -278,7 +278,7 @@ def set_loop(
 def set_gaps_open(repo_root, run_id, gaps_open: int):
     """Persist the plan-loop open-gap count from ``review_plan``'s return (U4's
     tick uses this). The engine reads ONLY the gap-set length and writes it here
-    (adapter-contract §2.2 / §5).
+    (backend-contract §2.2 / §5).
 
     The value is written into ``exit_predicate_result.gaps_open`` BEFORE the
     atomic-write recompute reads it back, so the freshly-recomputed predicate
@@ -438,7 +438,7 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     """Persist a plan unit's ``enumerate_plan_units`` output onto its
     ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
 
-    Called at plan-done with the adapter's enumerated work-unit list. The
+    Called at plan-done with the backend's enumerated work-unit list. The
     phase-transition producer (U5b) reads it from here when emitting work units —
     so this is the on-ledger bridge between "the plan finished" and "here are its
     work units," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is

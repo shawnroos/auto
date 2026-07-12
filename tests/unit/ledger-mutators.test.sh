@@ -63,13 +63,13 @@ mkdir -p "$REPO"
 # ── tiny python helpers run against the module ─────────────────────────────
 # init <run> <json-units>  — create a ledger with given units list
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 
@@ -96,8 +96,8 @@ import json, sys, importlib.util
 repo, run, units_json, scale, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-adapter = "native" if scale == "blocker-only" else "ce"
-m.init_ledger(repo, run, adapter=adapter, adapter_scale=scale,
+backend = "native" if scale == "blocker-only" else "ce"
+m.init_ledger(repo, run, backend=backend, backend_scale=scale,
               units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
@@ -158,7 +158,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
     units = [{"id": "judge", "state": "pending", "phase": "work"}]
     if extra_units:
         units.extend(extra_units)
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=units)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
@@ -514,7 +514,7 @@ def setup(run):
     p = m.ledger_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+    m.init_ledger(repo, run, backend="ce", loop_phase="plan",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=[{"id": "plan", "state": "pending", "phase": "plan"}])
 

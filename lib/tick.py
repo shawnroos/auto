@@ -27,7 +27,7 @@ The tick only:
   * reads the ledger,
   * detects stalled units and halts them + their transitive dependents while
     advancing independent siblings (the parallel-fan-out promise),
-  * does ONE advance (plan-loop: the adapter's next_plan_step; work-loop: apply
+  * does ONE advance (plan-loop: the backend's next_plan_step; work-loop: apply
     ONE fix from a converged verdict) inside a try/except,
   * writes the ledger atomically via ledger.py (I-1 recompute happens inside
     ledger.py's single write chokepoint) and stamps loop.last_beat_at,
@@ -116,7 +116,7 @@ def watchdog_wakeup_delay(ledger_dict):
 
 # ──────────────────────────────────────────────────────────────────────────
 # Errors. TickError is DEFINED in tick_advance (raised by advance_plan_loop);
-# re-exported here so the single class identity is shared — resolve_adapter
+# re-exported here so the single class identity is shared — resolve_backend
 # below and _cli's catch both reference the same class as advance_plan_loop's
 # raises.
 
@@ -210,47 +210,47 @@ def run_id_of(tick_lock_path: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Adapter boundary (six-op interface, per the plan / U6a contract).
+# Backend boundary (six-op interface, per the plan / U6a contract).
 #
-# For U4 the adapter call boundary is STUBBABLE: an adapter is any object
+# For U4 the backend call boundary is STUBBABLE: a backend is any object
 # exposing the ops the tick needs. The tick only ever calls:
 #   * next_plan_step(ledger) -> "plan" | "deepen" | "review_plan" | "done"
 #   * plan(scope) / deepen(plan) / review_plan(plan)   (the chosen step)
 # Work-loop ticks apply a fix as a pure ledger state transition and do NOT need
-# an adapter op (the fix's *content* is produced out-of-band; the tick records
+# a backend op (the fix's *content* is produced out-of-band; the tick records
 # only the state change — verdict-returned → fixed).
 #
-# U6b ships the real `native` / `ce` adapters. U4 resolves an adapter via
-# `resolve_adapter(name)`; a test injects its own object through `adapter=`.
+# U6b ships the real `native` / `ce` backends. U4 resolves a backend via
+# `resolve_backend(name)`; a test injects its own object through `backend=`.
 
 
-def resolve_adapter(name: str):
-    """Resolve a named adapter to a callable object.
+def resolve_backend(name: str):
+    """Resolve a named backend to a callable object.
 
-    U6b provides real adapters (`lib/adapter-native.py`, `lib/adapter-ce.py`).
-    Until then, a missing adapter module raises a clean TickError — the tick's
+    U6b provides real backends (`lib/backend-native.py`, `lib/backend-ce.py`).
+    Until then, a missing backend module raises a clean TickError — the tick's
     try/except converts that into a recorded `last_error` + `stalled` rather
     than crashing the run (so a half-built engine fails legibly, not silently).
     """
     candidates = {
-        "native": "adapter-native.py",
-        "ce": "adapter-ce.py",
+        "native": "backend-native.py",
+        "ce": "backend-ce.py",
     }
     fname = candidates.get(name)
     if fname is None:
-        raise TickError(f"unknown adapter: {name!r}")
+        raise TickError(f"unknown backend: {name!r}")
     apath = os.path.join(_LIB_DIR, fname)
     if not os.path.exists(apath):
         raise TickError(
-            f"adapter {name!r} not yet implemented (expected {fname}; U6b provides it)"
+            f"backend {name!r} not yet implemented (expected {fname}; U6b provides it)"
         )
-    spec = importlib.util.spec_from_file_location(f"adapter_{name}", apath)
+    spec = importlib.util.spec_from_file_location(f"backend_{name}", apath)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    # Convention: the adapter module exposes a module-level `Adapter` object or
-    # the ops directly. Prefer an `Adapter` factory if present.
-    if hasattr(module, "Adapter"):
-        return module.Adapter()
+    # Convention: the backend module exposes a module-level `Backend` object or
+    # the ops directly. Prefer an `Backend` factory if present.
+    if hasattr(module, "Backend"):
+        return module.Backend()
     return module
 
 
@@ -307,7 +307,7 @@ def dispatch_tick(
     repo_root,
     run_id,
     *,
-    adapter=None,
+    backend=None,
     auto=False,
     delay=DEFAULT_REARM_DELAY_SECONDS,
 ):
@@ -327,14 +327,14 @@ def dispatch_tick(
     try:
         with _tick_lock(repo_root, run_id):
             return _tick_body(
-                repo_root, run_id, adapter=adapter, auto=auto, delay=delay
+                repo_root, run_id, backend=backend, auto=auto, delay=delay
             )
     except _TickLockHeld:
         # Another live tick is driving this run — no-op (the double-drive guard).
         return _noop_intent(run_id, "lock-held-by-live-tick")
 
 
-def _tick_body(repo_root, run_id, *, adapter, auto, delay):
+def _tick_body(repo_root, run_id, *, backend, auto, delay):
     # The plugin-qualified re-arm command (see _bootstrap.TICK_COMMAND for the
     # "must be `/auto:auto-tick`, not bare `/auto-tick`" hazard).
     rearm_prompt = build_tick_prompt(run_id)
@@ -348,7 +348,7 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     t_start = time.monotonic()
     try:
         return _tick_body_inner(
-            repo_root, run_id, adapter=adapter, auto=auto, delay=delay,
+            repo_root, run_id, backend=backend, auto=auto, delay=delay,
             rearm_prompt=rearm_prompt, now=now, now_iso=now_iso,
         )
     finally:
@@ -364,7 +364,7 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
 
 
 def _tick_body_inner(
-    repo_root, run_id, *, adapter, auto, delay, rearm_prompt, now, now_iso
+    repo_root, run_id, *, backend, auto, delay, rearm_prompt, now, now_iso
 ):
     """Flat dispatcher over short-circuit helpers (B6 decomposition).
 
@@ -403,7 +403,7 @@ def _tick_body_inner(
     )
 
     advance_result, advance_intent = _dispatch_phase_advance(
-        repo_root, run_id, led, adapter, halted_ids, phase=phase,
+        repo_root, run_id, led, backend, halted_ids, phase=phase,
         auto=auto, now_iso=now_iso,
     )
     if advance_intent is not None:
@@ -619,7 +619,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
 
 
 def _dispatch_phase_advance(
-    repo_root, run_id, led, adapter, halted_ids, *, phase, auto, now_iso
+    repo_root, run_id, led, backend, halted_ids, *, phase, auto, now_iso
 ):
     """Step 3 — the ONE advance, inside try/except.
 
@@ -637,10 +637,10 @@ def _dispatch_phase_advance(
     advance_result = None
     try:
         if phase == "plan":
-            if adapter is None:
-                adapter = resolve_adapter(led.get("adapter"))
+            if backend is None:
+                backend = resolve_backend(led.get("adapter"))  # "adapter": format-v1 key; flips in U6
             advance_result = tick_advance.advance_plan_loop(
-                repo_root, run_id, led, adapter
+                repo_root, run_id, led, backend
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
             # whether the plan step closed the gaps.

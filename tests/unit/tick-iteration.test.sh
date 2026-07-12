@@ -16,8 +16,8 @@
 #   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. adapter raises mid-tick -> unit.last_error recorded + unit marked stalled;
-#      ledger never half-written; + deliberate-fail control proving the adapter
+#   4. backend raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [adapter] [phase]  — create a ledger with given units.
+# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 
@@ -162,7 +162,7 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
     ]
     units.append({"id": "judge", "state": "pending", "phase": "work",
                   "depends_on": list(plan_units)})
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=units)
     # Seed iteration + emit_templates block.
@@ -206,7 +206,7 @@ def init_a1(run, units=None):
     if os.path.exists(p): os.unlink(p)
     u = units or [{"id": "U1", "state": "verdict-returned",
                    "findings": [{"severity": "blocker", "note": "open"}]}]
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=u)
 
@@ -288,26 +288,26 @@ elif op == "iterate-over-wall":
     }))
 
 elif op == "finally-crash-accumulates":
-    # R5 / finally: _tick_body raises mid-flight (BoomAdapter inside the
+    # R5 / finally: _tick_body raises mid-flight (BoomBackend inside the
     # plan-loop). The finally clause must accumulate the active-time delta
     # regardless. We measure: before tick: active_wall_seconds=A0; tick
     # raises; after tick: active_wall_seconds > A0. Because the inner
-    # try/except in _tick_body_inner CATCHES the adapter raise and converts
+    # try/except in _tick_body_inner CATCHES the backend raise and converts
     # it to a recorded stall (so _tick_body returns normally), we instead
     # force the raise INSIDE the finally region by monkey-patching ledger
     # read to raise after the body started. Simpler: prove the finally fires
     # on the NORMAL return path too — accumulate_active_time fires once per
     # tick regardless of return path. We probe a regular tick + a tick whose
-    # adapter raises (the try/except path inside _tick_body_inner).
+    # backend raises (the try/except path inside _tick_body_inner).
     init_a1("u4-fin-crash")
     before = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
     t.dispatch_tick(repo, "u4-fin-crash")
     after_clean = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
-    # Now drive a raise via a BoomAdapter on a plan-phase ledger (the inner
+    # Now drive a raise via a BoomBackend on a plan-phase ledger (the inner
     # try/except converts it to a stall; the finally still fires).
     p2 = m.ledger_path(repo, "u4-fin-raise")
     if os.path.exists(p2): os.unlink(p2)
-    m.init_ledger(repo, "u4-fin-raise", adapter="ce", loop_phase="plan",
+    m.init_ledger(repo, "u4-fin-raise", backend="ce", loop_phase="plan",
                   units=[{"id": "U1", "state": "dispatched",
                           "dispatched_at": "2026-01-01T00:00:00Z",
                           "stall_threshold_seconds": 600}])
@@ -315,7 +315,7 @@ elif op == "finally-crash-accumulates":
     class Boom:
         def next_plan_step(self, led):
             raise RuntimeError("boom")
-    t.dispatch_tick(repo, "u4-fin-raise", adapter=Boom())
+    t.dispatch_tick(repo, "u4-fin-raise", backend=Boom())
     after_raise = m.read_ledger(repo, "u4-fin-raise").get("active_wall_seconds", 0)
     print(json.dumps({
         "clean_advanced": after_clean > before,
@@ -363,7 +363,7 @@ elif op == "w-early-return":
     # helper still early-returns at step 1.
     p = m.ledger_path(repo, "u4-w")
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, "u4-w", adapter="ce", loop_phase="work",
+    m.init_ledger(repo, "u4-w", backend="ce", loop_phase="work",
                   phase_order=["work"], terminal_phase="work",
                   units=[{"id": "W1", "state": "verdict-returned",
                           "findings": [{"severity": "blocker", "note": "x"}]}])
@@ -485,7 +485,7 @@ elif op == "integration-a4-iterate":
         {"id": "compare", "state": "pending", "phase": "work",
          "depends_on": ["build-clarity", "build-perf"]},
     ]
-    m.init_ledger(repo, "u4-int-a4", adapter="ce", loop_phase="work",
+    m.init_ledger(repo, "u4-int-a4", backend="ce", loop_phase="work",
                   phase_order=["plan","seam","work"], terminal_phase="work",
                   units=units)
     def seed(L):
@@ -591,7 +591,7 @@ else
 fi
 
 # ─── U4 Scenario 5: R5 finally — active-time accumulates on raise + clean ────
-it "U4 R5 finally: active_wall_seconds accumulates on BOTH clean returns AND adapter-raise returns"
+it "U4 R5 finally: active_wall_seconds accumulates on BOTH clean returns AND backend-raise returns"
 res="$(u4_driver finally-crash-accumulates)"
 clean="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['clean_advanced'])" "$res")"
 raise_adv="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raise_advanced'])" "$res")"
@@ -760,7 +760,7 @@ def _init_iter(run, **kw):
              for pid in plans]
     units.append({"id":"judge","state":"pending","phase":"work",
                   "depends_on":list(plans)})
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","seam","work"], terminal_phase="work",
                   units=units)
     def seed(L):
@@ -823,13 +823,13 @@ elif op == "df-killswitch-ignored":
                        "action": (direct or {}).get("action")}))
 
 elif op == "df-finally-skipped":
-    # Patched tick.py removes the finally accumulate; an adapter raise
+    # Patched tick.py removes the finally accumulate; a backend raise
     # leaves active_wall_seconds unchanged. We drive a raise-tick (the
-    # inner try/except in _tick_body_inner captures the adapter raise so
+    # inner try/except in _tick_body_inner captures the backend raise so
     # the tick returns; the finally would otherwise still accumulate).
     p = m.ledger_path(repo, "u4-df-fin")
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, "u4-df-fin", adapter="ce", loop_phase="plan",
+    m.init_ledger(repo, "u4-df-fin", backend="ce", loop_phase="plan",
                   units=[{"id":"U1","state":"dispatched",
                           "dispatched_at":"2026-01-01T00:00:00Z",
                           "stall_threshold_seconds":600}])
@@ -838,7 +838,7 @@ elif op == "df-finally-skipped":
         def next_plan_step(self, led):
             raise RuntimeError("boom")
     try:
-        t.dispatch_tick(repo, "u4-df-fin", adapter=Boom())
+        t.dispatch_tick(repo, "u4-df-fin", backend=Boom())
     except Exception:
         pass
     after = m.read_ledger(repo, "u4-df-fin").get("active_wall_seconds", 0)
@@ -993,7 +993,7 @@ else
 fi
 
 # DF#4 — Move accumulate_active_time out of the finally clause. With the
-# finally removed, an adapter-raise return path doesn't call accumulate, so
+# finally removed, a backend-raise return path doesn't call accumulate, so
 # active_wall_seconds stays at 0.
 it "U4 DELIBERATE-FAIL #4: moving accumulate_active_time out of finally → crashed-tick active_wall_seconds stays unchanged"
 res="$(u4_df_with_patched_tick "$DF_DIR/df4_no_finally.py" df-finally-skipped)"
@@ -1153,7 +1153,7 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
         {"id": "compare", "state": "pending", "phase": "work",
          "depends_on": ["build-clarity", "build-perf"]},
     ]
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","seam","work"], terminal_phase="work",
                   units=units)
     def seed(L):
@@ -1180,7 +1180,7 @@ def _init_iter_bad_decision(run):
         {"id": "judge", "state": "pending", "phase": "work",
          "depends_on": ["plan-1"]},
     ]
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","seam","work"], terminal_phase="work",
                   units=units)
     def seed(L):
@@ -1333,7 +1333,7 @@ units = [
     {"id": "judge", "state": "pending", "phase": "work",
      "depends_on": ["plan-1"]},
 ]
-m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+m.init_ledger(repo, run, backend="ce", loop_phase="work",
               phase_order=["plan","seam","work"], terminal_phase="work",
               units=units)
 def seed(L):
@@ -1410,7 +1410,7 @@ if os.path.exists(p): os.unlink(p)
 # regardless of ledger shape. We seed it with one pending plan unit so
 # dispatch_tick reaches the iteration check.
 units = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
-m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+m.init_ledger(repo, run, backend="ce", loop_phase="plan",
               phase_order=["plan","work"], terminal_phase="work",
               units=units)
 

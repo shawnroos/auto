@@ -330,22 +330,22 @@ it "DRIVING_SESSION_KEY: is exactly 'driving_session_id' (writer/reader share on
 assert_eq "driving_session_id" "$(probe driving_session_key)"
 
 # ── plan_step_sequencer (U10: the shared plan-loop sequencer) ───────────────
-# One pure function both adapters delegate to. CE injects
+# One pure function both backends delegate to. CE injects
 # ("plan","deepen","review_plan"); native injects ("plan","review_plan") — same
 # coherence guard + None-tolerance, ONLY the sequence differs. These probe the
-# shared function DIRECTLY (adapter-severity.test.sh is the end-to-end guard).
+# shared function DIRECTLY (backend-severity.test.sh is the end-to-end guard).
 #
-# Driver: call plan_step_sequencer with a per-adapter sequence + a ledger built
+# Driver: call plan_step_sequencer with a per-backend sequence + a ledger built
 # from (plan_step, gaps_open). Prints the returned step.
 seq_step() {
-  # args: <adapter: ce|native> <plan_step|null> <gaps_open>
+  # args: <backend: ce|native> <plan_step|null> <gaps_open>
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 import _bootstrap as b
-adapter, plan_step, gaps_open = sys.argv[2], sys.argv[3], int(sys.argv[4])
-sequence = ("plan", "deepen", "review_plan") if adapter == "ce" else ("plan", "review_plan")
+backend, plan_step, gaps_open = sys.argv[2], sys.argv[3], int(sys.argv[4])
+sequence = ("plan", "deepen", "review_plan") if backend == "ce" else ("plan", "review_plan")
 ledger = {
     "plan_step": None if plan_step == "null" else plan_step,
     "exit_predicate_result": {"gaps_open": gaps_open},

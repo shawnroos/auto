@@ -82,7 +82,7 @@ def _operator_guidance_for(phase, advance_result, led):
         step = None
         if isinstance(advance_result, dict):
             step = advance_result.get("step")
-        invocation = _PLAN_STEP_INVOCATION.get(step, "(see adapter contract)")
+        invocation = _PLAN_STEP_INVOCATION.get(step, "(see backend contract)")
         body = (
             "prepare/execute contract: I PREPARED a plan-loop invocation; "
             "YOU must run it. I do NOT dispatch the work — my role is to "
@@ -100,7 +100,7 @@ def _operator_guidance_for(phase, advance_result, led):
     if phase == "brainstorm":
         # v0.6.0 U7/U8 (P0 fix-round-3): the spine's brainstorm phase is a
         # SINGLE-unit, model-driven step (like plan, NOT a work-loop fan-out).
-        # The CE adapter has no `brainstorm` op, so nothing dispatches it for
+        # The CE backend has no `brainstorm` op, so nothing dispatches it for
         # the model — the driver MUST run /ce-brainstorm itself, then record the
         # two conditions advance_brainstorm_loop/_brainstorm_unit_ready gate on:
         # (i) the requirements-doc path on the brainstorm unit's

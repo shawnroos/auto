@@ -3,7 +3,7 @@
 
 The detection logic that used to live in a single-quoted bash heredoc inside
 `lib/auto-detect.sh`. U15 (plan 2026-07-01-001) moved it into this sibling
-module following the shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3):
+module following the shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3):
 `auto-detect.sh` is now a thin shim that pins the interpreter, resolves
 `script_dir`, and execs this file with `script_dir` as argv[1].
 
@@ -367,7 +367,7 @@ def _diff_summary(repo):
 # change (the code moved verbatim; each router still _emit's, which raises
 # SystemExit): the module-level block would otherwise be attributed by the
 # size-budget lint's `def`→`def` awk to the last helper above (a measurement
-# artifact — see the adapter-ce.py:_next_plan_step waiver). Keeping each router
+# artifact — see the backend-ce.py:_next_plan_step waiver). Keeping each router
 # a real `def` under the function budget avoids a fresh waiver on a health split.
 
 

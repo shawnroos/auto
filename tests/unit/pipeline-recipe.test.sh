@@ -59,7 +59,7 @@ def _init_from_recipe(repo, run, name):
     init_units = [recipes.unit_for(u, r) for u in r.get("units", [])]
     po = r.get("phase_order", ["plan", "seam", "work"])
     ledger.init_ledger(
-        repo, run, adapter="ce", units=init_units,
+        repo, run, backend="ce", units=init_units,
         loop_phase=po[0],
         recipe={"name": r["name"], "source_tier": tier},
         phase_order=po, terminal_phase=r.get("terminal_phase", "work"),

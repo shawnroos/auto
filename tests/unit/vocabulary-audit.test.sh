@@ -57,7 +57,7 @@ fail() {
 TERM_STATUS="\
 orchestrator=done
 emitter=done
-adapter=pending
+adapter=done
 tick=pending
 seam=pending
 unit=pending
@@ -153,12 +153,36 @@ audit_term_hits() {
       raw="$(printf '%s\n' "$raw" | grep -viE 'unit tests?' || true)"
       raw="$(printf '%s\n' "$raw" | grep -vE 'plan_step|PLAN_STEPS|next_plan_step' || true)"
       ;;
-    adapter|recipe)
-      # The KTD-4 flag-alias branches in lib/auto.py::_parse_args keep the old
-      # spellings (--recipe / --adapter / --teardown-recipe-after-init) as
-      # deprecated aliases plus their one-line deprecation strings.
+    adapter)
+      # PERMANENT: the KTD-4 flag-alias branch in lib/auto.py::_parse_args keeps
+      # `--adapter` as a deprecated alias plus its one-line deprecation string.
       raw="$(printf '%s\n' "$raw" \
-             | grep -vE '^lib/auto\.py:[0-9]+:.*(--recipe|--adapter|--teardown-recipe-after-init|[Dd]eprecat)' \
+             | grep -vE '^lib/auto\.py:[0-9]+:.*(--adapter|[Dd]eprecat)' || true)"
+      # TEMP: until U6. U4 renamed the adapter CONCEPT (symbols + prose + files
+      # + the backend-contract) to `backend`, but the on-disk KEY cutover is
+      # deferred to U6 (KTD-6 — all persisted key/value literals flip in one
+      # unit). So the persisted keys `adapter` / `adapter_scale` / `adapter_op`
+      # (and the workflow `default_adapter`) legitimately survive, in their
+      # persisted form, wherever code READS/WRITES them, in recipe/schema files,
+      # in doc examples, and in test fixtures. The compound tokens `adapter_op`
+      # / `adapter_scale` / `default_adapter` are UNIQUELY persisted-key names
+      # (nothing else is spelled that way), so filtering them bare is safe; the
+      # bare `adapter` CONCEPT is narrowed to the quoted/backticked key token so
+      # any un-renamed adapter concept prose or symbol still fails the audit.
+      # Remove this whole branch at U6.
+      raw="$(printf '%s\n' "$raw" | grep -vE 'adapter_op|adapter_scale|default_adapter' || true)"
+      raw="$(printf '%s\n' "$raw" | grep -vE "[\"'\`]adapter[\"'\`]" || true)"
+      # recipes/schema.json's `default_adapter` property carries a bare
+      # "Adapter used when --adapter is not passed." description string; the
+      # schema is a persisted-format file left untouched until U6 (KTD-6).
+      raw="$(printf '%s\n' "$raw" | grep -vE '^recipes/schema\.json:' || true)"
+      ;;
+    recipe)
+      # The KTD-4 flag-alias branches in lib/auto.py::_parse_args keep the old
+      # spellings (--recipe / --teardown-recipe-after-init) as deprecated aliases
+      # plus their one-line deprecation strings.
+      raw="$(printf '%s\n' "$raw" \
+             | grep -vE '^lib/auto\.py:[0-9]+:.*(--recipe|--teardown-recipe-after-init|[Dd]eprecat)' \
              || true)"
       ;;
     emitter)
@@ -229,9 +253,9 @@ fi
 # NB: this MUST track a term whose real status is still `pending`. Once a term is
 # renamed it no longer produces non-whitelisted hits, so the control would go
 # vacuous itself; each rename unit re-points this to the next still-pending term.
-# U2 moved it orchestrator→emitter; U3 renamed `emitter`, so it now probes
-# `adapter` (pending until U4).
-DF_TERM="adapter"
+# U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`,
+# so it now probes `tick` (pending until U5).
+DF_TERM="tick"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then

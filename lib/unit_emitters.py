@@ -8,9 +8,9 @@ actually spawn their units.
 
 THE PRODUCER (the F4 gap that almost shipped): producers do NOT invent plan output
 — they read it from `unit["dispatch_context"]["enumerated_units"]`, which the
-engine persists when a plan unit reaches `plan-done` by calling the adapter's
-`enumerate_plan_units` op (U6 wires the persist; the adapter op is the v0.2.0
-contract re-lock). So the data flow is: plan-loop runs → adapter enumerates the
+engine persists when a plan unit reaches `plan-done` by calling the backend's
+`enumerate_plan_units` op (U6 wires the persist; the backend op is the v0.2.0
+contract re-lock). So the data flow is: plan-loop runs → backend enumerates the
 plan's work units → engine stashes them on the plan unit → producer reads + shapes
 them into ledger units at the phase boundary.
 
@@ -54,7 +54,7 @@ _iteration = load_lib_module("iteration")
 def _enumerated_units(unit: dict) -> list:
     """The work units a plan unit produced, stashed by the engine at plan-done.
 
-    Read from `dispatch_context.enumerated_units` (the adapter's
+    Read from `dispatch_context.enumerated_units` (the backend's
     `enumerate_plan_units` output, persisted in U6's advance path). Empty list if
     the plan produced nothing (the caller/predicate handles the vacuous case).
     """
@@ -106,7 +106,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
     PURE (mirrors ``plan_output_to_work_units``): reads the ledger dict, returns
     a one-element list of a partial 5-key unit dict; no ledger mutation. The
     requirements-doc path flows onto the plan unit's ``dispatch_context`` so the
-    plan adapter op has the brainstorm output as input.
+    plan backend op has the brainstorm output as input.
 
     Raises ``RecipeError`` (the recipe-shape error class, matching the A2/A4
     producer failure surface) when no brainstorm unit carries an output — a
@@ -134,7 +134,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
             "id": "plan",
             "phase": to_phase,
             "depends_on": [],
-            "invokes": {"adapter_op": "next_plan_step"},
+            "invokes": {"adapter_op": "next_plan_step"},  # format-v1 key; flips in U6
             "dispatch_context": {"requirements_doc": requirements_doc},
         }
     ]
@@ -222,7 +222,7 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
         bid = f"build-{bias}"
         out.append({
             "id": bid, "phase": to_phase, "depends_on": [],
-            "invokes": {"adapter_op": "do_unit"},
+            "invokes": {"adapter_op": "do_unit"},  # format-v1 key; flips in U6
             "dispatch_context": {"bias": bias, "plan_items": items},
         })
     return out

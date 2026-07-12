@@ -124,7 +124,7 @@ mk_live_owned() {  # <name> <run> <driving-sid>
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1:4]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,adapter="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,run,backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
 PYEOF
   set_driving_session "$repo" "$2" "$3"
   printf '%s' "$repo"

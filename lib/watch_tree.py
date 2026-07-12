@@ -8,7 +8,7 @@ node with its age against the stall threshold + its attempt count, and nesting
 lib/topology-render.py's deterministic-string idioms — declaration-order
 traversal, stable formatting, pure stdlib — so tests can pin exact output.
 
-STRUCTURE comes from the ledger (the `depends_on` DAG + the `do_unit` adapter-op
+STRUCTURE comes from the ledger (the `depends_on` DAG + the `do_unit` backend-op
 marker); LIVE-agent status is overlaid model-side by the skill (skills/auto-watch)
 from the harness TaskList/Monitor tools. This module owns only the structural,
 deterministic half (KTD5).
@@ -65,14 +65,14 @@ def _seconds_between(start_iso, now_dt) -> int:
     return int((now_dt - started).total_seconds())
 
 
-def _adapter_op(unit) -> str:
+def _backend_op(unit) -> str:
     """The unit's adapter_op — read from `dispatch_context` (the materialized
     on-disk shape, where recipes.unit_for merged `invokes`) or from a raw
     `invokes` (a recipe-shaped unit). '' when neither carries one."""
     for holder_key in ("dispatch_context", "invokes"):
         holder = unit.get(holder_key)
-        if isinstance(holder, dict) and holder.get("adapter_op"):
-            return holder["adapter_op"]
+        if isinstance(holder, dict) and holder.get("adapter_op"):  # format-v1 key; flips in U6
+            return holder["adapter_op"]  # format-v1 key; flips in U6
     return ""
 
 
@@ -80,7 +80,7 @@ def _is_fanout_child(unit) -> bool:
     """True for a `do_unit` fan-out agent — the node that nests under the producer
     parent it depends on. The `do_unit` marker on the CHILD is the reliable,
     ledger-visible signal that its parent is the fan-out unit (KTD5)."""
-    return _adapter_op(unit) == "do_unit"
+    return _backend_op(unit) == "do_unit"
 
 
 def _threshold(unit) -> int:

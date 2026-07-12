@@ -70,7 +70,7 @@ DRIVER_SELF_STALE_SECONDS = 3900
 
 LOOP_PHASES = ("plan", "seam", "work", "done")
 # Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
-# adapter reads plan_step to compute the NEXT step; the tick persists the step it
+# backend reads plan_step to compute the NEXT step; the tick persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
 PLAN_STEPS = ("plan", "deepen", "review_plan")
 # v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
@@ -425,8 +425,8 @@ def init_ledger(
     repo_root: str,
     run_id: str,
     *,
-    adapter: str,
-    adapter_scale: str = "three-tier",
+    backend: str,
+    backend_scale: str = "three-tier",
     units=None,
     loop_phase: str = "plan",
     plan_step=None,
@@ -463,10 +463,10 @@ def init_ledger(
                            producers declared — legacy v0.1.x behavior, the run
                            emits nothing at phase boundaries).
     """
-    if adapter not in ("ce", "native"):
-        raise LedgerError(f"invalid adapter: {adapter!r}")
-    if adapter_scale not in ("three-tier", "blocker-only"):
-        raise LedgerError(f"invalid adapter_scale: {adapter_scale!r}")
+    if backend not in ("ce", "native"):
+        raise LedgerError(f"invalid backend: {backend!r}")
+    if backend_scale not in ("three-tier", "blocker-only"):
+        raise LedgerError(f"invalid backend_scale: {backend_scale!r}")
 
     # phase_order / terminal_phase default to the v0.1.x grammar so a call with
     # neither produces a ledger that behaves exactly as before.
@@ -575,8 +575,8 @@ def init_ledger(
             "loop_phase": loop_phase,
             "plan_step": plan_step,
             "seam_paused": loop_phase == "seam",
-            "adapter": adapter,
-            "adapter_scale": adapter_scale,
+            "adapter": backend,  # format-v1 key; flips in U6
+            "adapter_scale": backend_scale,  # format-v1 key; flips in U6
             # v0.2.0 recipe fields (additive). recipe is None on a recipe-blind
             # v0.1.x ledger; phase_order/terminal_phase default to the legacy
             # grammar so the predicate + phase routing behave identically.

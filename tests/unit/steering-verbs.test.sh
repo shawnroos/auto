@@ -66,7 +66,7 @@ def fresh(run, units):
     p = m.ledger_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    m.init_ledger(repo, run, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=units)
     return m.read_ledger(repo, run)
@@ -385,7 +385,7 @@ import os, sys, importlib.util
 ledger_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "ledger.py")
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(os.environ["REPO"], sys.argv[1], adapter="ce", loop_phase="work",
+m.init_ledger(os.environ["REPO"], sys.argv[1], backend="ce", loop_phase="work",
               phase_order=["plan", "seam", "work"], terminal_phase="work",
               units=[{"id": "base", "state": "pending", "phase": "work"}])
 PYEOF

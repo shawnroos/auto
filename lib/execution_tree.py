@@ -33,7 +33,7 @@ Four steps (mirroring KTD6 / KTD6b):
 
   4. SUBSTRATE SELECTION (a routing decision — never execution). A self-contained
      bounded parallel-fan-in loop (single-phase, no per-unit ce-work/review
-     adapter dispatch, an engine-enforced bound) routes to `"workflow-script"` —
+     backend dispatch, an engine-enforced bound) routes to `"workflow-script"` —
      an INERT routing label plus a topology preview, NOT a runnable compiled
      script (the parked RFC's `pipeline()`/`parallel()` compiler is unbuilt,
      KTD6b). Everything else routes to `"subagent-tree"`, the default and the ONLY
@@ -66,9 +66,9 @@ dispatcher = load_lib_module("dispatcher")
 # `verdict-returned` so the exact same predicate advances wave by wave.
 _is_ready = dispatcher._is_ready
 _units_by_id = dispatcher._units_by_id
-_unit_adapter_op = dispatcher._unit_adapter_op
+_unit_backend_op = dispatcher._unit_backend_op
 
-# The per-unit adapter ops that mark a loop as a long-lived ce-work / review
+# The per-unit backend ops that mark a loop as a long-lived ce-work / review
 # dispatch — the shape that MUST run on the native subagent-tree (each unit is a
 # background agent that self-writes a verdict). Their presence forces
 # `"subagent-tree"`; their ABSENCE (plus single-phase + bounded) is what lets a
@@ -159,7 +159,7 @@ def _expand_producer_units(recipe: dict):
             continue  # already a static unit — nothing to synthesize.
         tmpl = _emit_template_for(emit_id, recipe)
         phase = (tmpl or {}).get("phase") or recipe.get("terminal_phase", "work")
-        adapter_op = ((tmpl or {}).get("invokes") or {}).get("adapter_op")
+        adapter_op = ((tmpl or {}).get("invokes") or {}).get("adapter_op")  # format-v1 key; flips in U6
         _from_phase, src_ids = _phase_boundary_source(phase, recipe, units)
         # Producer-produced work units are fan-out children when their template
         # dispatches `do_unit`; the parent is the (single) producer-source unit.
@@ -240,7 +240,7 @@ def _select_substrate(recipe: dict, units: list) -> str:
 
       * single-phase — every unit shares one phase (a self-contained fan-in, no
         plan→seam→work spine to sequence), AND
-      * no ce-work/review adapter op — no unit dispatches `do_unit`/`review`
+      * no ce-work/review backend op — no unit dispatches `do_unit`/`review`
         (those are long-lived background agents that self-write verdicts and MUST
         run on the native subagent-tree), AND
       * bounded — an engine-enforced `iteration.bound` caps the fan-in loop.
@@ -253,7 +253,7 @@ def _select_substrate(recipe: dict, units: list) -> str:
     phases = {u.get("phase") for u in units}
     single_phase = len(phases) <= 1
     has_ce_dispatch = any(
-        _unit_adapter_op(u) in _CE_DISPATCH_OPS for u in units
+        _unit_backend_op(u) in _CE_DISPATCH_OPS for u in units
     )
     bounded = bool((recipe.get("iteration") or {}).get("bound"))
     if single_phase and not has_ce_dispatch and bounded:

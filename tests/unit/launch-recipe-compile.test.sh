@@ -233,7 +233,7 @@ elif op == "teardown":
     run_id = "teardown-" + slug
     ledger.init_ledger(
         repo, run_id,
-        adapter=recipe.get("default_adapter", "ce"),
+        backend=recipe.get("default_adapter", "ce"),
         units=init_units,
         loop_phase=phase_order[0],
         recipe={"name": recipe["name"], "source_tier": tier},

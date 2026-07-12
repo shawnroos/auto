@@ -73,15 +73,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers ────────────────────────────────────────────────────
-# ledger_init <run> <json-units> [adapter] [phase]  — create a ledger.
+# ledger_init <run> <json-units> [backend] [phase]  — create a ledger.
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 
@@ -306,17 +306,17 @@ fi
 
 # ─── Scenario 6b: adapter_op validation (U12) ─────────────────────────────────
 # dispatch_batch rejects a unit whose declared adapter_op is not in
-# VALID_ADAPTER_OPS — the op must NOT flow to launch. The adapter_op is injected
+# VALID_BACKEND_OPS — the op must NOT flow to launch. The adapter_op is injected
 # on `dispatch_context` (the durable home: _normalize_unit preserves
 # dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_unit)
 # and is the deliberate-fail CONTROL: same injected shape, valid value -> it
 # dispatches and launches, proving the guard keys on the op VALUE, not on the
 # unit's presence.
-it "adapter_op: unknown op -> rejected:bad-adapter-op, not launched, stays pending; valid op dispatches (control)"
-ledger_init "adapter-op" \
+it "adapter_op: unknown op -> rejected:bad-backend-op, not launched, stays pending; valid op dispatches (control)"
+ledger_init "backend-op" \
   '[{"id":"Uvalid","state":"pending","dispatch_context":{"adapter_op":"do_unit"}},{"id":"Ubad","state":"pending","dispatch_context":{"adapter_op":"totally-bogus-op"}}]' \
   >/dev/null 2>&1
-aop="$("$PY" - "$REPO" "adapter-op" "$ORCH_PY" <<'PYEOF'
+aop="$("$PY" - "$REPO" "backend-op" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
@@ -336,7 +336,7 @@ print(json.dumps({
     "bad_state": states.get("Ubad"),
     "valid_launched": "Uvalid" in launches,
     "valid_state": states.get("Uvalid"),
-    "valid_in_ops": "do_unit" in o.VALID_ADAPTER_OPS,
+    "valid_in_ops": "do_unit" in o.VALID_BACKEND_OPS,
 }))
 PYEOF
 )"
@@ -346,12 +346,12 @@ blaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_launched
 bstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['bad_state'])" "$aop")"
 vlaunch="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_launched'])" "$aop")"
 vstate="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['valid_state'])" "$aop")"
-if [ "$vstat" = "dispatched" ] && [ "$bstat" = "rejected:bad-adapter-op" ] \
+if [ "$vstat" = "dispatched" ] && [ "$bstat" = "rejected:bad-backend-op" ] \
    && [ "$blaunch" = "False" ] && [ "$bstate" = "pending" ] \
    && [ "$vlaunch" = "True" ] && [ "$vstate" = "dispatched" ]; then
   pass
 else
-  fail "valid=$vstat bad=$bstat bad_launched=$blaunch bad_state=$bstate valid_launched=$vlaunch valid_state=$vstate (expected dispatched / rejected:bad-adapter-op / False / pending / True / dispatched)"
+  fail "valid=$vstat bad=$bstat bad_launched=$blaunch bad_state=$bstate valid_launched=$vlaunch valid_state=$vstate (expected dispatched / rejected:bad-backend-op / False / pending / True / dispatched)"
 fi
 
 # ─── Scenario 7: VERDICT SURVIVES SESSION DEATH ───────────────────────────────
@@ -600,7 +600,7 @@ o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
 
 run="class1-bo"
 # blocker-only run: Ua (will carry a major), Ub depends on Ua.
-m.init_ledger(repo, run, adapter="native", adapter_scale="blocker-only",
+m.init_ledger(repo, run, backend="native", backend_scale="blocker-only",
               loop_phase="work",
               units=[{"id":"Ua","state":"pending"},
                      {"id":"Ub","state":"pending","depends_on":["Ua"]}])
@@ -671,7 +671,7 @@ def load(n,p):
 o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
 
 run="class1-bo-fail"
-m.init_ledger(repo, run, adapter="native", adapter_scale="blocker-only",
+m.init_ledger(repo, run, backend="native", backend_scale="blocker-only",
               loop_phase="work",
               units=[{"id":"Ua","state":"pending"},
                      {"id":"Ub","state":"pending","depends_on":["Ua"]}])
@@ -841,7 +841,7 @@ def chain(run, batch):
     p = m.ledger_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    m.init_ledger(repo, run, adapter="ce", loop_phase="plan",
+    m.init_ledger(repo, run, backend="ce", loop_phase="plan",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=[{"id": "plan", "state": "pending", "phase": "plan"}])
     m.set_enumerated_units(repo, run, "plan", batch)
@@ -853,7 +853,7 @@ def chain(run, batch):
         os.unlink(wp)
     units = [{"id": w["id"], "state": "pending", "phase": "work",
               "depends_on": w["depends_on"]} for w in work]
-    m.init_ledger(repo, wrun, adapter="ce", loop_phase="work",
+    m.init_ledger(repo, wrun, backend="ce", loop_phase="work",
                   phase_order=["plan", "seam", "work"], terminal_phase="work",
                   units=units)
     print(",".join(o.ready_units(repo, wrun)))

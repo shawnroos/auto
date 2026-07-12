@@ -13,7 +13,7 @@
 #
 # U15 (plan 2026-07-01-001): the ~590-line Python implementation moved out of a
 # single-quoted bash heredoc into the sibling `lib/auto-detect.py`, following
-# the shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3). This file is now
+# the shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3). This file is now
 # a thin shim; the JSON-envelope contract below is still authored here.
 #
 # JSON envelope (one line, machine-parseable):
@@ -99,7 +99,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # ──────────────────────────────────────────────────────────────────────────
 # DELEGATION (no inline logic). U15 moved the ~590-line detector body out of a
 # single-quoted `<<'PYEOF'` heredoc into the sibling `auto-detect.py` — the
-# shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3). This shim pins the
+# shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3). This shim pins the
 # interpreter, resolves `script_dir`, and execs the `.py`, forwarding the script
 # dir as argv[1]. The `.py` reached back through `_bootstrap` for the three
 # formerly-inlined duplications: `_repo_root` → `resolve_repo`; the twice-inlined

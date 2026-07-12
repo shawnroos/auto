@@ -8,7 +8,7 @@
 # unit (the representational change that makes the topology a recipe). So R13
 # asserts the BEHAVIORAL invariants that actually matter — the things a v0.1.x
 # operator would observe identically:
-#   1. the run is created in loop_phase "plan" with adapter ce
+#   1. the run is created in loop_phase "plan" with backend ce
 #   2. the plan-phase predicate is NOT met (no premature exit), gaps_open null
 #   3. the new additive fields are present as their v0.1.x-equivalent defaults
 #      (phase_order = legacy grammar, terminal_phase = work, recipe = a1)

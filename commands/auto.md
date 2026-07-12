@@ -1,5 +1,5 @@
 ---
-argument-hint: "[<plan-or-spec> [--review-plan] [--adapter ce|native] [--goal \"...\"] [--recipe <name>]] | freeform sentence"
+argument-hint: "[<plan-or-spec> [--review-plan] [--backend ce|native] [--goal \"...\"] [--recipe <name>]] | freeform sentence"
 allowed-tools: Bash, Skill, AskUserQuestion, advisor
 ---
 

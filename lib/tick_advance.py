@@ -16,7 +16,7 @@ dependency graph is one-way:
 
 No cycle: nothing here imports tick.py. `TickError` is defined HERE (raised by
 ``advance_plan_loop``) and re-exported by tick.py so the single class identity
-is shared — ``resolve_adapter`` in tick.py and ``_cli``'s catch both reference
+is shared — ``resolve_backend`` in tick.py and ``_cli``'s catch both reference
 the same class.
 """
 
@@ -59,8 +59,8 @@ class TickError(Exception):
     """Base class for tick errors."""
 
 
-# The adapter's plan-step ops the engine may execute (the engine never PICKS
-# the step — the adapter does; this is the set the engine will dispatch).
+# The backend's plan-step ops the engine may execute (the engine never PICKS
+# the step — the backend does; this is the set the engine will dispatch).
 _PLAN_STEP_OPS = ("plan", "deepen", "review_plan")
 
 
@@ -98,7 +98,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     A unit is stalled if it is `dispatched` and has been so for longer than its
     `stall_threshold_seconds` with no verdict. We mark it via ledger.transition
     (so the write goes through the I-1 chokepoint) with last_error preserved as
-    null (a plain timeout; an adapter raise sets last_error elsewhere). The
+    null (a plain timeout; a backend raise sets last_error elsewhere). The
     stalled unit AND its transitive dependents are halted for this tick;
     independent siblings still advance.
     """
@@ -116,7 +116,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
 
     confirmed_stalled = []
     for uid in newly_stalled:
-        # Plain timeout stall: last_error stays null (vs an adapter-raise stall,
+        # Plain timeout stall: last_error stays null (vs a backend-raise stall,
         # which records {call, message, at}). See record_stall_error.
         #
         # reap_pending (U3): the live agent may still be up (this is the alive-
@@ -251,7 +251,7 @@ def units_awaiting_reap(ledger_dict):
 
 
 def record_stall_error(repo_root, run_id, unit_id, call, message, now_iso):
-    """On an adapter raise mid-advance: mark the unit `stalled` AND record
+    """On a backend raise mid-advance: mark the unit `stalled` AND record
     last_error = {call, message, at}, in one grammar-checked atomic write.
 
     The unit must be `dispatched` for the dispatched → stalled edge to be legal.
@@ -295,7 +295,7 @@ def _ready_fix_unit(ledger_dict, halted_ids):
     the predicate already reports met. The fix-class and the terminality class
     MUST share the gating decision so they agree on which units still need work.
     """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
+    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))  # format-v1 key; flips in U6
     for u in ledger_dict.get("units", []):
         if u.get("id") in halted_ids:
             continue
@@ -319,7 +319,7 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
     and ``unit_is_terminal`` — a blocker-only run never re-enqueues a major-only
     fixed unit (majors are advisory), so it cannot churn fix→re-enqueue forever.
     """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))
+    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))  # format-v1 key; flips in U6
     for u in ledger_dict.get("units", []):
         if u.get("id") in halted_ids:
             continue
@@ -476,32 +476,32 @@ def _persist_enumerated_units(repo_root, run_id, enumerated):
     ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
 
 
-def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
-    """Plan-loop advance: ask the adapter for the next step and call that ONE
-    step. The ADAPTER owns plan-step sequencing — the engine never picks it.
+def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
+    """Plan-loop advance: ask the backend for the next step and call that ONE
+    step. The BACKEND owns plan-step sequencing — the engine never picks it.
 
     Returns a bare ``result_dict`` (U18 / KTD-5: the advance-return contract is
     normalized so every phase-advance returns a bare dict). A raise from the
-    adapter op (or a bad plan step) propagates to the caller's try/except in
+    backend op (or a bad plan step) propagates to the caller's try/except in
     ``_dispatch_phase_advance``, which records it as a stall — this function does
     NOT catch and never signals the raising op back through its return value.
 
-    CRITICAL (anti-livelock — schema §3.1): after the adapter op returns
+    CRITICAL (anti-livelock — schema §3.1): after the backend op returns
     SUCCESSFULLY, we PERSIST the executed step to the ledger via
     ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the ledger and
     each tick is a fresh process reading ALL state from disk; without this write
-    the next tick reads ``plan_step == null``, the adapter returns ``"plan"``,
+    the next tick reads ``plan_step == null``, the backend returns ``"plan"``,
     and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
     thus only on success): a step that raised is recorded as a stall by the
     caller's try/except, never as a completed step.
 
-    PLAN→exit (schema §3.1 / adapter-contract §4.1, §5): when ``next_plan_step``
+    PLAN→exit (schema §3.1 / backend-contract §4.1, §5): when ``next_plan_step``
     returns ``"done"`` the plan sequence is complete (gaps closed). The plan-loop
     must NOT re-arm on ``plan``; the caller (``_maybe_seam``) routes the met plan
     predicate to seam (manual) or work (auto). We surface ``{"advanced":
     "plan-done"}`` so the caller knows the sequence finished this tick.
 
-    GAPS persist (gap-write, adapter-contract §2.2): when the executed step is
+    GAPS persist (gap-write, backend-contract §2.2): when the executed step is
     ``review_plan``, its return is the gap-set; the engine reads ONLY its length
     and persists ``gaps_open = len(gap_set)`` via ``ledger.set_gaps_open`` (the
     I-1 atomic write path). The gap-set arrives either as a bare list (a direct
@@ -512,18 +512,18 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     short-circuit). This is what makes plan-met depend on a REAL review having
     reported its gaps, not the default — closing the deepen-refinement loop.
     """
-    step = adapter.next_plan_step(ledger_dict)
+    step = backend.next_plan_step(ledger_dict)
     if step == "done":
         # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
-        # via the v0.2.0 adapter op and PERSIST them onto the plan unit's
+        # via the v0.2.0 backend op and PERSIST them onto the plan unit's
         # dispatch_context.enumerated_units, so the phase-transition producer (U5b)
         # can read them when it emits work units (resolves F4 — the producer).
         # enumerate_plan_units is prepare-only: it may return a bare list (a
-        # synchronous/test adapter) OR a PREPARE envelope the model fills with the
+        # synchronous/test backend) OR a PREPARE envelope the model fills with the
         # units under the canonical "units" key. We persist whichever concrete list
         # is available; a freshly-prepared envelope with no "units" key leaves the
         # field untouched (same no-premature-default discipline as gaps_open).
-        enum_op = getattr(adapter, "enumerate_plan_units", None)
+        enum_op = getattr(backend, "enumerate_plan_units", None)
         enum_envelope = None
         if callable(enum_op):
             enum_result = enum_op(ledger_dict)
@@ -534,7 +534,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
                 if isinstance(enum_result.get("units"), list):
                     enumerated = enum_result["units"]
                 else:
-                    # A PREPARE envelope (the live adapter): the model fills the
+                    # A PREPARE envelope (the live backend): the model fills the
                     # units out-of-band via set_enumerated_units. Carry it so the
                     # caller can surface it as the rearm intent (producer
                     # handshake — see _maybe_seam). NOT a synchronous result.
@@ -543,19 +543,19 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
                 _persist_enumerated_units(repo_root, run_id, enumerated)
         return {"advanced": "plan-done", "enumerate_envelope": enum_envelope}
     if step not in _PLAN_STEP_OPS:
-        raise TickError(f"adapter returned unknown plan step: {step!r}")
-    op = getattr(adapter, step, None)
+        raise TickError(f"backend returned unknown plan step: {step!r}")
+    op = getattr(backend, step, None)
     if op is None or not callable(op):
-        raise TickError(f"adapter missing op {step!r}")
-    # The adapter step is the work-bearing call; the caller wraps this in the
+        raise TickError(f"backend missing op {step!r}")
+    # The backend step is the work-bearing call; the caller wraps this in the
     # try/except so a raise becomes a recorded last_error, not a crash.
     result = op(ledger_dict)
     # review_plan returns the gap-set; the engine reads ONLY its length and
-    # persists it (adapter-contract §2.2). The gap-set arrives in one of two
-    # shapes (Bug #5 — gaps_open was never written from the LIVE adapters, which
+    # persists it (backend-contract §2.2). The gap-set arrives in one of two
+    # shapes (Bug #5 — gaps_open was never written from the LIVE backends, which
     # return a dict envelope, so plan-met fired after a SINGLE review pass and the
     # deepen-refinement loop was unreachable):
-    #   * a bare array — direct return (e.g. a test/synchronous adapter); OR
+    #   * a bare array — direct return (e.g. a test/synchronous backend); OR
     #   * the live PREPARE envelope (a dict) with the model-filled ``gap_set``
     #     array under the canonical ``gap_set`` key (contract §2.2). The bare
     #     envelope ships WITHOUT ``gap_set``; the model fills it before the engine
@@ -862,9 +862,9 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     """If the plan-loop is complete, transition out of plan (gap #5).
 
     The plan sequence is complete when EITHER the cached predicate is met
-    (plan-phase: gaps_open == 0) OR the adapter signalled the sequence finished
+    (plan-phase: gaps_open == 0) OR the backend signalled the sequence finished
     this tick (``next_plan_step`` returned "done" → advance "plan-done"). The two
-    MUST agree (adapter-contract §4.1 coherence guard); we trigger on either so a
+    MUST agree (backend-contract §4.1 coherence guard); we trigger on either so a
     `next_plan_step=="done"` always transitions loop_phase, never re-arming on
     `plan`.
 
@@ -890,7 +890,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
         return advance_result  # gaps still open; keep ticking the plan loop.
     # PRODUCER HANDSHAKE (v0.4.3): the plan is complete, but the work-loop needs
     # units to dispatch. enumerate_plan_units is a PREPARE op the MODEL executes
-    # (adapter-contract §2.2) — it returns an envelope, then calls
+    # (backend-contract §2.2) — it returns an envelope, then calls
     # set_enumerated_units out-of-band. If the plan unit has no enumerated_units
     # yet, the model hasn't run it; transitioning now would flip to a work phase
     # with ZERO units (vacuous-exit guard keeps it un-met → the run wedges with
@@ -898,7 +898,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     # — the next tick, once units are stashed, passes this guard and flips to
     # work. This closes the latent producer gap for a1 too (every other plan op is
     # surfaced+executed across a tick boundary; enumerate must be as well). Tests
-    # / synchronous adapters that pre-persist enumerated_units pass straight
+    # / synchronous backends that pre-persist enumerated_units pass straight
     # through. The plan-presatisfied (W) path lands here on its very first tick.
     if not _plan_has_enumerated_units(led):
         out = dict(advance_result or {})

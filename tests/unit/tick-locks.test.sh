@@ -16,8 +16,8 @@
 #   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. adapter raises mid-tick -> unit.last_error recorded + unit marked stalled;
-#      ledger never half-written; + deliberate-fail control proving the adapter
+#   4. backend raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [adapter] [phase]  — create a ledger with given units.
+# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
 ledger_init() {
-  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
 PYEOF
 }
 

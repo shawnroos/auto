@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""auto U6b: the native Claude adapter — Python surface.
+"""auto U6b: the native Claude backend — Python surface.
 
-This is the module tick.py (U4) imports. `resolve_adapter` (tick.py:170-197)
-loads `lib/adapter-native.py`, prefers a module-level ``Adapter`` factory, and
+This is the module tick.py (U4) imports. `resolve_backend` (tick.py:170-197)
+loads `lib/backend-native.py`, prefers a module-level ``Backend`` factory, and
 calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
 deepen(ledger) / review_plan(ledger) / do_unit(unit) / review(unit)``.
 
 The pure logic (severity validation + the plan-step state machine) is here so
-tick.py can import it; the bash sibling ``adapter-native.sh`` mirrors it as a
-CLI for direct testing. An adapter NEVER writes the ledger (contract §1).
+tick.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
+CLI for direct testing. A backend NEVER writes the ledger (contract §1).
 
 ══════════════════════════════════════════════════════════════════════════════
-RUBRIC PROBE OUTCOME (gates this adapter — contract §3.1, plan U6b "FIRST"):
+RUBRIC PROBE OUTCOME (gates this backend — contract §3.1, plan U6b "FIRST"):
 
   A native reviewer is a Claude model judging findings against the
   blocker/major/minor rubric. The probe gave it 5 representative findings:
@@ -26,7 +26,7 @@ RUBRIC PROBE OUTCOME (gates this adapter — contract §3.1, plan U6b "FIRST"):
   (bounded correctness bug vs. code smell). Per the contract's partial rule,
   a hedge on even one major/minor finding drops us off "three-tier".
 
-  THEREFORE adapter_scale = "blocker-only". The predicate evaluator applies
+  THEREFORE backend_scale = "blocker-only". The predicate evaluator applies
   blocker-only logic for native runs: only `blocker` reliably gates the loop.
   R2's "widest gap" rationale is PARTIALLY met — the blocker gate is
   trustworthy, the major gate is best-effort. Native `review` still emits the
@@ -51,9 +51,9 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _bootstrap import plan_step_sequencer  # noqa: E402  (path-prepend first)
 
-ADAPTER_NAME = "native"
+BACKEND_NAME = "native"
 # Set by the rubric probe above (partial -> blocker-only).
-ADAPTER_SCALE = "blocker-only"
+BACKEND_SCALE = "blocker-only"
 
 _SEVERITIES = ("blocker", "major", "minor")
 
@@ -82,7 +82,7 @@ def validate_findings(findings):
         sev = str(f.get("severity", ""))
         if sev not in _SEVERITIES:
             raise ValueError(
-                "adapter-native: off-scale severity %r (expected blocker|major|minor)" % sev
+                "backend-native: off-scale severity %r (expected blocker|major|minor)" % sev
             )
         out.append({"severity": sev, "note": f.get("note", "")})
     return out
@@ -94,23 +94,23 @@ def _next_plan_step(ledger):
     Native has NO deepen step, so it NEVER emits "deepen": plan -> review_plan
     and, while gaps remain, loops back to "review_plan"; once a review_plan round
     closes the gaps the shared §4.1 coherence guard returns "done". That
-    per-adapter difference is now the injected ``_PLAN_SEQUENCE``; the guard +
+    per-backend difference is now the injected ``_PLAN_SEQUENCE``; the guard +
     ``plan_step is None`` first-step logic live once in ``_bootstrap``.
     ``plan_step`` IS a real validated ledger field (``ledger_core.PLAN_STEPS``)
-    that the tick persists — read identically by both adapters (there is no
+    that the tick persists — read identically by both backends (there is no
     native-specific schema gap; the sequencer just keeps native's None-tolerance).
     """
     return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
 
 
-class Adapter:
-    """The object tick.py's ``resolve_adapter`` instantiates. Exposes the six
+class Backend:
+    """The object tick.py's ``resolve_backend`` instantiates. Exposes the six
     ops as methods. `next_plan_step` and `deepen` are fully pure; `plan /
     review_plan / do_unit / review` are the live-invocation seam (PREPARE an
     envelope/rubric the model acts on, PARSE the structured result)."""
 
-    name = ADAPTER_NAME
-    adapter_scale = ADAPTER_SCALE
+    name = BACKEND_NAME
+    backend_scale = BACKEND_SCALE
     review_rubric = REVIEW_RUBRIC
 
     # ── plan-loop ops ──────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ class Adapter:
         engine can order the fan-out. Prepare-only, so this invocation string is
         where the model is instructed to originate the edges."""
         return {
-            "adapter": ADAPTER_NAME,
+            "backend": BACKEND_NAME,
             "op": "enumerate_plan_units",
             "invocation": (
                 "enumerate-plan-work-units; each item is {id, invokes, "
@@ -142,7 +142,7 @@ class Adapter:
 
     def plan(self, ledger):
         """PREPARE a prose-plan invocation; the model writes the plan."""
-        return {"adapter": ADAPTER_NAME, "op": "plan", "invocation": "write-prose-plan"}
+        return {"backend": BACKEND_NAME, "op": "plan", "invocation": "write-prose-plan"}
 
     def deepen(self, plan):
         """No-op: native has no deepen concept (contract §6.2; next_plan_step
@@ -153,7 +153,7 @@ class Adapter:
         """PREPARE a review + list-gaps invocation. The model returns a gap-set
         array; the engine reads only its length (contract §2.2)."""
         return {
-            "adapter": ADAPTER_NAME,
+            "backend": BACKEND_NAME,
             "op": "review_plan",
             "invocation": "review-and-list-gaps",
         }
@@ -165,7 +165,7 @@ class Adapter:
         with; U10 defines the correlation contract over this shape."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
         return {
-            "adapter": ADAPTER_NAME,
+            "backend": BACKEND_NAME,
             "op": "do_unit",
             "unit_id": unit_id,
             "invocation": "native-task %s" % unit_id,
@@ -185,7 +185,7 @@ class Adapter:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# CLI (the .sh shim DELEGATES here — adapter-native.sh execs this module). This
+# CLI (the .sh shim DELEGATES here — backend-native.sh execs this module). This
 # is the SINGLE implementation of the rubric + validate_findings + next_plan_step
 # state machine; the .sh no longer re-implements them in an inline Python heredoc
 # (the pure logic lived in two places and could drift). Positional argv only; the
@@ -197,13 +197,13 @@ def _cli(argv):
     import sys
 
     if not argv:
-        sys.stderr.write("usage: adapter-native.py <subcommand> [args...]\n")
+        sys.stderr.write("usage: backend-native.py <subcommand> [args...]\n")
         return 2
     sub, rest = argv[0], argv[1:]
-    a = Adapter()
+    a = Backend()
     try:
-        if sub == "adapter-scale":
-            sys.stdout.write(ADAPTER_SCALE + "\n")
+        if sub == "backend-scale":
+            sys.stdout.write(BACKEND_SCALE + "\n")
             return 0
         if sub == "review-rubric":
             sys.stdout.write(REVIEW_RUBRIC + "\n")
@@ -219,10 +219,10 @@ def _cli(argv):
             # trailing newline — mirrors the bash printf '%s' it replaces).
             sys.stdout.write(a.deepen(rest[0] if rest else ""))
             return 0
-        sys.stderr.write("adapter-native: unknown subcommand %r\n" % sub)
+        sys.stderr.write("backend-native: unknown subcommand %r\n" % sub)
         return 2
     except (ValueError, IndexError) as exc:
-        sys.stderr.write("adapter-native: %s\n" % exc)
+        sys.stderr.write("backend-native: %s\n" % exc)
         return 1
 
 

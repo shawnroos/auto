@@ -161,7 +161,7 @@ IS the wake signal. Per wave:
    `launch_fn` maps each unit's `invokes.adapter_op` to the skill it
    launches: `do_unit` → `/ce-work <unit-id>` (the default — `a1`/`w`/
    `pipeline`); `review` → `/ce-code-review` (the `review.json`
-   off-spine unit, U11). `dispatch_batch` never consults the adapter, so
+   off-spine unit, U11). `dispatch_batch` never consults the backend, so
    THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
@@ -383,7 +383,7 @@ Each pulse, on a `rearm` intent in the work phase:
 2. **Spawn ONE background `Agent` per dispatched unit.** Build each prompt to
    carry: the **unit id**; its **`attempt` generation** (from this dispatch — the
    agent passes it back so a superseded attempt's verdict is rejected as stale,
-   AE3); the **adapter invocation** (map `invokes.adapter_op` → skill per §4
+   AE3); the **backend invocation** (map `invokes.adapter_op` → skill per §4
    step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
    two-seam constraints — question routing, destructive-action avoidance,
    self-termination on no-progress); and the instruction to **self-write its

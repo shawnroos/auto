@@ -62,7 +62,7 @@ freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
 ## Dispatch grammar (reference)
 
 - Single plan: `bash lib/auto.sh "<plan-path> [auto] [--review-plan]
-  [--adapter ce|native] [--goal <text>] [--recipe <name>]"`
+  [--backend ce|native] [--goal <text>] [--recipe <name>]"`
 - Batch fanout: `python lib/auto-spawn.py fanout <plan> [<plan>...]
   [--intent "<text>"]` — the spawner owns worktrees/ports/sidecar +
   dispatch; the driver never shells out per sub-run.

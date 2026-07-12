@@ -3,11 +3,11 @@
 # (recipes/review.json) drives a SINGLE review/fix loop to a P3-only terminal
 # verdict and stops at `done` — it never auto-advances and never rebounds.
 #
-# WHY THIS TEST EXISTS (round-2 P2, lib/adapter-ce.py):
+# WHY THIS TEST EXISTS (round-2 P2, lib/backend-ce.py):
 # recipes.test.sh already pins that review.json validates / resolves / is
 # distinct from w. But the DISPATCH path was never driven: review.json's work
 # unit carries `dispatch_context.adapter_op == "review"` (NOT "do_unit"), and the
-# DRIVER — not the adapter, not the dispatcher — maps that adapter_op to the
+# DRIVER — not the backend, not the dispatcher — maps that adapter_op to the
 # skill it launches (`review` → /ce-code-review; `do_unit` → /ce-work). This test
 # drives the real engine end-to-end so the off-spine review path is locked, not
 # inferred:

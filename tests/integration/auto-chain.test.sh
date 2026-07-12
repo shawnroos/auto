@@ -5,8 +5,8 @@
 # + ledger (lib/ledger.py) wired together exactly as skills/auto/SKILL.md
 # instructs the driving agent to wire them. The ONLY injected seams are the
 # documented ones:
-#   * the ADAPTER (a Python object exposing next_plan_step/plan/deepen/
-#     review_plan) — injected the same way tick.test.sh injects BoomAdapter;
+#   * the BACKEND (a Python object exposing next_plan_step/plan/deepen/
+#     review_plan) — injected the same way tick.test.sh injects BoomBackend;
 #   * the background-agent verdict self-write — supplied as dispatcher
 #     dispatch_batch's `launch_fn`, which calls the REAL ledger.record_verdict
 #     synchronously (the documented "agent writes its own verdict atomically"
@@ -103,7 +103,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="full-chain"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"minor","note":"nit on U1"}]}],
                    loop_phase="work")
@@ -167,7 +167,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="closure"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
@@ -228,7 +228,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py)
 
 run="closure-noreenqueue"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
@@ -263,7 +263,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="closure-noreenqueue-engine"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
@@ -318,7 +318,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py)
 
 run="seam-manual"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"pending"}], loop_phase="seam")
 intent=tick.dispatch_tick(repo, run)
 L=ledger.read_ledger(repo, run)
@@ -361,7 +361,7 @@ run="seam-auto"
 # leaves gaps_open null (no real review reported), and plan-met does NOT fire. We
 # must seed the zero-gap count explicitly to model a completed review. (A plan
 # ledger before any review runs is NOT met — that is the deepen-loop guard.)
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned","findings":[]}],
                    loop_phase="plan", plan_step="review_plan")
 ledger.set_gaps_open(repo, run, 0)  # a real review ran and found zero gaps.
@@ -409,7 +409,7 @@ ledger=load("ledger",ledger_py); orch=load("dispatcher",orch_py)
 
 run="fanout"
 units=[{"id":"U%d"%i,"state":"pending"} for i in range(1,7)]
-ledger.init_ledger(repo, run, adapter="native", units=units, loop_phase="work")
+ledger.init_ledger(repo, run, backend="native", units=units, loop_phase="work")
 
 def n_disp():
     return sum(1 for u in ledger.read_ledger(repo, run)["units"] if u["state"]=="dispatched")
@@ -452,7 +452,7 @@ def load(n,p):
 ledger=load("ledger",ledger_py); tick=load("tick",tick_py)
 
 run="goaled"
-ledger.init_ledger(repo, run, adapter="native",
+ledger.init_ledger(repo, run, backend="native",
                    units=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"open"}]}],
                    loop_phase="work")

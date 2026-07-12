@@ -49,7 +49,7 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 | `version` | yes | string | format version (currently `"1"`). |
 | `units` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
-| `default_adapter` | no | `"ce"`\|`"native"` | the adapter to use when `--adapter` is not passed. |
+| `default_adapter` | no | `"ce"`\|`"native"` | the backend to use when `--backend` is not passed. |
 | `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every unit/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","seam","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","seam","work"]` (the `pipeline` recipe) validate. |
 | `terminal_phase` | no | string | the phase whose completion ends the run. Default `"work"`. MUST be a member of `phase_order`. |
 | `phase_transitions` | no | array | producer declarations (§4). |
@@ -110,7 +110,7 @@ Each entry declares which **producer** fires at a phase boundary:
 - **w** — Work-only. `phase_order: ["work"]`, no producer; units must be
   pre-declared in v0.2.0 (the shipped `recipes/w.json` carries a single stub
   unit). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
-  adds init-time enumeration so the adapter's `enumerate_plan_units` op can
+  adds init-time enumeration so the backend's `enumerate_plan_units` op can
   load work units from an operator-supplied plan at `init_ledger` time; until
   then, a work-only recipe with `units: []` is REJECTED by `validate()` (it
   would create a zero-unit ledger that re-arms forever).
@@ -123,7 +123,7 @@ Each entry declares which **producer** fires at a phase boundary:
   direct-mutation `transition_and_emit` path, never `set_loop` (KTD-3).
 - **review** — **(v0.6.0, U11)** Off-spine code-review-only entry.
   `phase_order: ["work"]`, terminal `work`; a single unit invoking the `review`
-  adapter op (one review/fix loop to P3, then stop). Distinct from `w` (which
+  backend op (one review/fix loop to P3, then stop). Distinct from `w` (which
   invokes `do_unit` to build): same single-phase shape, different op — no
   plan phase, no auto-advance, no rebound.
 
@@ -362,9 +362,9 @@ path), so no malformed topology can ship.
 - `docs/contracts/ledger-schema.md` — the ledger fields a recipe populates
   (including the v0.3.0 iteration fields + `dispatch_context.decision` /
   `bound_override` sub-keys).
-- `docs/contracts/adapter-contract.md` — the ops a unit's `invokes` references.
+- `docs/contracts/backend-contract.md` — the ops a unit's `invokes` references.
   **Unchanged for v0.3.0** — the iteration primitive lives entirely on the
-  engine side; no new adapter ops are introduced.
+  engine side; no new backend ops are introduced.
 - `skills/auto-design/references/verification-taxonomy.md` — the canonical shape
   of a typed `verification` criterion (§11); `recipes/schema.json` documents the
   same shape as a JSON Schema. `validate()` is the enforcer of both.

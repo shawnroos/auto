@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto U1 unit test: lib/presets.py (preset data object loader + validator),
-# lib/adapter_ops.py (shared VALID_ADAPTER_OPS leaf), and the two built-in seeds
+# lib/backend_ops.py (shared VALID_BACKEND_OPS leaf), and the two built-in seeds
 # (presets/tuned-review.json, presets/scoped-build.json).
 #
 # A "preset" is the pure `invokes` payload of a step — {name, version,
@@ -8,7 +8,7 @@
 # gate (R2). This suite locks the loader's resolution (built-in + workspace
 # override), the validator's rejections (verification/phase/depends_on keys, bad
 # adapter_op, path-traversal prompt_template), the clear not-found error, and the
-# shared-leaf symmetry that proves the VALID_ADAPTER_OPS refactor preserved
+# shared-leaf symmetry that proves the VALID_BACKEND_OPS refactor preserved
 # dispatcher's dispatch guard.
 #
 # SELF-CONTAINED inline harness (same style as recipes.test.sh / ledger.test.sh).
@@ -16,11 +16,11 @@
 # Scenarios (U1):
 #   1. a valid built-in preset (tuned-review) loads and validates
 #   2. a preset carrying `verification` is rejected, message names the field
-#   3. a preset whose adapter_op is outside VALID_ADAPTER_OPS is rejected
+#   3. a preset whose adapter_op is outside VALID_BACKEND_OPS is rejected
 #   4. a prompt_template with `..` or a leading `/` is rejected
 #   5. an unknown preset name yields a clear not-found error (not a traceback)
 #   6. a workspace .claude/auto/presets/<name>.json overrides a built-in
-#   7. adapter_ops.VALID_ADAPTER_OPS equals the set dispatcher.py uses
+#   7. backend_ops.VALID_BACKEND_OPS equals the set dispatcher.py uses
 
 set -uo pipefail
 
@@ -55,7 +55,7 @@ REPO="$SANDBOX/repo"
 mkdir -p "$HOME" "$REPO"
 trap 'rm -rf "$SANDBOX"' EXIT
 
-# Driver: load presets / adapter_ops / dispatcher via _bootstrap, run an op,
+# Driver: load presets / backend_ops / dispatcher via _bootstrap, run an op,
 # print a stable one-line result. Modules are imported via importlib through the
 # _bootstrap loader from an absolute lib/ path (same strategy as recipes.test.sh).
 con() {
@@ -96,10 +96,10 @@ elif op == "load-unknown":
     except presets.PresetError as e:
         print("notfound:" + str(e))
 elif op == "symmetry":
-    adapter_ops = load_lib_module("adapter_ops")
+    backend_ops = load_lib_module("backend_ops")
     orch = load_lib_module("dispatcher")
-    a = adapter_ops.VALID_ADAPTER_OPS
-    b = orch.VALID_ADAPTER_OPS
+    a = backend_ops.VALID_BACKEND_OPS
+    b = orch.VALID_BACKEND_OPS
     print("equal" if a == b else ("differ:%r vs %r" % (sorted(a), sorted(b))))
 PYEOF
 }
@@ -119,7 +119,7 @@ out="$(con validate-json '{"name":"x","version":"1","description":"d","invokes":
 case "$out" in rejected:*) : ;; *) fail "expected rejected, got '$out'";; esac
 assert_contains "verification" "$out"
 
-# ── 3. adapter_op outside VALID_ADAPTER_OPS is rejected ──────────────────────
+# ── 3. adapter_op outside VALID_BACKEND_OPS is rejected ──────────────────────
 it "preset with an unknown adapter_op is rejected"
 out="$(con validate-json '{"name":"x","version":"1","description":"d","invokes":{"adapter_op":"teleport"}}')"
 case "$out" in rejected:*) pass ;; *) fail "expected rejected, got '$out'";; esac
@@ -147,8 +147,8 @@ cat > "$REPO/.claude/auto/presets/tuned-review.json" <<'JSON'
 JSON
 assert_eq "WORKSPACE-OVERRIDE" "$(con load-field tuned-review "$REPO" description)"
 
-# ── 7. shared-leaf symmetry: adapter_ops == dispatcher's dispatch set ──────
-it "adapter_ops.VALID_ADAPTER_OPS equals dispatcher.VALID_ADAPTER_OPS"
+# ── 7. shared-leaf symmetry: backend_ops == dispatcher's dispatch set ──────
+it "backend_ops.VALID_BACKEND_OPS equals dispatcher.VALID_BACKEND_OPS"
 assert_eq "equal" "$(con symmetry)"
 
 # ── summary ──────────────────────────────────────────────────────────────────

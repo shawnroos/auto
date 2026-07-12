@@ -54,7 +54,7 @@ def fmt_waves(res):
     # Deterministic, order-insensitive WITHIN a wave (sorted); wave ORDER matters.
     return "|".join(",".join(sorted(w)) for w in res["waves"])
 
-# A minimal bounded parallel-fan-in loop with NO ce-work/review adapter op —
+# A minimal bounded parallel-fan-in loop with NO ce-work/review backend op —
 # the branch a2/a4 don't exercise (both carry review/do_unit). Single-phase +
 # bounded + no ce-dispatch → workflow-script routing label.
 def wfs_recipe():

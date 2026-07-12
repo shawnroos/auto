@@ -265,7 +265,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         )
 
     sys.stdout.write(
-        f"  adapter: {led.get('adapter', '?')} "
+        f"  backend: {led.get('adapter', '?')} "
         f"(scale={led.get('adapter_scale', '?')})\n"
     )
     sys.stdout.write(

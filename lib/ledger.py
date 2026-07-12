@@ -336,16 +336,16 @@ def _h_set_verdict_decision(argv):
 
 
 def _h_init(argv):
-    # init <run> <units-json> [adapter] [loop-phase]   (R4 — CREATE a run from
-    # the tool surface). adapter/loop-phase are validated INSIDE init_ledger
+    # init <run> <units-json> [backend] [loop-phase]   (R4 — CREATE a run from
+    # the tool surface). backend/loop-phase are validated INSIDE init_ledger
     # against its authoritative sets before any write (invalid → LedgerError, no
     # file), and an existing run-id raises LedgerExists leaving the ledger
     # untouched — so the CLI never re-guesses the allowed set.
     run = argv[1]
     units = _json_array(argv[2], "units") if len(argv) > 2 and argv[2] else None
-    adapter = argv[3] if len(argv) > 3 and argv[3] else "ce"
+    backend = argv[3] if len(argv) > 3 and argv[3] else "ce"
     loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
-    init_ledger(resolve_repo(), run, adapter=adapter, units=units, loop_phase=loop_phase)
+    init_ledger(resolve_repo(), run, backend=backend, units=units, loop_phase=loop_phase)
     return 0
 
 
@@ -420,9 +420,9 @@ _VERBS = {
     # agent steering verbs (the reshape surface)
     "init": _Verb(
         _h_init,
-        "<run> <units-json> [adapter] [loop-phase]",
+        "<run> <units-json> [backend] [loop-phase]",
         rejects="LedgerExists if the run-id already exists (existing ledger "
-        "untouched); LedgerError on an unknown adapter.",
+        "untouched); LedgerError on an unknown backend.",
     ),
     "force-skip": _Verb(
         _h_force_skip,

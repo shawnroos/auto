@@ -110,7 +110,7 @@ Report the routing decision and what it means:
   preview + annotation, deferred to the parked workflow-substrate RFC's re-entry.
   Do not imply a compiled script exists.
 
-The predicate is concrete (single-phase + no ce-work/review adapter op + bounded →
+The predicate is concrete (single-phase + no ce-work/review backend op + bounded →
 `workflow-script`; else `subagent-tree`) — see the module docstring for the exact
 rule. `a2` and `a4` both carry a `review` op (a4 also `do_unit`), so both route to
 `subagent-tree`.

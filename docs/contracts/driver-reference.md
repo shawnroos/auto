@@ -185,7 +185,7 @@ Each tick returns a JSON INTENT. The action's handling is phase-aware:
 
 | `action` | phase | what the driver does |
 |----------|-------|----------------------|
-| `rearm`  | `plan` | issue `ScheduleWakeup(intent.delay, intent.prompt)` — plan-loop runs adapter steps inline, no background wake needed |
+| `rearm`  | `plan` | issue `ScheduleWakeup(intent.delay, intent.prompt)` — plan-loop runs backend steps inline, no background wake needed |
 | `rearm`  | `work` | yield to the harness re-invocation on next verdict AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` (delay clamped to `[60, 3600]s`) so a tick fires even while work is in flight — a verdict landing first makes it a no-op. The LONG-delay (1200s+) ScheduleWakeup still applies when no background work is in flight and no ready units to dispatch (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. If `reason == "predicate-met*"`, emit report; if `reason == "seam-pause"`, surface seam |
 | `noop`   | any   | another live tick holds the lock (double-drive guard); do nothing; do NOT re-arm |
@@ -198,12 +198,12 @@ the harness re-invokes on background verdict completion.
 ## 5. Plan-loop sequencing
 
 While `loop_phase == "plan"` and `exit_predicate_result.met == false`,
-ticks fire. Each plan-loop tick asks the active adapter
+ticks fire. Each plan-loop tick asks the active backend
 `next_plan_step(ledger)` and runs that one step (`plan` / `deepen` /
 `review_plan`), then persists the executed step (`plan_step`) so the
 next fresh-process tick advances instead of re-planning.
 
-**The adapter owns plan-step sequencing — the driver never picks the
+**The backend owns plan-step sequencing — the driver never picks the
 next step.** Re-arm on `rearm` until the plan predicate (`gaps_open
 == 0`) closes.
 
@@ -333,11 +333,11 @@ Python owns only the marker.
 
 ### Work-unit `adapter_op` → invocation (the model-facing dispatch label)
 
-`dispatcher.dispatch_batch` is adapter-agnostic: it flips the unit
+`dispatcher.dispatch_batch` is backend-agnostic: it flips the unit
 `pending → dispatched` and calls the driver-injected `launch_fn`; it
-NEVER consults the adapter. So the DRIVER must map each work unit's
+NEVER consults the backend. So the DRIVER must map each work unit's
 `invokes.adapter_op` to the ce skill it launches in the background
-`Agent`. The CE adapter (`lib/adapter-ce.py`) exposes two work-loop ops,
+`Agent`. The CE backend (`lib/backend-ce.py`) exposes two work-loop ops,
 and the dispatch label differs per op:
 
 | `invokes.adapter_op` | launch this skill | used by |
@@ -350,7 +350,7 @@ that runs a single review/fix loop to a P3-only terminal verdict (the
 work-loop's own exit predicate, KTD-1), so it must dispatch as
 `/ce-code-review`, NOT `/ce-work`. Defaulting every work unit to
 `/ce-work` would run the wrong skill for an off-spine review run. The
-adapter's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
+backend's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
 is the PARSE half (it maps the returned findings onto the shared severity
 scale); the launch label for `review` is `/ce-code-review`, set here.
 
@@ -365,7 +365,7 @@ flow (KTD-3), and drives both through each module's CLI (`_cli`/`__main__`):
 - `build_oneshot_launch(preset, repo)` — the driver-side launch
   descriptor: the preset's `adapter_op`, plus the `prompt_template` body
   when the preset declares one (KTD-5 — the tuning folds at the DRIVER
-  launch, never via an adapter edit). The template resolves workspace-repo
+  launch, never via a backend edit). The template resolves workspace-repo
   first, then the built-in root.
 - `oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)`
   — the terminal verdict. It takes the ratified criteria list **directly**
@@ -603,7 +603,7 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
    against a run that does not exist yet.
 4. **kind == "skill"** (bug→`/ce-debug`, what-to-improve→`/ce-ideate`,
    perf→`/ce-optimize`): recommend the skill command — NO auto-wrap, no run
-   created (the `ce-ideate` precedent; the CE adapter has no debug/optimize op).
+   created (the `ce-ideate` precedent; the CE backend has no debug/optimize op).
 5. **kind == "recipe"** (vague→`pipeline`@brainstorm, clear-intent-no-plan→`a1`@plan,
    reviewed-plan→`w`@work, code-unreviewed→`review`@work):
    a. **Author a phase goal** by performing the `auto-author-goal` procedure

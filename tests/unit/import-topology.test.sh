@@ -122,7 +122,7 @@ fi
 
 # ─── presets DAG: the validator stays a light leaf (KTD-2) ─────────────────
 # lib/presets.py (U1, addressable-step-contents) reuses recipe_validate's
-# primitives + the adapter_ops leaf, but MUST NOT import dispatcher.py — that
+# primitives + the backend_ops leaf, but MUST NOT import dispatcher.py — that
 # module pulls in the ledger and the whole dispatch surface. Keeping the preset
 # validator off the heavy dispatch module is the KTD-2 boundary.
 # Existence assert (F13): the forbidden-edge check above is a NEGATIVE grep, so
@@ -138,7 +138,7 @@ fi
 
 it "presets.py does NOT import dispatcher (KTD-2 leaf boundary)"
 if loads_sibling "presets.py" "dispatcher"; then
-  fail "presets.py must not import dispatcher — the preset validator is a light leaf (KTD-2); import adapter_ops for VALID_ADAPTER_OPS instead"
+  fail "presets.py must not import dispatcher — the preset validator is a light leaf (KTD-2); import backend_ops for VALID_BACKEND_OPS instead"
 else
   pass
 fi
@@ -158,12 +158,25 @@ else
   pass
 fi
 
-it "adapter_ops.py imports NO sibling lib module (pure-stdlib leaf)"
-if grep -q "load_lib_module(" "$LIB/adapter_ops.py"; then
-  fail "adapter_ops.py must be a pure-stdlib leaf — it is the shared VALID_ADAPTER_OPS source of truth and must import no sibling"
+it "backend_ops.py imports NO sibling lib module (pure-stdlib leaf)"
+if grep -q "load_lib_module(" "$LIB/backend_ops.py"; then
+  fail "backend_ops.py must be a pure-stdlib leaf — it is the shared VALID_BACKEND_OPS source of truth and must import no sibling"
 else
   pass
 fi
+
+# ─── file-existence asserts for the U4-renamed backend modules (F13) ────────
+# The leaf/negative-grep checks above pass VACUOUSLY on a missing (mis-renamed)
+# file — a botched `adapter_ops`→`backend_ops` / `adapter-*`→`backend-*` rename
+# would go green by accident. These positive existence asserts make it go RED.
+for _mod in backend_ops.py backend-ce.py backend-native.py; do
+  it "lib/${_mod} exists (pinned module — guard against a vacuous negative-grep pass)"
+  if [ -f "$LIB/${_mod}" ]; then
+    pass
+  else
+    fail "lib/${_mod} is missing — the U4 backend rename did not land it"
+  fi
+done
 
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of ledger_mutators.py with a forbidden facade import added;

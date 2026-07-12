@@ -96,7 +96,7 @@ A1_BUILTIN = {
         {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
     ],
     "units": [
-        {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
+        {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}  # format-v1 key; flips in U6
     ],
 }
 
@@ -232,7 +232,7 @@ def unit_for(recipe_unit: dict, recipe: dict) -> dict:
     ``ledger.init_ledger`` expects). Merges recipe-side ``invokes`` metadata
     (``prompt_template`` etc.) into ``dispatch_context`` — RE-VALIDATING the
     path bound (the second enforcement point; the first is ``validate``). The
-    ``adapter_op`` stays in ``dispatch_context`` so the adapter reads it via the
+    ``adapter_op`` stays in ``dispatch_context`` so the backend reads it via the
     unit at dispatch.
     """
     inv = dict(recipe_unit.get("invokes") or {})

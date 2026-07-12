@@ -23,10 +23,10 @@ clear, operator-facing message that lists what was searched — never a tracebac
 
 DAG DISCIPLINE (KTD-2): this module reuses `recipe_validate`'s primitives
 (`_check_prompt_template` for path-bounding, `_validate_recipe_name` for the
-filename-safe name check) and imports `VALID_ADAPTER_OPS` from the pure-stdlib
-leaf `adapter_ops`. It MUST NOT import `dispatcher.py` — that module pulls in
+filename-safe name check) and imports `VALID_BACKEND_OPS` from the pure-stdlib
+leaf `backend_ops`. It MUST NOT import `dispatcher.py` — that module pulls in
 the ledger and the whole dispatch surface; the validator stays a light leaf.
-`recipe_validate` and `adapter_ops` are themselves DAG roots (no sibling
+`recipe_validate` and `backend_ops` are themselves DAG roots (no sibling
 imports), so this stays a shallow, cycle-free layer.
 
 VALIDATION IS HAND-ROLLED (no `jsonschema` — same install-anywhere constraint as
@@ -51,15 +51,15 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # Reused validation primitives (KTD-2). `recipe_validate` is the pure-stdlib
-# validation DAG root; `adapter_ops` is the pure-stdlib op-set leaf. Neither
+# validation DAG root; `backend_ops` is the pure-stdlib op-set leaf. Neither
 # imports a heavy sibling, so this module stays light.
 _recipe_validate = load_lib_module("recipe_validate")
-_adapter_ops = load_lib_module("adapter_ops")
+_backend_ops = load_lib_module("backend_ops")
 
 _check_prompt_template = _recipe_validate._check_prompt_template
 _validate_recipe_name = _recipe_validate._validate_recipe_name
 RecipeError = _recipe_validate.RecipeError
-VALID_ADAPTER_OPS = _adapter_ops.VALID_ADAPTER_OPS
+VALID_BACKEND_OPS = _backend_ops.VALID_BACKEND_OPS
 
 # The built-in seed directory: <auto_root>/presets (auto_root is lib/'s parent),
 # computed the same way recipe_validate._BUILTIN_DIR resolves <auto_root>/recipes.
@@ -72,7 +72,7 @@ _BUILTIN_DIR = os.path.join(os.path.dirname(_LIB_DIR), "presets")
 # preset-vs-container boundary), rather than a generic "unknown field".
 _KNOWN_TOPLEVEL = frozenset({"name", "version", "description", "invokes"})
 _FORBIDDEN_TOPLEVEL = frozenset({"verification", "phase", "depends_on"})
-_KNOWN_INVOKES_KEYS = frozenset({"adapter_op", "prompt_template"})
+_KNOWN_INVOKES_KEYS = frozenset({"adapter_op", "prompt_template"})  # "adapter_op": format-v1 key; flips in U6
 
 
 class PresetError(Exception):
@@ -139,7 +139,7 @@ def validate_preset(obj) -> tuple:
       - name is a non-empty, filename-safe string (reuses the recipe name guard)
       - version / description are non-empty strings
       - invokes is an object of {adapter_op, prompt_template?}
-      - adapter_op is required and ∈ VALID_ADAPTER_OPS (the shared leaf)
+      - adapter_op is required and ∈ VALID_BACKEND_OPS (the shared leaf)
       - prompt_template, when present, is path-bounded via `_check_prompt_template`
         (relative, no `..`, no leading `/`) — the SAME check recipes use
     """
@@ -190,13 +190,13 @@ def validate_preset(obj) -> tuple:
                         f"invokes: unknown field {ik!r}; known: "
                         f"{sorted(_KNOWN_INVOKES_KEYS)}"
                     )
-            op = inv.get("adapter_op")
+            op = inv.get("adapter_op")  # format-v1 key; flips in U6
             if not isinstance(op, str) or not op:
                 errors.append("invokes.adapter_op must be a non-empty string")
-            elif op not in VALID_ADAPTER_OPS:
+            elif op not in VALID_BACKEND_OPS:
                 errors.append(
                     f"invokes.adapter_op {op!r} not in the closed set "
-                    f"{sorted(VALID_ADAPTER_OPS)}"
+                    f"{sorted(VALID_BACKEND_OPS)}"
                 )
             if "prompt_template" in inv:
                 try:

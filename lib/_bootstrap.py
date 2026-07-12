@@ -333,7 +333,7 @@ def build_arm_intent(run_id, prompt, note, extra=None):
     Both auto.py (new run) and auto-resume.py (re-arm) emit an ``arm-tick``
     intent — "schedule the next tick" — with the same ``action``/``run``/
     ``prompt`` core and a trailing ``note``. auto.py carries extra keys
-    (``auto``/``adapter``/``plan``/``goal``) between ``prompt`` and ``note``;
+    (``auto``/``backend``/``plan``/``goal``) between ``prompt`` and ``note``;
     pass them via ``extra`` (an ordered dict) so the emitted key order stays
     byte-identical to the hand-built envelopes the stdout-contract tests assert.
     """
@@ -497,20 +497,20 @@ def coerce_confidence(confidence):
 
 
 def plan_step_sequencer(ledger, *, sequence):
-    """Pure plan-loop sequencer shared by both adapters (U10).
+    """Pure plan-loop sequencer shared by both backends (U10).
 
     Collapses the byte-identical ``_next_plan_step`` skeleton that lived in
-    ``adapter-ce.py`` and ``adapter-native.py``. The ONLY thing that differed
+    ``backend-ce.py`` and ``backend-native.py``. The ONLY thing that differed
     between the two was the transition ``sequence``; the coherence guard and the
     ``plan_step is None`` first-step logic were identical, so they live here once.
 
-    ``sequence`` is the per-adapter ordered plan steps EXCLUDING the terminal
+    ``sequence`` is the per-backend ordered plan steps EXCLUDING the terminal
     ``done`` — CE passes ``("plan", "deepen", "review_plan")`` and native passes
     ``("plan", "review_plan")`` (native has no deepen step). ``plan_step`` is a
     real validated ledger field (``ledger_core.PLAN_STEPS``) that the tick persists
-    via ``set_loop(plan_step=step)``; both adapters read it identically and this
+    via ``set_loop(plan_step=step)``; both backends read it identically and this
     sequencer keeps the ``None``-tolerance native already relied on. No IO — the
-    engine persists the returned step; the adapter never writes the ledger (§1).
+    engine persists the returned step; the backend never writes the ledger (§1).
 
     §4.1 coherence guard runs FIRST (livelock hazard): once a ``review_plan``
     round has closed the gaps (``gaps_open == 0``) the next call MUST return

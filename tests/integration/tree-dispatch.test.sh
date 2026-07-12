@@ -83,7 +83,7 @@ for i in range(1, n + 1):
     if threshold:
         u["stall_threshold_seconds"] = int(threshold)
     units.append(u)
-ledger.init_ledger(repo, run, adapter="ce", loop_phase="work", units=units)
+ledger.init_ledger(repo, run, backend="ce", loop_phase="work", units=units)
 PYEOF
 }
 

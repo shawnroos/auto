@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
-ledger.init_ledger(repo, "rF", adapter="ce",
+ledger.init_ledger(repo, "rF", backend="ce",
                    units=[{"id":"plan","phase":"plan","invokes":{"adapter_op":"next_plan_step"}}],
                    loop_phase="plan")
 PYEOF
