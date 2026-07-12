@@ -24,7 +24,7 @@ clear, operator-facing message that lists what was searched — never a tracebac
 DAG DISCIPLINE (KTD-2): this module reuses `recipe_validate`'s primitives
 (`_check_prompt_template` for path-bounding, `_validate_recipe_name` for the
 filename-safe name check) and imports `VALID_ADAPTER_OPS` from the pure-stdlib
-leaf `adapter_ops`. It MUST NOT import `orchestrator.py` — that module pulls in
+leaf `adapter_ops`. It MUST NOT import `dispatcher.py` — that module pulls in
 the ledger and the whole dispatch surface; the validator stays a light leaf.
 `recipe_validate` and `adapter_ops` are themselves DAG roots (no sibling
 imports), so this stays a shallow, cycle-free layer.

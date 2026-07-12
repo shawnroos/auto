@@ -6,13 +6,13 @@
 waves derived from the `depends_on` DAG, fan-out `do_unit` children nested under
 their emitter parent, and a substrate ROUTING DECISION. It is PURE and
 deterministic — it plans a topology, it never dispatches (`skills/auto-translate`
-wraps it; `lib/orchestrator.py::dispatch_batch` is the executor).
+wraps it; `lib/dispatcher.py::dispatch_batch` is the executor).
 
 Four steps (mirroring KTD6 / KTD6b):
 
   1. EXPAND emitter-produced units. Recipes like `recipes/a4.json` declare their
      paired builders in `expected_emit_outputs` (materialized at RUN time by a
-     phase-boundary emitter), NOT in `units[]`. `orchestrator._is_ready` treats an
+     phase-boundary emitter), NOT in `units[]`. `dispatcher._is_ready` treats an
      absent dependency as unsatisfied, so a raw frontier walk over a4 yields only
      `{plan}` and `compare` is never ready. We synthesize placeholder nodes for
      those declared ids FIRST so the dependents can become ready.
@@ -20,7 +20,7 @@ Four steps (mirroring KTD6 / KTD6b):
      expansion.
 
   2. FRONTIER WALK the (expanded) DAG, reusing the readiness logic in
-     `lib/orchestrator.py` (`_is_ready` / `_dependency_satisfied`). We drive that
+     `lib/dispatcher.py` (`_is_ready` / `_dependency_satisfied`). We drive that
      exact predicate over an in-memory unit list: place every ready unit, then
      flip it `pending → verdict-returned` (a satisfied dependency in the
      contract's precise sense) so the next frontier unblocks its dependents. Each
@@ -50,7 +50,7 @@ import os
 import sys
 
 # Load sibling lib modules via the ONE shared loader (see lib/_bootstrap). We
-# REUSE orchestrator's readiness frontier (KTD6 — no second copy of the predicate).
+# REUSE dispatcher's readiness frontier (KTD6 — no second copy of the predicate).
 # The preview mirrors topology-render's card idiom by hand (KTD-10 — one renderer
 # family) rather than importing it, so no topology-render load is needed here.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,15 +58,15 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
-orchestrator = load_lib_module("orchestrator")
+dispatcher = load_lib_module("dispatcher")
 
 # The readiness frontier we reuse verbatim (KTD6): a unit is ready iff it is
 # `pending`, every direct dependency is satisfied, and no transitive ancestor is
 # stalled. We drive it over an in-memory unit list, flipping placed units to
 # `verdict-returned` so the exact same predicate advances wave by wave.
-_is_ready = orchestrator._is_ready
-_units_by_id = orchestrator._units_by_id
-_unit_adapter_op = orchestrator._unit_adapter_op
+_is_ready = dispatcher._is_ready
+_units_by_id = dispatcher._units_by_id
+_unit_adapter_op = dispatcher._unit_adapter_op
 
 # The per-unit adapter ops that mark a loop as a long-lived ce-work / review
 # dispatch — the shape that MUST run on the native subagent-tree (each unit is a
@@ -179,13 +179,13 @@ def _expand_emitter_units(recipe: dict):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Step 2 — frontier walk (reusing orchestrator's readiness predicate).
+# Step 2 — frontier walk (reusing dispatcher's readiness predicate).
 
 
 def _frontier_waves(units: list, cap: int):
     """Ordered parallel waves over the expanded DAG, bounded to ``cap`` per wave.
 
-    Drives `orchestrator._is_ready` over the in-memory `units`: each iteration
+    Drives `dispatcher._is_ready` over the in-memory `units`: each iteration
     collects every ready unit (declaration order → deterministic), takes up to
     ``cap`` of them as one wave, and flips those `pending → verdict-returned` so
     the SAME predicate unblocks their dependents next iteration. The over-cap

@@ -39,7 +39,7 @@
 #      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
 #      outcome (the discriminator).
 #  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
-#      `dispatched` past its stall_threshold (the orchestrator rescue-swallow P3
+#      `dispatched` past its stall_threshold (the dispatcher rescue-swallow P3
 #      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
 #      stays dispatched.
 
@@ -618,8 +618,8 @@ else
   fail "buggy default outcome = $buggy_out (expected 0,True,done — the regression this null-path guards)"
 fi
 
-# ─── Scenario 10: phantom-dispatch self-heal (orchestrator P3 bound) ──────────
-# orchestrator.dispatch_batch's launch guard (Bug #8) marks a unit stalled if
+# ─── Scenario 10: phantom-dispatch self-heal (dispatcher P3 bound) ──────────
+# dispatcher.dispatch_batch's launch guard (Bug #8) marks a unit stalled if
 # launch_fn raises. If the rescue transition (dispatched->stalled) ALSO raises,
 # the broadened `except Exception` swallows it and the unit stays `dispatched`
 # with no agent — a phantom. The CLAIM bounding that P3 is that the phantom
@@ -637,7 +637,7 @@ ledger_init "phantom-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
   ce work >/dev/null 2>&1
 # Baseline: the phantom IS dispatched before the reaper runs (the swallowed-rescue
-# state the orchestrator P3 leaves behind).
+# state the dispatcher P3 leaves behind).
 st_before="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
 phantom_out="$("$PY" - "$REPO" "phantom-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime

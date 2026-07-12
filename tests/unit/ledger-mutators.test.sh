@@ -499,7 +499,7 @@ assert_eq \
 # raising (a raise would materialize zero work units — also a stall). Valid
 # edges, including forward-refs to sibling enumerated units, are preserved.
 #
-# These assert the CLEANED edges + marker; orchestrator.test.sh asserts the
+# These assert the CLEANED edges + marker; dispatcher.test.sh asserts the
 # sanitized shape actually becomes ready (the real anti-hang claim).
 enum_driver() {
   "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'

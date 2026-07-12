@@ -2,7 +2,7 @@
 """auto one-shot preset helpers (addressable-step-contents).
 
 THIN, pure/testable pieces the `auto-preset` skill calls to run a preset
-one-shot (KTD-3 — the skill is the orchestrator; this module holds no control
+one-shot (KTD-3 — the skill is the dispatcher; this module holds no control
 flow, no tick, no `/goal`):
 
   1. ``validate_oneshot_criteria(criteria)`` (U3) — validate a RATIFIED criteria
@@ -111,7 +111,7 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
 
     DRIVER-SIDE ONLY. The one-shot is driver-orchestrated (KTD-3), so the load-
     bearing site for "a preset's tuning reaches the dispatched agent" is the
-    DRIVER launch, NOT an adapter edit — ``orchestrator.dispatch_batch`` never
+    DRIVER launch, NOT an adapter edit — ``dispatcher.dispatch_batch`` never
     consults the adapter (driver-reference §7). This helper is what the
     ``auto-preset`` skill calls to assemble that launch:
 

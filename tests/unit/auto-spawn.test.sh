@@ -19,7 +19,7 @@
 #      shape from cmux-socket.sh::auto::spawn_resume.
 #
 # The cmux binary is stubbed for these scenarios — a fake `cmux` on PATH
-# records args to a file, so we exercise the orchestrator without actually
+# records args to a file, so we exercise the dispatcher without actually
 # spawning workspaces.
 
 set -uo pipefail

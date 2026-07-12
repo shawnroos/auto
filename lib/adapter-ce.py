@@ -131,7 +131,7 @@ class Adapter:
 
         U14 (KTD-1): each enumerated item must carry a `depends_on` list naming
         the sibling unit ids it depends on (empty when independent) so the
-        readiness engine (`orchestrator.ready_units`) can order the fan-out. The
+        readiness engine (`dispatcher.ready_units`) can order the fan-out. The
         op is prepare-only, so the invocation string is the ONLY place the model
         is told to originate those edges — without it, passthrough carries []."""
         edge_clause = (
@@ -189,7 +189,7 @@ class Adapter:
     # ── work-loop ops ──────────────────────────────────────────────────────
     def do_unit(self, unit):
         """PREPARE /ce-work for a unit. Returns an opaque dispatch_handle the
-        orchestrator (U10) uses to correlate the in-flight agent; U10 defines
+        dispatcher (U10) uses to correlate the in-flight agent; U10 defines
         the correlation contract over this shape."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
         return {

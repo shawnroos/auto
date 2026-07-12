@@ -2,7 +2,7 @@
 
 > **Status: LOCKED day-zero contract.** This file is the source-of-truth
 > specification for the auto per-unit ledger. U4 (tick), U6a/U6b
-> (adapters), U7 (hooks), and U10 (orchestrator) build against THIS document.
+> (adapters), U7 (hooks), and U10 (dispatcher) build against THIS document.
 > `lib/ledger.py` is the canonical implementation; this spec is authoritative
 > if the two ever disagree. Do not change the JSON shape, the invariants, the
 > state grammar, or the module constants without re-locking with all consumers.
@@ -138,16 +138,16 @@ recompute it.
 | `id` | string | unit identifier, unique within the run (e.g. `"U1"`) |
 | `state` | enum | `"pending"` \| `"dispatched"` \| `"verdict-returned"` \| `"fixed"` \| `"stalled"` \| `"terminal-skip"` — see §3 grammar |
 | `depends_on` | string[] | unit ids this unit depends on (for fan-out gating; resolved by U10) |
-| `dispatched_at` | `<iso>`/null | when the orchestrator marked it `dispatched`; null until then |
+| `dispatched_at` | `<iso>`/null | when the dispatcher marked it `dispatched`; null until then |
 | `verdict_at` | `<iso>`/null | timestamp of the **latest** verdict self-write (overwrites on re-verdict — latest-only semantics; null until first verdict) |
 | `stall_threshold_seconds` | int | per-unit timeout; adapter-set, defaults to `DEFAULT_STALL_THRESHOLD_SECONDS` (600). After this many seconds `dispatched` with no verdict, U4's tick may mark it `stalled` |
 | `last_error` | object/null | `{ "call": str, "message": str, "at": <iso> }` if an adapter raised, a launch failed, or a stall recorded an error; `null` otherwise. Set when `dispatched → stalled` via a raise (vs a plain timeout, which leaves it `null`) OR via a launch failure (`call == "launch"`, Bug #8). Cleared on `stalled → pending` (retry) AND on a recovered late verdict (`stalled → verdict-returned`, Bug #7) |
-| `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the orchestrator on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
+| `attempt` | int | **dispatch generation counter** (Bug #6 attempt-identity). Default `0`; **additive / backward-compatible** — an old ledger with no `attempt` field reads as `0`. INCREMENTED by the dispatcher on each `pending → dispatched` (in the same atomic snapshot as the transition). The background agent launched for attempt N carries N into `record_verdict(... attempt=N)`; a verdict whose `attempt` is **older** than the unit's current `attempt` is REJECTED (`StaleVerdict`) — a stale verdict from a SUPERSEDED attempt (e.g. a slow agent that was retried-past). `attempt=None` skips the check (back-compat); equal-attempt is accepted (re-review / recovery) |
 | `phase` | string | **(v0.2.0, additive)** the unit's phase. When absent, defaults to the run's start phase if that is a plan phase, else `"work"` — matching v0.1.x (plan-phase runs have no work units yet; any pre-declared unit is a work unit). Recipes set it explicitly. |
 | `plan_step` | enum/null | **(v0.2.0, additive)** per-unit plan-step for N>1 parallel plan-loops (R11). `null` default. A1's single plan-loop keeps using the **top-level** `plan_step` scalar (so A1's first-tick ledger stays byte-identical to v0.1.x); this per-unit field is populated only when a recipe declares multiple plan-phase units. |
 | `gaps_open` | int/null | **(v0.2.0, additive)** per-unit open-gap count for N>1 plan-loops. `null` until a review feeds one back. Same A1-uses-the-scalar rule as `plan_step`. |
 | `dispatch_context` | object | **(v0.2.0, additive)** `{}` default. Recipe-side metadata merged from the recipe unit's `invokes` (e.g. `prompt_template`, `bias`) — after path-bounding validation — plus engine-written keys such as `enumerated_units` (the plan unit's `enumerate_plan_units` output, persisted at `plan-done` so emitters read it without re-calling the adapter). The adapter reads it via its existing `unit` parameter. **(v0.3.0, additive sub-keys on a gate unit's `dispatch_context`):** `decision` ∈ `iteration.DECISIONS` (`"advance" \| "iterate" \| "exit"`) — the gate's verdict-time decision, written by `set_verdict_decision` (replaces the v0.2.x `winner_unit_id` pattern: the gate's outcome lives on `dispatch_context`, never on `findings[]` which `record_verdict` normalizes to `{severity, note}` only; readers MUST go through `lib/iteration.py::read_decision`, the AST lint enforces); `decision_payload` (optional dict) — caller-supplied data accompanying an `iterate` decision (e.g. `emit_count` for `iterate_template`); `bound_override` (object) — `{ "bound": "max_attempts"\|"max_wall_seconds", "original_decision": <enum>, "at": <iso> }`, written by `set_bound_override` when the engine forced `iterate → exit` because the bound was breached. Both `decision`/`decision_payload` are cleared by `reset_for_iteration` so a fresh iteration doesn't read the stale decision (round-3 P0-R3-1). **(v0.7.0, additive sub-key — U4):** `dispatch_context.judge_verdicts` (optional `{criterion_id: "pass"\|"fail"}`) — driver-supplied verdicts for the `advisor_judge`/`model_judge`/`human` criteria, consumed by the gate-resolution pipeline (full mechanism on the `verification` row below). The criteria *themselves* live on the unit's top-level `verification` field, NOT here — `judge_verdicts` is the only verification-related key that is genuinely a `dispatch_context` sub-key. |
-| `last_advanced_at` | `<iso>`/null | **(v0.2.0, additive)** `null` default (sorts oldest → picked first). The round-robin tiebreaker for serialized N>1 plan-loop advance: `orchestrator.pick_next_plan_unit_to_advance` picks the ready plan unit with the oldest `last_advanced_at`, ties broken by `units[]` declaration order. State lives here so resume continues round-robin correctly. |
+| `last_advanced_at` | `<iso>`/null | **(v0.2.0, additive)** `null` default (sorts oldest → picked first). The round-robin tiebreaker for serialized N>1 plan-loop advance: `dispatcher.pick_next_plan_unit_to_advance` picks the ready plan unit with the oldest `last_advanced_at`, ties broken by `units[]` declaration order. State lives here so resume continues round-robin correctly. |
 | `findings` | array | LATEST review verdict's findings; each `{ "severity": "blocker"\|"major"\|"minor", "note": str }`. See §4 findings semantics |
 | `verification` | array (optional) | **(v0.7.0, additive — U4)** Present **only** on a recipe gate unit that declared typed criteria. A **top-level unit key** — a *sibling* of `dispatch_context`, not a sub-key of it (the `judge_verdicts` verdicts live under `dispatch_context`; the criteria live here). Each entry is a typed criterion `{ "id", "type", … }` where `type` ∈ `programmatic` \| `model_judge` \| `advisor_judge` \| `human` (shape per `recipe-format.md` / `verification-contract.md`). `_normalize_unit` (`lib/ledger_core.py`) preserves it through normalization **conditionally** — appended to the rebuilt unit only when the source unit carries it, so a legacy/non-gate unit stays shapeless (no `verification` key — **not** `[]`/`null`, which would change every ledger's on-disk shape). The copy is **shallow** (`list(...)`, same as `findings` / `dispatch_context`): the list is fresh but the criterion dicts are shared with the source — safe because criteria are read-only downstream (`resolve_gate_verification` never mutates them). `lib/iteration.py::resolve_gate_verification` runs the `programmatic` criteria in-process and folds them with `dispatch_context.judge_verdicts` into an advance/iterate **signal** (keyed `signal`, not `decision`, so the literal stays centralized — see `iteration-ast-lint`); the caller commits a non-None signal as `decision` via `set_verdict_decision`. |
 
@@ -168,7 +168,7 @@ A unit's `state` may move ONLY along these edges. `lib/ledger.py::transition`
 rejects any transition not in this table (it raises; the ledger is not written).
 
 ```
-pending          → dispatched          (ORCHESTRATOR via dispatch_batch — the ONLY entry transition; non-pending units are rejected)
+pending          → dispatched          (DISPATCHER via dispatch_batch — the ONLY entry transition; non-pending units are rejected)
 dispatched       → verdict-returned    (the BACKGROUND AGENT self-writes its verdict + findings atomically)
 dispatched       → stalled             (past stall_threshold_seconds with no verdict, OR an adapter raised mid-dispatch)
 verdict-returned → fixed               (a TICK applies a fix for this unit's findings — fixed is NOT terminal-with-closure; see §4)
@@ -249,7 +249,7 @@ in the pre-iterate state).
 `verdict-returned → dispatched`, `terminal-skip → *`, any self-edge.
 
 **Who writes which transition** (no two writers contend for the same edge):
-- **Orchestrator** (U10) owns `pending → dispatched`.
+- **Dispatcher** (U10) owns `pending → dispatched`.
 - **Background agent** (U10) owns `dispatched → verdict-returned` (self-write; survives the driving session's death) and is the **only writer of `findings[]`**.
 - **Tick** (U4) owns `verdict-returned → fixed`, `fixed → pending`, `verdict-returned → pending`, `dispatched → stalled`, and all `loop_phase` phase transitions.
 - **Operator** (U7, via `/auto-resume`) owns the `stalled →` recoveries.
@@ -337,7 +337,7 @@ so consumers (and the I-2 test) can call it directly.
 ### I-1 — Atomic predicate freshness (generalized to ALL writers)
 
 EVERY ledger write that mutates unit state or findings — whether by a tick (U4),
-a background agent's verdict self-write (U10), or the orchestrator's
+a background agent's verdict self-write (U10), or the dispatcher's
 `dispatch_batch` (U10) — MUST recompute `exit_predicate_result` (including
 `all_units_terminal`) from the SAME in-memory state and persist both in ONE
 atomic `mkstemp + os.rename` under flock.

@@ -23,7 +23,7 @@ common operator trap (multiple field bugs, two separate agents).
 - **YOU EXECUTE.** When the INTENT names a `plan_step` (`plan`,
   `deepen`, `review_plan`), YOU run the corresponding invocation
   (`/ce-plan`, `/ce-doc-review`, …). When work-loop units exist, YOU
-  drive `orchestrator.dispatch_batch`. The tick does NOT dispatch
+  drive `dispatcher.dispatch_batch`. The tick does NOT dispatch
   agents, does NOT run `/ce-plan`, does NOT write verdicts.
 
 **Re-ticking without running the prepared invocation is a no-op.**
@@ -46,7 +46,7 @@ background unit-agent, etc.
 ### Source of truth is the disk ledger
 
 Every decision reads the ledger at `<repo>/.claude/auto/<run>.json`
-(via `lib/ledger.py` / `lib/orchestrator.py`). A `ScheduleWakeup`-fired
+(via `lib/ledger.py` / `lib/dispatcher.py`). A `ScheduleWakeup`-fired
 tick re-injects into the same conversation, so context grows across
 ticks and is **advisory only** — the ledger is the durable truth. If
 context runs out, the routine continuation is a normal `/auto-resume`
@@ -59,7 +59,7 @@ context runs out, the routine continuation is a normal `/auto-resume`
   dict on stdout. The tick CANNOT call `ScheduleWakeup` (model tool,
   not CLI). YOU read the intent and, when `action == "rearm"`, issue
   the `ScheduleWakeup(delay, prompt)` call.
-- **`lib/orchestrator.py`** — `ready_units`, `dispatch_batch`,
+- **`lib/dispatcher.py`** — `ready_units`, `dispatch_batch`,
   `converge`. Surfaces ready-and-independent units; YOU decide the
   cap. Never hardcodes concurrency.
 - **`lib/ledger.py`** — disk-persisted per-unit ledger. Read
@@ -247,12 +247,12 @@ polling antipattern the Agent tool explicitly forbids.
 
 ### Per-wave loop
 
-1. `units = orchestrator.ready_units(repo, run)` — units dispatchable
+1. `units = dispatcher.ready_units(repo, run)` — units dispatchable
    RIGHT NOW (pending, dependencies satisfied, no stalled ancestor).
 2. **Decide a cap for THIS wave.** Live per-wave decision — resize
    between waves under machine pressure (16 when idle, 3 when
    grinding, 1 to serialize a probe). No fixed constant.
-3. `orchestrator.dispatch_batch(repo, run, units, cap, launch_fn=...)`
+3. `dispatcher.dispatch_batch(repo, run, units, cap, launch_fn=...)`
    — marks up to `cap` units `pending → dispatched` and launches each
    background agent. **The agent self-writes its own verdict**
    (`ledger.record_verdict`) atomically on completion — durable the
@@ -271,7 +271,7 @@ polling antipattern the Agent tool explicitly forbids.
    can only reap if a tick actually fires while work is in flight. If a
    verdict lands first, the heartbeat tick finds nothing past-threshold
    and is a self-cancelling no-op.
-5. **On re-invocation: `orchestrator.converge(repo, run)`** — reads
+5. **On re-invocation: `dispatcher.converge(repo, run)`** — reads
    landed verdicts off disk. Partial-completion-safe: a single verdict
    landing is enough to re-enter the wave. A resumed session reads
    completed verdicts straight off the ledger and does NOT
@@ -304,7 +304,7 @@ the driver applies this per stalled node:
    flip set `reap_pending=True` to record a kill was owed; clearing it
    is the driver's confirmation it issued one.
 3. **Retry or escalate on the `attempt` budget.** If
-   `orchestrator.should_escalate(<unit>)` is False (`attempt < 2`) →
+   `dispatcher.should_escalate(<unit>)` is False (`attempt < 2`) →
    `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
    clears `last_error`) to re-dispatch. If True (`attempt ≥ 2`) →
    `bash lib/auto-resume.py pause <run> "<unit> wedged after 2
@@ -333,7 +333,7 @@ Python owns only the marker.
 
 ### Work-unit `adapter_op` → invocation (the model-facing dispatch label)
 
-`orchestrator.dispatch_batch` is adapter-agnostic: it flips the unit
+`dispatcher.dispatch_batch` is adapter-agnostic: it flips the unit
 `pending → dispatched` and calls the driver-injected `launch_fn`; it
 NEVER consults the adapter. So the DRIVER must map each work unit's
 `invokes.adapter_op` to the ce skill it launches in the background
@@ -1082,10 +1082,10 @@ self-writes its verdict. This section is the theory; the operational steps live 
 ### `launch_fn` is and REMAINS a no-op — spawning is model-side
 
 This is the load-bearing, counterintuitive fact. Spawning a Claude sub-agent is a
-MODEL-side `Agent` tool call. `orchestrator.dispatch_batch` runs inside a
+MODEL-side `Agent` tool call. `dispatcher.dispatch_batch` runs inside a
 `python3` subprocess and has NO access to that tool. So its injected
-`launch_fn` **stays the no-op recorder** — `orchestrator._default_launch_fn`
-returns `None` (`lib/orchestrator.py`), and the `orchestrator.py dispatch` CLI
+`launch_fn` **stays the no-op recorder** — `dispatcher._default_launch_fn`
+returns `None` (`lib/dispatcher.py`), and the `dispatcher.py dispatch` CLI
 path uses that default. There is deliberately no "real launcher" wired into
 `dispatch_batch`; the earlier interface note about a driver-injected launcher is
 superseded — U5 wires no Python launcher, because none can spawn an `Agent`.
@@ -1097,7 +1097,7 @@ existing work-loop fan-out spawn (§7) and the model-side reap (§7 stalled-node
 policy) already operate. This is the standing "the tick PREPARES, YOU EXECUTE"
 contract (§1) applied to dispatch: `dispatch_batch` PREPARES (transitions the
 ledger); the boss EXECUTES (spawns the sub-agents). No new code lands on the
-dispatch path; `lib/orchestrator.py`, `lib/tick.py`, and the ledger family are
+dispatch path; `lib/dispatcher.py`, `lib/tick.py`, and the ledger family are
 untouched by U5.
 
 ### Convergence reads the LEDGER, never sub-agent return text
@@ -1106,7 +1106,7 @@ Each dispatched sub-agent self-writes its verdict via
 `bash lib/ledger.py record-verdict <run> <unit> '<findings>' <attempt>` — the I-1
 atomic write chokepoint — on completion. The verdict is durable the moment that
 (separate) process writes it, independent of whether the boss turn that
-dispatched it is still alive. `orchestrator.converge` is a pure READER (§7): a
+dispatched it is still alive. `dispatcher.converge` is a pure READER (§7): a
 later pulse reads the landed verdict straight off disk. So a verdict lands even
 though the dispatching turn has exited — the durability property the whole tree
 runtime rests on, and the reason the boss context stays flat (it never reads

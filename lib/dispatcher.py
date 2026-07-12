@@ -26,7 +26,7 @@ atomically, via ``ledger.record_verdict`` (the I-1 write chokepoint). The
 verdict is durable the moment the agent finishes — independent of whether the
 driving session is still alive. So ``converge`` never loses a verdict to a
 session death: a resumed session reads completed verdicts straight off the
-ledger and does NOT re-dispatch them. The orchestrator's in-flight batch state
+ledger and does NOT re-dispatch them. The dispatcher's in-flight batch state
 (which cap it chose, which handles it holds) is DISPOSABLE; only the durable
 per-unit ledger state matters across a resume.
 
@@ -115,8 +115,8 @@ _now_iso = ledger.now_iso
 # Errors.
 
 
-class OrchestratorError(Exception):
-    """Base class for orchestrator errors."""
+class DispatcherError(Exception):
+    """Base class for dispatcher errors."""
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -374,7 +374,7 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
     guard, the pre-filter is just to avoid a pointless write attempt.
     """
     if cap is None or int(cap) < 0:
-        raise OrchestratorError(f"cap must be a non-negative int, got {cap!r}")
+        raise DispatcherError(f"cap must be a non-negative int, got {cap!r}")
     cap = int(cap)
     if launch_fn is None:
         launch_fn = _default_launch_fn
@@ -536,14 +536,14 @@ def converge(repo_root, run_id):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# CLI (thin; lib/orchestrator.sh routes through this). Positional argv only;
+# CLI (thin; lib/dispatcher.sh routes through this). Positional argv only;
 # never string-interpolated into a shell ($ARGUMENTS-safe — the $-logic lives
 # in the .sh shim, never in a command .md body).
 
 
 def _cli(argv):
     if not argv:
-        sys.stderr.write("usage: orchestrator.py <subcommand> ...\n")
+        sys.stderr.write("usage: dispatcher.py <subcommand> ...\n")
         return 2
     cmd = argv[0]
     try:
@@ -566,13 +566,13 @@ def _cli(argv):
             json.dump(converge(repo, run), sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
-        sys.stderr.write(f"orchestrator.py: unknown subcommand {cmd!r}\n")
+        sys.stderr.write(f"dispatcher.py: unknown subcommand {cmd!r}\n")
         return 2
-    except (OrchestratorError, LedgerError) as e:
-        sys.stderr.write(f"orchestrator.py: {e}\n")
+    except (DispatcherError, LedgerError) as e:
+        sys.stderr.write(f"dispatcher.py: {e}\n")
         return 1
     except (IndexError, ValueError) as e:
-        sys.stderr.write(f"orchestrator.py: bad arguments: {e}\n")
+        sys.stderr.write(f"dispatcher.py: bad arguments: {e}\n")
         return 2
 
 

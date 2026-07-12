@@ -4,11 +4,11 @@
 # WHY THIS TEST EXISTS (plan RISK-10 / KTD-1):
 # U5 pushes the loop's context-heavy phase work into a sub-agent tree. The
 # load-bearing (and counterintuitive) mechanism: spawning a Claude sub-agent is
-# a MODEL-side `Agent` tool call. `orchestrator.dispatch_batch` runs inside a
+# a MODEL-side `Agent` tool call. `dispatcher.dispatch_batch` runs inside a
 # `python3` subprocess with NO access to that tool — its default `launch_fn` is a
-# literal no-op (`orchestrator._default_launch_fn` returns None). So the BOSS
+# literal no-op (`dispatcher._default_launch_fn` returns None). So the BOSS
 # (a model session) issues the `Agent` spawns itself, in-turn; `dispatch_batch`
-# performs ONLY the `pending -> dispatched` ledger transition. `lib/orchestrator.py`
+# performs ONLY the `pending -> dispatched` ledger transition. `lib/dispatcher.py`
 # is unchanged by U5.
 #
 # This test cannot spawn a real Claude Agent, so it proves the SEAM the runtime
@@ -100,7 +100,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator")
+orch = load("dispatcher")
 ledger = load("ledger")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 
@@ -146,7 +146,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator"); ledger = load("ledger")
+orch = load("dispatcher"); ledger = load("ledger")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 before = ledger.read_ledger(repo, run)["units"][0].get("attempt", 0)
 orch.dispatch_batch(repo, run, ["u1"], cap=1)
@@ -174,13 +174,13 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator")
+orch = load("dispatcher")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)
 PYEOF
 
 it "durability control: BEFORE the sub-agent writes, converge shows the unit in_flight (not completed)"
-res_before="$("$PY" "$AUTO_ROOT/lib/orchestrator.py" converge "$CLAUDE_AUTO_REPO" C 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print("in_flight=%s completed=%s" % (d["in_flight"], d["completed"]))')"
+res_before="$("$PY" "$AUTO_ROOT/lib/dispatcher.py" converge "$CLAUDE_AUTO_REPO" C 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print("in_flight=%s completed=%s" % (d["in_flight"], d["completed"]))')"
 assert_eq "in_flight=['u1'] completed=[]" "$res_before"
 
 it "durability: a verdict self-written by a SEPARATE process converges on a later read (boss already exited)"
@@ -188,7 +188,7 @@ it "durability: a verdict self-written by a SEPARATE process converges on a late
 "$PY" "$AUTO_ROOT/lib/ledger.py" record-verdict C u1 '[]' 1 >/dev/null 2>&1
 vrc=$?
 # Process 3: a fresh converge reads the durable verdict off disk.
-res_after="$("$PY" "$AUTO_ROOT/lib/orchestrator.py" converge "$CLAUDE_AUTO_REPO" C 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print("rc=%s in_flight=%s completed=%s" % ("'"$vrc"'", d["in_flight"], d["completed"]))')"
+res_after="$("$PY" "$AUTO_ROOT/lib/dispatcher.py" converge "$CLAUDE_AUTO_REPO" C 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print("rc=%s in_flight=%s completed=%s" % ("'"$vrc"'", d["in_flight"], d["completed"]))')"
 assert_eq "rc=0 in_flight=[] completed=['u1']" "$res_after"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator")
+orch = load("dispatcher")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)  # attempt -> 1
 PYEOF
@@ -238,7 +238,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator"); ledger = load("ledger")
+orch = load("dispatcher"); ledger = load("ledger")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 def launch_fn(uid, attempt):
     if uid == "u2":
@@ -273,7 +273,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, p)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
-orch = load("orchestrator"); ledger = load("ledger")
+orch = load("dispatcher"); ledger = load("ledger")
 ta = load("tick_advance")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)  # dispatched_at = now

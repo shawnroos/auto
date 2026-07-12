@@ -25,7 +25,7 @@ ACTIVE-RUN POLICY:
     Blocking a manual-driver run would self-conflict with the engine's own
     seam-stop signal. (Brief/plan stated the simpler "phase != done AND !met"
     rule, which conflicts with the seam; this carve-out resolves it — raised as a
-    gap for the orchestrator.)
+    gap for the dispatcher.)
 
 LOOP-SAFETY:
     Claude Code re-fires Stop after a block with stop_hook_active == true. We

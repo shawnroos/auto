@@ -24,7 +24,7 @@ reports the result. (R9, R10, R11.)
 
 It sits DOWNSTREAM of loop design: hand it a recipe that `auto-design` /
 `auto-author-recipe` already wrote (or a built-in like `a2` / `a4`). It composes
-with the dependency engine (`lib/orchestrator.py::ready_units` / `dispatch_batch`)
+with the dependency engine (`lib/dispatcher.py::ready_units` / `dispatch_batch`)
 and the two-seam `do_unit` split rather than replacing them — the same readiness
 frontier drives both the preview here and the real run.
 
@@ -32,7 +32,7 @@ frontier drives both the preview here and the real run.
 
 - **Parallelism is implicit in the DAG — no wave field.** Units sharing a phase
   with independent `depends_on` run concurrently; a multi-dep unit is a fan-in.
-  The derivation reuses `orchestrator._is_ready` / `_dependency_satisfied` to walk
+  The derivation reuses `dispatcher._is_ready` / `_dependency_satisfied` to walk
   waves — it never invents a second parallelism model. (KTD6.)
 - **The fan-out `cap` bounds each wave.** A wave wider than `cap` spills its excess
   to the next wave, exactly as `dispatch_batch` leaves over-cap units pending for a
@@ -102,7 +102,7 @@ rendered over the DERIVED waves rather than the raw recipe.
 Report the routing decision and what it means:
 
 - **`subagent-tree`** — the default and the **only executable** target this run
-  (`lib/orchestrator.py::dispatch_batch`). A loop with per-unit ce-work/`review`
+  (`lib/dispatcher.py::dispatch_batch`). A loop with per-unit ce-work/`review`
   dispatch or long-lived verdicts routes here.
 - **`workflow-script`** — an **inert routing label** for a self-contained bounded
   parallel-fan-in loop (single-phase, no `do_unit`/`review` op, an engine-enforced
@@ -136,7 +136,7 @@ executes on the native subagent-tree — the label is a forward-looking annotati
 ## Invariants
 
 - **Reuse the frontier, don't re-derive it.** Waves come from
-  `orchestrator._is_ready`, bounded by `cap` — never a second parallelism model.
+  `dispatcher._is_ready`, bounded by `cap` — never a second parallelism model.
 - **Expand emitter-produced units before the walk**, or a recipe whose builders
   live in `expected_emit_outputs` (a4) yields only `{plan}` and its dependents
   never become ready.

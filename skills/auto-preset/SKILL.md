@@ -5,7 +5,7 @@ description: >
   addressable step presets. Use when the operator wants to fire a single tuned
   step (a tuned review, a scoped build) standalone: "run <preset> against
   <target>", "one-shot the tuned-review on this diff", "fire scoped-build on
-  <target>". This skill IS the orchestrator (no tick, no /goal, no re-arm): it
+  <target>". This skill IS the dispatcher (no tick, no /goal, no re-arm): it
   loads the preset, PROPOSES context-fit verification the operator accepts or
   edits, launches the preset's op ONCE as an awaited sub-agent honoring its
   prompt_template, resolves every criterion inline, folds the ratified criteria
@@ -13,7 +13,7 @@ description: >
   ONE target — a multi-step plan-then-build is a flow (deferred), not a preset.
 ---
 
-# auto-preset (the one-shot preset orchestrator)
+# auto-preset (the one-shot preset dispatcher)
 
 A **preset** is the pure payload of a step — one `adapter_op` invocation plus an
 optional tuning `prompt_template`, promoted to a first-class named object
@@ -99,7 +99,7 @@ verdict; there is no persisted unit.
 ### 3. Launch the preset's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
 Build the launch descriptor — the DRIVER folds the preset's tuning in (the
-orchestrator never consults the adapter, driver-reference §7):
+dispatcher never consults the adapter, driver-reference §7):
 
 ```
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" launch "<preset-name>" "$PWD"

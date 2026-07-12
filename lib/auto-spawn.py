@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""auto v0.4.0 U2: multi-plan fanout orchestrator.
+"""auto v0.4.0 U2: multi-plan fanout dispatcher.
 
 Given a hypothesis envelope's ``multi_plan.paths`` (the v0.4.0 rename of
 v0.2.x's ``ambiguous-plans``), this module:
@@ -75,7 +75,7 @@ _DEFAULT_PROVISIONAL_TTL = 600  # 10 minutes
 
 
 class SpawnError(Exception):
-    """Base for fanout-orchestrator errors."""
+    """Base for fanout-dispatcher errors."""
 
 
 class PortPoolExhausted(SpawnError):
@@ -183,7 +183,7 @@ def _scan_in_use_ports(shared: str):
     cleanup; no separate GC pass needed.
 
     Malformed sidecars are skipped (parity with the Stop hook's tolerance
-    of bad ledgers — never let one corrupt file break the orchestrator).
+    of bad ledgers — never let one corrupt file break the dispatcher).
     """
     in_use = set()
     swept = []
@@ -296,7 +296,7 @@ def _git_worktree_add(host_repo: str, worktree: str, branch: str):
     """Run `git worktree add <worktree> -b <branch>` from the host repo.
 
     Raises WorktreeAddFailed on non-zero exit. Caller is responsible for
-    teardown (the orchestrator's rollback path).
+    teardown (the dispatcher's rollback path).
     """
     result = subprocess.run(
         ["git", "-C", host_repo, "worktree", "add", worktree, "-b", branch],

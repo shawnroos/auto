@@ -57,7 +57,7 @@ observable — every advance is one named op the ledger can record.
 | `deepen(plan)` | → `plan` (improved, or unchanged = no-op) | tick (U4) | one round of plan deepening |
 | `review_plan(plan)` | → `gap_set` | tick (U4) | one plan-review pass; returns the open gaps |
 | `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | tick (U4) | **the adapter owns plan-step sequencing** — the engine never picks the next plan step |
-| `do_unit(unit)` | → `dispatch_handle` | orchestrator (U10) | dispatch one work-loop unit for execution |
+| `do_unit(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
 | `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
 | `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | tick (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe emitters read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition emitter (U5b) shapes it into ledger units. |
 
@@ -79,9 +79,9 @@ ops**. The work-loop ops are invoked by different actors, deliberately:
   (U4) during the plan-loop. Each tick asks `next_plan_step(ledger)` which step is
   next, then calls that one step. The tick does NOT hardcode the plan→deepen→review
   order; the adapter does (see §4).
-- **`do_unit`** — invoked by the **orchestrator** (U10), NOT the tick. The tick
-  never dispatches work. The orchestrator decides batch size and calls `do_unit`
-  for each unit in a wave; `do_unit` returns a dispatch handle the orchestrator
+- **`do_unit`** — invoked by the **dispatcher** (U10), NOT the tick. The tick
+  never dispatches work. The dispatcher decides batch size and calls `do_unit`
+  for each unit in a wave; `do_unit` returns a dispatch handle the dispatcher
   uses to correlate the in-flight agent.
 - **`review`** — invoked by the **background work agent** on the unit it executed.
   The agent self-writes the resulting findings through the engine's
@@ -100,7 +100,7 @@ reads the recorded verdict and applies fixes.
 | `plan` | **opaque to the engine** — adapter-internal state (a doc path, a string, a structured object the adapter alone interprets). The engine passes it back into `deepen` / `review_plan` unread. | the adapter (round-trips it) |
 | `gap_set` | an **array** of gap descriptors. The engine reads only its **length**: it writes `exit_predicate_result.gaps_open = len(gap_set)`. Empty array ⇒ plan gaps closed. Element shape is adapter-defined (the engine never inspects elements). | the engine (length only) |
 | plan-step token | one of the four string literals `"plan"`, `"deepen"`, `"review_plan"`, `"done"`. Anything else is a contract violation. | the tick (drives the plan-loop) |
-| `dispatch_handle` | an **opaque** correlation token (e.g. a Task id, an agent handle). The orchestrator uses it to track the in-flight agent; the engine never interprets its internals. | the orchestrator |
+| `dispatch_handle` | an **opaque** correlation token (e.g. a Task id, an agent handle). The dispatcher uses it to track the in-flight agent; the engine never interprets its internals. | the dispatcher |
 | `findings[]` | an array of `{ "severity": "blocker" \| "major" \| "minor", "note": <string> }`. This is the ONE return the engine reads semantically — it counts severities to compute the predicate. See §3. | the engine (severity counts) |
 
 ---
@@ -256,5 +256,5 @@ Do NOT write the ledger from any op. Return data; the engine records it.
   §6 (`SEVERITIES` and other module constants), §3 (state grammar / who-writes-what).
 - Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md`
   — U6a (this contract), U6b (the two adapter implementations), U5 (the driver),
-  U4 (the tick that calls the plan-loop ops), U10 (the orchestrator that calls `do_unit`).
+  U4 (the tick that calls the plan-loop ops), U10 (the dispatcher that calls `do_unit`).
 - Companion authoring guide: `skills/auto-adapter/SKILL.md`.

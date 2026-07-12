@@ -64,9 +64,9 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
 
 ### Work-loop ops (NOT called by the tick)
 
-5. **`do_unit(unit) -> dispatch_handle`** — called by the **orchestrator**, not
+5. **`do_unit(unit) -> dispatch_handle`** — called by the **dispatcher**, not
    the tick. Dispatch one unit for execution and return an **opaque correlation
-   token** (e.g. a Task id) the orchestrator uses to track the in-flight agent.
+   token** (e.g. a Task id) the dispatcher uses to track the in-flight agent.
 
 6. **`review(unit) -> findings[]`** — called by the **background work agent** on
    the unit it ran. Review the unit and return findings, each tagged on the shared
@@ -142,7 +142,7 @@ verdicts.
 - [ ] `deepen(plan) -> plan` (no-op allowed)
 - [ ] `review_plan(plan) -> gap_set` (length is the open-gap count)
 - [ ] `next_plan_step(ledger) -> token` (returns `"done"` once `gaps_open == 0`)
-- [ ] `do_unit(unit) -> dispatch_handle` (opaque token; called by orchestrator)
+- [ ] `do_unit(unit) -> dispatch_handle` (opaque token; called by dispatcher)
 - [ ] `review(unit) -> findings[]` (severities translated to the shared scale)
 - [ ] A declared severity mapping table
 - [ ] A declared `adapter_scale` (`"three-tier"` or `"blocker-only"`; native runs a rubric probe first)

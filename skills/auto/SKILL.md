@@ -2,8 +2,8 @@
 name: auto
 description: >
   Drive an auto run: chain the plan-loop → seam → work-loop using the
-  self-pacing tick (lib/tick.py), the agent-managed orchestrator
-  (lib/orchestrator.py), and a deliberate-stop /goal binding. Use when
+  self-pacing tick (lib/tick.py), the agent-managed dispatcher
+  (lib/dispatcher.py), and a deliberate-stop /goal binding. Use when
   invoked via /auto, when continuing after a seam, or when resuming a
   run. This skill IS the driving agent: arms the tick chain, decides
   the work-loop fan-out cap per wave (resizable in flight), reads the
@@ -154,10 +154,10 @@ When plan predicate met:
 The harness re-invokes you when a background `Agent` finishes — that
 IS the wake signal. Per wave:
 
-1. `units = orchestrator.ready_units(repo, run)`.
+1. `units = dispatcher.ready_units(repo, run)`.
 2. Decide cap for THIS wave (16 idle / 3 grinding / 1 to serialize —
    no fixed constant).
-3. `orchestrator.dispatch_batch(repo, run, units, cap, launch_fn=...)`.
+3. `dispatcher.dispatch_batch(repo, run, units, cap, launch_fn=...)`.
    `launch_fn` maps each unit's `invokes.adapter_op` to the skill it
    launches: `do_unit` → `/ce-work <unit-id>` (the default — `a1`/`w`/
    `pipeline`); `review` → `/ce-code-review` (the `review.json`
@@ -173,7 +173,7 @@ IS the wake signal. Per wave:
    agent that never returns a verdict. It is NOT a sub-minute poll: a
    verdict landing first re-invokes you and the heartbeat tick then
    finds nothing past-threshold and is a self-cancelling no-op.
-5. On re-invocation: `orchestrator.converge(repo, run)` reads landed
+5. On re-invocation: `dispatcher.converge(repo, run)` reads landed
    verdicts. Predicate met → exit (§5); ready_units → next wave;
    work in flight → yield again.
 6. Ticks apply fixes (`verdict-returned → fixed → pending`); re-
@@ -208,7 +208,7 @@ it there), apply this per stalled node:
    flip set `reap_pending=True` to record that a kill was owed; clearing
    it confirms you issued it (see below).
 3. **Retry or escalate on the attempt budget.** If
-   `orchestrator.should_escalate(<unit>)` is False (`attempt < 2`) →
+   `dispatcher.should_escalate(<unit>)` is False (`attempt < 2`) →
    `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
    clears `last_error`) to re-dispatch it. If True (`attempt ≥ 2`, wedged
    twice) → **do not loop:** `bash lib/auto-resume.py pause <run>
@@ -366,17 +366,17 @@ The §4 work-loop fan-out IS the general mechanism: the loop's context-heavy
 phase work lives in a sub-agent tree beneath a light boss session, and the same
 dispatch → yield → converge shape drives it. **KTD-1 — read carefully, it is
 counterintuitive:** spawning a Claude sub-agent is a MODEL-side `Agent` tool
-call. `orchestrator.dispatch_batch` runs inside a `python3` subprocess with NO
+call. `dispatcher.dispatch_batch` runs inside a `python3` subprocess with NO
 access to that tool — its `launch_fn` is and REMAINS a no-op
-(`orchestrator._default_launch_fn` returns `None`; the `orchestrator.py dispatch`
+(`dispatcher._default_launch_fn` returns `None`; the `dispatcher.py dispatch`
 CLI uses it). So **the boss (this session) issues the spawns itself, in-turn** —
 `dispatch_batch` performs ONLY the `pending → dispatched` ledger transition. This
 matches auto's standing "the tick PREPARES, YOU EXECUTE" contract
-(`driver-reference.md` §1, §16). `lib/orchestrator.py` is unchanged.
+(`driver-reference.md` §1, §16). `lib/dispatcher.py` is unchanged.
 
 Each pulse, on a `rearm` intent in the work phase:
 
-1. **Transition, don't spawn.** `orchestrator.dispatch_batch(repo, run, units,
+1. **Transition, don't spawn.** `dispatcher.dispatch_batch(repo, run, units,
    cap)` — flips up to `cap` ready units `pending → dispatched` (bumping each
    unit's `attempt`, Bug #6) and delegates the launch to the injected no-op. It
    spawns nothing; that is your job.
@@ -407,7 +407,7 @@ Each pulse, on a `rearm` intent in the work phase:
      genuinely absent does it fall back to pointing at this section — never to a
      line range.
 3. **YIELD, then converge from the LEDGER.** End the turn (§4 step 4, plus the
-   watchdog heartbeat). On re-invocation, `orchestrator.converge(repo, run)`
+   watchdog heartbeat). On re-invocation, `dispatcher.converge(repo, run)`
    reads landed verdicts off disk — **NEVER from sub-agent return text.** A
    verdict is durable the moment the sub-agent's `record-verdict` process writes
    it, independent of whether the boss turn survived; convergence on a later

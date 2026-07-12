@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U8 integration test: the picker's DATA LAYER (recipes-list.sh).
 #
-# The picker UX is orchestrator prose in commands/auto.md (AskUserQuestion) — not
+# The picker UX is dispatcher prose in commands/auto.md (AskUserQuestion) — not
 # directly unit-testable. But the picker only RENDERS what recipes-list.sh
 # returns, so AE1/AE2 are verified at that data boundary: the list the picker
 # shows, and the tier badges + shadowing it surfaces.

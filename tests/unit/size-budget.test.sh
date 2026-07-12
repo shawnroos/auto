@@ -95,7 +95,7 @@ ALLOWED_FUNCTIONS=(
   # prior 132 waiver. The guard is cohesive with the other per-unit
   # pre-filters (not-pending / over-cap) it sits beside. Decomposition
   # candidate (extract the per-unit filter chain).
-  "lib/orchestrator.py:dispatch_batch:140"
+  "lib/dispatcher.py:dispatch_batch:140"
   # _print_run is the /auto-status rendering surface — F1's iteration
   # section + G2's exit_reason line + G7's defense-in-depth wrap + the
   # legacy unit/predicate render. Each new visible field adds a few lines;
@@ -116,7 +116,7 @@ ALLOWED_FUNCTIONS=(
   # validators — _validate_toplevel / _validate_phase_order / _validate_units /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on
   # / _validate_phase_transitions / _validate_emit_templates / _validate_iteration
-  # / _validate_work_only_gap — with validate() now a ~30-line ordered orchestrator.
+  # / _validate_work_only_gap — with validate() now a ~30-line ordered dispatcher.
   # Each helper is under budget; decompose, don't bump.)
   # _next_plan_step is the LAST top-level def before `class Adapter` in
   # adapter-ce.py, so this awk (which spans column-0 `def`→`def`, not
@@ -131,7 +131,7 @@ ALLOWED_FUNCTIONS=(
   # `enumerate_plan_units` method (in the Adapter class body the awk attributes
   # here) so the readiness engine can order the emitter fan-out — 125 → 137.
   "lib/adapter-ce.py:_next_plan_step:137"
-  # run() is auto.py's linear run-creation orchestrator (parse → validate recipe
+  # run() is auto.py's linear run-creation dispatcher (parse → validate recipe
   # → build units → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,
   # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in

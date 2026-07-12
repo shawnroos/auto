@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto U10 unit test: lib/orchestrator.py — the agent-driven fan-out
+# auto U10 unit test: lib/dispatcher.py — the agent-driven fan-out
 # layer. It exposes THREE operations against the ledger schema contract:
 #
 #   * ready_units(repo, run)                 -> dispatchable-now unit ids (READER)
@@ -13,7 +13,7 @@
 # (cross-plugin coupling forbidden) nor auto shared helpers (U2's,
 # not yet present). When U2 lands, this file may migrate to them.
 #
-# Scenarios (mapped to the U10 plan, tested against orchestrator.py's ACTUAL
+# Scenarios (mapped to the U10 plan, tested against dispatcher.py's ACTUAL
 # surface — ready_units / dispatch_batch / converge):
 #   1. ready_units: 4 independent pending units -> all returned
 #   2. dependency gating (the "satisfied" definition): U_b depends on U_a;
@@ -37,8 +37,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-ORCH_PY="${AUTO_ROOT}/lib/orchestrator.py"
-ORCH_SH="${AUTO_ROOT}/lib/orchestrator.sh"
+ORCH_PY="${AUTO_ROOT}/lib/dispatcher.py"
+ORCH_SH="${AUTO_ROOT}/lib/dispatcher.sh"
 LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -104,7 +104,7 @@ orch_ready() {
   "$PY" - "$REPO" "$run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 print(",".join(o.ready_units(repo, run)))
 PYEOF
@@ -135,7 +135,7 @@ PYEOF
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-echo "orchestrator.test.sh"
+echo "dispatcher.test.sh"
 
 # ─── Scenario 1: ready_units — 4 independent pending units -> all returned ────
 it "ready_units: 4 independent pending units -> all four returned (declaration order)"
@@ -197,7 +197,7 @@ ledger_init "cap-run" \
 wave="$("$PY" - "$REPO" "cap-run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 # Wave 1: 10 ready, cap=3.
 r1 = o.ready_units(repo, run)
@@ -233,7 +233,7 @@ ledger_init "resize-run" \
 resize="$("$PY" - "$REPO" "resize-run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 # Wave 1: cap=8.
 r1 = o.ready_units(repo, run)
@@ -268,7 +268,7 @@ ledger_init "idem-run" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 idem="$("$PY" - "$REPO" "idem-run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 
 launches = []
@@ -319,7 +319,7 @@ ledger_init "adapter-op" \
 aop="$("$PY" - "$REPO" "adapter-op" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 
 launches = []
@@ -365,7 +365,7 @@ ledger_init "survive-run" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 "$PY" - "$REPO" "survive-run" "$ORCH_PY" <<'PYEOF' >/dev/null 2>&1
 import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 o.dispatch_batch(repo, run, ["U1"], 4)
 PYEOF
@@ -376,7 +376,7 @@ ledger_verdict "survive-run" "U1" '[]' >/dev/null 2>&1
 survive="$("$PY" - "$REPO" "survive-run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 c = o.converge(repo, run)
 # A resumed session would re-dispatch only units still 'pending'/ready. After a
@@ -405,14 +405,14 @@ ledger_init "survive-control" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 "$PY" - "$REPO" "survive-control" "$ORCH_PY" <<'PYEOF' >/dev/null 2>&1
 import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 o.dispatch_batch(repo, run, ["U1"], 4)
 PYEOF
 control="$("$PY" - "$REPO" "survive-control" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 c = o.converge(repo, run)
 print(json.dumps({"in_flight": c["in_flight"], "completed": c["completed"]}))
@@ -485,7 +485,7 @@ ledger_init "launch-fail" \
 lf="$("$PY" - "$REPO" "launch-fail" "$ORCH_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, run, orch_py, ledger_py = sys.argv[1:5]
-ospec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+ospec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(ospec); ospec.loader.exec_module(o)
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(m)
@@ -561,7 +561,7 @@ a0="$(ledger_field "attempt-bump" 'L["units"][0]["attempt"]')"
 "$PY" - "$REPO" "attempt-bump" "$ORCH_PY" <<'PYEOF' >/dev/null
 import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("orchestrator", orch_py)
+spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 o.dispatch_batch(repo, run, ["U1"], 4)
 PYEOF
@@ -596,7 +596,7 @@ import sys, importlib.util, json
 repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-o=load("orchestrator",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
 
 run="class1-bo"
 # blocker-only run: Ua (will carry a major), Ub depends on Ua.
@@ -668,7 +668,7 @@ import sys, importlib.util, json
 repo, orch_py, ledger_py, tick_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-o=load("orchestrator",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
+o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("tick",tick_py)
 
 run="class1-bo-fail"
 m.init_ledger(repo, run, adapter="native", adapter_scale="blocker-only",
@@ -710,7 +710,7 @@ import sys, os, json
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-orch = load_lib_module("orchestrator")
+orch = load_lib_module("dispatcher")
 ledger = json.loads(sys.argv[2])
 print(orch.pick_next_plan_unit_to_advance(ledger))
 PYEOF
@@ -744,7 +744,7 @@ import sys, os, json
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-orch = load_lib_module("orchestrator")
+orch = load_lib_module("dispatcher")
 unit = json.loads(sys.argv[2])
 if len(sys.argv) > 3:
     print(orch.should_escalate(unit, int(sys.argv[3])))
@@ -828,7 +828,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module, load_ledger
 m = load_ledger()
 e = load_lib_module("unit_emitters")
-o = load_lib_module("orchestrator")
+o = load_lib_module("dispatcher")
 op = sys.argv[2]
 
 
@@ -904,5 +904,5 @@ assert_eq "w2" "$(livelock_chain mixed)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "orchestrator.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "dispatcher.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -13,7 +13,7 @@ reads the durable ledger fresh. Resume is also the routine long-run
 continuation path (a long run's end-state is a context-exhaust that
 surfaces as a normal resume), not just the crash path.
 
-## Argument handling (orchestrator routes BEFORE invoking the script)
+## Argument handling (dispatcher routes BEFORE invoking the script)
 
 Inspect the argument string and resolve to one of these four canonical forms,
 then invoke the script with exactly that form:
@@ -62,7 +62,7 @@ Routing rules:
 
 After routing, the resolved canonical-form string goes verbatim to the
 script — the script remains the single source of truth for the actual
-state-machine transitions; orchestrator routing is purely a parse-and-pick
+state-machine transitions; dispatcher routing is purely a parse-and-pick
 layer above it.
 
 ## Dispatch

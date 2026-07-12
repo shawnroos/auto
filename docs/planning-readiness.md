@@ -41,7 +41,7 @@ findings remain. **The smart-entry layer doesn't build this loop — it wraps a
 chosen ce phase in it.**
 
 ### R3 — "Ultracode-style workflow" = the fan-out+verify pattern auto already has (NOT the Workflow tool)
-auto's work-loop fan-out (`lib/orchestrator.py`: `ready_units` → `dispatch_batch`
+auto's work-loop fan-out (`lib/dispatcher.py`: `ready_units` → `dispatch_batch`
 → converge, each agent self-writes its verdict atomically) already implements
 the fan-out + adversarial-verify shape "ultracode" describes. The locked
 `deterministic-over-probabilistic` / engine-owns-the-verdict decisions cut
@@ -145,7 +145,7 @@ thresholds are brainstorm/plan work.
   (hypothesis former — read-only, must always emit a parseable envelope, all keys
   present even null, exit 0 on any non-fatal path).
 - Loop: `skills/auto/SKILL.md` (§1 goal binding, §4.5 pause), `lib/tick.py`,
-  `lib/orchestrator.py`, `lib/on-stop.py` (Stop hook owns verdict).
+  `lib/dispatcher.py`, `lib/on-stop.py` (Stop hook owns verdict).
 - Phases/recipes: `lib/recipes.py:201` (the lock), `lib/phase-grammar.py`
   (general), `lib/emitters.py` (emitter registry), `recipes/*.json`.
 - Goal: `skills/auto-author-goal/SKILL.md`.

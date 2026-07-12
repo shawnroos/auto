@@ -161,7 +161,7 @@ class Adapter:
     # ── work-loop ops ──────────────────────────────────────────────────────
     def do_unit(self, unit):
         """PREPARE a native edit / Task dispatch. Returns an opaque
-        dispatch_handle the orchestrator (U10) correlates the in-flight agent
+        dispatch_handle the dispatcher (U10) correlates the in-flight agent
         with; U10 defines the correlation contract over this shape."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
         return {

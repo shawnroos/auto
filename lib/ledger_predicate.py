@@ -264,7 +264,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         no_majors = "major" not in gating_severities(scale) or majors == 0
         # Bug #4 — vacuous work-phase exit. all([]) is vacuously True, so a
         # phase flip with ZERO units dispatched would declare met before the
-        # orchestrator fans out work. The phase-scoped check
+        # dispatcher fans out work. The phase-scoped check
         # (all_terminal_in_eval_phase + has_units_in_phase) addresses both this AND
         # the v0.2.0 fix-pass A.1 (plan units in declared recipes shouldn't gate
         # the work-loop's terminal check).

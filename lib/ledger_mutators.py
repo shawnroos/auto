@@ -130,7 +130,7 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
     Predicate recomputed in the same atomic snapshot (I-1).
 
     ``attempt`` (Bug #6 — attempt-identity): the dispatch generation the verdict is
-    written FOR. The orchestrator increments a unit's ``attempt`` on each
+    written FOR. The dispatcher increments a unit's ``attempt`` on each
     pending->dispatched dispatch; a background agent launched for attempt N carries
     N here. A verdict whose ``attempt`` is OLDER than the unit's current ``attempt``
     is REJECTED (``StaleVerdict``) — it is a stale verdict from a SUPERSEDED attempt
@@ -350,7 +350,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
     enumerated unit in THIS batch (forward-refs allowed — mirrors
     ``recipes._validate_depends_on`` tolerating emitter-output forward-refs) OR an
     id already present in the ledger. Three failure classes are dropped, because
-    each leaves ``orchestrator._is_ready`` unable to ever return True:
+    each leaves ``dispatcher._is_ready`` unable to ever return True:
       * ``dangling`` — dep names no known id → ``_is_ready`` sees ``dep is None``
         and returns False forever.
       * ``self`` — a unit depending on itself is never satisfiable.

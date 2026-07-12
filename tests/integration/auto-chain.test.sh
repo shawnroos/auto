@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # auto U5 integration test: the dispatch DRIVER chain.
 #
-# This exercises the REAL tick (lib/tick.py) + orchestrator (lib/orchestrator.py)
+# This exercises the REAL tick (lib/tick.py) + dispatcher (lib/dispatcher.py)
 # + ledger (lib/ledger.py) wired together exactly as skills/auto/SKILL.md
 # instructs the driving agent to wire them. The ONLY injected seams are the
 # documented ones:
 #   * the ADAPTER (a Python object exposing next_plan_step/plan/deepen/
 #     review_plan) — injected the same way tick.test.sh injects BoomAdapter;
-#   * the background-agent verdict self-write — supplied as orchestrator
+#   * the background-agent verdict self-write — supplied as dispatcher
 #     dispatch_batch's `launch_fn`, which calls the REAL ledger.record_verdict
 #     synchronously (the documented "agent writes its own verdict atomically"
 #     boundary, exercising the real I-1 write chokepoint).
-# The tick, the orchestrator's ready/auto/converge, and every ledger write
+# The tick, the dispatcher's ready/auto/converge, and every ledger write
 # are the real code — NOT mocks. ScheduleWakeup is a model tool with no CLI, so
 # the "re-arm" is modelled by the driver loop re-invoking dispatch_tick when the
 # tick returns action=="rearm" (the literal intent the SKILL says to act on).
@@ -31,7 +31,7 @@
 #      re-review is load-bearing
 #   3. auto vs manual seam: a seam-paused tick stops without re-arming and leaves
 #      driver=manual; auto flips plan->work via _maybe_seam (the auto branch)
-#   4. orchestrator-driven fan-out + in-flight cap resize: wave1 cap=N, wave2 smaller
+#   4. dispatcher-driven fan-out + in-flight cap resize: wave1 cap=N, wave2 smaller
 #   5. goal binding active: a self-pacing run is legible to the U7 Stop hook
 #      (predicate present + unmet; driver=self) and the SKILL instructs goal binding
 
@@ -40,7 +40,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TICK_PY="${AUTO_ROOT}/lib/tick.py"
-ORCH_PY="${AUTO_ROOT}/lib/orchestrator.py"
+ORCH_PY="${AUTO_ROOT}/lib/dispatcher.py"
 LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
 SKILL_MD="${AUTO_ROOT}/skills/auto/SKILL.md"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
@@ -100,7 +100,7 @@ import sys, importlib.util, json
 repo, ledger_py, tick_py, orch_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("orchestrator",orch_py)
+ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="full-chain"
 ledger.init_ledger(repo, run, adapter="native",
@@ -164,7 +164,7 @@ import sys, importlib.util, json
 repo, ledger_py, tick_py, orch_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("orchestrator",orch_py)
+ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="closure"
 ledger.init_ledger(repo, run, adapter="native",
@@ -260,7 +260,7 @@ import sys, importlib.util, json
 repo, ledger_py, tick_py, orch_py = sys.argv[1:5]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("orchestrator",orch_py)
+ledger=load("ledger",ledger_py); tick=load("tick",tick_py); orch=load("dispatcher",orch_py)
 
 run="closure-noreenqueue-engine"
 ledger.init_ledger(repo, run, adapter="native",
@@ -394,7 +394,7 @@ else
   fail "met_plan=$a_metplan auto_seam=$a_seam phase=$a_phase driver=$a_driver"
 fi
 
-# ─── Scenario 4: orchestrator-driven fan-out + in-flight cap resize ───────────
+# ─── Scenario 4: dispatcher-driven fan-out + in-flight cap resize ───────────
 # 6 independent pending work units. Wave 1: driver picks cap=4 -> 4 dispatched,
 # 2 left pending. Wave 2: driver RESIZES to cap=2 (machine pressure) -> the
 # remaining 2 dispatch. Confirms the DRIVER (not the tick) decides batch size,
@@ -405,7 +405,7 @@ import sys, importlib.util, json
 repo, ledger_py, orch_py = sys.argv[1:4]
 def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
-ledger=load("ledger",ledger_py); orch=load("orchestrator",orch_py)
+ledger=load("ledger",ledger_py); orch=load("dispatcher",orch_py)
 
 run="fanout"
 units=[{"id":"U%d"%i,"state":"pending"} for i in range(1,7)]

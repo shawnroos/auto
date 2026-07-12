@@ -312,7 +312,7 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
 
     After a fix is applied (verdict-returned → fixed) the findings remain stale
     (R8 — only a fresh verdict clears them), so the unit is NOT yet terminal.
-    The tick re-enqueues it (fixed → pending) so the orchestrator re-dispatches
+    The tick re-enqueues it (fixed → pending) so the dispatcher re-dispatches
     it for a fresh review. Skips halted units. Returns the unit id or None.
 
     SCALE-AWARE (Bug #3): same single-helper gating decision as ``_ready_fix_unit``

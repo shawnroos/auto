@@ -26,7 +26,7 @@
 #   tick_advance  → ledger, iteration, emitters, tick_guidance
 #   tick          → ledger, iteration, emitters, tick_advance, tick_guidance
 #
-# Consumers (auto.py, orchestrator.py, on-stop.py, auto-status.py, etc.) load
+# Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the LEDGER FACADE, never ledger_mutators/ledger_emitters directly — the facade
 # is the public surface.
 
@@ -122,12 +122,23 @@ fi
 
 # ─── presets DAG: the validator stays a light leaf (KTD-2) ─────────────────
 # lib/presets.py (U1, addressable-step-contents) reuses recipe_validate's
-# primitives + the adapter_ops leaf, but MUST NOT import orchestrator.py — that
+# primitives + the adapter_ops leaf, but MUST NOT import dispatcher.py — that
 # module pulls in the ledger and the whole dispatch surface. Keeping the preset
 # validator off the heavy dispatch module is the KTD-2 boundary.
-it "presets.py does NOT import orchestrator (KTD-2 leaf boundary)"
-if loads_sibling "presets.py" "orchestrator"; then
-  fail "presets.py must not import orchestrator — the preset validator is a light leaf (KTD-2); import adapter_ops for VALID_ADAPTER_OPS instead"
+# Existence assert (F13): the forbidden-edge check above is a NEGATIVE grep, so
+# it passes VACUOUSLY if lib/dispatcher.py is missing (e.g. a botched rename that
+# left the module under its old name). Pin the pinned module's presence so a
+# mis-rename goes red here instead of silently un-enforcing the boundary.
+it "lib/dispatcher.py exists (pinned module — negative-grep guard against vacuous pass)"
+if [ -f "$LIB/dispatcher.py" ]; then
+  pass
+else
+  fail "lib/dispatcher.py is missing — the KTD-2 forbidden-edge grep above would pass vacuously"
+fi
+
+it "presets.py does NOT import dispatcher (KTD-2 leaf boundary)"
+if loads_sibling "presets.py" "dispatcher"; then
+  fail "presets.py must not import dispatcher — the preset validator is a light leaf (KTD-2); import adapter_ops for VALID_ADAPTER_OPS instead"
 else
   pass
 fi

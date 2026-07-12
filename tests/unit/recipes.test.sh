@@ -112,7 +112,7 @@ elif op == "review-vs-w-distinct":
 elif op == "validate-firsterr":
     # Pin the LOAD-BEARING first-error-wins order across the validate()
     # decomposition (was one 324-LOC function, now a ~30-line ordered
-    # orchestrator over per-concern sub-validators). A doubly-malformed recipe
+    # dispatcher over per-concern sub-validators). A doubly-malformed recipe
     # must surface the EARLIER block's error. Classify the first RecipeError
     # message into a stable token so the order is assertable.
     try:
@@ -1086,16 +1086,16 @@ it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan
 assert_eq "clean" "$(itr spoof-builtins-clean)"
 
 # ── U12: every shipped recipe's declared adapter_op ∈ VALID_ADAPTER_OPS ───────
-# The build-time counterpart to orchestrator.dispatch_batch's runtime guard: a
+# The build-time counterpart to dispatcher.dispatch_batch's runtime guard: a
 # typo in a shipped recipe JSON is caught here, before it can ship. Enumerates
 # EVERY `adapter_op` across recipes/*.json (exhaustive, not a sample) and asserts
-# the set is a subset of orchestrator.VALID_ADAPTER_OPS.
-it "U12: every shipped recipe adapter_op is in orchestrator.VALID_ADAPTER_OPS"
+# the set is a subset of dispatcher.VALID_ADAPTER_OPS.
+it "U12: every shipped recipe adapter_op is in dispatcher.VALID_ADAPTER_OPS"
 opcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, json, glob, importlib.util
 auto_root = sys.argv[1]
 spec = importlib.util.spec_from_file_location(
-    "orchestrator", os.path.join(auto_root, "lib", "orchestrator.py"))
+    "dispatcher", os.path.join(auto_root, "lib", "dispatcher.py"))
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 
 def walk_ops(node):

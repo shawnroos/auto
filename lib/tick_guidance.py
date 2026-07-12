@@ -127,11 +127,11 @@ def _operator_guidance_for(phase, advance_result, led):
         return iteration_prefix + body if iteration_prefix else body
     if phase == "work":
         # In the work-loop, the trap is different: the driver dispatches background
-        # Agents via the orchestrator and then YIELDS for harness re-invocation
+        # Agents via the dispatcher and then YIELDS for harness re-invocation
         # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
         body = (
             "prepare/execute contract: in the work-loop YOU drive the "
-            "orchestrator fan-out (orchestrator.ready_units + dispatch_batch); "
+            "dispatcher fan-out (dispatcher.ready_units + dispatch_batch); "
             "after dispatching, YIELD silently — the harness re-invokes you "
             "when a verdict lands (fix-pass G). Re-ticking without running "
             "dispatch is a no-op."

@@ -89,8 +89,8 @@ unenforced schema doc would just duplicate this one.
 
 `lib/presets.py` reuses `lib/recipe_validate.py`'s `_check_prompt_template` and
 `_validate_recipe_name`, and imports `VALID_ADAPTER_OPS` from the pure-stdlib leaf
-`lib/adapter_ops.py`. It **must not** import `lib/orchestrator.py` (the heavy
+`lib/adapter_ops.py`. It **must not** import `lib/dispatcher.py` (the heavy
 dispatch module that pulls in the ledger) — the validator stays a light DAG leaf.
 `tests/unit/import-topology.test.sh` asserts this boundary, and
 `tests/unit/presets.test.sh` asserts `adapter_ops.VALID_ADAPTER_OPS` equals the
-set `orchestrator.py` uses.
+set `dispatcher.py` uses.

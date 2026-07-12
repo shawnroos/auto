@@ -55,7 +55,7 @@ fail() {
 # recipe        recipe           U8
 # ledger        ledger           U9
 TERM_STATUS="\
-orchestrator=pending
+orchestrator=done
 emitter=pending
 adapter=pending
 tick=pending
@@ -190,14 +190,21 @@ else
   fail "vocabulary audit found stale identifiers:${report}"
 fi
 
-# ─── Scenario 2: deliberate-fail control — force `orchestrator=done` ─────────
-# The current tree still uses `orchestrator` everywhere (U2 has not landed), so
-# auditing it as `done` MUST produce hits that name offending files. This runs
-# on EVERY invocation and proves the audit is not vacuous — a 0-assertion test
-# or a never-firing grep would report green while checking nothing. It does NOT
-# touch the real status table above (that stays all-pending → Scenario 1 green).
-it "deliberate-fail: auditing 'orchestrator' as done names offending files"
-df_hits="$(audit_term_hits "orchestrator")"
+# ─── Scenario 2: deliberate-fail control — force a still-PENDING term `done` ──
+# Probe a term that has NOT yet been renamed (its old identifier still lives all
+# over the tree): auditing it as `done` MUST produce hits that name offending
+# files. This runs on EVERY invocation and proves the audit is not vacuous — a
+# 0-assertion test or a never-firing grep would report green while checking
+# nothing. It does NOT touch the real status table above.
+#
+# NB: this MUST track a term whose real status is still `pending`. Once
+# `orchestrator` was renamed (U2) it no longer produces non-whitelisted hits, so
+# the control would go vacuous itself; it now probes `emitter` (pending until
+# U3). Each rename unit that lands its term should re-point this to the next
+# still-pending term.
+DF_TERM="emitter"
+it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
+df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then
   # Confirm the output actually NAMES files (path:lineno:… shape), not just
   # non-empty noise.
@@ -207,7 +214,7 @@ if [ -n "$df_hits" ]; then
     fail "audit fired but did not name files: ${df_hits}"
   fi
 else
-  fail "audit of 'orchestrator' found NO hits — the harness is vacuous"
+  fail "audit of '${DF_TERM}' found NO hits — the harness is vacuous"
 fi
 
 # ─── Scenario 3: the summary line matches the runner's tally regex ──────────

@@ -572,7 +572,7 @@ if os.path.exists(p): os.unlink(p)
 m.init_ledger(repo, run, adapter="ce", loop_phase="work",
               units=[{"id":"U1","state":"pending"}])
 
-# Attempt 1: dispatch (attempt -> 1). Simulate the orchestrator's bump.
+# Attempt 1: dispatch (attempt -> 1). Simulate the dispatcher's bump.
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 a1 = m.read_ledger(repo, run)["units"][0]["attempt"]
 # A stalls.

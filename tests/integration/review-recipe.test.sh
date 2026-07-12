@@ -7,7 +7,7 @@
 # recipes.test.sh already pins that review.json validates / resolves / is
 # distinct from w. But the DISPATCH path was never driven: review.json's work
 # unit carries `dispatch_context.adapter_op == "review"` (NOT "do_unit"), and the
-# DRIVER — not the adapter, not the orchestrator — maps that adapter_op to the
+# DRIVER — not the adapter, not the dispatcher — maps that adapter_op to the
 # skill it launches (`review` → /ce-code-review; `do_unit` → /ce-work). This test
 # drives the real engine end-to-end so the off-spine review path is locked, not
 # inferred:

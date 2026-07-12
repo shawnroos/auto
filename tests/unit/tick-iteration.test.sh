@@ -39,7 +39,7 @@
 #      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
 #      outcome (the discriminator).
 #  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
-#      `dispatched` past its stall_threshold (the orchestrator rescue-swallow P3
+#      `dispatched` past its stall_threshold (the dispatcher rescue-swallow P3
 #      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
 #      stays dispatched.
 

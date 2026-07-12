@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto: the ONE ledger-module loader.
 
-Every consumer module (tick.py, orchestrator.py, on-stop.py, on-session-start.py,
+Every consumer module (tick.py, dispatcher.py, on-stop.py, on-session-start.py,
 goal-status.py, auto-resume.py, auto.py, auto-status.py) loads the canonical ledger
 module by FILE PATH rather than `import ledger` — the plugin is not pip-installed
 and lib/ is not guaranteed on sys.path. That importlib bootstrap used to be

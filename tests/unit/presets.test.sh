@@ -9,7 +9,7 @@
 # override), the validator's rejections (verification/phase/depends_on keys, bad
 # adapter_op, path-traversal prompt_template), the clear not-found error, and the
 # shared-leaf symmetry that proves the VALID_ADAPTER_OPS refactor preserved
-# orchestrator's dispatch guard.
+# dispatcher's dispatch guard.
 #
 # SELF-CONTAINED inline harness (same style as recipes.test.sh / ledger.test.sh).
 #
@@ -20,7 +20,7 @@
 #   4. a prompt_template with `..` or a leading `/` is rejected
 #   5. an unknown preset name yields a clear not-found error (not a traceback)
 #   6. a workspace .claude/auto/presets/<name>.json overrides a built-in
-#   7. adapter_ops.VALID_ADAPTER_OPS equals the set orchestrator.py uses
+#   7. adapter_ops.VALID_ADAPTER_OPS equals the set dispatcher.py uses
 
 set -uo pipefail
 
@@ -55,7 +55,7 @@ REPO="$SANDBOX/repo"
 mkdir -p "$HOME" "$REPO"
 trap 'rm -rf "$SANDBOX"' EXIT
 
-# Driver: load presets / adapter_ops / orchestrator via _bootstrap, run an op,
+# Driver: load presets / adapter_ops / dispatcher via _bootstrap, run an op,
 # print a stable one-line result. Modules are imported via importlib through the
 # _bootstrap loader from an absolute lib/ path (same strategy as recipes.test.sh).
 con() {
@@ -97,7 +97,7 @@ elif op == "load-unknown":
         print("notfound:" + str(e))
 elif op == "symmetry":
     adapter_ops = load_lib_module("adapter_ops")
-    orch = load_lib_module("orchestrator")
+    orch = load_lib_module("dispatcher")
     a = adapter_ops.VALID_ADAPTER_OPS
     b = orch.VALID_ADAPTER_OPS
     print("equal" if a == b else ("differ:%r vs %r" % (sorted(a), sorted(b))))
@@ -147,8 +147,8 @@ cat > "$REPO/.claude/auto/presets/tuned-review.json" <<'JSON'
 JSON
 assert_eq "WORKSPACE-OVERRIDE" "$(con load-field tuned-review "$REPO" description)"
 
-# ── 7. shared-leaf symmetry: adapter_ops == orchestrator's dispatch set ──────
-it "adapter_ops.VALID_ADAPTER_OPS equals orchestrator.VALID_ADAPTER_OPS"
+# ── 7. shared-leaf symmetry: adapter_ops == dispatcher's dispatch set ──────
+it "adapter_ops.VALID_ADAPTER_OPS equals dispatcher.VALID_ADAPTER_OPS"
 assert_eq "equal" "$(con symmetry)"
 
 # ── summary ──────────────────────────────────────────────────────────────────

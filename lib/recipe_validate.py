@@ -757,7 +757,7 @@ def validate(recipe: dict) -> None:
     violation; returns None on success. The hard contract — both the engine and
     the authoring skill call this; skill output that passes here is engine-OK.
 
-    An ordered orchestrator over per-concern validators (extracted from the
+    An ordered dispatcher over per-concern validators (extracted from the
     former 315-line monolith). ORDER IS LOAD-BEARING: the first violation a
     malformed recipe hits must stay the same, so these run in the original
     sequence. Shared state (phase_order, unit_ids, the single emit_prefixes set)

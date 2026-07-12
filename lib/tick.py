@@ -21,7 +21,7 @@ THE RE-ARM BOUNDARY (read this — it is the load-bearing seam):
     action == "rearm", issues the actual `ScheduleWakeup(delay, prompt)` tool
     call. Do NOT look for a ScheduleWakeup binary — there isn't one.
 
-The tick NEVER dispatches (the orchestrator owns `pending → dispatched`) and
+The tick NEVER dispatches (the dispatcher owns `pending → dispatched`) and
 NEVER writes verdicts (each background agent self-writes its own `findings[]`).
 The tick only:
   * reads the ledger,
@@ -546,7 +546,7 @@ def _try_iteration_check(
             return iteration_result, led
         if action == "iterate":
             # New units emitted + gate reset to pending; the next tick will
-            # see fresh pending units for the orchestrator to dispatch. Re-
+            # see fresh pending units for the dispatcher to dispatch. Re-
             # read the ledger to surface the iteration in the rearm intent
             # (operator-diagnostics + so /auto-status sees the new units).
             led = ledger.read_ledger(repo_root, run_id)

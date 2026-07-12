@@ -79,7 +79,7 @@ crash-marked-done run from a clean exit. The transient harness stop
 intent (`{action: "stop", reason: "..."}`) carries the same `kind` —
 both are written by `lib/tick.py`'s F2 / G2 catches.
 
-## Argument handling (orchestrator routes BEFORE invoking the script)
+## Argument handling (dispatcher routes BEFORE invoking the script)
 
 Inspect the argument string and route as follows:
 
