@@ -1,23 +1,23 @@
 ---
-name: auto-content
+name: auto-preset
 description: >
-  Run one named content one-shot against a target — the Phase-1 headline of
-  addressable step contents. Use when the operator wants to fire a single tuned
-  step (a tuned review, a scoped build) standalone: "run <content> against
+  Run one named preset one-shot against a target — the Phase-1 headline of
+  addressable step presets. Use when the operator wants to fire a single tuned
+  step (a tuned review, a scoped build) standalone: "run <preset> against
   <target>", "one-shot the tuned-review on this diff", "fire scoped-build on
   <target>". This skill IS the orchestrator (no tick, no /goal, no re-arm): it
-  loads the content, PROPOSES context-fit verification the operator accepts or
-  edits, launches the content's op ONCE as an awaited sub-agent honoring its
+  loads the preset, PROPOSES context-fit verification the operator accepts or
+  edits, launches the preset's op ONCE as an awaited sub-agent honoring its
   prompt_template, resolves every criterion inline, folds the ratified criteria
   into a pass/fail verdict, reports, and terminates. It runs ONE step against
-  ONE target — a multi-step plan-then-build is a flow (deferred), not a content.
+  ONE target — a multi-step plan-then-build is a flow (deferred), not a preset.
 ---
 
-# auto-content (the one-shot content orchestrator)
+# auto-preset (the one-shot preset orchestrator)
 
-A **content** is the pure payload of a step — one `adapter_op` invocation plus an
+A **preset** is the pure payload of a step — one `adapter_op` invocation plus an
 optional tuning `prompt_template`, promoted to a first-class named object
-(`lib/contents.py`). This skill runs one content **one-shot**: grab it by name,
+(`lib/presets.py`). This skill runs one preset **one-shot**: grab it by name,
 point it at a target, propose a context-fit check, run it once, get the result
 plus a verdict — no flow armed, no loop, no tick.
 
@@ -28,20 +28,20 @@ result+verdict presentation. It does **not** enter the engine's tick loop, arm a
 unchanged" hold literally.
 
 Read before running — the quality bar, not background:
-`skills/auto-content/references/one-shot-verification.md` (how to derive criteria
+`skills/auto-preset/references/one-shot-verification.md` (how to derive criteria
 and the inline-resolution rule for each of the four types) and
 `skills/auto-design/references/verification-taxonomy.md` (the exact criterion
-shape). The thin lib seams this skill drives live in `lib/contents.py` and
-`lib/content_oneshot.py`.
+shape). The thin lib seams this skill drives live in `lib/presets.py` and
+`lib/preset_oneshot.py`.
 
 ## What stays true throughout
 
 - **Driver-orchestrated, engine untouched.** No tick, no `ScheduleWakeup`, no
   `/goal`, no re-arm. The skill drives synchronously start to finish.
-- **One content = one step.** Exactly one `adapter_op` invocation. A multi-step
-  reusable sequence is a *flow* of containers (Phase-2, deferred), not a content.
+- **One preset = one step.** Exactly one `adapter_op` invocation. A multi-step
+  reusable sequence is a *flow* of containers (Phase-2, deferred), not a preset.
 - **Verification is generated, never stored.** The ratified criteria live only on
-  this run — they are NEVER written back to the content JSON (R2/A2). A content
+  this run — they are NEVER written back to the preset JSON (R2/A2). A preset
   is pure payload; it carries no built-in gate.
 - **Every criterion resolves inline.** Because there is no next tick,
   `advisor_judge` and `human` criteria BLOCK (a blocking `advisor` consult / a
@@ -53,31 +53,31 @@ The lib seams are driven through each module's CLI (`_cli`/`__main__`, the house
 pattern — see `lib/verification.py`), as one-liners. **JSON args are single-quoted**
 so the shell hands the whole document through as one argv element.
 
-### 1. Load and validate the content by name
+### 1. Load and validate the preset by name
 
-The operator names a content and a target. Resolve + validate it in one call:
+The operator names a preset and a target. Resolve + validate it in one call:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/contents.py" load-validate "<content-name>" "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/presets.py" load-validate "<preset-name>" "$PWD"
 ```
 
-Prints `OK` for a valid resolved content, or `INVALID: <message>` (an unknown name
-or a bad shape). `load_content` resolves the workspace tier
-(`<repo>/.claude/auto/contents/`) first, then the built-in seeds — first-wins.
+Prints `OK` for a valid resolved preset, or `INVALID: <message>` (an unknown name
+or a bad shape). `load_preset` resolves the workspace tier
+(`<repo>/.claude/auto/presets/`) first, then the built-in seeds — first-wins.
 Shipped seeds today: `tuned-review` (a tuned `review`) and `scoped-build` (a scoped
 `do_unit`).
 
-**Unknown content name → clear error, then point multi-step reuse at the flow
-arc (R-D).** `load_content` raises `ContentError` listing what it searched —
+**Unknown preset name → clear error, then point multi-step reuse at the flow
+arc (R-D).** `load_preset` raises `PresetError` listing what it searched —
 surface that, do NOT dump a traceback. If the operator was reaching for a
 multi-step sequence (a "plan then build", a whole pipeline), say plainly: *a
-content is one step (one adapter op); a plan-then-build is a **flow** of two
+preset is one step (one adapter op); a plan-then-build is a **flow** of two
 containers, which is the deferred composition arc — not something a single
-content can express.* Offer the built-in seeds or `auto-launch` for a real loop.
+preset can express.* Offer the built-in seeds or `auto-launch` for a real loop.
 
 ### 2. Propose context-fit verification — the operator accepts or edits (U3)
 
-**Seed, don't interview.** Read the target and the content's intent, and PROPOSE
+**Seed, don't interview.** Read the target and the preset's intent, and PROPOSE
 a short (1–3) list of criteria that would prove this one step landed — coaching
 deterministic-first per `references/one-shot-verification.md`. Show the proposal;
 the operator ACCEPTS or EDITS it. **Do not dispatch until the criteria are
@@ -89,29 +89,29 @@ malformed criterion (a `programmatic` with a shell string instead of an argv
 list, an unknown `type`, >16 criteria) and re-ratify:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" validate-criteria '<ratified-criteria-json>'
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" validate-criteria '<ratified-criteria-json>'
 ```
 
-Prints `OK` or `INVALID: <message>`. Nothing is written back to the content file
+Prints `OK` or `INVALID: <message>`. Nothing is written back to the preset file
 — the ratified criteria are ephemeral (R2/A2) and flow directly into the step-5
 verdict; there is no persisted unit.
 
-### 3. Launch the content's op ONCE, honoring `prompt_template` (U5 / KTD-5)
+### 3. Launch the preset's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
-Build the launch descriptor — the DRIVER folds the content's tuning in (the
+Build the launch descriptor — the DRIVER folds the preset's tuning in (the
 orchestrator never consults the adapter, driver-reference §7):
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" launch "<content-name>" "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" launch "<preset-name>" "$PWD"
 ```
 
-The `launch` op re-loads and re-validates the content (fail closed) before
+The `launch` op re-loads and re-validates the preset (fail closed) before
 building the descriptor.
 
-The descriptor always names `adapter_op`. When the content declares a
+The descriptor always names `adapter_op`. When the preset declares a
 `prompt_template`, the descriptor carries `prompt_template_body` (the template
 text) — **fold that body into the launched sub-agent's prompt** so the tuning
-travels with the content. When there is no `prompt_template`, the descriptor is
+travels with the preset. When there is no `prompt_template`, the descriptor is
 the plain op invocation — launch it exactly as a normal op (regression-safe).
 
 Map `adapter_op` → the skill/agent you launch the same way the driver launch map
@@ -146,7 +146,7 @@ Fold the **ratified criteria** plus the resolved results into the terminal
 verdict — the criteria list goes in directly (there is no persisted unit):
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/content_oneshot.py" verdict \
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" verdict \
   '<ratified-criteria-json>' '<programmatic_results-json>' '<judge_verdicts-json>'
 ```
 
@@ -157,7 +157,7 @@ never a green — do not present it as a pass. Because every type was resolved i
 step 4, no judges are pending; if any were, it raises `OneShotIncomplete` rather
 than passing silently.
 
-Then **surface the content's output and the verdict distinctly** — the review /
+Then **surface the preset's output and the verdict distinctly** — the review /
 build result the sub-agent produced, and the `pass`/`fail`/`unverified` with
 which criteria drove it. The run is terminal: **no tick is armed, no `/goal` is
 bound, nothing to resume.** Report and stop.
@@ -166,13 +166,13 @@ bound, nothing to resume.** Report and stop.
 
 - It does not arm a loop, a tick, a `ScheduleWakeup`, or a `/goal` — that is
   `/auto` (`skills/auto`). The one-shot is single-pass and driver-driven.
-- It does not write the ratified criteria back to the content (R2/A2), and it
-  does not edit the content JSON.
-- It does not compose contents into a flow or swap a container's content — that
+- It does not write the ratified criteria back to the preset (R2/A2), and it
+  does not edit the preset JSON.
+- It does not compose presets into a flow or swap a container's preset — that
   is the deferred Phase-2 composition arc (R6/R7/R8).
 - It does not touch the adapter (KTD-5): the `prompt_template` is folded at the
   DRIVER launch, never via an `adapter.do_unit` / `adapter.review` edit.
-- It does not run a multi-step sequence. One content is one step; point
+- It does not run a multi-step sequence. One preset is one step; point
   multi-step reuse at the deferred flow arc (step 1).
 
 ## Invariants
@@ -184,7 +184,7 @@ bound, nothing to resume.** Report and stop.
 - **Deterministic-first verification.** A claim that can be a command + check is
   `programmatic`; judges are for what a command genuinely can't decide.
 - **Ephemeral criteria.** Ratified criteria live only on the run; never persisted
-  to the content (R2/A2).
+  to the preset (R2/A2).
 - **Inline resolution.** Every criterion — including `advisor_judge` and `human`
   — resolves in one synchronous pass; they BLOCK, they never defer (KTD-3).
 - **The verdict is a terminal read.** `oneshot_verdict` reports pass/fail; it

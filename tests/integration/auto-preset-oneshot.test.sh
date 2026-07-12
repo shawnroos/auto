@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # auto U7 integration test (addressable-step-contents): the one-shot LIB wiring
-# the `auto-content` skill orchestrates, end to end, WITHOUT a live agent.
+# the `auto-preset` skill orchestrates, end to end, WITHOUT a live agent.
 #
-# F1 (the Phase-1 headline) is: load a named content -> propose/ratify criteria
+# F1 (the Phase-1 headline) is: load a named preset -> propose/ratify criteria
 # -> launch the op ONCE -> resolve criteria inline -> oneshot_verdict on the
 # ratified criteria -> report + terminate. The live sub-agent launch and
 # the propose/ratify CONVERSATION are agent-driven (verified by the skill prose +
 # code review). What is DETERMINISTIC — and what this test pins — is the lib seam
 # the skill drives:
 #
-#   load_content -> validate_oneshot_criteria -> build_oneshot_launch ->
+#   load_preset -> validate_oneshot_criteria -> build_oneshot_launch ->
 #   (stub the dispatch: evaluate_programmatic in-process + a supplied model_judge
 #   verdict) -> oneshot_verdict(ratified_criteria, ...).
 #
@@ -19,10 +19,10 @@
 # injects the model_judge verdict as data.
 #
 # Scenarios (U7 plan / F1):
-#   1. a built-in content loads, its ratified criteria validate, and with all
+#   1. a built-in preset loads, its ratified criteria validate, and with all
 #      criteria resolved PASS -> verdict `pass`.
 #   2. the same wiring with one programmatic criterion FAILING -> verdict `fail`.
-#   3. the launch descriptor for the built-in content names its op and folds its
+#   3. the launch descriptor for the built-in preset names its op and folds its
 #      prompt_template body (U5 in the F1 chain).
 #   4. no `pending_judges` survive to verdict time (all types resolved inline).
 
@@ -46,7 +46,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-echo "auto-content-oneshot.test.sh"
+echo "auto-preset-oneshot.test.sh"
 
 probe() {
   "$PY" - "$LIB" "$AUTO_ROOT" <<'PYEOF'
@@ -64,8 +64,8 @@ def load(name):
     return m
 
 try:
-    contents = load("contents")
-    co = load("content_oneshot")
+    presets = load("presets")
+    co = load("preset_oneshot")
     verification = load("verification")
 except Exception as e:
     print("IMPORT-FAIL:%s" % e)
@@ -73,13 +73,13 @@ except Exception as e:
 
 results = []
 
-# ── Step 1: load a built-in content (the `auto-content` skill's first move) ──
+# ── Step 1: load a built-in preset (the `auto-preset` skill's first move) ──
 # Load against an EMPTY temp repo so a workspace override can never shadow the
 # built-in seed (test hermeticity); auto_root stays the target workspace below.
 empty_repo = tempfile.mkdtemp(prefix="oneshot-empty-repo-")
-content = contents.load_content("tuned-review", empty_repo)
-ok_c, errs_c = contents.validate_content(content)
-results.append("content_valid=%s" % ok_c)
+preset = presets.load_preset("tuned-review", empty_repo)
+ok_c, errs_c = presets.validate_preset(preset)
+results.append("preset_valid=%s" % ok_c)
 
 # ── Step 2: propose/ratify -> validate the ratified criteria (U3) ────────────
 # A programmatic criterion the skill would run in-process, plus a model_judge
@@ -92,7 +92,7 @@ ok_v, errs_v = co.validate_oneshot_criteria(ratified)
 results.append("criteria_valid=%s" % ok_v)
 
 # ── Step 3: build the launch descriptor (U5) — names op, folds template ──────
-launch = co.build_oneshot_launch(content, auto_root)
+launch = co.build_oneshot_launch(preset, auto_root)
 results.append("launch_op=%s" % launch.get("adapter_op"))
 results.append("launch_body_folds=%s" % ("Tuned review prompt" in (launch.get("prompt_template_body") or "")))
 
@@ -135,16 +135,16 @@ PYEOF
 OUT="$(probe)"
 get() { printf '%s' "$OUT" | tr ';' '\n' | grep "^$1=" | head -1 | cut -d= -f2-; }
 
-it "the built-in content loads and validates"
-assert_eq "True" "$(get content_valid)"
+it "the built-in preset loads and validates"
+assert_eq "True" "$(get preset_valid)"
 
 it "the ratified criteria validate against the taxonomy (U3)"
 assert_eq "True" "$(get criteria_valid)"
 
-it "the launch descriptor names the content's op (U5)"
+it "the launch descriptor names the preset's op (U5)"
 assert_eq "review" "$(get launch_op)"
 
-it "the launch descriptor folds the content's prompt_template body (U5)"
+it "the launch descriptor folds the preset's prompt_template body (U5)"
 assert_eq "True" "$(get launch_body_folds)"
 
 it "all criteria resolved PASS -> verdict pass (F1 / KTD-1)"
@@ -160,5 +160,5 @@ it "no pending_judges survive to verdict time — all types resolved inline (KTD
 assert_eq "0" "$(get pending)"
 
 echo ""
-echo "auto-content-oneshot.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "auto-preset-oneshot.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -57,7 +57,7 @@ def load(name):
     return m
 
 try:
-    co = load("content_oneshot")
+    co = load("preset_oneshot")
     verdict_fn = co.oneshot_verdict
 except Exception as e:  # function missing -> RED
     print("IMPORT-FAIL:%s" % e)

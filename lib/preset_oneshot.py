@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""auto one-shot content helpers (addressable-step-contents).
+"""auto one-shot preset helpers (addressable-step-contents).
 
-THIN, pure/testable pieces the `auto-content` skill calls to run a content
+THIN, pure/testable pieces the `auto-preset` skill calls to run a preset
 one-shot (KTD-3 — the skill is the orchestrator; this module holds no control
 flow, no tick, no `/goal`):
 
@@ -9,9 +9,9 @@ flow, no tick, no `/goal`):
      list against the verification taxonomy BEFORE dispatch, reusing the recipe
      validator's shape check (KTD-2 reuse).
 
-  2. ``build_oneshot_launch(content, repo)`` (U5) — build the driver-side launch
-     descriptor: the content's `adapter_op`, plus the `prompt_template` body when
-     the content declares one (KTD-5 — the tuning is folded at the DRIVER launch,
+  2. ``build_oneshot_launch(preset, repo)`` (U5) — build the driver-side launch
+     descriptor: the preset's `adapter_op`, plus the `prompt_template` body when
+     the preset declares one (KTD-5 — the tuning is folded at the DRIVER launch,
      never via an adapter edit).
 
   3. ``oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)``
@@ -39,19 +39,19 @@ import sys
 
 # Standard bootstrap: prepend lib/ so sibling loads route through _bootstrap
 # (the harness loads this file by path via spec_from_file_location, which does
-# NOT add lib/ to sys.path). Mirrors lib/contents.py.
+# NOT add lib/ to sys.path). Mirrors lib/presets.py.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
-# The auto plugin root (lib/'s parent) — where the built-in `contents/` seeds and
-# their `prompt_template` files ship. `build_oneshot_launch` resolves a content's
+# The auto plugin root (lib/'s parent) — where the built-in `presets/` seeds and
+# their `prompt_template` files ship. `build_oneshot_launch` resolves a preset's
 # relative prompt_template against the workspace repo first, then this built-in root.
 _AUTO_ROOT = os.path.dirname(_LIB_DIR)
 
 # `recipe_validate` is the pure-stdlib validation DAG root (imports no heavy
-# sibling — same leaf discipline `contents.py` relies on). We reuse TWO primitives:
+# sibling — same leaf discipline `presets.py` relies on). We reuse TWO primitives:
 #   - `_validate_verification` — the SAME taxonomy-shape check a recipe's
 #     `verification` block passes, so U3's ratify gate rejects a malformed
 #     proposed criterion with the exact rules the engine enforces (KTD-2 reuse).
@@ -106,45 +106,45 @@ def validate_oneshot_criteria(criteria) -> tuple:
     return True, []
 
 
-def build_oneshot_launch(content: dict, repo: str) -> dict:
-    """Build the launch descriptor for a one-shot content (U5 / KTD-5).
+def build_oneshot_launch(preset: dict, repo: str) -> dict:
+    """Build the launch descriptor for a one-shot preset (U5 / KTD-5).
 
     DRIVER-SIDE ONLY. The one-shot is driver-orchestrated (KTD-3), so the load-
-    bearing site for "a content's tuning reaches the dispatched agent" is the
+    bearing site for "a preset's tuning reaches the dispatched agent" is the
     DRIVER launch, NOT an adapter edit — ``orchestrator.dispatch_batch`` never
     consults the adapter (driver-reference §7). This helper is what the
-    ``auto-content`` skill calls to assemble that launch:
+    ``auto-preset`` skill calls to assemble that launch:
 
-      - it always names the content's ``adapter_op``;
-      - when the content declares a ``prompt_template``, it folds the template's
+      - it always names the preset's ``adapter_op``;
+      - when the preset declares a ``prompt_template``, it folds the template's
         BODY into the descriptor (``prompt_template`` = the path, ``prompt_template_body``
         = the file text) so the skill can splice the tuning into the sub-agent's
         prompt;
-      - when the content declares NO ``prompt_template``, the descriptor is the
+      - when the preset declares NO ``prompt_template``, the descriptor is the
         plain op invocation — no template keys at all (regression-safe: a
-        template-less content launches exactly as before).
+        template-less preset launches exactly as before).
 
-    ``content`` is a VALIDATED content dict (see ``lib/contents.py::validate_content``
-    / ``load_and_validate_content``), so ``invokes`` and ``invokes.adapter_op`` are
+    ``preset`` is a VALIDATED preset dict (see ``lib/presets.py::validate_preset``
+    / ``load_and_validate_preset``), so ``invokes`` and ``invokes.adapter_op`` are
     accessed directly — the validator guarantees them.
 
     The relative ``prompt_template`` path is re-path-bounded (defensively — same
-    ``_check_prompt_template`` the recipe/content validators use) and resolved
+    ``_check_prompt_template`` the recipe/preset validators use) and resolved
     against the workspace ``repo`` first (a workspace override wins, matching
-    ``load_content``'s tier order), then the auto plugin root (where built-in seeds
+    ``load_preset``'s tier order), then the auto plugin root (where built-in seeds
     ship). A declared-but-unreadable template FAILS CLOSED with a ``RecipeError``
     rather than launching a half-tuned agent.
 
     Returns ``{"adapter_op": <op>[, "prompt_template": <path>,
-    "prompt_template_body": <text>]}``. Pure w.r.t. ``content`` — mutates nothing.
+    "prompt_template_body": <text>]}``. Pure w.r.t. ``preset`` — mutates nothing.
     """
-    invokes = content["invokes"]
+    invokes = preset["invokes"]
     descriptor = {"adapter_op": invokes["adapter_op"]}
 
     pt = invokes.get("prompt_template")
     if pt:
         # Re-bound defensively before touching the filesystem (the load path does
-        # not run validate_content, so this helper cannot assume it was checked).
+        # not run validate_preset, so this helper cannot assume it was checked).
         _check_prompt_template(pt, "invokes")
         body = None
         for base in (repo, _AUTO_ROOT):
@@ -230,48 +230,48 @@ def oneshot_verdict(ratified_criteria, programmatic_results: dict, judge_verdict
     }
 
 
-# ── op-dispatch CLI (exercised by tests/unit/content-cli.test.sh) ─────────────
+# ── op-dispatch CLI (exercised by tests/unit/preset-cli.test.sh) ─────────────
 def _cli(argv) -> int:
     import json
 
     if not argv:
-        sys.stderr.write("usage: content_oneshot.py <op> ...\n")
+        sys.stderr.write("usage: preset_oneshot.py <op> ...\n")
         return 2
     op = argv[0]
     if op == "validate-criteria":
         # argv[1] = ratified criteria JSON
         if len(argv) != 2:
-            sys.stderr.write("usage: content_oneshot.py validate-criteria <criteria-json>\n")
+            sys.stderr.write("usage: preset_oneshot.py validate-criteria <criteria-json>\n")
             return 2
         ok, errs = validate_oneshot_criteria(json.loads(argv[1]))
         print("OK" if ok else "INVALID: " + "; ".join(errs))
         return 0
     if op == "launch":
-        # argv[1] = content name, argv[2] = repo. Loads + validates the content
+        # argv[1] = preset name, argv[2] = repo. Loads + validates the preset
         # (fail closed) before folding its tuning into the launch descriptor.
         if len(argv) != 3:
-            sys.stderr.write("usage: content_oneshot.py launch <name> <repo>\n")
+            sys.stderr.write("usage: preset_oneshot.py launch <name> <repo>\n")
             return 2
-        contents = load_lib_module("contents")
-        # A shape-valid content can still declare a real-but-missing/unreadable
+        presets = load_lib_module("presets")
+        # A shape-valid preset can still declare a real-but-missing/unreadable
         # template that only build_oneshot_launch touches — surface either as the
         # operator-facing INVALID line, never a bare traceback.
         try:
-            content = contents.load_and_validate_content(argv[1], argv[2])
-            print(json.dumps(build_oneshot_launch(content, argv[2])))
-        except (contents.ContentError, RecipeError) as e:
+            preset = presets.load_and_validate_preset(argv[1], argv[2])
+            print(json.dumps(build_oneshot_launch(preset, argv[2])))
+        except (presets.PresetError, RecipeError) as e:
             print("INVALID: " + str(e))
         return 0
     if op == "verdict":
         # argv[1]=criteria JSON, argv[2]=programmatic_results JSON, argv[3]=judge_verdicts JSON
         if len(argv) != 4:
             sys.stderr.write(
-                "usage: content_oneshot.py verdict <criteria-json> <prog-json> <judges-json>\n"
+                "usage: preset_oneshot.py verdict <criteria-json> <prog-json> <judges-json>\n"
             )
             return 2
         print(json.dumps(oneshot_verdict(json.loads(argv[1]), json.loads(argv[2]), json.loads(argv[3]))))
         return 0
-    sys.stderr.write(f"content_oneshot.py: unknown op {op!r}\n")
+    sys.stderr.write(f"preset_oneshot.py: unknown op {op!r}\n")
     return 2
 
 

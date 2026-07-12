@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # auto U5 unit test (addressable-step-contents): build_oneshot_launch.
 #
-# U5 / KTD-5: for the DRIVER-orchestrated one-shot, the content's optional
+# U5 / KTD-5: for the DRIVER-orchestrated one-shot, the preset's optional
 # `prompt_template` is folded into the launched sub-agent's prompt by the DRIVER,
 # never by an adapter edit. build_oneshot_launch is the thin lib seam the
-# auto-content skill calls to build the launch descriptor: it names the op and,
-# when the content declares a prompt_template, folds the template's BODY in.
-# Template-less contents produce the plain op invocation (regression-safe).
+# auto-preset skill calls to build the launch descriptor: it names the op and,
+# when the preset declares a prompt_template, folds the template's BODY in.
+# Template-less presets produce the plain op invocation (regression-safe).
 #
 # SELF-CONTAINED harness; python pinned via CLAUDE_AUTO_PYTHON3; module loaded
 # via importlib from an absolute path.
 #
 # Scenarios (U5 plan, KTD-5):
-#   1. a content WITHOUT prompt_template -> plain op invocation (no template
+#   1. a preset WITHOUT prompt_template -> plain op invocation (no template
 #      key on the descriptor) — the regression case.
-#   2. a content WITH prompt_template -> the template body is folded into the
+#   2. a preset WITH prompt_template -> the template body is folded into the
 #      launch descriptor.
-#   3. a content with a valid op -> the descriptor NAMES that op.
+#   3. a preset with a valid op -> the descriptor NAMES that op.
 
 set -uo pipefail
 
@@ -41,7 +41,7 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 echo "oneshot-launch.test.sh"
 
 # Probe resolves the built-in `tuned-review` seed (which HAS a prompt_template)
-# against AUTO_ROOT as the repo, and a hand-built template-less content.
+# against AUTO_ROOT as the repo, and a hand-built template-less preset.
 probe() {
   "$PY" - "$LIB" "$AUTO_ROOT" <<'PYEOF'
 import sys, importlib.util
@@ -58,8 +58,8 @@ def load(name):
     return m
 
 try:
-    co = load("content_oneshot")
-    contents = load("contents")
+    co = load("preset_oneshot")
+    presets = load("presets")
     fn = co.build_oneshot_launch
 except Exception as e:  # module/function missing -> RED
     print("IMPORT-FAIL:%s" % e)
@@ -67,11 +67,11 @@ except Exception as e:  # module/function missing -> RED
 
 results = []
 
-# ── Scenario 1: template-less content -> plain op invocation (regression) ────
+# ── Scenario 1: template-less preset -> plain op invocation (regression) ────
 plain = {
     "name": "plain-review",
     "version": "1",
-    "description": "a template-less review content",
+    "description": "a template-less review preset",
     "invokes": {"adapter_op": "review"},
 }
 d_plain = fn(plain, auto_root)
@@ -80,9 +80,9 @@ results.append("plain_has_tmpl=%s" % ("prompt_template" in d_plain))
 results.append("plain_has_body=%s" % ("prompt_template_body" in d_plain))
 
 # ── Scenario 2 + 3: the built-in tuned-review seed HAS a prompt_template ──────
-# load_content resolves the shipped seed; build_oneshot_launch folds its body.
+# load_preset resolves the shipped seed; build_oneshot_launch folds its body.
 try:
-    tuned = contents.load_content("tuned-review", auto_root)
+    tuned = presets.load_preset("tuned-review", auto_root)
 except Exception as e:
     print("LOAD-FAIL:%s" % e)
     sys.exit(0)
@@ -99,22 +99,22 @@ PYEOF
 OUT="$(probe)"
 get() { printf '%s' "$OUT" | tr ';' '\n' | grep "^$1=" | head -1 | cut -d= -f2-; }
 
-it "a template-less content yields the plain op invocation naming its op"
+it "a template-less preset yields the plain op invocation naming its op"
 assert_eq "review" "$(get plain_op)"
 
-it "a template-less content carries no prompt_template key (regression-safe)"
+it "a template-less preset carries no prompt_template key (regression-safe)"
 assert_eq "False" "$(get plain_has_tmpl)"
 
-it "a template-less content carries no folded body"
+it "a template-less preset carries no folded body"
 assert_eq "False" "$(get plain_has_body)"
 
-it "a content with a valid op produces a launch naming that op"
+it "a preset with a valid op produces a launch naming that op"
 assert_eq "review" "$(get tuned_op)"
 
-it "a content WITH a prompt_template folds the template body into the descriptor"
+it "a preset WITH a prompt_template folds the template body into the descriptor"
 assert_eq "True" "$(get tuned_body_folds)"
 
-it "a content WITH a prompt_template records the template path on the descriptor"
+it "a preset WITH a prompt_template records the template path on the descriptor"
 assert_eq "True" "$(get tuned_has_tmpl)"
 
 # ── Scenario 4: workspace template WINS over the built-in (pins workspace-first) ─
@@ -124,8 +124,8 @@ assert_eq "True" "$(get tuned_has_tmpl)"
 # other scenarios pass AUTO_ROOT as the repo, collapsing both bases, so this is
 # the only scenario that actually pins the order.)
 TMPREPO="$(mktemp -d -t auto-oneshot.XXXXXX)"
-mkdir -p "${TMPREPO}/contents"
-printf 'WORKSPACE-OVERRIDE-SENTINEL\n' > "${TMPREPO}/contents/tuned-review.prompt.md"
+mkdir -p "${TMPREPO}/presets"
+printf 'WORKSPACE-OVERRIDE-SENTINEL\n' > "${TMPREPO}/presets/tuned-review.prompt.md"
 OVERRIDE_BODY="$(
   "$PY" - "$LIB" "$AUTO_ROOT" "$TMPREPO" <<'PYEOF'
 import sys, importlib.util
@@ -135,9 +135,9 @@ if lib not in sys.path:
 def load(name):
     spec = importlib.util.spec_from_file_location(name, f"{lib}/{name}.py")
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
-co = load("content_oneshot"); contents = load("contents")
-# built-in seed; its prompt_template is the relative 'contents/tuned-review.prompt.md'
-tuned = contents.load_content("tuned-review", auto_root)
+co = load("preset_oneshot"); presets = load("presets")
+# built-in seed; its prompt_template is the relative 'presets/tuned-review.prompt.md'
+tuned = presets.load_preset("tuned-review", auto_root)
 d = co.build_oneshot_launch(tuned, tmprepo)  # repo=tmprepo -> workspace searched first
 body = d.get("prompt_template_body") or ""
 print("sentinel" if "WORKSPACE-OVERRIDE-SENTINEL" in body else "builtin")

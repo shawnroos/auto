@@ -293,8 +293,8 @@ def pick_next_plan_unit_to_advance(ledger: dict):
 # where an unknown op previously flowed straight to ``launch_fn``.
 #
 # v0.14.0 (U1): the frozenset was lifted into the pure-stdlib leaf
-# ``lib/adapter_ops.py`` so ``lib/contents.py::validate_content`` can check a
-# content's op against the SAME set without importing this heavy dispatch module
+# ``lib/adapter_ops.py`` so ``lib/presets.py::validate_preset`` can check a
+# preset's op against the SAME set without importing this heavy dispatch module
 # (KTD-2 DAG boundary). We re-bind it here under the same name, so this module's
 # dispatch guard (``op not in VALID_ADAPTER_OPS`` below) is unchanged.
 VALID_ADAPTER_OPS = load_lib_module("adapter_ops").VALID_ADAPTER_OPS

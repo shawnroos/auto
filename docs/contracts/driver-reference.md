@@ -354,17 +354,17 @@ adapter's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
 is the PARSE half (it maps the returned findings onto the shared severity
 scale); the launch label for `review` is `/ce-code-review`, set here.
 
-### One-shot content verdict (v0.14.0 — driver-orchestrated, READ-ONLY)
+### One-shot preset verdict (v0.14.0 — driver-orchestrated, READ-ONLY)
 
-The `auto-content` skill runs a *content* one-shot: it loads a content,
+The `auto-preset` skill runs a *preset* one-shot: it loads a preset,
 dispatches its op **once**, and produces a terminal pass/fail verdict —
 WITHOUT the tick loop, a `/goal`, or any `ScheduleWakeup`. Two thin
-helpers in `lib/content_oneshot.py` back this; the skill owns all control
+helpers in `lib/preset_oneshot.py` back this; the skill owns all control
 flow (KTD-3), and drives both through each module's CLI (`_cli`/`__main__`):
 
-- `build_oneshot_launch(content, repo)` — the driver-side launch
-  descriptor: the content's `adapter_op`, plus the `prompt_template` body
-  when the content declares one (KTD-5 — the tuning folds at the DRIVER
+- `build_oneshot_launch(preset, repo)` — the driver-side launch
+  descriptor: the preset's `adapter_op`, plus the `prompt_template` body
+  when the preset declares one (KTD-5 — the tuning folds at the DRIVER
   launch, never via an adapter edit). The template resolves workspace-repo
   first, then the built-in root.
 - `oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)`

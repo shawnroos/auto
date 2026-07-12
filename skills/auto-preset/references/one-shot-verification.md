@@ -1,5 +1,5 @@
 <!--
-One-shot verification reference for the auto-content skill.
+One-shot verification reference for the auto-preset skill.
 Extends skills/auto-design/references/verification-taxonomy.md (the authoritative
 criterion-shape contract) to the RUN-TIME, STEP-LEVEL, driver-orchestrated
 one-shot. The criterion SHAPES are identical; what changes is WHO resolves each
@@ -8,7 +8,7 @@ type and WHEN — inline, in one synchronous pass, with no tick and no gate.
 
 # One-shot verification — deriving and resolving criteria
 
-A one-shot content run has no flow, no loop, and no tick. The `auto-content`
+A one-shot preset run has no flow, no loop, and no tick. The `auto-preset`
 skill is the whole control path: it PROPOSES a small set of context-fit
 verification criteria, the operator ACCEPTS or EDITS them, the ratified set is
 baked into the single run, and the skill RESOLVES every criterion **inline**
@@ -18,14 +18,14 @@ and the exact resolution rule for each of the four criterion types.
 Read `skills/auto-design/references/verification-taxonomy.md` first — it pins the
 exact field shape of each criterion (`programmatic` / `model_judge` /
 `advisor_judge` / `human`). Nothing here changes those shapes; the ratified list
-is validated against that same taxonomy (via `content_oneshot.validate_oneshot_criteria`,
+is validated against that same taxonomy (via `preset_oneshot.validate_oneshot_criteria`,
 which reuses the recipe validator) before anything is baked.
 
 ## Deriving criteria from the target — seed, don't interview
 
 Extend `auto-design`'s **"Seed, don't interview"** invariant to the step level.
 Do NOT open a blank questionnaire. Read the target the operator named (the diff,
-the branch, the file, the change to build) and the content's own intent (its
+the branch, the file, the change to build) and the preset's own intent (its
 `description` and `adapter_op`), and PROPOSE a short list — usually 1–3 criteria —
 that would actually prove this one step landed. Then let the operator accept or
 edit.
@@ -38,10 +38,10 @@ at 16 (the taxonomy cap, enforced by the validator).
 
 Worked seeds:
 
-- A `review` content fired at a diff → propose `programmatic` `{argv: ["bash",
+- A `review` preset fired at a diff → propose `programmatic` `{argv: ["bash",
   "tests/run.sh"], check: exit_zero}` when the repo has a test command, plus a
   `model_judge` "the review's findings are grounded in the diff, not generic."
-- A `do_unit` content fired at a scoped build → propose `programmatic` that the
+- A `do_unit` preset fired at a scoped build → propose `programmatic` that the
   build's own test/typecheck passes, plus (only if the change is taste-sensitive)
   a `human` sign-off.
 
@@ -77,7 +77,7 @@ when the second read or the human judgment is worth blocking for — otherwise a
 ## Handing the resolved criteria to the verdict
 
 Once all criteria are resolved, the skill folds them into a single terminal
-verdict via `content_oneshot.oneshot_verdict(ratified_criteria,
+verdict via `preset_oneshot.oneshot_verdict(ratified_criteria,
 programmatic_results, judge_verdicts)` — the ratified criteria list goes in
 directly (there is no synthesized unit):
 
@@ -94,7 +94,7 @@ at verdict time — if any remain, `oneshot_verdict` raises `OneShotIncomplete`
 ## What stays true
 
 - **The ratified criteria are ephemeral.** They live only on this run. They are
-  NEVER written back onto the content JSON (R2/A2) — a content is pure payload,
+  NEVER written back onto the preset JSON (R2/A2) — a preset is pure payload,
   never payload-plus-gate. Do not "save this check for next time" (that is a
   deferred Phase-2 opt-in).
 - **An edited criterion is what's baked.** If the operator changes a proposed

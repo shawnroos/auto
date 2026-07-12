@@ -1,9 +1,0 @@
-{
-  "name": "scoped-build",
-  "version": "1",
-  "description": "A scoped build content — runs the `do_unit` adapter op with a tightly-scoped build prompt. Fire it one-shot to implement one well-bounded change against a target, no flow armed.",
-  "invokes": {
-    "adapter_op": "do_unit",
-    "prompt_template": "contents/scoped-build.prompt.md"
-  }
-}
