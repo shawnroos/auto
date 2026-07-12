@@ -32,7 +32,7 @@ imports), so this stays a shallow, cycle-free layer.
 VALIDATION IS HAND-ROLLED (no `jsonschema` — same install-anywhere constraint as
 `recipe_validate`; the plugin ships pure stdlib + bash to arbitrary repos). The
 written contract is `docs/contracts/preset-format.md` (marked PROVISIONAL until
-a Phase-2 `content_ref` consumer validates the container/preset boundary); there
+a Phase-2 `preset_ref` consumer validates the container/preset boundary); there
 is deliberately no `presets/schema.json` — code is the enforcement.
 """
 

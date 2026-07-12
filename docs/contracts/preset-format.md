@@ -3,7 +3,7 @@
 > **⚠️ Status: PROVISIONAL.** The preset object shape below is **not locked**.
 > Phase 1 (addressable-step-contents) ships the one-shot runnable preset, but
 > the container↔preset boundary — how a flow's *container* references a preset
-> by name and hands it inputs — is not built until Phase 2 (`content_ref`, R6/R7/
+> by name and hands it inputs — is not built until Phase 2 (`preset_ref`, R6/R7/
 > R8). The field set here may change once a real container consumer validates the
 > boundary. Do **not** treat this as a locked contract or build external tooling
 > against it yet. (Contrast: [`recipe-format.md`](recipe-format.md) is a LOCKED
