@@ -49,7 +49,7 @@
               "plan_output_to_paired_builders",
               "brainstorm_output_to_plan_unit"
             ],
-            "description": "MUST be a V1-registered phase-boundary emitter name (validate() rejects any other). iterate_template is within-phase and never named here."
+            "description": "MUST be a V1-registered phase-boundary producer name (validate() rejects any other). iterate_template is within-phase and never named here."
           }
         }
       }
@@ -95,7 +95,7 @@
     "expected_emit_outputs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "(v0.3.0, additive — F4) Unit ids materialized by a phase-boundary emitter, declared so depends_on integrity accepts them — see recipe-format.md §8."
+      "description": "(v0.3.0, additive — F4) Unit ids materialized by a phase-boundary producer, declared so depends_on integrity accepts them — see recipe-format.md §8."
     },
     "plan_presatisfied": {
       "type": "boolean",

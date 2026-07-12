@@ -245,7 +245,7 @@ backends. The mechanics:
    composed custom from `auto-design`). Attach the confirmed `verification` array
    to the unit named by the recipe's existing `iteration.gate_unit`
    (`a2`→`judge`, `a4`→`compare`, custom→its declared gate). Do not add a new
-   gate point or emitter — the typed array rides on the *existing* mechanism
+   gate point or producer — the typed array rides on the *existing* mechanism
    (`recipe-format.md` §11 + §6).
 2. **Name it run-scoped: `<builtin>-<run-slug>`** (e.g. `a2-fix-checkout`). This
    **distinct stem** is the anti-shadow guard (KTD-6): it never collides with the

@@ -121,11 +121,11 @@ class Adapter:
     def enumerate_plan_units(self, ledger):
         """PREPARE the plan→work-units enumeration (v0.2.0 re-lock, KTD-4).
 
-        The producer the emitters read. At plan-done the engine calls this to turn
+        The producer the producers read. At plan-done the engine calls this to turn
         the reviewed plan into a work-unit list. Prepare-only: returns an envelope
         the MODEL executes (reads the plan, returns `[{id, invokes, ...}]`); the
         engine persists it onto the plan unit's `dispatch_context.enumerated_units`
-        (U6) and the emitters (U5b) shape it into ledger units. v0.4.3 (KTD-15):
+        (U6) and the producers (U5b) shape it into ledger units. v0.4.3 (KTD-15):
         for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
         is surfaced so the envelope names WHICH plan; omitted for a1.
 
@@ -175,7 +175,7 @@ class Adapter:
         Prepare-only, mirroring ``do_unit``: the model runs /ce-brainstorm,
         records the requirements-doc path on the unit's
         ``dispatch_context.requirements_doc``, and self-writes verdict-returned;
-        the engine then fires the U8 ``brainstorm_output_to_plan_unit`` emitter
+        the engine then fires the U8 ``brainstorm_output_to_plan_unit`` producer
         on advance to plan. Without this op the spine's brainstorm unit resolved
         to nothing and could never be worked to terminal (round-1 P1)."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit

@@ -16,7 +16,7 @@ description: >
 
 A legible, at-a-glance picture of a live auto run's agent tree: the driver, the
 work units it dispatched, and the `do_unit` fan-out agents nested under their
-emitter parents — each annotated with how long it has been in flight against its
+producer parents — each annotated with how long it has been in flight against its
 stall threshold and which attempt it is on. Its purpose is supervision *legibility*
 (R6, AE5): surface a wedged or dead node — top-level or nested — as a distinct,
 over-age node so the driver's reap→retry→escalate policy (`skills/auto/SKILL.md`

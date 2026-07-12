@@ -18,7 +18,7 @@ recipe: <name>
   ┌─ PLAN
   │   • <unit-id>   ← <dep, dep>   (deps shown when present)
   └─
-      ▼  emit: <emitter-name>      (the emitter that fires arriving at the next phase)
+      ▼  emit: <producer-name>      (the producer that fires arriving at the next phase)
   ┌─ WORK  (terminal)
   │   • (units emitted at runtime)  (a phase with no declared units)
   └─
@@ -30,11 +30,11 @@ recipe: <name>
 - **`• <unit-id>`** is a declared unit in that phase. `← a, b` shows its
   `depends_on` (it waits for a and b).
 - **`(units emitted at runtime)`** means the phase has no pre-declared units —
-  they're produced by the emitter when the run reaches that phase (A1's work
+  they're produced by the producer when the run reaches that phase (A1's work
   phase, A2's chosen-plan work, A4's builders).
-- **`▼ emit: <name>`** on a between-phase arrow names the emitter that fires when
-  the run ARRIVES at the next phase (the emitter is keyed on its `to` phase, so a
-  `{from: plan, to: work}` emitter shows on the arrow entering `work` even though
+- **`▼ emit: <name>`** on a between-phase arrow names the producer that fires when
+  the run ARRIVES at the next phase (the producer is keyed on its `to` phase, so a
+  `{from: plan, to: work}` producer shows on the arrow entering `work` even though
   the run routes through `seam`).
 - **`(terminal)`** marks the phase whose completion ends the run.
 
@@ -45,7 +45,7 @@ Render each with `bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh" --render <nam
 - `a2` — plan-1/2/3 (parallel) + judge → `judge_winner_to_work_units` → work.
 - `a4` — one plan unit → `plan_output_to_paired_builders` → two biased builders +
   comparator.
-- `w` — work-only: `phase_order: ["work"]`, no plan, no emitter; units come from
+- `w` — work-only: `phase_order: ["work"]`, no plan, no producer; units come from
   `enumerate_plan_units` at init (an already-reviewed plan, built directly).
 
 ## Comparison — stacking cards for the launch chooser (KTD-2/KTD-3)

@@ -105,7 +105,7 @@ ALLOWED_FUNCTIONS=(
   # _print_skip_reason rather than inlined (8 LOC out); what remains here is the
   # single delegation call, +1 net. Decomposed first, waived only the residue.
   "lib/auto-status.py:_print_run:127"
-  # iterate_template is v0.3.0 U3's emitter. A single coherent computation:
+  # iterate_template is v0.3.0 U3's producer. A single coherent computation:
   # validate inputs (recipe shape + emit_count bounds), read
   # iteration_emit_count, compute the next N unit ids, build the unit dicts.
   # Decomposition would extract 2-3 private helpers (validate-shape,
@@ -129,7 +129,7 @@ ALLOWED_FUNCTIONS=(
   # function itself is small; U10 shrank the measured span 139 → 125.
   # U14 (KTD-1) added the enumerate op's per-item `depends_on` edge clause to the
   # `enumerate_plan_units` method (in the Adapter class body the awk attributes
-  # here) so the readiness engine can order the emitter fan-out — 125 → 137.
+  # here) so the readiness engine can order the producer fan-out — 125 → 137.
   "lib/adapter-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation dispatcher (parse → validate recipe
   # → build units → init ledger → emit arm intent). Already partially decomposed

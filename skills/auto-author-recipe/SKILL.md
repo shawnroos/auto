@@ -15,7 +15,7 @@ description: >
 
 A **recipe** is a named JSON declaration of a workflow topology — the initial
 ledger `/auto` builds a run from (units, their `depends_on` graph, the phase
-each runs in, and which emitter produces work units at a phase boundary). The
+each runs in, and which producer produces work units at a phase boundary). The
 user should NOT write that JSON by hand. This skill is the compiler: the user
 describes the workflow in plain language, and this skill produces a validated
 recipe file.
@@ -35,11 +35,11 @@ writing. Never invent a recipe shape that wouldn't pass `validate`.
      (a work-phase unit that `depends_on` them)
    - Does the work come from a plan-loop (the engine plans first) or is the plan
      already written? (plan-loop → a `plan`-phase unit + a `phase_transitions`
-     emitter; already-written → the work-only shape, `phase_order: ["work"]`)
-2. **Compile** the answers into a recipe dict. Choose the emitter from the V1
+     producer; already-written → the work-only shape, `phase_order: ["work"]`)
+2. **Compile** the answers into a recipe dict. Choose the producer from the V1
    registry by intent: one plan → one set of work units = `plan_output_to_work_units`;
    N competing plans + judge = `judge_winner_to_work_units`; two biased builders +
-   comparator = `plan_output_to_paired_builders`. (These are the only V1 emitter
+   comparator = `plan_output_to_paired_builders`. (These are the only V1 producer
    names `validate` accepts; non-default `phase_order` other than `["work"]` is
    rejected until v0.2.1.)
 3. **Show the topology** back to the user: render it with
@@ -121,7 +121,7 @@ See `docs/contracts/recipe-format.md` §6 + §7 for the full field set and
 - It does not write JSON the user hand-edits — the user describes; the skill
   compiles. The JSON is a compile artifact.
 - It does not accept v0.2.1+ shapes (non-default `phase_order` beyond work-only,
-  unregistered emitter names, a loaded `python_hook`) — `validate` rejects them
+  unregistered producer names, a loaded `python_hook`) — `validate` rejects them
   and you surface the rejection rather than working around it.
 - It does not run the recipe — that's `/auto <plan> --recipe <name>`. Tell the
   user that's how to use what they just saved.

@@ -4,15 +4,15 @@
 `derive_execution_tree(recipe, cap)` turns a validated recipe dict (from
 `auto-author-recipe` / `auto-design`) into an EXECUTION TREE: ordered parallel
 waves derived from the `depends_on` DAG, fan-out `do_unit` children nested under
-their emitter parent, and a substrate ROUTING DECISION. It is PURE and
+their producer parent, and a substrate ROUTING DECISION. It is PURE and
 deterministic — it plans a topology, it never dispatches (`skills/auto-translate`
 wraps it; `lib/dispatcher.py::dispatch_batch` is the executor).
 
 Four steps (mirroring KTD6 / KTD6b):
 
-  1. EXPAND emitter-produced units. Recipes like `recipes/a4.json` declare their
+  1. EXPAND producer-produced units. Recipes like `recipes/a4.json` declare their
      paired builders in `expected_emit_outputs` (materialized at RUN time by a
-     phase-boundary emitter), NOT in `units[]`. `dispatcher._is_ready` treats an
+     phase-boundary producer), NOT in `units[]`. `dispatcher._is_ready` treats an
      absent dependency as unsatisfied, so a raw frontier walk over a4 yields only
      `{plan}` and `compare` is never ready. We synthesize placeholder nodes for
      those declared ids FIRST so the dependents can become ready.
@@ -28,8 +28,8 @@ Four steps (mirroring KTD6 / KTD6b):
      over-cap remainder stays pending and spills to the next wave, mirroring
      `dispatch_batch`'s over-cap behavior.
 
-  3. NEST fan-out `do_unit` children under their emitter parent (the unit whose
-     completion triggers their emission — the phase-boundary emitter's source).
+  3. NEST fan-out `do_unit` children under their producer parent (the unit whose
+     completion triggers their emission — the phase-boundary producer's source).
 
   4. SUBSTRATE SELECTION (a routing decision — never execution). A self-contained
      bounded parallel-fan-in loop (single-phase, no per-unit ce-work/review
@@ -81,14 +81,14 @@ class ExecutionTreeError(Exception):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Step 1 — expand emitter-produced units.
+# Step 1 — expand producer-produced units.
 
 
 def _emit_template_for(emit_id: str, recipe: dict):
     """The `emit_templates` entry whose `id_prefix` prefixes ``emit_id``, or None.
 
     A declared `expected_emit_outputs` id (e.g. a4's ``build-clarity``) is
-    materialized by an emitter; the matching emit_template carries its `phase` and
+    materialized by a producer; the matching emit_template carries its `phase` and
     `invokes.adapter_op` — which tells us the emitted node's phase and whether it
     is a fan-out `do_unit` child (KTD5 nesting). Longest-prefix wins so overlapping
     prefixes resolve deterministically.
@@ -103,10 +103,10 @@ def _emit_template_for(emit_id: str, recipe: dict):
 
 
 def _phase_boundary_source(to_phase: str, recipe: dict, units: list):
-    """The (from_phase, source_unit_ids) an emitter produces its `to_phase` units
+    """The (from_phase, source_unit_ids) a producer produces its `to_phase` units
     from — the structural dependency of an emitted node.
 
-    A phase-boundary emitter (`plan_output_to_paired_builders` etc.) fires when the
+    A phase-boundary producer (`plan_output_to_paired_builders` etc.) fires when the
     run ARRIVES at its `to` phase, so its output waits on the `from` phase's units
     (they must finish before the emission happens). We return those source unit ids
     so a synthesized node `depends_on` them — which is what orders the paired-
@@ -132,13 +132,13 @@ def _phase_boundary_source(to_phase: str, recipe: dict, units: list):
     return from_phase, src_ids
 
 
-def _expand_emitter_units(recipe: dict):
+def _expand_producer_units(recipe: dict):
     """Synthesize placeholder nodes for `expected_emit_outputs` ids not in `units[]`.
 
     Returns ``(units, emitted_meta)`` where ``units`` is the expanded in-memory
     unit list (static `units[]` copied verbatim, each stamped `state=pending`, plus
-    the synthesized emitter-produced nodes) and ``emitted_meta`` maps each
-    synthesized id → ``{"parent": <emitter-source-id>, "fanout": bool}`` for the
+    the synthesized producer-produced nodes) and ``emitted_meta`` maps each
+    synthesized id → ``{"parent": <producer-source-id>, "fanout": bool}`` for the
     nesting step. a2 (no `expected_emit_outputs`) expands to itself unchanged.
     """
     units = []
@@ -161,8 +161,8 @@ def _expand_emitter_units(recipe: dict):
         phase = (tmpl or {}).get("phase") or recipe.get("terminal_phase", "work")
         adapter_op = ((tmpl or {}).get("invokes") or {}).get("adapter_op")
         _from_phase, src_ids = _phase_boundary_source(phase, recipe, units)
-        # Emitter-produced work units are fan-out children when their template
-        # dispatches `do_unit`; the parent is the (single) emitter-source unit.
+        # Producer-produced work units are fan-out children when their template
+        # dispatches `do_unit`; the parent is the (single) producer-source unit.
         parent = src_ids[0] if len(src_ids) == 1 else None
         fanout = adapter_op == "do_unit"
         units.append({
@@ -213,11 +213,11 @@ def _frontier_waves(units: list, cap: int):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Step 3 — nest fan-out do_unit children under their emitter parent.
+# Step 3 — nest fan-out do_unit children under their producer parent.
 
 
 def _build_nesting(emitted_meta: dict) -> dict:
-    """`{parent_id: [child_id, ...]}` for the emitter-produced fan-out children.
+    """`{parent_id: [child_id, ...]}` for the producer-produced fan-out children.
 
     Only `do_unit` fan-out children are nested (a comparator/judge fan-in stays a
     top-level wave node). Children are sorted for a deterministic structure.
@@ -306,7 +306,7 @@ def derive_execution_tree(recipe: dict, cap: int) -> dict:
           "waves":     [[unit_id, ...], ...],   # ordered; within a wave = parallel
           "nesting":   {parent_id: [child_id]}, # fan-out do_unit children
           "substrate": "subagent-tree" | "workflow-script",
-          "emitted":   [synthesized emitter-produced ids],
+          "emitted":   [synthesized producer-produced ids],
           "preview":   "<topology-render-style card string>",
         }
 
@@ -317,7 +317,7 @@ def derive_execution_tree(recipe: dict, cap: int) -> dict:
         raise ExecutionTreeError(f"cap must be a positive int, got {cap!r}")
     cap = int(cap)
 
-    units, emitted_meta = _expand_emitter_units(recipe)
+    units, emitted_meta = _expand_producer_units(recipe)
     waves = _frontier_waves(units, cap)
     nesting = _build_nesting(emitted_meta)
     substrate = _select_substrate(recipe, units)

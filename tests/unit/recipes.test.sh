@@ -8,10 +8,10 @@
 # are added when U3 lands):
 #   1. each built-in recipe (a1/a2/a4/w) validates
 #   2. A1_BUILTIN equals the resolved a1.json topology (no drift) + validates
-#   3. validate rejections: unknown field, bad emitter, traversal, non-default
+#   3. validate rejections: unknown field, bad producer, traversal, non-default
 #      phase_order (A3), missing required, depends_on integrity
 #   4. work-only ([work]) accepted; reserved python_hook accepted
-#   5. topology-render: deterministic, renders each built-in, names the emitter
+#   5. topology-render: deterministic, renders each built-in, names the producer
 
 set -uo pipefail
 
@@ -66,7 +66,7 @@ elif op == "render-builtin":
     tr = load_lib_module("topology-render")
     with open(os.path.join(auto_root, "recipes", sys.argv[3] + ".json")) as f:
         card = tr.render(json.load(f), 60)
-    # print a few stable signals: contains the recipe name, the emitter, phase labels
+    # print a few stable signals: contains the recipe name, the producer, phase labels
     sigs = []
     sigs.append("name" if ("recipe: " + sys.argv[3]) in card else "NONAME")
     sigs.append("PLAN" if "PLAN" in card.upper() else "noplan")
@@ -197,7 +197,7 @@ assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase
 it "fix-pass D: default phase_order with empty units NOT rejected by the work-only rule"
 assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[]}')"
 
-it "unregistered emitter name rejected"
+it "unregistered producer name rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"plan","phase":"plan","invokes":{}}],"phase_transitions":[{"from":"plan","to":"work","emitter":"nope"}]}')"
 
 it "prompt_template path traversal rejected (security Finding 1)"
@@ -283,7 +283,7 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_orde
 it "U6: work-only empty-units guard STILL fires (regression — guard retained)"
 assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
 
-it "U6: phase_transitions naming an unregistered emitter STILL rejected on a spine"
+it "U6: phase_transitions naming an unregistered producer STILL rejected on a spine"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","emitter":"nope"}],"units":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
 
 # ─── v0.6.0 U7: pipeline.json (the brainstorm-rooted spine) validates+resolves ─
@@ -304,7 +304,7 @@ it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_unit)
 assert_eq "review:review|w:next_plan_step|distinct:True" "$(rec review-vs-w-distinct)"
 
 # ─── Scenario 5: topology-render ────────────────────────────────────────────
-it "topology-render: a1 card names recipe + has PLAN + names emitter"
+it "topology-render: a1 card names recipe + has PLAN + names producer"
 assert_eq "name,PLAN,emit" "$(rec render-builtin a1)"
 
 it "topology-render: deterministic (same input → same output)"
@@ -434,11 +434,11 @@ elif op == "unit-for-merge":
                         u["dispatch_context"]["prompt_template"]))
 
 elif op == "lint-empty-phase":
-    # validate_and_lint warns on a phase with no units + no emitter targeting it.
+    # validate_and_lint warns on a phase with no units + no producer targeting it.
     warns = recipes.validate_and_lint({"name": "x", "version": "1",
         "phase_order": ["plan","seam","work"], "terminal_phase": "work",
         "units": [{"id":"plan","phase":"plan","invokes":{}}]})
-    # work phase has no units and (no phase_transitions) no emitter → a warning.
+    # work phase has no units and (no phase_transitions) no producer → a warning.
     print("warned" if any("work" in w for w in warns) else "no-warning")
 PYEOF
 }
@@ -478,7 +478,7 @@ assert_eq "raised" "$(reg unit-for-traversal)"
 it "unit_for merges invokes into dispatch_context"
 assert_eq "u,do_unit,p/x.md" "$(reg unit-for-merge)"
 
-it "validate_and_lint warns: phase with no units + no emitter"
+it "validate_and_lint warns: phase with no units + no producer"
 assert_eq "warned" "$(reg lint-empty-phase)"
 
 # ─── U5 (v0.3.0): iteration + emit_templates validation ─────────────────────
@@ -641,11 +641,11 @@ elif op == "lint-max-wall-short":
 elif op == "u6-depends-on-id-prefix-valid":
     # v0.3.0 U6 (F4-tightened): a structural unit may forward-reference units
     # produced by an emit_template. With F4 SCHEMA TIGHTENING the recipe must
-    # DECLARE the emitter-produced ids via `expected_emit_outputs` — they are
+    # DECLARE the producer-produced ids via `expected_emit_outputs` — they are
     # no longer accepted on prefix-match alone. A4's `compare` is the canonical
     # example: its depends_on names "build-clarity" and "build-perf"
     # (materialized by the bias-builder emit_template + the
-    # plan_output_to_paired_builders phase-transition emitter). The validator
+    # plan_output_to_paired_builders phase-transition producer). The validator
     # MUST accept this AFTER the recipe declares them in expected_emit_outputs.
     r = {
         "name": "u6-fwdref", "version": "1",
@@ -693,7 +693,7 @@ elif op == "u6-depends-on-unrelated-rejected":
 elif op == "f4-build-typo-rejected":
     # F4 DF control (a): the prior carve-out accepted ANY depends_on string
     # starting with an emit_template's id_prefix — `"build-typo"` would pass
-    # against id_prefix `"build-"` even though no emitter would ever produce
+    # against id_prefix `"build-"` even though no producer would ever produce
     # `build-typo`. After F4 the validator requires either iterate-shape
     # ({id_prefix}{positive_int}) OR declaration in expected_emit_outputs.
     # `build-typo` matches NEITHER, so it must reject.
@@ -717,7 +717,7 @@ elif op == "f4-build-typo-rejected":
 
 elif op == "f4-iterate-shape-accepted":
     # F4 DF control (b): iterate-shape ids ({id_prefix}{positive_int}) are
-    # plausibly produced by `iterate_template` (see lib/emitters.py: the emit
+    # plausibly produced by `iterate_template` (see lib/producers.py: the emit
     # math is `f"{id_prefix}{base + i + 1}"`), so `build-1`, `build-7`, etc.
     # must validate WITHOUT requiring expected_emit_outputs.
     r = {

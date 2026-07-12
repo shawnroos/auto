@@ -68,11 +68,11 @@ tier="$(cd "$wt/sub/deep" && unset CLAUDE_AUTO_REPO && bash "$LIST_SH" | awk -F'
 assert_eq "workspace" "$tier"
 
 # ─── preview surface ────────────────────────────────────────────────────────
-it "picker preview: --render a4 produces a topology card naming the emitter"
+it "picker preview: --render a4 produces a topology card naming the producer"
 card="$(CLAUDE_AUTO_REPO="$(mktemp -d)" bash "$LIST_SH" --render a4)"
 case "$card" in
   *"recipe: a4"*"plan_output_to_paired_builders"*) pass ;;
-  *) fail "card missing name or emitter: $(printf '%s' "$card" | head -3)" ;;
+  *) fail "card missing name or producer: $(printf '%s' "$card" | head -3)" ;;
 esac
 
 # ── summary ─────────────────────────────────────────────────────────────────

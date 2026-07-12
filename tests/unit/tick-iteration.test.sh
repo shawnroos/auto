@@ -195,7 +195,7 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
             payload = {"emit_count": emit_count}
         m.set_verdict_decision(repo, run, "judge", decision, payload=payload)
     if gate_state == "verdict-returned" and decision == "advance":
-        # Advance requires winner_unit_id for downstream emitters; set it.
+        # Advance requires winner_unit_id for downstream producers; set it.
         m.set_winner_unit_id(repo, run, "judge", plan_units[0])
 
 
@@ -1046,24 +1046,24 @@ PYEOF
 # DF#6 patch: revert the emit_template-optional branch so the iterate path
 # ALWAYS calls iterate_template even when the recipe omits emit_template.
 # Under a recipe with iteration but no emit_template, iterate_template raises
-# RecipeError at lib/emitters.py:229.
+# RecipeError at lib/producers.py:229.
 cat > "$DF_DIR/df6_no_optional_emit.py" <<'PYEOF'
 """DF#6: revert the F2 emit_template-optional branch so the iterate path
-unconditionally hardcodes emitter=iterate_template. With a recipe that
+unconditionally hardcodes producer=iterate_template. With a recipe that
 omits iteration.emit_template, iterate_template raises RecipeError."""
 import os, sys
 p = os.path.join(sys.argv[1], "tick_advance.py")  # B4: anchor moved to tick_advance
 src = open(p).read()
 old = (
     '        if (led.get("iteration") or {}).get("emit_template"):\n'
-    '            emitter = emitters.iterate_template\n'
+    '            producer = producers.iterate_template\n'
     '        else:\n'
-    '            emitter = emitters.no_emit\n'
+    '            producer = producers.no_emit\n'
     '        ledger.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'
     '            gate_unit_id,\n'
-    '            emitter=emitter,\n'
+    '            producer=producer,\n'
     '            new_depends_on=None,\n'
     '        )'
 )
@@ -1072,7 +1072,7 @@ new = (
     '            repo_root,\n'
     '            run_id,\n'
     '            gate_unit_id,\n'
-    '            emitter=emitters.iterate_template,  # DF#6 PATCH\n'
+    '            producer=producers.iterate_template,  # DF#6 PATCH\n'
     '            new_depends_on=None,\n'
     '        )'
 )
@@ -1224,7 +1224,7 @@ if op == "df-iteration-raise-unwrapped":
 elif op == "df-no-emit-raises":
     # DF#6: iterate_template ALWAYS called; on a no-emit_template recipe
     # this raises RecipeError. With the F2 fix, the iterate path uses the
-    # no-op emitter instead and the tick re-arms cleanly.
+    # no-op producer instead and the tick re-arms cleanly.
     _init_iter_no_emit("f2-df-noemit", attempts=0, max_attempts=5)
     try:
         r = t.dispatch_tick(repo, "f2-df-noemit")
@@ -1274,7 +1274,7 @@ fi
 # reverts the optional-emit branch — the F2 try/except (DF#5's target) is
 # left intact — so the visible effect is a stop intent with
 # reason="iteration-check-failed". We assert EXACTLY that observable.
-it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op emitter branch → an iterate path on a recipe missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
+it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op producer branch → an iterate path on a recipe missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
 res="$(f2_df_with_patched_tick "$DF_DIR/df6_no_optional_emit.py" df-no-emit-raises)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('action',''))" "$res")"
 reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('reason',''))" "$res")"

@@ -27,7 +27,7 @@
 #      blocking; a distinct description clears it.
 #   5. Teardown / recipe-blind-after-init — after init_ledger the run-scoped
 #      recipe file is deleted, yet a post-init drive (dispatch_tick, which
-#      resolves emitters off the LEDGER, never the recipe file) still advances the
+#      resolves producers off the LEDGER, never the recipe file) still advances the
 #      run, read_ledger still carries the topology, and nothing persists in
 #      .claude/auto/recipes/.
 

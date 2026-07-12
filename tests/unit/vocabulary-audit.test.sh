@@ -56,7 +56,7 @@ fail() {
 # ledger        ledger           U9
 TERM_STATUS="\
 orchestrator=done
-emitter=pending
+emitter=done
 adapter=pending
 tick=pending
 seam=pending
@@ -161,6 +161,35 @@ audit_term_hits() {
              | grep -vE '^lib/auto\.py:[0-9]+:.*(--recipe|--adapter|--teardown-recipe-after-init|[Dd]eprecat)' \
              || true)"
       ;;
+    emitter)
+      # TEMP: until U6. U3 renamed the emitter ROLE vocabulary (symbols + prose)
+      # to `producer`, but the on-disk KEY cutover is deferred to U6 (KTD-6 — all
+      # persisted key/value literals flip in one unit). So the literal JSON key
+      # `emitter` (phase_transitions[].emitter) legitimately survives, in its
+      # persisted form, in exactly these places:
+      #   * recipes/*.json + recipes/schema.json — the recipe files that carry
+      #     `"emitter": "<producer-name>"` and the schema's `required`/property key;
+      #   * lib/recipe_validate.py, lib/phase-grammar.py, lib/topology-render.py —
+      #     the code that READS phase_transitions[].emitter (pt["emitter"] /
+      #     pt.get("emitter")) plus lib/recipes.py's docstring example;
+      #   * docs/contracts/recipe-format.md — the normative JSON example + the
+      #     `emitter` key identifier in §4 (key tables wait for U6, KTD-5);
+      #   * tests/**/*.sh — recipe/transition fixtures exercising the key.
+      # The producer-name VALUES (`plan_output_to_work_units`, …) also rename in
+      # U6 — they contain no `emitter` token, so no entry is needed for them.
+      # Narrow to the QUOTED/BACKTICKED key token so any un-renamed emitter ROLE
+      # prose or symbol still fails the audit. Remove this whole branch at U6.
+      raw="$(printf '%s\n' "$raw" | grep -vE "[\"'\`]emitter[\"'\`]" || true)"
+      # Two-term test files whose module family renames later (KTD-3): the module
+      # names lib/unit_emitters.py / lib/ledger_emitters.py use `_` (no \b before
+      # `emitter`, never matched here), but their sibling test files use a hyphen
+      # (unit-emitters.test.sh renames at U7 with the `unit` family;
+      # ledger-emitters.test.sh at U9 with the `ledger` family). Their summary
+      # lines MUST equal the on-disk filename for tests/run.sh to tally them, so
+      # the `-emitters` token legitimately survives until those units. TEMP-ish:
+      # these two drop out of this branch when their file is renamed (U7/U9).
+      raw="$(printf '%s\n' "$raw" | grep -vE 'unit-emitters\.test\.sh|ledger-emitters\.test\.sh' || true)"
+      ;;
   esac
 
   [ -z "$raw" ] && return 0
@@ -197,18 +226,22 @@ fi
 # 0-assertion test or a never-firing grep would report green while checking
 # nothing. It does NOT touch the real status table above.
 #
-# NB: this MUST track a term whose real status is still `pending`. Once
-# `orchestrator` was renamed (U2) it no longer produces non-whitelisted hits, so
-# the control would go vacuous itself; it now probes `emitter` (pending until
-# U3). Each rename unit that lands its term should re-point this to the next
-# still-pending term.
-DF_TERM="emitter"
+# NB: this MUST track a term whose real status is still `pending`. Once a term is
+# renamed it no longer produces non-whitelisted hits, so the control would go
+# vacuous itself; each rename unit re-points this to the next still-pending term.
+# U2 moved it orchestrator→emitter; U3 renamed `emitter`, so it now probes
+# `adapter` (pending until U4).
+DF_TERM="adapter"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then
   # Confirm the output actually NAMES files (path:lineno:… shape), not just
-  # non-empty noise.
-  if printf '%s\n' "$df_hits" | grep -qE '^[^:]+:[0-9]+:'; then
+  # non-empty noise. NB: no `grep -q` here — a large hit set (e.g. `adapter`,
+  # >64KB) would make grep early-exit and SIGPIPE the upstream `printf`, which
+  # `set -o pipefail` then reports as a pipeline failure (a false negative that
+  # only shows up once the probed term is populous enough to exceed the pipe
+  # buffer). Reading all input with a plain `grep … >/dev/null` avoids it.
+  if printf '%s\n' "$df_hits" | grep -E '^[^:]+:[0-9]+:' >/dev/null; then
     pass
   else
     fail "audit fired but did not name files: ${df_hits}"

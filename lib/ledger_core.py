@@ -11,7 +11,7 @@ primitives. The PURE predicate logic (``recompute_predicate`` and its helpers,
 (U16) to keep this file under the size budget; ``_atomic_write`` reaches it via
 the deferred ``_lazy_load`` idiom, so this file still imports NO sibling ledger
 module at top level — it is the bottom of the acyclic DAG (core ← mutators ←
-emitters ← facade).
+producers ← facade).
 
 Design notes (the load-bearing correctness rules):
 
@@ -455,12 +455,12 @@ def init_ledger(
                            ["plan", "seam", "work"] (the v0.1.x grammar).
       ``terminal_phase`` — optional str; the phase whose completion ends the run.
                            Defaults to "work". MUST be a member of phase_order.
-      ``phase_transitions`` — optional list of {from, to, emitter} dicts; the
-                           recipe's emitter declarations. Persisted on the ledger
-                           so seam-handlers can resolve the emitter for a given
+      ``phase_transitions`` — optional list of {from, to, producer} dicts; the
+                           recipe's producer declarations. Persisted on the ledger
+                           so seam-handlers can resolve the producer for a given
                            arrival phase without re-loading the recipe file
                            (which could drift mid-run). Defaults to [] (no
-                           emitters declared — legacy v0.1.x behavior, the run
+                           producers declared — legacy v0.1.x behavior, the run
                            emits nothing at phase boundaries).
     """
     if adapter not in ("ce", "native"):
@@ -620,7 +620,7 @@ def init_ledger(
             "exit_reason": None,
             # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
             # ledger at init so the engine's iteration check (advance_iteration_loop)
-            # and the iterate_template emitter find them at every tick. None on a
+            # and the iterate_template producer find them at every tick. None on a
             # legacy or non-iteration recipe (a1, W, v0.2.x a2/a4); the validators
             # at U5 ensure shape is OK if non-None. Routed through here (not seeded
             # post-init) so the recipe→ledger flow is the production path — the

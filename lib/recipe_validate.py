@@ -46,12 +46,12 @@ from typing import NoReturn
 # The helper itself is defined below RecipeError (forward-ref guard).
 _RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
-# The emitter NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
+# The producer NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
 # only reference these — the validator rejects any other name so a recipe can't
-# point at a v0.3.0 emitter that doesn't exist yet. Kept here (not imported from
-# unit_emitters.py) so validation has no runtime dependency on the emitter module; the
+# point at a v0.3.0 producer that doesn't exist yet. Kept here (not imported from
+# unit_emitters.py) so validation has no runtime dependency on the producer module; the
 # two are cross-checked by a U5b test that asserts this set equals the registry.
-V1_EMITTER_NAMES = frozenset(
+V1_PRODUCER_NAMES = frozenset(
     {
         "plan_output_to_work_units",
         "judge_winner_to_work_units",
@@ -65,7 +65,7 @@ V1_EMITTER_NAMES = frozenset(
         # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
         # the brainstorm unit's requirements-doc output and emitting the single
         # plan unit. Added atomically with the unit_emitters.REGISTRY entry so the
-        # symmetry test (set(REGISTRY) == V1_EMITTER_NAMES) stays green.
+        # symmetry test (set(REGISTRY) == V1_PRODUCER_NAMES) stays green.
         "brainstorm_output_to_plan_unit",
     }
 )
@@ -117,14 +117,14 @@ _KNOWN_TOPLEVEL = frozenset(
         "iteration",
         "emit_templates",
         # v0.3.0 fix-pass F4: ADV-2 + maint-4 (depends_on carve-out is too
-        # loose). Recipes that use a non-iterate emitter to produce concrete
+        # loose). Recipes that use a non-iterate producer to produce concrete
         # unit ids consumed by a structural unit's depends_on must DECLARE
         # those ids here. The validator then accepts depends_on members that
         # are EITHER in units[], OR in expected_emit_outputs, OR plausibly
         # produced by iterate_template's id math (`{id_prefix}{N}` shape).
         # Prior carve-out accepted any depends_on string starting with an
         # emit_template id_prefix — `"build-typo"` would pass against
-        # id_prefix `"build-"` even though no emitter would ever produce it.
+        # id_prefix `"build-"` even though no producer would ever produce it.
         "expected_emit_outputs",
         # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe for
         # "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go straight
@@ -212,7 +212,7 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
     plan-loop" would strand the run with no way to enumerate units. So if the
     flag is true we require:
       (a) a "plan" phase in phase_order (the satisfied state lives there),
-      (b) exactly one plan-phase unit (the enumerate carrier — the emitters read
+      (b) exactly one plan-phase unit (the enumerate carrier — the producers read
           enumerated_units off the single plan unit, lib/unit_emitters.py), and
       (c) a phase_transition {from: plan, to: work} (the enumerate→emit edge).
     Mechanical so a malformed work-only recipe can't ship a dead end. Absent or
@@ -234,7 +234,7 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
     if plan_unit_count != 1:
         _bad(
             "plan_presatisfied requires exactly one plan-phase unit (the "
-            f"enumerate carrier the plan→work emitter reads); got {plan_unit_count}"
+            f"enumerate carrier the plan→work producer reads); got {plan_unit_count}"
         )
     if not any(pt.get("from") == "plan" and pt.get("to") == "work" for pt in pts):
         _bad(
@@ -539,8 +539,8 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
     structurally-declared unit (e.g., A4's `compare` after U6) may name a
     builder id like `build-clarity` in its `depends_on` even though no `units[]`
     entry has that exact id yet — the matching builder is materialized at run
-    time by an emitter. Two emit-shapes are legitimate: (a) iterate_template
-    materializes `{id_prefix}{N}`; (b) a non-iterate emitter produces
+    time by a producer. Two emit-shapes are legitimate: (a) iterate_template
+    materializes `{id_prefix}{N}`; (b) a non-iterate producer produces
     explicitly-named ids declared via top-level `expected_emit_outputs` (F4:
     ADV-2 + maint-4 — grounds acceptance in the author's stated producer-output
     contract, not a literal-prefix coincidence)."""
@@ -583,9 +583,9 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
 
 
 def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
-    """phase_transitions: optional; each entry {from, to, emitter}; emitter must
-    be a registered V1 emitter name (Gap B disambiguation — A1 vs A4 at the
-    shared (plan, work) boundary each name their own emitter)."""
+    """phase_transitions: optional; each entry {from, to, producer}; producer must
+    be a registered V1 producer name (Gap B disambiguation — A1 vs A4 at the
+    shared (plan, work) boundary each name their own producer)."""
     pts = recipe.get("phase_transitions", [])
     if not isinstance(pts, list):
         _bad("phase_transitions must be a list")
@@ -599,10 +599,10 @@ def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
             _bad(
                 f"phase_transitions from/to must be members of phase_order: {pt!r}"
             )
-        if pt["emitter"] not in V1_EMITTER_NAMES:
+        if pt["emitter"] not in V1_PRODUCER_NAMES:
             _bad(
-                f"unknown emitter {pt['emitter']!r} — V1 recipes may only name "
-                f"one of {sorted(V1_EMITTER_NAMES)}"
+                f"unknown producer {pt['emitter']!r} — V1 recipes may only name "
+                f"one of {sorted(V1_PRODUCER_NAMES)}"
             )
 
 
@@ -836,9 +836,9 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
     ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
     strings (empty when clean). Call ``validate`` for the contract; this adds:
-      - a phase in phase_order with no unit assigned (and no emitter targeting it)
+      - a phase in phase_order with no unit assigned (and no producer targeting it)
       - depends_on creating an unreachable unit (no path from a root)
-      - terminal_phase with no units AND no emitter targeting it
+      - terminal_phase with no units AND no producer targeting it
       - a workspace/global recipe whose description matches a built-in verbatim
         (description-spoofing defense — security observation 1)
       - (P2-15) when ``filename`` is supplied: the recipe's declared ``name``
@@ -877,13 +877,13 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
             continue  # seam is a pass-through; never holds units
         if not units_by_phase.get(ph) and ph not in emit_targets:
             warnings.append(
-                f"phase {ph!r} has no units and no emitter targets it — it will "
+                f"phase {ph!r} has no units and no producer targets it — it will "
                 f"do nothing"
             )
     terminal = recipe.get("terminal_phase", "work")
     if not units_by_phase.get(terminal) and terminal not in emit_targets:
         warnings.append(
-            f"terminal_phase {terminal!r} has no units and no emitter — the run "
+            f"terminal_phase {terminal!r} has no units and no producer — the run "
             f"would exit immediately with nothing done"
         )
     # v0.3.0 (U5) editorial: iteration.bound editorial sanity checks. Neither is

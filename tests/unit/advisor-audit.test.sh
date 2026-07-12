@@ -2,7 +2,7 @@
 # auto U5 unit test: the advisor-gate decision audit + driving_session_id.
 #
 # SELF-CONTAINED inline harness (same style as ledger-mutators.test.sh /
-# emitters.test.sh). Shells into Python via _bootstrap.load_lib_module against
+# producers.test.sh). Shells into Python via _bootstrap.load_lib_module against
 # the REAL ledger facade — nothing mocked except a sandbox tmp repo.
 #
 # Scenarios (U5 plan):

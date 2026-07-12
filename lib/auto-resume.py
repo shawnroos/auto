@@ -61,7 +61,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
 # v0.2.0 fix-pass A.2: the manual seam→work resume routes through tick.py's
-# centralized advance helper so it fires the recipe's emitter the same way the
+# centralized advance helper so it fires the recipe's producer the same way the
 # auto-flip does. tick.py uses a hyphenless name so plain import works.
 import tick  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
@@ -196,7 +196,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
         return rc
     if phase == "seam":
         # seam -> work: route through tick.advance_to_phase so the recipe's
-        # emitter fires the same way it does on the auto-flip path (P0 #1
+        # producer fires the same way it does on the auto-flip path (P0 #1
         # fix-pass A.2 — without this the manual resume would silently skip
         # emission and the work-loop would start with empty units). Legacy
         # ledgers (no recipe) fall through to set_loop inside the helper,

@@ -2,21 +2,21 @@
 # auto v0.6.0 U7 unit test: recipes/pipeline.json (the brainstorm-rooted spine)
 # + brainstorm entry-phase wiring through the init path.
 #
-# SELF-CONTAINED inline harness (same style as emitters.test.sh / recipes.test.sh).
+# SELF-CONTAINED inline harness (same style as producers.test.sh / recipes.test.sh).
 #
 # Scenarios:
 #   1. pipeline.json validates and resolves through the three-tier registry.
 #   2. Init at `brainstorm` bakes loop_phase="brainstorm" + the full phase_order
 #      (the recipe-generic `loop_phase=phase_order[0]` init line threads it; no
 #      auto.py change needed — init_ledger validates membership, line ~808).
-#   3. Forward advance brainstorm→plan emits the plan unit via the EMITTER path
+#   3. Forward advance brainstorm→plan emits the plan unit via the PRODUCER path
 #      (transition_and_emit / direct-dict-mutation), not predicate-met.
 #   4. A spine-phase loop_phase write via the direct-mutation path
 #      (transition_and_emit) SUCCEEDS; via set_loop it RAISES — documents the
 #      KTD-3 constraint (set_loop validates against LOOP_PHASES, which excludes
 #      "brainstorm"; the direct-mutation path bypasses that gate).
 #   5. terminal_phase is `work`; the run leaves brainstorm ONLY via forward
-#      phase-advance (emitter), never via predicate-met (met stays False at a
+#      phase-advance (producer), never via predicate-met (met stays False at a
 #      non-terminal phase).
 #   6. plan-entry still routes to a1, work-entry to w (no regression).
 
@@ -39,7 +39,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Driver: load recipes/ledger/emitters via _bootstrap, run an op, print result.
+# Driver: load recipes/ledger/producers via _bootstrap, run an op, print result.
 pl() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json, tempfile
@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 recipes = load_lib_module("recipes")
 ledger = load_lib_module("ledger")
-emitters = load_lib_module("unit_emitters")
+producers = load_lib_module("unit_emitters")
 op = sys.argv[2]
 
 
@@ -83,8 +83,8 @@ elif op == "init-brainstorm":
 
 elif op == "forward-advance":
     # Record the brainstorm output, then advance brainstorm→plan via
-    # transition_and_emit (the direct-mutation/emitter path). Asserts the plan
-    # unit is EMITTER-driven (appended), loop_phase moved to plan, and the
+    # transition_and_emit (the direct-mutation/producer path). Asserts the plan
+    # unit is PRODUCER-driven (appended), loop_phase moved to plan, and the
     # requirements-doc rode through onto the plan unit's dispatch_context.
     repo = tempfile.mkdtemp()
     _init_from_recipe(repo, "pl", "pipeline")
@@ -98,7 +98,7 @@ elif op == "forward-advance":
     with open(path, "w") as f:
         json.dump(d, f)
     appended = ledger.transition_and_emit(
-        repo, "pl", "plan", emitters.brainstorm_output_to_plan_unit)
+        repo, "pl", "plan", producers.brainstorm_output_to_plan_unit)
     led = ledger.read_ledger(repo, "pl")
     plan = next(u for u in led["units"] if u["id"] == "plan")
     print("%s|%s|%s" % (
@@ -149,8 +149,8 @@ assert_eq "pipeline:built-in:brainstorm,plan,seam,work:work" "$(pl validate-reso
 it "U7: init bakes loop_phase=brainstorm + full phase_order + the brainstorm unit"
 assert_eq "brainstorm|brainstorm,plan,seam,work|brainstorm" "$(pl init-brainstorm)"
 
-# ─── Scenario 3: forward advance brainstorm→plan (emitter-driven) ───────────
-it "U7: forward advance brainstorm→plan emits the plan unit (emitter path), carries the req-doc"
+# ─── Scenario 3: forward advance brainstorm→plan (producer-driven) ───────────
+it "U7: forward advance brainstorm→plan emits the plan unit (producer path), carries the req-doc"
 assert_eq "plan|plan|docs/req.md" "$(pl forward-advance)"
 
 # ─── Scenario 4: set_loop rejects brainstorm (KTD-3 constraint) ─────────────

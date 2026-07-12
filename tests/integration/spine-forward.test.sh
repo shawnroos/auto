@@ -11,7 +11,7 @@
 # current phase can't close — it escalates the cluster to the operator via the
 # EXISTING pause seam (driver=manual + blocked_on). The autonomous backward edge
 # (rebound) is deferred to v0.7.0; this test asserts v0.6.0's narrow contract:
-#   * forward advance works (the spine recipe's emitters fire on arrival), AND
+#   * forward advance works (the spine recipe's producers fire on arrival), AND
 #   * on a detected cluster the run PAUSES (driver=manual, blocked_on names the
 #     upstream phase), loop_phase is UNCHANGED (no backward move), and NO new
 #     top-level ledger field is written.
@@ -94,7 +94,7 @@ forward_ok = (entry.get("loop_phase") == "brainstorm"
 # while the test stayed green). Prime the brainstorm unit verdict-returned with
 # its requirements-doc output, then drive dispatch_tick exactly as the plan→work
 # leg below does. dispatch_tick's brainstorm branch fires the U8
-# brainstorm_output_to_plan_unit emitter on advance to plan (emitter-driven, not
+# brainstorm_output_to_plan_unit producer on advance to plan (producer-driven, not
 # predicate-met). If the brainstorm trigger is missing this goes RED (the
 # deliberate-fail control for the wiring).
 led = ld()
@@ -111,7 +111,7 @@ plan_units = [u["id"] for u in led["units"] if u["phase"] == "plan"]
 forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_units) == 1
 
 # Step 3: forward advance plan → work. Prime plan-done (enumerated units +
-# gaps_open=0 + plan_step=review_plan) and auto-flip; the plan→work emitter
+# gaps_open=0 + plan_step=review_plan) and auto-flip; the plan→work producer
 # materializes the work unit.
 plan_uid = plan_units[0]
 ledger.set_enumerated_units(
@@ -239,7 +239,7 @@ assert_eq "yes" "$has_doc"
 res="$(drive_spine 1)"
 IFS='|' read -r forward reason phase driver phase_unchanged blocked_named keys <<< "$res"
 
-it "spine recipe advances brainstorm → plan → work forward (emitter-driven)"
+it "spine recipe advances brainstorm → plan → work forward (producer-driven)"
 assert_eq "yes" "$forward"
 
 it "injected upstream cluster PAUSES the run (tick stop reason = seam-pause)"

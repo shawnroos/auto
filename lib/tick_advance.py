@@ -11,7 +11,7 @@ They were extracted VERBATIM from lib/tick.py (B4); no logic changed. The
 dependency graph is one-way:
 
     tick.py        → tick_advance, tick_guidance
-    tick_advance   → ledger, iteration, emitters, phase_grammar, tick_guidance
+    tick_advance   → ledger, iteration, producers, phase_grammar, tick_guidance
     tick_guidance  → ledger, phase_grammar (leaf)
 
 No cycle: nothing here imports tick.py. `TickError` is defined HERE (raised by
@@ -41,7 +41,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 ledger = load_ledger()
 phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
-import unit_emitters as emitters  # noqa: E402
+import unit_emitters as producers  # noqa: E402
 tick_guidance = load_lib_module("tick_guidance")
 # v0.6.0 U9: the pure upstream-cluster classifier. A stdlib-only leaf (it imports
 # no lib siblings) — this adds the single DAG edge tick_advance → upstream_cluster.
@@ -516,7 +516,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     if step == "done":
         # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
         # via the v0.2.0 adapter op and PERSIST them onto the plan unit's
-        # dispatch_context.enumerated_units, so the phase-transition emitter (U5b)
+        # dispatch_context.enumerated_units, so the phase-transition producer (U5b)
         # can read them when it emits work units (resolves F4 — the producer).
         # enumerate_plan_units is prepare-only: it may return a bare list (a
         # synchronous/test adapter) OR a PREPARE envelope the model fills with the
@@ -579,8 +579,8 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
 
 
 # v0.3.1 B10: `no_emit` moved to lib/unit_emitters.py (collocated with the other
-# emit functions per kieran-r2-2 — emitters belong in the emitters module).
-# The call site below now references `emitters.no_emit`.
+# emit functions per kieran-r2-2 — producers belong in the producers module).
+# The call site below now references `producers.no_emit`.
 
 
 def advance_iteration_loop(repo_root, run_id, led):
@@ -666,8 +666,8 @@ def advance_iteration_loop(repo_root, run_id, led):
         # signal). When the recipe omits emit_template, the iterate path
         # must still advance the loop (increment iteration_attempts + reset
         # the gate) WITHOUT emitting new units; the existing units re-
-        # engage. We honor that by passing a no-op emitter to
-        # atomic_iterate_step: `_apply_emit` calls `emitter(ledger,
+        # engage. We honor that by passing a no-op producer to
+        # atomic_iterate_step: `_apply_emit` calls `producer(ledger,
         # to_phase) or []`, so returning `[]` cleanly skips emission AND
         # leaves iteration_emit_count unchanged (the counter bumps PER
         # emitted unit). The deps default (`caller_depends_on=None` →
@@ -677,14 +677,14 @@ def advance_iteration_loop(repo_root, run_id, led):
         # writes (increment then reset) would open a window where a tick
         # could read attempts++ but a still-verdict-returned gate.
         if (led.get("iteration") or {}).get("emit_template"):
-            emitter = emitters.iterate_template
+            producer = producers.iterate_template
         else:
-            emitter = emitters.no_emit
+            producer = producers.no_emit
         ledger.atomic_iterate_step(
             repo_root,
             run_id,
             gate_unit_id,
-            emitter=emitter,
+            producer=producer,
             new_depends_on=None,
         )
         return {"action": "iterate"}
@@ -742,9 +742,9 @@ def _plan_has_enumerated_units(led) -> bool:
     """True iff some plan-phase unit has had enumerated_units SET — the producer
     handshake gate. We test KEY PRESENCE, not truthiness: an explicit empty list
     means the model RAN the enumerate prepare op and legitimately found zero work
-    units (a valid terminal — the emitter returns [] and any structural units
+    units (a valid terminal — the producer returns [] and any structural units
     remain), so we must transition. A MISSING key means the model hasn't run
-    enumerate yet, so we surface the prepare and wait. The plan→work emitters read
+    enumerate yet, so we surface the prepare and wait. The plan→work producers read
     enumerated_units off the plan unit."""
     for u in led.get("units", []):
         if u.get("phase") == "plan" and "enumerated_units" in (
@@ -764,18 +764,18 @@ def _is_auto(auto_flag) -> bool:
 
 def advance_to_phase(repo_root, run_id, led, *, to_phase):
     """Advance loop_phase to ``to_phase``, emitting that phase's units if the
-    recipe declares an emitter for arrival there.
+    recipe declares a producer for arrival there.
 
     v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
-    the recipe's {to: to_phase} emitter via phase_grammar.emitter_name_for_arrival
+    the recipe's {to: to_phase} producer via phase_grammar.producer_name_for_arrival
     and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
-    no emitter is declared we still need to fall back to a raw set_loop:
+    no producer is declared we still need to fall back to a raw set_loop:
 
     * Legacy ledger (recipe is None, e.g. a v0.1.x run resumed under v0.2.0) —
       no recipe means no phase_transitions; use set_loop to preserve byte-
       identical R13 behavior.
     * v0.2.0 ledger with no matching transition — the recipe declares no
-      emitter for arrival at to_phase; this is a RECIPE BUG (the validator
+      producer for arrival at to_phase; this is a RECIPE BUG (the validator
       should have rejected it earlier, but defense in depth: raise here so a
       misconfigured workspace recipe can't silently no-op).
 
@@ -783,12 +783,12 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
     the wire — every phase advance that crosses a transition boundary goes
     through here.
     """
-    emitter_name = phase_grammar.emitter_name_for_arrival(led, to_phase)
+    producer_name = phase_grammar.producer_name_for_arrival(led, to_phase)
     legacy_ledger = led.get("recipe") is None
-    if emitter_name is None:
+    if producer_name is None:
         if not legacy_ledger:
             raise ledger.LedgerError(
-                f"recipe {led.get('recipe',{}).get('name')!r} declares no emitter "
+                f"recipe {led.get('recipe',{}).get('name')!r} declares no producer "
                 f"for arrival at {to_phase!r}; either add a phase_transitions entry "
                 f"or fix the recipe"
             )
@@ -807,19 +807,19 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
             beat=True,
         )
         return
-    emitter_fn = emitters.resolve(emitter_name)
-    ledger.transition_and_emit(repo_root, run_id, to_phase, emitter_fn)
+    producer_fn = producers.resolve(producer_name)
+    ledger.transition_and_emit(repo_root, run_id, to_phase, producer_fn)
 
 
 def _brainstorm_unit_ready(led) -> bool:
     """True iff the spine's brainstorm unit is complete AND has recorded its
     requirements-doc output — the precondition for firing the U8
-    ``brainstorm_output_to_plan_unit`` emitter.
+    ``brainstorm_output_to_plan_unit`` producer.
 
     Gating on BOTH conditions is load-bearing: if we advanced to plan before the
-    doc path is recorded, the U8 emitter raises ``RecipeError``, which
+    doc path is recorded, the U8 producer raises ``RecipeError``, which
     ``_dispatch_phase_advance``'s try/except would mis-record as a unit stall
-    (feedback_plan_documents_transition_code_doesnt_wire_it — the emitter must
+    (feedback_plan_documents_transition_code_doesnt_wire_it — the producer must
     only fire when its input is present). Until both hold the brainstorm tick
     re-arms (the unit is still being worked by the model).
     """
@@ -838,18 +838,18 @@ def advance_brainstorm_loop(repo_root, run_id, led):
 
     The brainstorm phase has NO predicate-met exit (KTD-3 / U7 technical design:
     ``eval_phase == terminal_phase`` is False at brainstorm, so ``met`` stays
-    False) — it leaves ONLY via emitter-driven forward advance. Without this
+    False) — it leaves ONLY via producer-driven forward advance. Without this
     branch a brainstorm-phase tick falls into ``_dispatch_phase_advance``'s
     ``else`` ({"advanced":"none"}) and re-arms forever (the livelock the U7
     success criterion forbids; feedback_plan_documents_transition_code_doesnt_wire_it
-    — the U8 emitter existed but nothing CALLED it on a brainstorm tick).
+    — the U8 producer existed but nothing CALLED it on a brainstorm tick).
 
     When the brainstorm unit is complete + has its requirements-doc, advance to
     ``plan`` through ``advance_to_phase`` (the single phase-advance chokepoint),
     which resolves the recipe's {to: plan} transition and fires the registered
-    ``brainstorm_output_to_plan_unit`` emitter atomically. Otherwise return
+    ``brainstorm_output_to_plan_unit`` producer atomically. Otherwise return
     ``{"advanced":"none"}`` so the tick re-arms while the model still works the
-    brainstorm step. Pairs with the plan→work emitter exactly as plan→work pairs
+    brainstorm step. Pairs with the plan→work producer exactly as plan→work pairs
     with seam.
     """
     if not _brainstorm_unit_ready(led):
@@ -870,9 +870,9 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
 
     Manual (not auto): write loop_phase="seam", seam_paused=true,
     loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
-    Auto: flip plan → work directly via the recipe's emitter (v0.2.0; P0 #1
+    Auto: flip plan → work directly via the recipe's producer (v0.2.0; P0 #1
     fix-pass A.2 — the load-bearing rewire). Reads the recipe's
-    phase_transitions for the {to: work} emitter, resolves it, and calls
+    phase_transitions for the {to: work} producer, resolves it, and calls
     ledger.transition_and_emit atomically (advance + emit + recompute in ONE
     locked snapshot — the G3/F2 invariant). Legacy ledgers (no recipe) fall
     back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep

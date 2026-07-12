@@ -23,8 +23,8 @@
 #   ledger_emitters → ledger_core, ledger_mutators
 #   ledger (facade) → ledger_core, ledger_mutators, ledger_emitters
 #   tick_guidance → ledger (facade), phase-grammar         [leaf]
-#   tick_advance  → ledger, iteration, emitters, tick_guidance
-#   tick          → ledger, iteration, emitters, tick_advance, tick_guidance
+#   tick_advance  → ledger, iteration, producers, tick_guidance
+#   tick          → ledger, iteration, producers, tick_advance, tick_guidance
 #
 # Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the LEDGER FACADE, never ledger_mutators/ledger_emitters directly — the facade
@@ -64,10 +64,10 @@ else
   pass
 fi
 
-it "ledger_mutators.py imports ledger_core only (no emitters, no facade)"
+it "ledger_mutators.py imports ledger_core only (no producers, no facade)"
 if loads_sibling "ledger_mutators.py" "ledger_emitters" \
    || loads_sibling "ledger_mutators.py" "ledger"; then
-  fail "ledger_mutators.py may import ledger_core ONLY — importing emitters/facade is a cycle"
+  fail "ledger_mutators.py may import ledger_core ONLY — importing producers/facade is a cycle"
 else
   pass
 fi

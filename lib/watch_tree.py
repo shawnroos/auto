@@ -4,7 +4,7 @@
 `render_agent_tree(ledger, now)` turns a live ledger into a compact ASCII tree
 of the driver → work unit → `do_unit` fan-out agent, annotating each dispatched
 node with its age against the stall threshold + its attempt count, and nesting
-`do_unit` fan-out children under their emitter parent. It mirrors
+`do_unit` fan-out children under their producer parent. It mirrors
 lib/topology-render.py's deterministic-string idioms — declaration-order
 traversal, stable formatting, pure stdlib — so tests can pin exact output.
 
@@ -77,7 +77,7 @@ def _adapter_op(unit) -> str:
 
 
 def _is_fanout_child(unit) -> bool:
-    """True for a `do_unit` fan-out agent — the node that nests under the emitter
+    """True for a `do_unit` fan-out agent — the node that nests under the producer
     parent it depends on. The `do_unit` marker on the CHILD is the reliable,
     ledger-visible signal that its parent is the fan-out unit (KTD5)."""
     return _adapter_op(unit) == "do_unit"
@@ -112,7 +112,7 @@ def render_agent_tree(ledger: dict, now: str) -> str:
 
     Layout: an `agent-tree: <run_id>` header, a blank line, then each root unit as
     a `• <id>  [<status>]` bullet in DECLARATION order, with `do_unit` fan-out
-    children nested one indent deeper under the emitter parent they depend on
+    children nested one indent deeper under the producer parent they depend on
     (recursively; also declaration order). A dispatched node's status is annotated
     with age-vs-threshold, an OVER-AGE flag past threshold, and its attempt; other
     states show their state name.
@@ -131,7 +131,7 @@ def render_agent_tree(ledger: dict, now: str) -> str:
     now_dt = _parse_iso(now)
 
     # Fan-out nesting from the depends_on DAG: a do_unit child nests under the
-    # first EXISTING unit it depends on (its emitter parent). Every other unit —
+    # first EXISTING unit it depends on (its producer parent). Every other unit —
     # empty depends_on, a fan-in judge, a non-do_unit dependent — is a root.
     by_id = {u.get("id"): u for u in units}
     children_of: dict = {}

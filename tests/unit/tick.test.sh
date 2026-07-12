@@ -677,7 +677,7 @@ assert_eq "dispatched" "$noreap_state"
 # ─── U6: plan-done enumerate→persist (the F4 producer wiring) ───────────────
 # At plan-done, advance_plan_loop calls the adapter's enumerate_plan_units and
 # persists the result onto the plan unit's dispatch_context.enumerated_units, so
-# the U5b emitter can read it. Drive it with a fake adapter whose next_plan_step
+# the U5b producer can read it. Drive it with a fake adapter whose next_plan_step
 # returns "done" and enumerate_plan_units returns a bare list.
 it "U6: plan-done persists enumerate_plan_units output to dispatch_context"
 ledger_init "enum-run" '[{"id":"plan","phase":"plan","state":"dispatched"}]' ce plan >/dev/null 2>&1

@@ -4,7 +4,7 @@
 # render_agent_tree(ledger, now) turns a live ledger into a compact ASCII tree
 # of driver -> work unit -> do_unit fan-out agent, annotating each dispatched
 # node with age-vs-threshold + attempt, and nesting do_unit children under their
-# emitter parent. It is PURE (now is passed in as an ISO-8601 string, never
+# producer parent. It is PURE (now is passed in as an ISO-8601 string, never
 # datetime.now()) so a fixed ledger + fixed now yields byte-identical output.
 #
 # SELF-CONTAINED inline harness (same style as recipes.test.sh): fixtures are

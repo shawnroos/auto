@@ -651,14 +651,14 @@ def _dispatch_phase_advance(
         elif phase == "brainstorm":
             # Spine forward trigger (v0.6.0 / U7): the brainstorm phase has no
             # predicate-met exit (KTD-3); it advances to plan ONLY via the U8
-            # emitter. advance_brainstorm_loop fires that emitter when the
+            # producer. advance_brainstorm_loop fires that producer when the
             # brainstorm unit is complete + has its requirements-doc, else
             # returns {"advanced":"none"} so this tick re-arms (the model is
             # still working the brainstorm step). Mirrors the plan→work flip.
             advance_result = tick_advance.advance_brainstorm_loop(
                 repo_root, run_id, led
             )
-            # The emitter (re)wrote loop_phase + plan unit; the caller's
+            # The producer (re)wrote loop_phase + plan unit; the caller's
             # downstream beat re-stamp + rearm intent re-read by (repo, run),
             # so no led refresh is needed here.
         elif phase == "work":

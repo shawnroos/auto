@@ -152,7 +152,7 @@ stay separate; this skill orchestrates them). R3.
   `verification` array on the unit named by `iteration.gate_unit`. That skill
   owns the write gate: `lib/recipes.py::validate_and_lint` before write, atomic
   mkstemp+rename, and read-back verification. The typed `verification` block
-  rides on the *existing* `iteration.gate_unit` mechanism — no new emitter, no
+  rides on the *existing* `iteration.gate_unit` mechanism — no new producer, no
   new topology grammar, and the same `validate()` enforces the criterion shape
   at both write time and engine load time. Surface any hard validation error and
   fix it with the user; do not work around the gate.

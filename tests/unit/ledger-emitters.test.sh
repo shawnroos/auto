@@ -190,7 +190,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
 
 # ─── op: emit_within_phase-emit ────────────────────────────────────────────
 if op == "emit_within_phase-emit":
-    # The emitter returns 2 partial units; emit_within_phase appends them
+    # The producer returns 2 partial units; emit_within_phase appends them
     # WITHOUT advancing loop_phase, and bumps iteration_emit_count per unit.
     led = fresh("u2-ewp-emit",
                 extra_units=[{"id": "plan-1", "state": "verdict-returned",
@@ -253,9 +253,9 @@ elif op == "atomic_iterate_step-happy":
         "unit_count": len(after["units"]),
     }))
 
-# ─── op: atomic_iterate_step-bad-emitter-keeps-counter ─────────────────────
-elif op == "atomic_iterate_step-bad-emitter-keeps-counter":
-    # An emitter that returns a colliding id MUST roll back the entire
+# ─── op: atomic_iterate_step-bad-producer-keeps-counter ─────────────────────
+elif op == "atomic_iterate_step-bad-producer-keeps-counter":
+    # A producer that returns a colliding id MUST roll back the entire
     # composite — iteration_attempts stays 0 after the failed call (the
     # all-or-nothing contract / deliberate-fail #8 control's GREEN side).
     led = fresh("u2-ais-bad")
@@ -283,7 +283,7 @@ PYEOF
 }
 
 echo ""
-echo "── v0.3.0 U2: iteration emitters (emit path) ──"
+echo "── v0.3.0 U2: iteration producers (emit path) ──"
 
 # ─── U2.9: emit_within_phase appends + bumps counter, no loop_phase write ───
 it "U2: emit_within_phase appends 2 units, leaves loop_phase, bumps emit_count"
@@ -302,10 +302,10 @@ assert_eq \
   "$(iter_driver atomic_iterate_step-happy)"
 
 # ─── U2.16: atomic_iterate_step is all-or-nothing on failure ────────────────
-it "U2: atomic_iterate_step with a bad emitter keeps iteration_attempts at 0 (all-or-nothing)"
+it "U2: atomic_iterate_step with a bad producer keeps iteration_attempts at 0 (all-or-nothing)"
 assert_eq \
   '{"raised": "yes", "iteration_attempts": 0, "iteration_emit_count": 0, "unit_count": 1}' \
-  "$(iter_driver atomic_iterate_step-bad-emitter-keeps-counter)"
+  "$(iter_driver atomic_iterate_step-bad-producer-keeps-counter)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

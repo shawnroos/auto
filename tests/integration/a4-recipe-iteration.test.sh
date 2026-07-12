@@ -6,9 +6,9 @@
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # After U6, a4's `compare` unit is declared structurally in units[] (with
 # depends_on: [build-clarity, build-perf] forward-referencing the bias-builder
-# emit_template id_prefix). The plan_output_to_paired_builders emitter no
+# emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
-# proves the structural+emitter split survives the production init→tick path:
+# proves the structural+producer split survives the production init→tick path:
 # the recipe→ledger→tick wire materializes builders AND honors compare as
 # the iteration gate.
 #
@@ -92,11 +92,11 @@ led0 = ledger.read_ledger(repo, run_id)
 assert led0.get("iteration"), f"iteration block missing on ledger after init: {sorted(led0.keys())!r}"
 assert led0["iteration"]["gate_unit"] == "compare", led0["iteration"]
 assert led0.get("emit_templates", {}).get("bias-builder"), led0.get("emit_templates")
-# Compare structural: in units[] from init (NOT emitter-synthesized).
+# Compare structural: in units[] from init (NOT producer-synthesized).
 unit_ids_at_init = sorted(u["id"] for u in led0["units"])
 assert "compare" in unit_ids_at_init, f"compare not in initial units[]: {unit_ids_at_init!r}"
 
-# Step 2: prime the plan unit's enumerated_units (the emitter passes these to
+# Step 2: prime the plan unit's enumerated_units (the producer passes these to
 # each builder's dispatch_context as plan_items). Set gaps_open=0 + plan_step=
 # review_plan so plan-met fires.
 ledger.set_enumerated_units(repo, run_id, "plan",

@@ -3,7 +3,7 @@
 # scenarios (GREEN/ITERATE/BOUND) driving the full recipe→ledger→tick path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
-# Unit tests on iterate_template (emitters.test.sh) and advance_iteration_loop
+# Unit tests on iterate_template (producers.test.sh) and advance_iteration_loop
 # (tick.test.sh) cover the iteration primitives in isolation; this file proves
 # that a recipe DECLARING iteration in JSON actually drives the production
 # init→tick path. Without it, the recipe→ledger→tick wire could silently
@@ -101,7 +101,7 @@ assert led0["iteration"]["gate_unit"] == "judge", led0["iteration"]
 assert led0["iteration_emit_count"] == 3, f"iteration_emit_count={led0['iteration_emit_count']!r}"  # F0: init_ledger seeds from max numeric suffix matching id_prefix; a2 has plan-1/2/3 + id_prefix='plan-' → seed=3 (production-faithful — the test no longer rigs this)
 
 # Step 2: prime plan units' enumerated_units (needed for GREEN's downstream
-# emitter), set gaps_open=0 + plan_step=review_plan so predicate composition
+# producer), set gaps_open=0 + plan_step=review_plan so predicate composition
 # is at "plan-met" (modulo iteration_pending).
 ledger.set_enumerated_units(repo, run_id, "plan-1",
     [{"id": "wA-1", "invokes": {"adapter_op": "do_unit"}}])
@@ -137,7 +137,7 @@ ledger.record_verdict(repo, run_id, "judge",
 if scenario == "green":
     # GREEN: gate says advance. iteration logic does NOT fire (advance_iteration_loop
     # returns {"action":"advance"} and the caller falls through). The standard
-    # flow needs a winner_unit_id for the judge_winner_to_work_units emitter.
+    # flow needs a winner_unit_id for the judge_winner_to_work_units producer.
     ledger.set_verdict_decision(repo, run_id, "judge", "advance")
     ledger.set_winner_unit_id(repo, run_id, "judge", "plan-1")
 elif scenario == "iterate":

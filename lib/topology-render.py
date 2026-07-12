@@ -25,15 +25,15 @@ def _phase_units(recipe: dict, phase: str) -> list:
     return [u["id"] for u in recipe.get("units", []) if u.get("phase") == phase]
 
 
-def _emitter_for_arrival(recipe: dict, to_phase: str):
-    """The emitter that fires when the run ARRIVES at `to_phase`.
+def _producer_for_arrival(recipe: dict, to_phase: str):
+    """The producer that fires when the run ARRIVES at `to_phase`.
 
-    Recipes declare emitters by their `to` phase (the phase whose units the
-    emitter produces) — e.g. A1's `{from: plan, to: work}` fires when the run
+    Recipes declare producers by their `to` phase (the phase whose units the
+    producer produces) — e.g. A1's `{from: plan, to: work}` fires when the run
     reaches the work phase, even though phase_order routes plan → seam → work.
     Keying on `to` (not the exact adjacent pair) is what makes the seam a
-    pass-through: the emitter is attached to the arrow ENTERING its target phase.
-    U5b's seam-handler consumes it the same way (advance INTO X → run X's emitter).
+    pass-through: the producer is attached to the arrow ENTERING its target phase.
+    U5b's seam-handler consumes it the same way (advance INTO X → run X's producer).
     """
     for pt in recipe.get("phase_transitions", []):
         if pt.get("to") == to_phase:
@@ -46,7 +46,7 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
 
     Layout: name + description header, then each phase in `phase_order` as a
     boxed row listing its declared units (or "(emitted at runtime)" when a phase
-    has no declared units but is an emit target), with the emitter named on the
+    has no declared units but is an emit target), with the producer named on the
     transition arrow between phases. The terminal phase is marked.
     """
     width = max(24, int(width_hint or _DEFAULT_WIDTH))
@@ -86,13 +86,13 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
         else:
             lines.append("  │   • (units emitted at runtime)")
         lines.append("  └─")
-        # Inter-phase arrow + the emitter that fires arriving at the NEXT phase.
+        # Inter-phase arrow + the producer that fires arriving at the NEXT phase.
         if i + 1 < len(phase_order):
             nxt = phase_order[i + 1]
-            emitter = _emitter_for_arrival(recipe, nxt)
+            producer = _producer_for_arrival(recipe, nxt)
             arrow = "      ▼"
-            if emitter:
-                arrow += f"  emit: {emitter}"
+            if producer:
+                arrow += f"  emit: {producer}"
             lines.append(arrow)
 
     return "\n".join(lines)

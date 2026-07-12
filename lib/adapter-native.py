@@ -123,7 +123,7 @@ class Adapter:
         Native counterpart of the CE op. Prepare-only: the model reads the
         reviewed prose plan and returns a list of unit dicts; the engine persists
         them to the plan unit's dispatch_context.enumerated_units (U6) and the
-        emitters (U5b) shape them into ledger units. The producer the emitters
+        producers (U5b) shape them into ledger units. The producer the producers
         read — resolves the F4 gap.
 
         U14 (KTD-1): each enumerated item carries a depends_on list (sibling unit

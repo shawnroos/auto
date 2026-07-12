@@ -88,22 +88,22 @@ def next_phase_after_met(ledger: dict, current: str | None = None) -> str | None
     return order[idx + 1] if idx + 1 < len(order) else None
 
 
-def emitter_name_for_arrival(ledger: dict, to_phase: str) -> str | None:
-    """The emitter NAME that fires when the run ARRIVES at ``to_phase``, per the
+def producer_name_for_arrival(ledger: dict, to_phase: str) -> str | None:
+    """The producer NAME that fires when the run ARRIVES at ``to_phase``, per the
     ledger's persisted ``phase_transitions``. Returns None when no transition
-    declares an emitter for this arrival.
+    declares a producer for this arrival.
 
-    Per recipe-format §4, emitter firing is keyed on the ``to`` phase (not the
-    ``from``): a transition ``{from: plan, to: work}`` fires the emitter when
+    Per recipe-format §4, producer firing is keyed on the ``to`` phase (not the
+    ``from``): a transition ``{from: plan, to: work}`` fires the producer when
     the run reaches work, even if it routes through seam. The seam-handler
-    looks up the emitter for its DESTINATION phase via this helper.
+    looks up the producer for its DESTINATION phase via this helper.
 
     Returns None in two distinct shapes:
       * legacy ledger (recipe is None or phase_transitions is empty/absent) —
         callers should fall back to a raw ``set_loop`` for backward-compat
         with v0.1.x ledgers resumed under v0.2.0.
       * v0.2.0 ledger with a recipe but no matching ``to_phase`` transition —
-        the recipe declares no emitter for this arrival; the caller decides
+        the recipe declares no producer for this arrival; the caller decides
         whether that's a misconfigured recipe (raise) or a legitimate
         pass-through (proceed without emission).
 

@@ -65,7 +65,7 @@ diagnostic). The line carries `kind: <error-type>: <message>`. Two
 
 - `iteration-check-failed` — `advance_iteration_loop` raised a
   non-`LedgerError` exception (typically a malformed iteration block, a
-  corrupted gate verdict, or a raise from the emitter). Investigate the
+  corrupted gate verdict, or a raise from the producer). Investigate the
   ledger's `iteration` block + the gate unit's `dispatch_context`.
 - `recipe-bug` — `advance_iteration_loop` raised a `LedgerError`
   subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) — the

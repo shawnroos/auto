@@ -14,9 +14,9 @@ single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
 (``force_skip``, ``add_unit``, ``reshape_deps``, ``register_session``) live in
 ``ledger_steering``, which imports this module for its two graph helpers.
 
-Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← emitters ← facade):
+Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← producers ← facade):
 imports ledger_core for constants, errors, the lock primitive, and the pure
-helpers; imports NOTHING from emitters or the facade.
+helpers; imports NOTHING from producers or the facade.
 """
 
 from __future__ import annotations
@@ -348,7 +348,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
 
     An edge ``unit -> dep`` is VALID only if ``dep`` names EITHER a sibling
     enumerated unit in THIS batch (forward-refs allowed — mirrors
-    ``recipes._validate_depends_on`` tolerating emitter-output forward-refs) OR an
+    ``recipes._validate_depends_on`` tolerating producer-output forward-refs) OR an
     id already present in the ledger. Three failure classes are dropped, because
     each leaves ``dispatcher._is_ready`` unable to ever return True:
       * ``dangling`` — dep names no known id → ``_is_ready`` sees ``dep is None``
@@ -439,7 +439,7 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
 
     Called at plan-done with the adapter's enumerated work-unit list. The
-    phase-transition emitter (U5b) reads it from here when emitting work units —
+    phase-transition producer (U5b) reads it from here when emitting work units —
     so this is the on-ledger bridge between "the plan finished" and "here are its
     work units," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is
     a list of partial unit dicts (each at least an ``id``). Raises if the named
@@ -498,10 +498,10 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
     """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_unit_id``
     (v0.2.0 round-2 P0 fix — fix-pass I).
 
-    A2's ``judge_winner_to_work_units`` emitter needs to know which plan unit won.
+    A2's ``judge_winner_to_work_units`` producer needs to know which plan unit won.
     The original design read it from ``findings[].winner_unit_id``, but
     ``record_verdict`` normalizes findings to ``{severity, note}`` only —
-    stripping the winner before the emitter ever runs. Production A2 was
+    stripping the winner before the producer ever runs. Production A2 was
     unrunnable end-to-end. dispatch_context is the right home: same channel as
     ``enumerated_units``, preserved by ``transition()`` and the verdict-write
     path, and findings stay narrow.
@@ -510,7 +510,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
     ``record_verdict`` to declare the winner. ``winner_id`` must be a non-empty
     string AND must reference an existing unit id in the ledger (defensive — a
     typo'd winner would surface as a hard error here rather than a confusing
-    emitter raise later). Raises if the judge unit doesn't exist or the winner
+    producer raise later). Raises if the judge unit doesn't exist or the winner
     is invalid. Atomic (predicate recompute is a no-op here — the judge's own
     state is unchanged — but the write stays on the I-1 path).
     """
@@ -524,7 +524,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
         # The eligible-winner set is "every unit except the judge itself"
         # (round-3 P3 promotion — fix-pass J). The previous check accepted
         # the judge naming itself as winner, which would pass the guard, the
-        # emitter would call _enumerated_units(judge) which returns [] (judges
+        # producer would call _enumerated_units(judge) which returns [] (judges
         # don't carry enumerated_units), and the run would silently emit no
         # work units — exactly the failure mode the design was trying to
         # prevent ("malformed judge verdict is a hard error, not silent empty

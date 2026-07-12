@@ -3,7 +3,7 @@
 ledger_core / ledger_mutators / ledger_emitters.
 
 This module was split (B5) for maintainability: the implementation now lives in
-three sibling modules along an acyclic DAG (core ← mutators ← emitters ← this
+three sibling modules along an acyclic DAG (core ← mutators ← producers ← this
 facade). This file re-exports the WHOLE surface — every public name (the time helpers
 ``now_iso`` / ``parse_iso`` are public here) PLUS the one private helper
 consumers reach through the ``ledger.`` namespace (``_with_locked_ledger``) — so

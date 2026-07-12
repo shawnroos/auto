@@ -4,7 +4,7 @@ description: >
   Translate a designed loop (from auto-design) or a recipe (from
   auto-author-recipe) into an execution tree — ordered parallel waves sized from
   the recipe's depends_on DAG and the active fan-out cap, fan-out do_unit children
-  nested under their emitter parent, and a substrate routing decision
+  nested under their producer parent, and a substrate routing decision
   (native subagent-tree = executable, workflow-script = an inert label deferred to
   the parked RFC). Use when the user says "translate this loop", "what's the
   execution tree / wave order", "how will this recipe parallelize", "size the
@@ -81,12 +81,12 @@ print('waves:', res['waves'])"
 `derive_execution_tree(recipe, cap)` returns `{recipe, cap, waves, nesting,
 substrate, emitted, preview}` — pure and deterministic. It:
 
-- **expands emitter-produced units first** — recipes like `a4` declare their paired
+- **expands producer-produced units first** — recipes like `a4` declare their paired
   builders in `expected_emit_outputs` (materialized at runtime by a phase-boundary
-  emitter, NOT in `units[]`), so the derivation synthesizes placeholder nodes for
+  producer, NOT in `units[]`), so the derivation synthesizes placeholder nodes for
   them before the frontier walk. `a2`'s parallel units are static — no expansion.
 - **walks ordered waves** from the expanded `depends_on` DAG, bounding each to `cap`.
-- **nests fan-out `do_unit` children** under their emitter parent.
+- **nests fan-out `do_unit` children** under their producer parent.
 - **routes a substrate** (step 4).
 
 ### 3. Show the topology preview
@@ -137,7 +137,7 @@ executes on the native subagent-tree — the label is a forward-looking annotati
 
 - **Reuse the frontier, don't re-derive it.** Waves come from
   `dispatcher._is_ready`, bounded by `cap` — never a second parallelism model.
-- **Expand emitter-produced units before the walk**, or a recipe whose builders
+- **Expand producer-produced units before the walk**, or a recipe whose builders
   live in `expected_emit_outputs` (a4) yields only `{plan}` and its dependents
   never become ready.
 - **Native is the only executable target.** `workflow-script` is a routing label +

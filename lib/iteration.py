@@ -122,7 +122,7 @@ def read_decision(unit: dict):
 
 # Named thin accessors for the read-heavy keys — one call per consumer read site
 # so a typo becomes an AttributeError on the module, not a swallowed None. Keys
-# with no live read site (`bias`, `plan_items` — emitter-WRITTEN only) stay in
+# with no live read site (`bias`, `plan_items` — producer-WRITTEN only) stay in
 # `DISPATCH_CONTEXT_KEYS` and are reachable via `read_dc` without a named alias.
 def read_enumerated_units(unit: dict):
     """The plan unit's enumerated work-unit list (producer-persist), or None."""

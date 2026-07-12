@@ -772,7 +772,7 @@ it "should_escalate: respects a custom max_attempts -> attempt 3 at max=3 is Tru
 assert_eq "True" "$(esc '{"attempt":3}' 3)"
 
 # ════════════════════════════════════════════════════════════════════════════
-# U14 — edge-driven ordering of an emitter fan-out (the readiness engine, once
+# U14 — edge-driven ordering of a producer fan-out (the readiness engine, once
 # fed real depends_on edges, sequences the work units). This is the consumer
 # side of U14: unit-emitters.test.sh proves the edges are materialized; here we
 # prove ready_units ORDERS on them.
@@ -814,7 +814,7 @@ assert_eq "w1,w2,w3" "$(orch_ready "u14-edgeless")"
 # ════════════════════════════════════════════════════════════════════════════
 # U14 P2 anti-livelock — the FULL chain proves no silent stall. A bad
 # model-emitted depends_on (dangling / self / cycle) enters via
-# set_enumerated_units, flows through the A1 emitter, materializes onto a work
+# set_enumerated_units, flows through the A1 producer, materializes onto a work
 # ledger, and ready_units MUST still return a dispatchable unit (never the empty
 # set forever). ledger-mutators.test.sh proves the edge is cleaned; here we
 # prove the readiness engine is actually un-stalled — the real cure for the
@@ -833,7 +833,7 @@ op = sys.argv[2]
 
 
 def chain(run, batch):
-    """plan ledger → set_enumerated_units(batch) → A1 emitter → work ledger →
+    """plan ledger → set_enumerated_units(batch) → A1 producer → work ledger →
     ready_units. Returns the comma-joined ready ids of the materialized work
     units. A non-empty result means the livelock is cured."""
     repo = os.path.join(os.environ["HOME"], "chain-repo")

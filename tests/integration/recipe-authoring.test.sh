@@ -42,7 +42,7 @@ tr = load_lib_module("topology-render")
 op = sys.argv[2]
 
 # The recipe the skill should produce for the AE3 prompt (A4's topology): one
-# plan unit + the paired-builders emitter at the (plan, work) boundary.
+# plan unit + the paired-builders producer at the (plan, work) boundary.
 A4_SHAPED = {
     "name": "my-pair", "version": "1",
     "description": "two builders clarity vs perf, comparator picks",
@@ -56,9 +56,9 @@ A4_SHAPED = {
 if op == "ae3-validates":
     try:
         recipes.validate(A4_SHAPED)
-        # render shows the paired-builders emitter (the A4 signature).
+        # render shows the paired-builders producer (the A4 signature).
         card = tr.render(A4_SHAPED, 60)
-        print("valid" if "plan_output_to_paired_builders" in card else "valid-no-emitter")
+        print("valid" if "plan_output_to_paired_builders" in card else "valid-no-producer")
     except recipes.RecipeError as e:
         print("rejected:" + str(e))
 

@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""auto U5b (v0.2.0): the phase-transition emitter registry (G1).
+"""auto U5b (v0.2.0): the phase-transition producer registry (G1).
 
-Recipes declare WHAT topology to run; emitters are HOW work units come into being
+Recipes declare WHAT topology to run; producers are HOW work units come into being
 at a phase boundary. v0.1.x produced work units off-ledger (the seam paused for
 manual creation); v0.2.0 makes emission a first-class, in-engine step so A2/A4
 actually spawn their units.
 
-THE PRODUCER (the F4 gap that almost shipped): emitters do NOT invent plan output
+THE PRODUCER (the F4 gap that almost shipped): producers do NOT invent plan output
 — they read it from `unit["dispatch_context"]["enumerated_units"]`, which the
 engine persists when a plan unit reaches `plan-done` by calling the adapter's
 `enumerate_plan_units` op (U6 wires the persist; the adapter op is the v0.2.0
 contract re-lock). So the data flow is: plan-loop runs → adapter enumerates the
-plan's work units → engine stashes them on the plan unit → emitter reads + shapes
+plan's work units → engine stashes them on the plan unit → producer reads + shapes
 them into ledger units at the phase boundary.
 
-EMITTERS ARE PURE (F3): each is `(ledger, to_phase) -> list[new_unit_dict]`. They
+PRODUCERS ARE PURE (F3): each is `(ledger, to_phase) -> list[new_unit_dict]`. They
 READ the ledger dict and RETURN new partial unit dicts. They MUST NOT call ledger
 mutators — `ledger.transition_and_emit` calls them INSIDE its locked write, and a
 re-entrant mutator would deadlock on the flock. The primitive appends + normalizes
 what they return.
 
-V1 ships exactly 3 emitters (A3's `review_findings_to_plan_input` deferred with A3,
-KTD-14). The NAME registry below is what `recipes.V1_EMITTER_NAMES` mirrors; a
-test asserts the two sets match so a recipe can't name an emitter that isn't here.
+V1 ships exactly 3 producers (A3's `review_findings_to_plan_input` deferred with A3,
+KTD-14). The NAME registry below is what `recipes.V1_PRODUCER_NAMES` mirrors; a
+test asserts the two sets match so a recipe can't name a producer that isn't here.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from __future__ import annotations
 import os
 import sys
 
-# Import recipes via the standard bootstrap so emitter errors share the
+# Import recipes via the standard bootstrap so producer errors share the
 # RecipeError hierarchy: a judge that names no winner is a recipe-shape
 # violation (the recipe declared an A2 topology but the judge did not produce
 # the verdict the topology requires). Using the same exception class as the
@@ -94,11 +94,11 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
     """Spine (v0.6.0 / U8): the brainstorm unit's output → ONE plan unit.
 
     The brainstorm-rooted spine (``recipes/pipeline.json``,
-    ``phase_order ["brainstorm","plan","seam","work"]``) fires this emitter on
+    ``phase_order ["brainstorm","plan","seam","work"]``) fires this producer on
     arrival at ``plan`` from ``brainstorm`` (KTD-2). ce-brainstorm produces a
     requirements document; the model records that doc's path on the brainstorm
     unit's ``dispatch_context.requirements_doc`` when the brainstorm completes.
-    This emitter reads that path and materializes the single structural plan
+    This producer reads that path and materializes the single structural plan
     unit the plan-loop then drives — exactly the shape ``a1`` declares at init
     (``invokes.adapter_op == "next_plan_step"``), so the downstream plan→work
     machinery is unchanged for both plan-entry (a1) and brainstorm-entry (spine).
@@ -109,7 +109,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
     plan adapter op has the brainstorm output as input.
 
     Raises ``RecipeError`` (the recipe-shape error class, matching the A2/A4
-    emitter failure surface) when no brainstorm unit carries an output — a
+    producer failure surface) when no brainstorm unit carries an output — a
     silent empty emit would leave the plan phase with no unit and the run would
     re-arm against a vacuous plan phase forever.
     """
@@ -149,7 +149,7 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
     ``ledger.record_verdict`` normalizes findings to ``{severity, note}``
     only, hard-stripping every other key — so a real judge agent calling
     record_verdict would have its winner_id silently dropped before the
-    emitter ever ran. Production A2 was unrunnable end-to-end.
+    producer ever ran. Production A2 was unrunnable end-to-end.
 
     dispatch_context is the right home: it's already where the engine
     persists ``enumerated_units`` (the parallel routing channel), it survives
@@ -164,7 +164,7 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
     v0.3.0 generalization (KTD §D / U3): the gate unit id is read from
     ``ledger.iteration.gate_unit`` (defaulting to literal ``"judge"`` so
     v0.2.0 a2 ledgers without an iteration block keep working). This lets a
-    recipe rename the gate unit without forking the emitter.
+    recipe rename the gate unit without forking the producer.
     """
     gate_unit_id = (ledger.get("iteration") or {}).get("gate_unit", "judge")
     judge = next(
@@ -202,13 +202,13 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
     """A4: emit two bias-differentiated builders. v0.3.0 U6: `compare` is now
     declared structurally in `units[]` (with `depends_on: [build-clarity, build-perf]`
     forward-referencing the bias-builder emit_template's id_prefix), so this
-    emitter only emits the two builders — the comparator is already on the
+    producer only emits the two builders — the comparator is already on the
     ledger from init.
 
     The plan's enumerated output is built TWICE — once clarity-biased, once
     perf-biased. The two builders carry their bias in `dispatch_context.bias`;
     the structurally-declared `compare` reviews. Removing `compare` from this
-    emitter's output is U6's "compare structural" contract — closes round-2 P0 #7
+    producer's output is U6's "compare structural" contract — closes round-2 P0 #7
     (the validator special case + the dual-source compare definition).
     """
     plan_units = _plan_units(ledger)
@@ -233,13 +233,13 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
     Materializes ``emit_count`` new units off the recipe's named template at
     iteration time. Drives the outcomes-gated loop: the gate unit verdicts
-    ``iterate`` with a payload, the engine calls this emitter through
+    ``iterate`` with a payload, the engine calls this producer through
     ``emit_within_phase``, new sibling units land inside the gate's current
     phase, and the gate unit resets to pending with extended ``depends_on``.
 
     The id contract is monotonic — the Nth unit emitted across the WHOLE run
     gets id ``id_prefix + (counter+N)`` where ``counter`` is the pre-emit
-    ``ledger["iteration_emit_count"]``. The emitter NEVER recounts existing
+    ``ledger["iteration_emit_count"]``. The producer NEVER recounts existing
     units (round-3 P0-R3-2): after a partial-emit crash the counter may
     exceed the surviving unit count, and recount-based id assignment would
     re-use ids that previously existed and got lost. The counter only ever
@@ -276,7 +276,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
     if not iteration:
         raise RecipeError(
             "iterate_template: ledger has no 'iteration' block — recipe must "
-            "declare iteration.{gate_unit, emit_template} to use this emitter"
+            "declare iteration.{gate_unit, emit_template} to use this producer"
         )
 
     gate_unit_id = iteration.get("gate_unit")
@@ -335,7 +335,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
     # Read the monotonic counter — the pre-emit base. _apply_emit (ledger.py)
     # bumps this PER appended unit, AFTER we return. So id math here is pure
-    # arithmetic on the pre-emit value; this emitter NEVER writes the counter.
+    # arithmetic on the pre-emit value; this producer NEVER writes the counter.
     base = int(ledger.get("iteration_emit_count", 0))
 
     template_phase = template.get("phase", to_phase)
@@ -354,9 +354,9 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
 
 def no_emit(ledger_dict, to_phase):
-    """v0.3.0 F2: no-op emitter for the iterate path on a recipe that omits
+    """v0.3.0 F2: no-op producer for the iterate path on a recipe that omits
     ``iteration.emit_template``. Returns an empty list so ``_apply_emit``'s
-    ``emitter(ledger, to_phase) or []`` line treats it as "no new units" —
+    ``producer(ledger, to_phase) or []`` line treats it as "no new units" —
     ``iteration_emit_count`` stays unchanged (the counter bumps per emitted
     unit) and ``appended`` is []. The default ``caller_depends_on=None`` path
     in ``atomic_iterate_step`` then computes ``gate.depends_on + [] =
@@ -365,35 +365,35 @@ def no_emit(ledger_dict, to_phase):
     ``iteration_attempts`` increments, so the existing siblings re-engage on
     the next tick.
 
-    Lives here (B10, v0.3.1) — it's an emitter and belongs next to the others.
+    Lives here (B10, v0.3.1) — it's a producer and belongs next to the others.
     NOT in ``REGISTRY``: it's selected by ``tick_advance.advance_iteration_loop``
     as the internal fallback when the recipe declares no ``emit_template``;
-    promoting it to a recipe-namable emitter would duplicate the "omit
+    promoting it to a recipe-namable producer would duplicate the "omit
     emit_template" recipe shape with no added authoring expressiveness.
     """
     return []
 
 
-# NAME → emitter function. `recipes.V1_EMITTER_NAMES` mirrors these keys; a U5b
-# test asserts the two sets are equal so a recipe can never name an emitter that
+# NAME → producer function. `recipes.V1_PRODUCER_NAMES` mirrors these keys; a U5b
+# test asserts the two sets are equal so a recipe can never name a producer that
 # isn't registered here (and the registry can't drift from the validator).
 REGISTRY = {
     "plan_output_to_work_units": plan_output_to_work_units,
     "judge_winner_to_work_units": judge_winner_to_work_units,
     "plan_output_to_paired_builders": plan_output_to_paired_builders,
     "iterate_template": iterate_template,
-    # v0.6.0 (U8): brainstorm→plan spine emitter. Added atomically with the
-    # recipes.V1_EMITTER_NAMES entry so the symmetry test stays green.
+    # v0.6.0 (U8): brainstorm→plan spine producer. Added atomically with the
+    # recipes.V1_PRODUCER_NAMES entry so the symmetry test stays green.
     "brainstorm_output_to_plan_unit": brainstorm_output_to_plan_unit,
 }
 
 
 def resolve(name: str):
-    """Return the emitter function for ``name``, or raise KeyError.
+    """Return the producer function for ``name``, or raise KeyError.
 
-    The seam-handler resolves the recipe's declared emitter name through here,
+    The seam-handler resolves the recipe's declared producer name through here,
     then hands the function to ``ledger.transition_and_emit``.
     """
     if name not in REGISTRY:
-        raise KeyError(f"unknown emitter {name!r}; registered: {sorted(REGISTRY)}")
+        raise KeyError(f"unknown producer {name!r}; registered: {sorted(REGISTRY)}")
     return REGISTRY[name]

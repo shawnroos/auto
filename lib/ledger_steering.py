@@ -24,7 +24,7 @@ Sits ABOVE ledger_mutators in the acyclic DAG
 and errors, and ledger_mutators for the two graph helpers ``add_unit`` /
 ``reshape_deps`` reuse (``_sanitize_enumerated_depends_on``,
 ``_find_depends_on_back_edge``) rather than hand-rolling a second sanitizer or
-cycle detector. Imports NOTHING from emitters or the facade.
+cycle detector. Imports NOTHING from producers or the facade.
 """
 
 from __future__ import annotations

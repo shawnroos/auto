@@ -105,7 +105,7 @@ def _operator_guidance_for(phase, advance_result, led):
         # two conditions advance_brainstorm_loop/_brainstorm_unit_ready gate on:
         # (i) the requirements-doc path on the brainstorm unit's
         # dispatch_context.requirements_doc, AND (ii) self-write that unit
-        # `verdict-returned`. Without BOTH, the forward brainstorm→plan emitter
+        # `verdict-returned`. Without BOTH, the forward brainstorm→plan producer
         # never fires and every tick re-arms identically (the livelock the U7
         # success criterion forbids; feedback_plan_documents_transition_code_
         # doesnt_wire_it). Mirrors the single-unit plan-phase guidance, not the

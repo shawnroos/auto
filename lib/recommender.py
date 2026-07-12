@@ -104,7 +104,7 @@ _TAXONOMY = {
         # `recipes.load_and_validate(name, repo)` → f"{name}.json", so passing
         # "pipeline.json" would resolve to recipes/pipeline.json.json and fail.
         # The recipe's phase_order[0] IS the entry phase ("brainstorm"); the run
-        # auto-advances brainstorm→plan→work via the U8 emitter (KTD-2/3).
+        # auto-advances brainstorm→plan→work via the U8 producer (KTD-2/3).
         "ce_step": "ce-brainstorm",
         "recipe_or_entry": "pipeline",
         "entry": "brainstorm",

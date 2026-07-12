@@ -59,12 +59,12 @@ observable — every advance is one named op the ledger can record.
 | `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | tick (U4) | **the adapter owns plan-step sequencing** — the engine never picks the next plan step |
 | `do_unit(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
 | `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
-| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | tick (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe emitters read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition emitter (U5b) shapes it into ledger units. |
+| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | tick (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
 
 > **v0.2.0 contract re-lock (KTD-4).** The op set grew from six to **seven** with
 > `enumerate_plan_units`. This was a deliberate re-lock, not a drift: v0.1.x had no
 > in-code work-unit producer (the seam paused for off-ledger manual creation), so
-> the recipe emitters had no source data (feasibility F4). Both `ce` and `native`
+> the recipe producers had no source data (feasibility F4). Both `ce` and `native`
 > adapters implement the new op. `next_plan_step`'s signature is UNCHANGED — N>1
 > parallel plan-loops advance serialized (one per tick), so the adapter still sees
 > one logical advance-stream. A `unit_id` parameter on `next_plan_step` for

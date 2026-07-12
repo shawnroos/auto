@@ -4,7 +4,7 @@
 # finding count (KTD-6 — adversarial + feasibility + security converging on one
 # upstream phase beats N same-role hits).
 #
-# SELF-CONTAINED inline harness (modeled on tests/unit/emitters.test.sh): shells
+# SELF-CONTAINED inline harness (modeled on tests/unit/producers.test.sh): shells
 # into Python via _bootstrap.load_lib_module("upstream-cluster").
 #
 # Scenarios:

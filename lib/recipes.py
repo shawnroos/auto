@@ -10,10 +10,10 @@ U17 (v0.9.0) split the former ~981-LOC recipes.py BY CONCERN: the ~700-LOC
 validation family moved to lib/recipe_validate.py (the DAG root — pure stdlib,
 imports no sibling), and THIS file is the thin registry facade. It re-exports the
 validation surface (``validate`` / ``validate_and_lint`` / ``RecipeError`` /
-``V1_EMITTER_NAMES`` / the ``_validate_*`` helpers ``resolve``/``unit_for`` need)
+``V1_PRODUCER_NAMES`` / the ``_validate_*`` helpers ``resolve``/``unit_for`` need)
 so existing callers that do ``recipes.validate(...)``, ``except recipes.RecipeError``,
-``recipes.V1_EMITTER_NAMES`` etc. keep resolving unchanged — exactly the pattern
-the ledger facade uses for ledger_core/mutators/emitters. ``RecipeError`` lives in
+``recipes.V1_PRODUCER_NAMES`` etc. keep resolving unchanged — exactly the pattern
+the ledger facade uses for ledger_core/mutators/producers. ``RecipeError`` lives in
 recipe_validate (the root) and is re-exported here, so it is importable from BOTH
 modules with no import cycle (facade → recipe_validate, one direction).
 
@@ -53,9 +53,9 @@ RecipeError = recipe_validate.RecipeError  # shared exception (both modules expo
 validate = recipe_validate.validate
 validate_and_lint = recipe_validate.validate_and_lint
 
-# Public constant consumers read as recipes.V1_EMITTER_NAMES (e.g. the U5b
+# Public constant consumers read as recipes.V1_PRODUCER_NAMES (e.g. the U5b
 # symmetry test that cross-checks it against unit_emitters.REGISTRY).
-V1_EMITTER_NAMES = recipe_validate.V1_EMITTER_NAMES
+V1_PRODUCER_NAMES = recipe_validate.V1_PRODUCER_NAMES
 
 # Format constants + the private validation helpers the registry below reaches:
 # resolve() calls _validate_recipe_name + _bad; unit_for() calls
