@@ -89,9 +89,9 @@ Each shape has a legible name; the shorthand still works as an alias
   the work-loop.
 - **`parallel-theories`** (alias `a2`) — Parallel Theories + Judge.
   High-uncertainty design space worth running N competing plans and judging the
-  winner (declares a `judge` gate unit).
+  winner (declares a `judge` gate step).
 - **`adversarial-pair`** (alias `a4`) — Adversarial Pair + Comparator. One plan,
-  two biased builders, a comparator picks/merges (declares a `compare` gate unit).
+  two biased builders, a comparator picks/merges (declares a `compare` gate step).
 
 Ground the pick in the `auto-design` rubrics (above). When **no built-in fits**
 (the work needs a gate point no built-in expresses — e.g. a spike-before-build
@@ -111,14 +111,14 @@ decide. Keep one claim per criterion; the array is capped at ≤ 16.
 
 **Gate attachment is shape-specific (KTD-4):**
 
-- **`a1` / `w` have no iteration gate point.** They emit work units at runtime
+- **`a1` / `w` have no iteration gate point.** They emit work steps at runtime
   with dynamic ids, so they carry **no `verification` block**. What the
   chooser/notice surfaces for them is a *description of the inherent
   review-to-P3 exit predicate* (`blockers == 0 AND majors == 0 AND
   all_steps_terminal` — "only P3 findings remain"), for visibility only — not a
   new typed gate. R2's "at each gate point" is vacuously satisfied (a1/w have no
   iteration gate point).
-- **`a2` / `a4` / custom have a declared gate unit** (`judge` / `compare` /
+- **`a2` / `a4` / custom have a declared gate step** (`judge` / `compare` /
   the custom's own), so typed `verification` attaches via the existing
   `iteration.gate_step` mechanism.
 
@@ -186,7 +186,7 @@ Print the R9 one-line non-blocking notice and dispatch — no question.
 `<summary>` for **a1/w** names the inherent review-to-P3 exit predicate, e.g.
 `-> a1 · gate: review-clean to P3` — **not** a literal programmatic check (per
 KTD-4, the exit predicate is what gates the run; a "tests green" phrasing would
-misrepresent it). For a2/a4 with a default gate, name the gate unit's check.
+misrepresent it). For a2/a4 with a default gate, name the gate step's check.
 
 ### `confirm`
 
@@ -243,7 +243,7 @@ backends. The mechanics:
 
 1. **Build the draft.** Start from the chosen shape's built-in topology (or the
    composed custom from `auto-design`). Attach the confirmed `verification` array
-   to the unit named by the recipe's existing `iteration.gate_step`
+   to the step named by the recipe's existing `iteration.gate_step`
    (`a2`→`judge`, `a4`→`compare`, custom→its declared gate). Do not add a new
    gate point or producer — the typed array rides on the *existing* mechanism
    (`recipe-format.md` §11 + §6).

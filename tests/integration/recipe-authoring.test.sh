@@ -42,7 +42,7 @@ tr = load_lib_module("topology-render")
 op = sys.argv[2]
 
 # The recipe the skill should produce for the AE3 prompt (A4's topology): one
-# plan unit + the paired-builders producer at the (plan, work) boundary.
+# plan step + the paired-builders producer at the (plan, work) boundary.
 A4_SHAPED = {
     "name": "my-pair", "version": "1",
     "description": "two builders clarity vs perf, comparator picks",

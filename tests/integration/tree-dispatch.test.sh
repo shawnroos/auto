@@ -13,16 +13,16 @@
 #
 # This test cannot spawn a real Claude Agent, so it proves the HANDOFF the runtime
 # rests on, deterministically:
-#   A. dispatch_batch transitions ready units pending->dispatched, capped, and
+#   A. dispatch_batch transitions ready steps pending->dispatched, capped, and
 #      delegates the (no-op) launch to launch_fn — it never spawns anything itself.
-#   B. a unit's `attempt` generation increments on dispatch (Bug #6).
+#   B. a step's `attempt` generation increments on dispatch (Bug #6).
 #   C. DURABILITY: a verdict self-written by a SEPARATE PROCESS (simulating the
 #      sub-agent, via `python3 lib/ledger.py record-verdict`) is converged by a
 #      later read even though the "boss" process that dispatched it has exited.
 #      This is the property the whole tree runtime rests on.
 #   D. a stale-attempt verdict (from a superseded attempt) is REJECTED
 #      (StaleVerdict), not merged (AE3).
-#   E. a launch that RAISES marks its unit `stalled` with a `launch-failed`
+#   E. a launch that RAISES marks its step `stalled` with a `launch-failed`
 #      last_error and CONTINUES the wave (the existing Bug #8 guard).
 #   F. RISK-7: a long-running-but-alive sub-agent (dispatched, within its
 #      stall threshold) is NOT reaped; only a past-threshold one is.
@@ -59,7 +59,7 @@ REPO="$(mktemp -d)"
 export CLAUDE_AUTO_REPO="$REPO"
 mkdir -p "$REPO/.claude/auto"
 
-# Seed a run with N work-phase pending units (backend_op=do_step, the default
+# Seed a run with N work-phase pending steps (backend_op=do_step, the default
 # work-loop op). Runs in one python process; the ledger persists on disk.
 seed_run() {
   local run="$1"; local n="$2"; local threshold="${3:-}"
@@ -76,19 +76,19 @@ def load(name):
     return m
 ledger = load("ledger")
 repo = os.environ["CLAUDE_AUTO_REPO"]
-units = []
+steps = []
 for i in range(1, n + 1):
     u = {"id": f"u{i}", "phase": "work",
          "dispatch_context": {"backend_op": "do_step"}}
     if threshold:
         u["stall_threshold_seconds"] = int(threshold)
-    units.append(u)
-ledger.init_ledger(repo, run, backend="ce", loop_phase="work", units=units)
+    steps.append(u)
+ledger.init_ledger(repo, run, backend="ce", loop_phase="work", steps=steps)
 PYEOF
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-it "KTD-1: dispatch_batch transitions ready units pending->dispatched, CAPPED, and delegates the (no-op) launch — it never spawns"
+it "KTD-1: dispatch_batch transitions ready steps pending->dispatched, CAPPED, and delegates the (no-op) launch — it never spawns"
 seed_run A 3
 res="$("$PY" - "$AUTO_ROOT" A <<'PYEOF'
 import sys, os
@@ -108,14 +108,14 @@ repo = os.environ["CLAUDE_AUTO_REPO"]
 # is KTD-1 — dispatch_batch cannot spawn a Claude Agent from a python subprocess.
 default_is_noop = orch._default_launch_fn("u1", 1) is None
 
-# A spy launcher proves dispatch_batch DELEGATES the launch (passing unit_id +
+# A spy launcher proves dispatch_batch DELEGATES the launch (passing step_id +
 # attempt) rather than doing it itself. dispatch_batch's own body performs the
 # ledger transition ONLY.
 spy = []
 def launch_fn(uid, attempt):
     spy.append((uid, attempt))
 
-ready = orch.ready_units(repo, run)
+ready = orch.ready_steps(repo, run)
 results = orch.dispatch_batch(repo, run, ready, cap=2, launch_fn=launch_fn)
 
 led = ledger.read_ledger(repo, run)
@@ -128,13 +128,13 @@ print("ready=%s|status=%s|states=%s|spy=%s|noop=%s" % (
 PYEOF
 )"
 # cap=2: u1,u2 dispatched; u3 eligible but over-cap stays pending. The spy sees
-# exactly the two dispatched units (with their bumped attempt=1). The default
+# exactly the two dispatched steps (with their bumped attempt=1). The default
 # launcher is a no-op.
 exp='ready=u1,u2,u3|status=dispatched,dispatched,rejected:over-cap|states=u1:dispatched,u2:dispatched,u3:pending|spy=u1@1,u2@1|noop=True'
 assert_eq "$exp" "$res"
 
 # ─────────────────────────────────────────────────────────────────────────────
-it "Bug #6: a unit's attempt generation increments on dispatch (0 -> 1)"
+it "Bug #6: a step's attempt generation increments on dispatch (0 -> 1)"
 seed_run B 1
 res="$("$PY" - "$AUTO_ROOT" B <<'PYEOF'
 import sys, os
@@ -179,7 +179,7 @@ repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)
 PYEOF
 
-it "durability control: BEFORE the sub-agent writes, converge shows the unit in_flight (not completed)"
+it "durability control: BEFORE the sub-agent writes, converge shows the step in_flight (not completed)"
 res_before="$("$PY" "$AUTO_ROOT/lib/dispatcher.py" converge "$CLAUDE_AUTO_REPO" C 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print("in_flight=%s completed=%s" % (d["in_flight"], d["completed"]))')"
 assert_eq "in_flight=['u1'] completed=[]" "$res_before"
 
@@ -214,7 +214,7 @@ it "stale verdict (attempt 0 < current 1) is REJECTED (StaleVerdict) — non-zer
 "$PY" "$AUTO_ROOT/lib/ledger.py" record-verdict D u1 '[]' 0 >/dev/null 2>&1
 stale_rc=$?
 state_after="$("$PY" "$AUTO_ROOT/lib/ledger.py" read "$CLAUDE_AUTO_REPO" D 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["steps"][0]["state"])')"
-# rejected: non-zero exit AND the unit stays `dispatched` (no verdict merged).
+# rejected: non-zero exit AND the step stays `dispatched` (no verdict merged).
 if [ "$stale_rc" -ne 0 ] && [ "$state_after" = "dispatched" ]; then pass; else
   fail "expected non-zero rc + state 'dispatched', got rc=$stale_rc state='$state_after'"; fi
 
@@ -226,7 +226,7 @@ if [ "$fresh_rc" -eq 0 ] && [ "$state_fresh" = "verdict-returned" ]; then pass; 
   fail "expected rc=0 + state 'verdict-returned', got rc=$fresh_rc state='$state_fresh'"; fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-it "Bug #8: a launch that RAISES marks its unit stalled (last_error.call=launch) and CONTINUES the wave"
+it "Bug #8: a launch that RAISES marks its step stalled (last_error.call=launch) and CONTINUES the wave"
 seed_run E 3
 res="$("$PY" - "$AUTO_ROOT" E <<'PYEOF'
 import sys, os
@@ -281,7 +281,7 @@ led = ledger.read_ledger(repo, run)
 dispatched_at = led["steps"][0]["dispatched_at"]
 base = ledger.parse_iso(dispatched_at)
 
-# ALIVE: 60s in, far below the unit's 3600s threshold -> not stalled.
+# ALIVE: 60s in, far below the step's 3600s threshold -> not stalled.
 alive = base + timedelta(seconds=60)
 _, halted_alive, confirmed_alive = ta.detect_and_halt_stalled(repo, run, led, alive)
 state_alive = ledger.read_ledger(repo, run)["steps"][0]["state"]

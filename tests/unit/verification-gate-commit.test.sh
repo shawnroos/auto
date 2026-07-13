@@ -88,13 +88,13 @@ def emit(tag, val):
 JUDGE_TYPES = ("advisor_judge", "model_judge", "human")
 
 def init(run, verification, dispatch_context=None):
-    """Arm a real on-disk ledger with a verification gate unit (carried through
+    """Arm a real on-disk ledger with a verification gate step (carried through
     by U3's feeder) + a minimal iteration block naming it the gate."""
-    unit = {"id": "gate", "state": "verdict-returned", "verification": verification}
+    step = {"id": "gate", "state": "verdict-returned", "verification": verification}
     if dispatch_context is not None:
-        unit["dispatch_context"] = dispatch_context
+        step["dispatch_context"] = dispatch_context
     ledger.init_ledger(repo, run, backend="ce", loop_phase="work",
-                       units=[unit], iteration={"gate_step": "gate"})
+                       steps=[step], iteration={"gate_step": "gate"})
 
 def drive(run, caller_verdicts=None):
     """Mirror §4.7 steps 3-5 against the on-disk ledger. Returns the signal."""

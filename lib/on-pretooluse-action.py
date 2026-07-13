@@ -39,7 +39,7 @@ and eval/obfuscation. ALSO out-of-scope (fix-round-5 P2): GitHub MCP write tools
 do NOT flow through the Bash `command` channel this classifier reads (their
 tool_input carries no `command`), and the hook is wired to Bash/Write tool names
 only, so an MCP tool name never reaches it. Gating MCP-write tools is a tool-name
-interception change beyond v0.6.0's detect-and-escalate scope; fan-out units carry
+interception change beyond v0.6.0's detect-and-escalate scope; fan-out steps carry
 the prompt-embedded two-handoff instruction instead. The classifier is a
 deterministic minimum-set backstop, not a comprehensive sandbox.
 

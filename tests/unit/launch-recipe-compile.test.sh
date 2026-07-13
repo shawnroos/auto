@@ -15,10 +15,10 @@
 #   1. Covers AE3 — an a2 recommendation with an edited advisor_judge gate
 #      compiles to a2-<slug>.json in the WORKSPACE tier through the real
 #      validate_and_lint write gate; validate accepts it; resolve("a2-<slug>")
-#      returns it at tier `workspace` (and the gate unit carries the verification).
+#      returns it at tier `workspace` (and the gate step carries the verification).
 #   2. Covers AE4 — a custom spike-before-build loop validates before it is offered.
 #   3. a1/w take the no-compile branch — the built-ins declare no iteration gate
-#      unit, so there is nothing to attach a verification array to; no workspace
+#      step, so there is nothing to attach a verification array to; no workspace
 #      recipe is written.
 #   4. Anti-shadow + verbatim-description-warning-is-blocking — the distinct stem
 #      a2-<slug> resolves at `workspace` WHILE the canonical built-in a2 stays
@@ -183,7 +183,7 @@ elif op == "custom-validates":
     print(f"custom={vresult(custom)}")
 
 elif op == "a1w-nocompile":
-    # a1/w declare NO iteration block, so there is no gate_unit to attach a
+    # a1/w declare NO iteration block, so there is no gate_step to attach a
     # verification array to → the no-compile branch (KTD-4).
     a1 = load_builtin("a1"); w = load_builtin("w")
     print(
@@ -228,13 +228,13 @@ elif op == "teardown":
     atomic_write(path, draft)
 
     recipe, tier = recipes.load_and_validate(draft["name"], repo)
-    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("steps", [])]
+    init_steps = [recipes.step_for(u, recipe) for u in recipe.get("steps", [])]
     phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
     run_id = "teardown-" + slug
     ledger.init_ledger(
         repo, run_id,
         backend=recipe.get("default_backend", "ce"),
-        units=init_units,
+        steps=init_steps,
         loop_phase=phase_order[0],
         recipe={"name": recipe["name"], "source_tier": tier},
         phase_order=phase_order,
@@ -259,9 +259,9 @@ elif op == "teardown":
 
     # ...yet read_ledger still carries the persisted topology...
     led = ledger.read_ledger(repo, run_id)
-    led_units = sorted(u["id"] for u in led.get("steps", []))
-    expected = sorted(u["id"] for u in init_units)
-    topo_ok = int(led_units == expected)
+    led_steps = sorted(u["id"] for u in led.get("steps", []))
+    expected = sorted(u["id"] for u in init_steps)
+    topo_ok = int(led_steps == expected)
 
     # ...and a post-init drive still advances the run (no recipe file needed).
     intent = pulse.dispatch_pulse(repo, run_id)
@@ -286,7 +286,7 @@ it "AE3: read-back load_and_validate accepts the compiled recipe"
 assert_eq "valid" "$(field readback "$R")"
 it "AE3: resolve('a2-fix-checkout') returns the variant at tier workspace"
 assert_eq "workspace" "$(field resolve_variant "$R")"
-it "AE3: the gate unit (judge) carries the operator-edited verification array"
+it "AE3: the gate step (judge) carries the operator-edited verification array"
 assert_eq "1" "$(field gate_has_verif "$R")"
 
 # ── 2. Covers AE4: a custom spike-before-build loop validates ───────────────
@@ -295,11 +295,11 @@ assert_eq "valid" "$(field custom "$(drv custom-validates one)")"
 
 # ── 3. a1/w take the no-compile branch (KTD-4) ──────────────────────────────
 R="$(drv a1w-nocompile)"
-it "no-compile: a1 declares no iteration gate unit (nothing to attach a gate to)"
+it "no-compile: a1 declares no iteration gate step (nothing to attach a gate to)"
 assert_eq "0" "$(field a1_iter "$R")"
-it "no-compile: w declares no iteration gate unit"
+it "no-compile: w declares no iteration gate step"
 assert_eq "0" "$(field w_iter "$R")"
-it "no-compile: a1's gate unit is absent (no-compile branch, KTD-4)"
+it "no-compile: a1's gate step is absent (no-compile branch, KTD-4)"
 assert_eq "none" "$(field a1_gate "$R")"
 
 # ── 4. Anti-shadow distinct stem + verbatim-description-warning-is-blocking ──

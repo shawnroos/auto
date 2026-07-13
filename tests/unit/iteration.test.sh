@@ -2,13 +2,13 @@
 # auto v0.3.0 U1 unit test: the ONE iteration-decision module.
 #
 # Mirrors tests/unit/phase-grammar.test.sh — every site that reads a gate
-# unit's verdict.decision routes through this module. AST lint (sibling
+# step's verdict.decision routes through this module. AST lint (sibling
 # file tests/unit/iteration-ast-lint.test.sh) mechanically enforces that
 # no other lib/*.py raw-subscripts dispatch_context["decision"] — same
 # discipline as phase-grammar's "loop_phase" literal lint.
 #
 # Behavior contract from plan U1:
-#   evaluate_decision(led, gate_unit_id, now_monotonic=None) -> dict with
+#   evaluate_decision(led, gate_step_id, now_monotonic=None) -> dict with
 #     decision_effective: "advance" | "iterate" | "exit" | None
 #     original_decision: <same string or None>
 #     bound_breached: bool
@@ -21,7 +21,7 @@
 #   3. bound: max_attempts — attempts == max → effective forced to "exit"
 #   4. bound: max_wall_seconds — active_wall_seconds > max → effective forced to "exit"
 #   5. no decision yet — read_decision returns None, evaluate returns None
-#   6. unknown gate unit id — raises clear error
+#   6. unknown gate step id — raises clear error
 
 set -uo pipefail
 
@@ -54,7 +54,7 @@ op = sys.argv[2]
 
 def make_led(decision, attempts=0, active_wall_seconds=0,
              max_attempts=5, max_wall_seconds=None):
-    """A minimal ledger shape with one gate unit named 'judge' carrying the
+    """A minimal ledger shape with one gate step named 'judge' carrying the
     given decision payload, plus the iteration block + bound."""
     judge = {"id": "judge", "phase": "work", "state": "verdict-returned",
              "dispatch_context": {}}
@@ -71,7 +71,7 @@ def make_led(decision, attempts=0, active_wall_seconds=0,
     }
 
 def make_verif_led(crits, dispatch_context=None):
-    """A minimal ledger with one gate unit 'g' carrying a verification block."""
+    """A minimal ledger with one gate step 'g' carrying a verification block."""
     return {"steps": [{"id": "g", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": dispatch_context or {},
                        "verification": crits}]}
@@ -166,7 +166,7 @@ elif op == "decisions-constant":
 elif op == "pending-no-iteration-block":
     print(iteration.compute_pending_state({"steps": []}))
 
-elif op == "pending-no-gate-unit-named":
+elif op == "pending-no-gate-step-named":
     led = {"steps": [], "iteration": {"bound": {}}}
     print(iteration.compute_pending_state(led))
 
@@ -320,8 +320,8 @@ assert_eq \
   '{"read_decision": null, "decision_effective": null}' \
   "$(run_iter no-decision)"
 
-# ─── Scenario 6: unknown gate unit ──────────────────────────────────────────
-it "evaluate_decision: unknown gate_unit_id raises"
+# ─── Scenario 6: unknown gate step ──────────────────────────────────────────
+it "evaluate_decision: unknown gate_step_id raises"
 result="$(run_iter unknown-gate)"
 case "$result" in
   raised:*) pass ;;
@@ -336,10 +336,10 @@ assert_eq "advance,iterate,exit" "$(run_iter decisions-constant)"
 it "compute_pending_state: no iteration block → False"
 assert_eq "False" "$(run_iter pending-no-iteration-block)"
 
-it "compute_pending_state: no gate_unit named in iteration block → False"
-assert_eq "False" "$(run_iter pending-no-gate-unit-named)"
+it "compute_pending_state: no gate_step named in iteration block → False"
+assert_eq "False" "$(run_iter pending-no-gate-step-named)"
 
-it "compute_pending_state: gate unit id not present in steps[] → False"
+it "compute_pending_state: gate step id not present in steps[] → False"
 assert_eq "False" "$(run_iter pending-gate-not-found)"
 
 it "compute_pending_state: gate decision != 'iterate' → False"
@@ -446,20 +446,20 @@ sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 iteration = load_lib_module("iteration")
 
-unit = {"dispatch_context": {"enumerated_steps": [{"id": "w1"}]}}
+step = {"dispatch_context": {"enumerated_steps": [{"id": "w1"}]}}
 
 # 1. misspelled key -> KeyError (loud), NOT a silent None.
 try:
-    iteration.read_dc(unit, "enumarated_units")  # typo
+    iteration.read_dc(step, "enumarated_steps")  # typo
     typo = "no-raise"
 except KeyError:
     typo = "raised"
 
 # 2. declared-but-absent key -> None (real-miss semantics preserved).
-absent = iteration.read_dc(unit, "winner_step_id")
+absent = iteration.read_dc(step, "winner_step_id")
 
 # 3. named accessor reads the declared key.
-named = iteration.read_enumerated_units(unit)
+named = iteration.read_enumerated_steps(step)
 
 # 4. read_decision still delegates through read_dc (behavior identical).
 dec = iteration.read_decision({"dispatch_context": {"decision": "iterate"}})

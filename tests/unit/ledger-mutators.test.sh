@@ -16,9 +16,9 @@
 #      proves the test goes RED without locking
 #   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
-#   6. I-2: 3 units, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
+#   6. I-2: 3 steps, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
 #      dispatched -> met==false (all_steps_terminal false)
-#   7. I-2 closure: unit `fixed` with a stale blocker -> all_steps_terminal==false
+#   7. I-2 closure: step `fixed` with a stale blocker -> all_steps_terminal==false
 #   8. I-3: liveness/orphan predicate (manual / stale-beat / healthy-slow)
 #   9. state grammar: every documented transition holds; undocumented rejected
 #  10. fence: no production file enables a TEST_NO_* hatch
@@ -61,15 +61,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the module ─────────────────────────────
-# init <run> <json-units>  — create a ledger with given units list
+# init <run> <json-steps>  — create a ledger with given steps list
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -86,19 +86,19 @@ print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-units> <backend_scale> [phase]  — like ledger_init but
+# init_scale <run> <json-steps> <backend_scale> [phase]  — like ledger_init but
 # threads backend_scale (the ledger_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
 ledger_init_scale() {
-  local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" scale="$3" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, scale, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, scale, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 backend = "native" if scale == "blocker-only" else "ce"
 m.init_ledger(repo, run, backend=backend, backend_scale=scale,
-              units=json.loads(units_json), loop_phase=phase)
+              steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -111,13 +111,13 @@ echo "ledger-mutators.test.sh"
 #
 # Six new write paths support outcomes-gated emission (KTD §A-D / plan U2):
 #   set_verdict_decision     — writes dispatch_context.decision (the gate
-#                              unit's verdict-side decision enum; sibling to
-#                              set_winner_unit_id)
+#                              step's verdict-side decision enum; sibling to
+#                              set_winner_step_id)
 #   set_bound_override       — engine-only audit trail for iterate→exit
 #   accumulate_active_time   — atomic add-write of the wall-time bound
 #                              accumulator
 #   increment_iteration_attempts — atomic ++ of the attempts bound counter
-#   reset_for_iteration      — atomic gate-unit cycle-back combo
+#   reset_for_iteration      — atomic gate-step cycle-back combo
 #   emit_within_phase        — sibling to transition_and_emit, no loop_phase
 #                              write, bumps iteration_emit_count
 #   atomic_iterate_step      — composite of increment + emit + reset in ONE
@@ -134,7 +134,7 @@ echo "ledger-mutators.test.sh"
 #   `NOT iteration_pending`.
 
 # A tiny Python driver that loads ledger.py and applies a sequence of writes
-# against a fresh ledger seeded with an iteration block + gate unit. Each
+# against a fresh ledger seeded with an iteration block + gate step. Each
 # scenario writes JSON to stdout and the bash assertions check exact strings.
 iter_driver() {
   "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'
@@ -147,20 +147,20 @@ op = sys.argv[3]
 
 def fresh(run, *, iteration=True, gate_state="verdict-returned",
           attempts=0, active_wall=0, max_attempts=5, max_wall=None,
-          extra_units=None):
+          extra_steps=None):
     """Create a fresh ledger with an optional iteration block and a 'judge'
-    gate unit. Returns the ledger dict (already on disk via init_ledger then
+    gate step. Returns the ledger dict (already on disk via init_ledger then
     a _with_locked_ledger touch to install the iteration block + gate state).
     """
     p = m.ledger_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    units = [{"id": "judge", "state": "pending", "phase": "work"}]
-    if extra_units:
-        units.extend(extra_units)
+    steps = [{"id": "judge", "state": "pending", "phase": "work"}]
+    if extra_steps:
+        steps.extend(extra_steps)
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
     # ships in U5/recipes).
@@ -172,7 +172,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
             L["iteration"] = {"gate_step": "judge", "bound": bound}
         L["iteration_attempts"] = attempts
         L["active_wall_seconds"] = active_wall
-        # Walk the gate unit to the requested state via grammar-valid edges.
+        # Walk the gate step to the requested state via grammar-valid edges.
         u = L["steps"][0]
         if gate_state == "verdict-returned":
             u["state"] = "dispatched"  # then record_verdict will edge it.
@@ -252,13 +252,13 @@ elif op == "set_verdict_decision-rejects-garbage":
     except m.LedgerError:
         print("rejected")
 
-# ─── op: set_verdict_decision-unknown-unit ─────────────────────────────────
-elif op == "set_verdict_decision-unknown-unit":
+# ─── op: set_verdict_decision-unknown-step ─────────────────────────────────
+elif op == "set_verdict_decision-unknown-step":
     led = fresh("u2-svd-noghost")
     try:
         m.set_verdict_decision(repo, "u2-svd-noghost", "ghost", "iterate")
         print("ACCEPTED")
-    except m.UnknownUnit:
+    except m.UnknownStep:
         print("rejected-unknown")
     except m.LedgerError:
         print("rejected-ledger")
@@ -431,9 +431,9 @@ assert_eq \
 it "U2: set_verdict_decision rejects a decision not in iteration.DECISIONS"
 assert_eq "rejected" "$(iter_driver set_verdict_decision-rejects-garbage)"
 
-# ─── U2.5: set_verdict_decision rejects unknown unit ────────────────────────
-it "U2: set_verdict_decision rejects an unknown gate_unit_id"
-result="$(iter_driver set_verdict_decision-unknown-unit)"
+# ─── U2.5: set_verdict_decision rejects unknown step ────────────────────────
+it "U2: set_verdict_decision rejects an unknown gate_step_id"
+result="$(iter_driver set_verdict_decision-unknown-step)"
 case "$result" in
   rejected-*) pass ;;
   *) fail "expected a rejection, got '$result'" ;;
@@ -462,7 +462,7 @@ assert_eq \
   "$(iter_driver reset_for_iteration-happy)"
 
 # ─── U2.12: reset_for_iteration rejects bad source state ────────────────────
-it "U2: reset_for_iteration on a non-verdict-returned unit raises InvalidTransition"
+it "U2: reset_for_iteration on a non-verdict-returned step raises InvalidTransition"
 assert_eq "rejected-invalid-transition" "$(iter_driver reset_for_iteration-bad-state)"
 
 # ─── U2.13: predicate composition — iteration_pending suppresses met ────────
@@ -488,16 +488,16 @@ assert_eq \
   "$(iter_driver predicate-survives-corrupt-iteration-attempts)"
 
 # ════════════════════════════════════════════════════════════════════════════
-# U14 P2 anti-livelock — set_enumerated_units sanitizes model-emitted depends_on.
+# U14 P2 anti-livelock — set_enumerated_steps sanitizes model-emitted depends_on.
 #
 # A dangling id, a self-edge, or a cycle in the model's per-item depends_on
-# would leave the materialized work unit permanently un-_is_ready → a SILENT
+# would leave the materialized work step permanently un-_is_ready → a SILENT
 # full-run livelock (never ready, never dispatched, dispatch-timeout never
-# fires, all_steps_terminal false forever). set_enumerated_units is the single
+# fires, all_steps_terminal false forever). set_enumerated_steps is the single
 # chokepoint where runtime model output enters the ledger; it DROPS invalid
 # edges (recording dispatch_context.dropped_depends_on_edges) rather than
-# raising (a raise would materialize zero work units — also a stall). Valid
-# edges, including forward-refs to sibling enumerated units, are preserved.
+# raising (a raise would materialize zero work steps — also a stall). Valid
+# edges, including forward-refs to sibling enumerated steps, are preserved.
 #
 # These assert the CLEANED edges + marker; dispatcher.test.sh asserts the
 # sanitized shape actually becomes ready (the real anti-hang claim).
@@ -516,12 +516,12 @@ def setup(run):
         os.unlink(p)
     m.init_ledger(repo, run, backend="ce", loop_phase="plan",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=[{"id": "plan", "state": "pending", "phase": "plan"}])
+                  steps=[{"id": "plan", "state": "pending", "phase": "plan"}])
 
 
 def report(run, enumerated):
     setup(run)
-    m.set_enumerated_units(repo, run, "plan", enumerated)
+    m.set_enumerated_steps(repo, run, "plan", enumerated)
     L = m.read_ledger(repo, run)
     plan = next(u for u in L["steps"] if u["id"] == "plan")
     dc = plan["dispatch_context"]
@@ -558,7 +558,7 @@ elif op == "mixed":
             {"id": "w2", "invokes": {}, "depends_on": ["w1"]},
             {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
 elif op == "existing-ref":
-    # depending on an EXISTING ledger unit ("plan") is valid — preserved.
+    # depending on an EXISTING ledger step ("plan") is valid — preserved.
     report("g-exist",
            [{"id": "w1", "invokes": {}, "depends_on": ["plan"]}])
 elif op == "leaf-dep":
@@ -570,18 +570,18 @@ elif op == "leaf-dep":
 elif op == "unhashable":
     # malformed model output: an unhashable (list) element where a string id
     # belongs — must be DROPPED, not raise TypeError on the `in set` test (which
-    # would abort the persist → zero units → the same stall class, just loud).
+    # would abort the persist → zero steps → the same stall class, just loud).
     report("g-unhashable",
            [{"id": "w1", "invokes": {}, "depends_on": [["nested"]]}])
 PYEOF
 }
 
-it "U14 guard: dangling dep id → dropped, unit left with depends_on:[] (no dangling stall)"
+it "U14 guard: dangling dep id → dropped, step left with depends_on:[] (no dangling stall)"
 assert_eq \
   '{"deps": {"w1": []}, "dropped": [["w1", "ghost", "dangling"]]}' \
   "$(enum_driver dangling)"
 
-it "U14 guard: self-edge → dropped (a unit can never satisfy itself)"
+it "U14 guard: self-edge → dropped (a step can never satisfy itself)"
 assert_eq \
   '{"deps": {"w1": []}, "dropped": [["w1", "w1", "self"]]}' \
   "$(enum_driver self)"
@@ -611,7 +611,7 @@ assert_eq \
   '{"deps": {"w1": ["w2"], "w2": [], "w3": ["w1"]}, "dropped": [["w2", "w1", "cycle"]]}' \
   "$(enum_driver mixed)"
 
-it "U14 guard: dep on an existing ledger unit is valid → preserved"
+it "U14 guard: dep on an existing ledger step is valid → preserved"
 assert_eq \
   '{"deps": {"w1": ["plan"]}, "dropped": []}' \
   "$(enum_driver existing-ref)"

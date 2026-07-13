@@ -42,7 +42,7 @@ if [ ! -f "$SPIKE_DOC" ]; then
 # U1 spike: cmux new-workspace --layout JSON shape
 
 **Date:** $(date -u +%Y-%m-%d)
-**Unit:** plan 004 U1 (gated spike — decides U2-U5's dispatch shape)
+**Step:** plan 004 U1 (gated spike — decides U2-U5's dispatch shape)
 **Status:** in progress
 
 ## Question

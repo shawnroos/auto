@@ -6,15 +6,15 @@
 # Before this, smart-entry detected `reviewed-plan` but routed to a1, whose
 # plan-loop re-ran /ce-plan + /ce-doc-review on the already-green plan ("auto
 # re-plans a finished plan"). The W recipe that should skip the plan-loop was a
-# v0.2.0 stub with no plan→units enumeration. The fix makes W declare its plan
+# v0.2.0 stub with no plan→steps enumeration. The fix makes W declare its plan
 # phase `plan_presatisfied`: init sets plan_step="review_plan" + gaps_open=0 so
-# the FIRST pulse's next_plan_step returns "done" → enumerate_plan_units →
+# the FIRST pulse's next_plan_step returns "done" → enumerate_plan_steps →
 # plan→work, with NO plan/deepen/review pass.
 #
 # STRUCTURE: create a real W run via `/auto <plan> --recipe w`, assert the
-# pre-satisfied ledger state, stash the model-enumerated work units (what the
-# model does when it executes the enumerate_plan_units prepare op), pulse once in
-# auto mode, and assert the run is now in `work` with those units — proving the
+# pre-satisfied ledger state, stash the model-enumerated work steps (what the
+# model does when it executes the enumerate_plan_steps prepare op), pulse once in
+# auto mode, and assert the run is now in `work` with those steps — proving the
 # plan-loop was skipped entirely.
 #
 # DELIBERATE-FAIL CONTROL: a second run created WITHOUT plan_presatisfied (plain
@@ -40,7 +40,7 @@ fail() {
 }
 
 # Drive a recipe from /auto creation through one auto-mode pulse. Prints CSV:
-#   init_plan_step | init_gaps_open | init_met | plan_path_bound | post_phase | work_unit_ids
+#   init_plan_step | init_gaps_open | init_met | plan_path_bound | post_phase | work_step_ids
 # recipe arg selects the recipe (w | a1).
 drive_presatisfied() {
   recipe="${1:-w}"
@@ -76,11 +76,11 @@ init_step = led.get("plan_step")
 epr = led.get("exit_predicate_result") or {}
 init_gaps = epr.get("gaps_open")
 init_met = epr.get("met")
-plan_units = [u for u in led["steps"] if u.get("phase") == "plan"]
-plan_path_bound = bool(plan_units) and (plan_units[0].get("dispatch_context") or {}).get("plan_path") == plan
+plan_steps = [u for u in led["steps"] if u.get("phase") == "plan"]
+plan_path_bound = bool(plan_steps) and (plan_steps[0].get("dispatch_context") or {}).get("plan_path") == plan
 
 # PULSE 1 — the model has NOT enumerated yet (production reality). The producer
-# handshake must NOT transition to work with zero units: it stays in the plan
+# handshake must NOT transition to work with zero steps: it stays in the plan
 # phase and surfaces the enumerate prepare op.
 with contextlib.redirect_stdout(io.StringIO()):
     intent1 = pulse.dispatch_pulse(repo, run_id, auto=True)
@@ -89,13 +89,13 @@ pulse1_phase = led1["loop_phase"]
 guidance1 = intent1.get("operator_guidance", "")
 enumerate_surfaced = "ENUMERATE" in guidance1 or "enumerate" in guidance1
 
-# The model executes the enumerate_plan_units prepare op → stashes work units.
-ledger.set_enumerated_units(repo, run_id, plan_units[0]["id"], [
+# The model executes the enumerate_plan_steps prepare op → stashes work steps.
+ledger.set_enumerated_steps(repo, run_id, plan_steps[0]["id"], [
     {"id": "u-a", "invokes": {"backend_op": "do_step"}},
     {"id": "u-b", "invokes": {"backend_op": "do_step"}},
 ])
 
-# PULSE 2 — now the units exist, so the handshake passes and we transition.
+# PULSE 2 — now the steps exist, so the handshake passes and we transition.
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led2 = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
@@ -107,7 +107,7 @@ print("%s|%s|%s|%s|%s|%s|%s|%s" % (
 PYEOF
 }
 
-# ─── Green path: W is pre-satisfied, handshakes for units, then works ───────
+# ─── Green path: W is pre-satisfied, handshakes for steps, then works ───────
 res="$(drive_presatisfied w)"
 IFS='|' read -r g_step g_gaps g_met g_bound g_t1phase g_enum g_phase g_work <<EOF
 $res
@@ -117,17 +117,17 @@ it "W inits plan-presatisfied (plan_step=review_plan, gaps_open=0, plan-met)"
 [ "$g_step" = "review_plan" ] && [ "$g_gaps" = "0" ] && [ "$g_met" = "True" ] \
   && pass || fail "expected review_plan|0|True, got ${g_step}|${g_gaps}|${g_met}"
 
-it "W binds the plan doc path to the plan unit (enumerate knows which plan)"
+it "W binds the plan doc path to the plan step (enumerate knows which plan)"
 [ "$g_bound" = "True" ] && pass || fail "plan_path not bound: ${g_bound}"
 
-# THE PRODUCER HANDSHAKE: without it, pulse 1 would flip to work with ZERO units
+# THE PRODUCER HANDSHAKE: without it, pulse 1 would flip to work with ZERO steps
 # and the run would wedge. The fix keeps it in the plan phase and surfaces the
-# enumerate prepare op until the model stashes units.
-it "W pulse 1 (no units yet) stays in plan and surfaces the enumerate prepare (handshake)"
+# enumerate prepare op until the model stashes steps.
+it "W pulse 1 (no steps yet) stays in plan and surfaces the enumerate prepare (handshake)"
 [ "$g_t1phase" = "plan" ] && [ "$g_enum" = "True" ] \
   && pass || fail "expected plan|True (enumerate-pending), got ${g_t1phase}|${g_enum}"
 
-it "W pulse 2 (units stashed) transitions to work with the enumerated units"
+it "W pulse 2 (steps stashed) transitions to work with the enumerated steps"
 [ "$g_phase" = "work" ] && [ "$g_work" = "u-a,u-b" ] \
   && pass || fail "expected work|u-a,u-b, got ${g_phase}|${g_work}"
 

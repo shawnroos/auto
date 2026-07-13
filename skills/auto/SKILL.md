@@ -75,8 +75,8 @@ agent-native answer to a harness limit, not a workaround bolted on.
   The fuzzy judgment "is the next step clear?" stays in the model; the
   CRISP outcome is one of two ledger writes — same split as
   `goal-route.py` (model classifies, code decides):
-  - **clear →** materialize the next step as a unit via a steering verb
-    (`add-unit`, per R15) and keep driving (`driver` stays `self`, so
+  - **clear →** materialize the next step as a step via a steering verb
+    (`add-step`, per R15) and keep driving (`driver` stays `self`, so
     the Stop hook keeps the session held).
   - **unclear →** hand back: `python3 lib/auto-resume.py pause <run>
     "<why the next step is unclear>"`, which flips `driver → manual`.
@@ -87,7 +87,7 @@ agent-native answer to a harness limit, not a workaround bolted on.
   is denied by the PreToolUse gate. The boss re-reads the doc each pulse
   and picks up the edit; the operator never needs a live prompt.
 
-Test the crisp handoff (what the boss WROTE — a unit-create or a manual
+Test the crisp handoff (what the boss WROTE — a step-create or a manual
 pause), never the fuzzy judgment. Full contract: `driver-reference.md`.
 
 ## 2. Arm the pulse chain
@@ -107,7 +107,7 @@ dispatch:
 | `action` | phase | what you do |
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
-| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
+| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready steps (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `handoff-pause` → surface handoff (§3) |
 | `noop`   | any   | another live pulse holds the lock; do nothing |
 
@@ -131,9 +131,9 @@ normal `action: "rearm"` intent whose `advance.advanced ==
 describing the prepare op). (`/auto-resume advance` on a plan-phase run
 doesn't emit this itself — it emits its own `arm-pulse` to arm the pulse
 that THEN surfaces the handshake.) The handshake is an instruction, not
-noise: run the enumerate prepare op and stash the work units via
-`ledger.py set-enumerated-units`, **then re-arm the pulse**. The NEXT
-pulse — once units are stashed — flips `plan → work`. Do NOT read the
+noise: run the enumerate prepare op and stash the work steps via
+`ledger.py set-enumerated-steps`, **then re-arm the pulse**. The NEXT
+pulse — once steps are stashed — flips `plan → work`. Do NOT read the
 envelope as "done planning, start building" and skip the re-arm: skipping
 it leaves the run at `plan` with the work-loop never armed.
 
@@ -154,14 +154,14 @@ When plan predicate met:
 The harness re-invokes you when a background `Agent` finishes — that
 IS the wake signal. Per wave:
 
-1. `units = dispatcher.ready_units(repo, run)`.
+1. `steps = dispatcher.ready_steps(repo, run)`.
 2. Decide cap for THIS wave (16 idle / 3 grinding / 1 to serialize —
    no fixed constant).
-3. `dispatcher.dispatch_batch(repo, run, units, cap, launch_fn=...)`.
-   `launch_fn` maps each unit's `invokes.backend_op` to the skill it
-   launches: `do_step` → `/ce-work <unit-id>` (the default — `a1`/`w`/
+3. `dispatcher.dispatch_batch(repo, run, steps, cap, launch_fn=...)`.
+   `launch_fn` maps each step's `invokes.backend_op` to the skill it
+   launches: `do_step` → `/ce-work <step-id>` (the default — `a1`/`w`/
    `pipeline`); `review` → `/ce-code-review` (the `review.json`
-   off-spine unit, U11). `dispatch_batch` never consults the backend, so
+   off-spine step, U11). `dispatch_batch` never consults the backend, so
    THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `ledger.record_verdict` —
    durable independent of this session.
@@ -174,29 +174,29 @@ IS the wake signal. Per wave:
    verdict landing first re-invokes you and the heartbeat pulse then
    finds nothing past-threshold and is a self-cancelling no-op.
 5. On re-invocation: `dispatcher.converge(repo, run)` reads landed
-   verdicts. Predicate met → exit (§5); ready_units → next wave;
+   verdicts. Predicate met → exit (§5); ready_steps → next wave;
    work in flight → yield again.
 6. Pulses apply fixes (`verdict-returned → fixed → pending`); re-
-   dispatch; re-review. Loop terminates only when every unit reaches
+   dispatch; re-review. Loop terminates only when every step reaches
    a clean terminal verdict.
 
 **Death path (event-driven reap).** When you observe a background
 agent has DIED — a crash, auth-churn silent death, or a completion
-that lands with no verdict written — reconcile that unit at once by
-calling `pulse_advance.reap_unit(<run>, <unit>, <the dispatched
+that lands with no verdict written — reconcile that step at once by
+calling `pulse_advance.reap_step(<run>, <step>, <the dispatched
 attempt>)` (the attempt-gated reap) rather than waiting out the stall
-threshold. It flips the unit `dispatched → stalled` only when the unit
+threshold. It flips the step `dispatched → stalled` only when the step
 is still `dispatched` at that attempt, then the stalled-node policy
 (reap → retry → escalate) takes over. This is idempotent with the
 watchdog-heartbeat timeout path above: a later pulse that also sees the
-unit is a no-op because it is already `stalled`, and the attempt gate
+step is a no-op because it is already `stalled`, and the attempt gate
 means a death event from an already-superseded attempt can never stall
 a fresh retry — the two paths converge on exactly one stall per
 attempt. Spike caveat: if the harness surfaces no distinct death
 signal (only verdict/completion), this path degrades to the U1 timeout
 watchdog with no change to the loop's shape.
 
-**Stalled-node policy — reap → retry → escalate.** Whenever a unit is
+**Stalled-node policy — reap → retry → escalate.** Whenever a step is
 `stalled` (whether the watchdog-heartbeat timeout or the death path put
 it there), apply this per stalled node:
 
@@ -204,15 +204,15 @@ it there), apply this per stalled node:
    primitive in `lib/`): `TaskStop` the agent, then `kill -TERM` its
    process (the reap sequence — TaskStop then SIGTERM).
 2. **Clear the marker.** `pulse_advance.clear_reap_pending(<run>,
-   <unit>)` right after issuing the kill — the `dispatched → stalled`
+   <step>)` right after issuing the kill — the `dispatched → stalled`
    flip set `reap_pending=True` to record that a kill was owed; clearing
    it confirms you issued it (see below).
 3. **Retry or escalate on the attempt budget.** If
-   `dispatcher.should_escalate(<unit>)` is False (`attempt < 2`) →
-   `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
+   `dispatcher.should_escalate(<step>)` is False (`attempt < 2`) →
+   `bash lib/auto-resume.py retry <run> <step>` (`stalled → pending`,
    clears `last_error`) to re-dispatch it. If True (`attempt ≥ 2`, wedged
    twice) → **do not loop:** `bash lib/auto-resume.py pause <run>
-   "<unit> wedged after 2 attempts"` to hand it to the operator (§4.5).
+   "<step> wedged after 2 attempts"` to hand it to the operator (§4.5).
 
 `detect_and_halt_stalled` already halts a stalled node's transitive
 dependents, so this policy runs **per stalled node while independent
@@ -220,14 +220,14 @@ siblings keep advancing** — one wedged branch never freezes the wave.
 
 **Nested `do_step` reap.** A `do_step` fan-out agent is not its own
 ledger row (KTD-5), so a wedged nested agent is reaped through its
-**parent** fan-out unit: the parent flips to `stalled` and its whole
+**parent** fan-out step: the parent flips to `stalled` and its whole
 fan-out wave is reaped + re-dispatched together (coarse-grained v1 —
 node-level reap of a single nested agent is deferred). The watch view
 still surfaces the individual wedged node for visibility.
 
 **`reap_pending` semantics.** The stalled transition sets
 `reap_pending`; the driver clears it (step 2) after the kill;
-`pulse_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+`pulse_advance.steps_awaiting_reap(ledger)` returns the `stalled` steps
 whose marker is still set — an **uncleared marker on a later pulse means
 "kill owed but unconfirmed"** (a possible zombie agent). It is the only
 Python-visible handle on a kill that is otherwise entirely model-side.
@@ -288,9 +288,9 @@ re-derives the exit predicate. The gate fires ONLY for THIS driving session
 (matched by `driving_session_id`, recorded at arm time); a concurrent
 standalone ce-skill in the same worktree is never intercepted.
 
-**Two-handoff split — fan-out units (KTD-5).** Work-loop `do_step` agents get
+**Two-handoff split — fan-out steps (KTD-5).** Work-loop `do_step` agents get
 their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
-destructive backstop) can reach them. When you construct a fan-out unit prompt
+destructive backstop) can reach them. When you construct a fan-out step prompt
 (§4 step 3), bake in all THREE constraints:
   - **(i) question routing:** "Do not call `AskUserQuestion`. For a mechanical
     clarification, consult the advisor and resolve it yourself; for a
@@ -315,7 +315,7 @@ destructive backstop) can reach them. When you construct a fan-out unit prompt
 
 ### 4.7 Gate advisor-judging — typed verification (v0.7.0, U5)
 
-A recipe gate unit may carry a typed `verification` block (kinds
+A recipe gate step may carry a typed `verification` block (kinds
 `programmatic` / `model_judge` / `advisor_judge` / `human` — see
 `docs/contracts/recipe-format.md` and
 `skills/auto-design/references/verification-taxonomy.md`). At convergence,
@@ -335,7 +335,7 @@ the §4.6 pattern:
    pause handoff instead). When no judges remain pending the call yields a
    non-None `signal`.
 4. **Commit** the signal as the gate's decision via
-   `ledger_mutators.set_verdict_decision(repo, run, gate_unit_id, signal)` — the
+   `ledger_mutators.set_verdict_decision(repo, run, gate_step_id, signal)` — the
    single, centralized decision write. A `None` signal means judges are still
    pending (`pending_judges` non-empty): commit nothing, audit nothing.
 5. **Audit — only when a judge verdict resolved the gate.** When the resolved
@@ -343,7 +343,7 @@ the §4.6 pattern:
    `human`) — i.e. the signal is non-None, so `pending_judges` is empty and every
    judge criterion contributed a verdict — log one record per judge criterion via
    `ledger.append_advisor_audit(repo, run, kind="advisor",
-   subject="<gate_unit_id>: <criterion id>",
+   subject="<gate_step_id>: <criterion id>",
    classification="<the criterion's `type`>", resolution="<advance|iterate>")`,
    surfaced in the exit report (§5). A **programmatic-only** gate (no judge
    criterion) commits the signal in step 4 with **no** audit record — no judge
@@ -376,18 +376,18 @@ matches auto's standing "the pulse PREPARES, YOU EXECUTE" contract
 
 Each pulse, on a `rearm` intent in the work phase:
 
-1. **Transition, don't spawn.** `dispatcher.dispatch_batch(repo, run, units,
-   cap)` — flips up to `cap` ready units `pending → dispatched` (bumping each
-   unit's `attempt`, Bug #6) and delegates the launch to the injected no-op. It
+1. **Transition, don't spawn.** `dispatcher.dispatch_batch(repo, run, steps,
+   cap)` — flips up to `cap` ready steps `pending → dispatched` (bumping each
+   step's `attempt`, Bug #6) and delegates the launch to the injected no-op. It
    spawns nothing; that is your job.
-2. **Spawn ONE background `Agent` per dispatched unit.** Build each prompt to
-   carry: the **unit id**; its **`attempt` generation** (from this dispatch — the
+2. **Spawn ONE background `Agent` per dispatched step.** Build each prompt to
+   carry: the **step id**; its **`attempt` generation** (from this dispatch — the
    agent passes it back so a superseded attempt's verdict is rejected as stale,
    AE3); the **backend invocation** (map `invokes.backend_op` → skill per §4
    step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
    two-handoff constraints — question routing, destructive-action avoidance,
    self-termination on no-progress); and the instruction to **self-write its
-   verdict on completion** via `bash lib/ledger.py record-verdict <run> <unit>
+   verdict on completion** via `bash lib/ledger.py record-verdict <run> <step>
    '<json-findings>' <attempt>`.
    - **FIRST line of every phase sub-agent prompt (R21 — LOAD-BEARING SAFETY):**
      `bash lib/ledger.py register-session <run>`. A dispatched sub-agent carries
@@ -420,8 +420,8 @@ Each pulse, on a `rearm` intent in the work phase:
    dead tree. If the chain goes stale past `DRIVER_SELF_STALE_SECONDS` (3900s)
    with no beat, the Stop hook treats it as dead and releases the session.
 
-A launch that raises does NOT abandon the wave: `dispatch_batch`'s per-unit Bug #8
-guard marks that unit `stalled` (`last_error.call == "launch"`) and continues,
+A launch that raises does NOT abandon the wave: `dispatch_batch`'s per-step Bug #8
+guard marks that step `stalled` (`last_error.call == "launch"`) and continues,
 and the stalled-node policy (§4) reaps → retries → escalates it. A dispatched but
 alive sub-agent within its `stall_threshold_seconds` is NOT reaped — only a
 past-threshold one is (RISK-7; `detect_and_halt_stalled` fires on `age >

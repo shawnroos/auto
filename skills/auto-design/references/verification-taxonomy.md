@@ -15,7 +15,7 @@ instead of a vibe.
 
 ## The `verification` block
 
-A gate's unit may carry an optional `verification` array (max 16 criteria). Each
+A gate's step may carry an optional `verification` array (max 16 criteria). Each
 entry is a criterion object:
 
 ```

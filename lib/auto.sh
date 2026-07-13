@@ -4,7 +4,7 @@
 #
 # /auto initializes a NEW run from a plan/spec: it creates the durable
 # ledger at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
-# units — the plan-loop populates work units later via the backend), and emits
+# steps — the plan-loop populates work steps later via the backend), and emits
 # an arm-first-pulse INTENT (JSON) that the MODEL acts on by setting the
 # deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-pulse.
 #

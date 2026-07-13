@@ -13,7 +13,7 @@ BLOCK MECHANISM (U9 §4 + ralph-loop/hooks/stop-hook.sh:179-188):
 ACTIVE-RUN POLICY:
     BLOCK if ANY run has loop_phase != "done" AND exit_predicate_result.met ==
     false AND loop.driver == "self". `met` already encodes the all_steps_terminal
-    gate (schema §5 I-2), so a lurking stalled/pending unit (findings counters
+    gate (schema §5 I-2), so a lurking stalled/pending step (findings counters
     zero) keeps the stop blocked.
 
     The `driver == "self"` conjunct is the HANDOFF/MANUAL carve-out: the engine
@@ -53,7 +53,7 @@ STALE-CHAIN CARVE-OUT (Bug #9):
     resume by the SessionStart hook instead).
 
     THREE THRESHOLDS, reconciled (smallest → largest, no overlap of purpose):
-      * DEFAULT_STALL_THRESHOLD_SECONDS = 600  — per-UNIT dispatch timeout (pulse).
+      * DEFAULT_STALL_THRESHOLD_SECONDS = 600  — per-STEP dispatch timeout (pulse).
       * DRIVER_SELF_STALE_SECONDS       = 3900 — per-RUN dead-chain gate (THIS
             hook). Above the 3600s ScheduleWakeup max-pulse-delay + slack, so a
             healthy slow-paced chain (last beat ≤3600s ago) is NEVER misread as
@@ -253,7 +253,7 @@ def _reason_for(blocking) -> str:
         if majors:
             parts.append(f"{majors} major{'s' if majors != 1 else ''}")
         if not all_terminal:
-            parts.append("units not yet terminal")
+            parts.append("steps not yet terminal")
         detail = " / ".join(parts) if parts else "loop not complete"
         chunks.append(f"{run_id} ({detail})")
     # The block holds the session open; the reason message routes the driver's

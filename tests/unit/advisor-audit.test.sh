@@ -75,14 +75,14 @@ def emit(tag, val):
 
 # ── 1. init records driving_session_id at arm time ──────────────────────────
 ledger.init_ledger(repo, "armed", backend="ce", loop_phase="work",
-                   units=[{"id": "U1", "state": "pending"}],
+                   steps=[{"id": "U1", "state": "pending"}],
                    driving_session_id="sess-ARM")
 L = ledger.read_ledger(repo, "armed")
 emit("init_sid", L.get("driving_session_id"))
 
 # init WITHOUT the kwarg => field present and null (always-present field).
 ledger.init_ledger(repo, "noarm", backend="ce", loop_phase="work",
-                   units=[{"id": "U1", "state": "pending"}])
+                   steps=[{"id": "U1", "state": "pending"}])
 L = ledger.read_ledger(repo, "noarm")
 emit("noarm_has_key", "driving_session_id" in L)
 emit("noarm_sid", L.get("driving_session_id"))
@@ -120,7 +120,7 @@ emit("audit_survives_recompute", before == after and len(after) == 2)
 # Init a run, append one audit, do an unrelated locked write, append another:
 # all three end states must coexist (the append-inside-the-lock contract).
 ledger.init_ledger(repo, "concur", backend="ce", loop_phase="work",
-                   units=[{"id": "V1", "state": "pending"}],
+                   steps=[{"id": "V1", "state": "pending"}],
                    driving_session_id="sess-C")
 ledger.append_advisor_audit(repo, "concur", kind="advisor",
     subject="q1", classification="mechanical", resolution="resolved-autonomously")
@@ -130,7 +130,7 @@ ledger.append_advisor_audit(repo, "concur", kind="action",
     subject="rm -rf build/", classification="rm -rf", resolution="blocked-and-paused")
 L = ledger.read_ledger(repo, "concur")
 emit("concur_audit_len", len(L.get("advisor_audit", [])))
-emit("concur_unit_state", L["steps"][0]["state"])
+emit("concur_step_state", L["steps"][0]["state"])
 
 # ── 5. validation rejections ────────────────────────────────────────────────
 def rejects(fn):
@@ -182,7 +182,7 @@ assert_eq "True" "$(g audit_survives_recompute)"
 it "interleaved locked writes do not clobber the audit list (concurrent-safe)"
 assert_eq "2" "$(g concur_audit_len)"
 it "interleaved record_verdict still landed (the audit append is on the locked path)"
-assert_eq "verdict-returned" "$(g concur_unit_state)"
+assert_eq "verdict-returned" "$(g concur_step_state)"
 
 it "append_advisor_audit rejects a bad kind"
 assert_eq "True" "$(g reject_bad_kind)"
@@ -215,9 +215,9 @@ grep -qi "advisor_audit" "$SKILL_MD" && grep -qi "exit report" "$SKILL_MD" && pa
 it "SKILL.md documents append_advisor_audit as the logging mutator"
 has "$SKILL_MD" "append_advisor_audit"
 
-# The two-handoff (ii) requirement: the fan-out unit prompt MUST carry BOTH
+# The two-handoff (ii) requirement: the fan-out step prompt MUST carry BOTH
 # question-routing AND destructive-action avoidance.
-it "SKILL.md fan-out instruction carries (i) question routing for fan-out units"
+it "SKILL.md fan-out instruction carries (i) question routing for fan-out steps"
 grep -qi "do not call" "$SKILL_MD" && grep -qi "AskUserQuestion" "$SKILL_MD" && pass \
   || fail "SKILL.md missing fan-out question-routing instruction"
 it "SKILL.md fan-out instruction carries (ii) destructive-action avoidance"
@@ -225,7 +225,7 @@ grep -qi "destructive" "$SKILL_MD" \
   && grep -qi "rm -rf" "$SKILL_MD" \
   && grep -qi "push --force" "$SKILL_MD" && pass \
   || fail "SKILL.md missing fan-out destructive-action constraint"
-it "SKILL.md names the two-handoff split for fan-out units"
+it "SKILL.md names the two-handoff split for fan-out steps"
 grep -qi "two-handoff" "$SKILL_MD" && pass || fail "SKILL.md missing two-handoff split mention"
 
 it "commands/auto.md adds advisor to allowed-tools"

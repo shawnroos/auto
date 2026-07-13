@@ -64,12 +64,12 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
 
 ### Work-loop ops (NOT called by the pulse)
 
-5. **`do_step(unit) -> dispatch_handle`** — called by the **dispatcher**, not
-   the pulse. Dispatch one unit for execution and return an **opaque correlation
+5. **`do_step(step) -> dispatch_handle`** — called by the **dispatcher**, not
+   the pulse. Dispatch one step for execution and return an **opaque correlation
    token** (e.g. a Task id) the dispatcher uses to track the in-flight agent.
 
-6. **`review(unit) -> findings[]`** — called by the **background work agent** on
-   the unit it ran. Review the unit and return findings, each tagged on the shared
+6. **`review(step) -> findings[]`** — called by the **background work agent** on
+   the step it ran. Review the step and return findings, each tagged on the shared
    severity scale: `[{ "severity": "blocker"|"major"|"minor", "note": "..." }]`.
    The agent records these through the engine's verdict path; **you do not write
    them to disk.**
@@ -133,7 +133,7 @@ You never write an exit predicate. You supply inputs; the engine computes:
 
 Get the severities right and the engine's predicate handles the rest. The
 `all_steps_terminal` conjunct is purely engine-side (it guards against stalled or
-not-yet-reviewed units) — your backend does not influence it beyond returning
+not-yet-reviewed steps) — your backend does not influence it beyond returning
 verdicts.
 
 ## Build checklist
@@ -142,8 +142,8 @@ verdicts.
 - [ ] `deepen(plan) -> plan` (no-op allowed)
 - [ ] `review_plan(plan) -> gap_set` (length is the open-gap count)
 - [ ] `next_plan_step(ledger) -> token` (returns `"done"` once `gaps_open == 0`)
-- [ ] `do_step(unit) -> dispatch_handle` (opaque token; called by dispatcher)
-- [ ] `review(unit) -> findings[]` (severities translated to the shared scale)
+- [ ] `do_step(step) -> dispatch_handle` (opaque token; called by dispatcher)
+- [ ] `review(step) -> findings[]` (severities translated to the shared scale)
 - [ ] A declared severity mapping table
 - [ ] A declared `backend_scale` (`"three-tier"` or `"blocker-only"`; native runs a rubric probe first)
 - [ ] No ledger writes from any op — return data only

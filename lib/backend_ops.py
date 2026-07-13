@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The closed set of backend ops — the single source of truth (KTD-2).
 
-A unit declares the operation it runs via ``invokes.backend_op``; the engine's
+A step declares the operation it runs via ``invokes.backend_op``; the engine's
 ``dispatcher.dispatch_batch`` rejects any value OUTSIDE this set instead of
 launching an agent against a misspelled/unknown op. Historically this frozenset
 lived inline in ``lib/dispatcher.py``. v0.14.0 (U1, addressable-step-contents)
@@ -19,7 +19,7 @@ drift the dispatch guard).
 
 from __future__ import annotations
 
-# The four ops a V1 recipe/preset unit may declare. Kept as a frozenset so
+# The four ops a V1 recipe/preset step may declare. Kept as a frozenset so
 # membership is O(1) and the set is immutable (a consumer can't mutate the shared
 # source of truth). Every shipped recipe's op is one of these four.
 VALID_BACKEND_OPS = frozenset({"brainstorm", "do_step", "next_plan_step", "review"})

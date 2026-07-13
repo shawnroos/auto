@@ -27,7 +27,7 @@ reject.**
 
 It is compare-and-set for slow deciders. An agent decides against a snapshot it
 read a minute ago; by the time its write lands, a concurrent sub-agent may have
-moved the same unit. Both agents reasoned correctly — this is a *timing* problem,
+moved the same step. Both agents reasoned correctly — this is a *timing* problem,
 not a judgment one, and no amount of agent intelligence prevents it (two people
 editing the same doc offline clobber each other the same way).
 
@@ -47,13 +47,26 @@ Run `python3 lib/ledger.py describe` for the authoritative list with argument
 shapes and per-verb rejection modes. In brief:
 
 - **Read / inspect** (no mutation): `read`, `path`, `is-orphaned`, `describe`.
+- **State change**: `transition` (grammar-checked step state change — rejects any
+  edge not in `ALLOWED_TRANSITIONS`; will not write findings, use `record-verdict`).
 - **Verdict feedback**: `record-verdict` (rejects a stale-attempt verdict),
-  `set-gaps-open`, `set-enumerated-units`, `set-verdict-decision`.
+  `set-gaps-open`, `set-enumerated-steps`, `set-verdict-decision`.
 - **Steering** (reshape a live run): `init` (create a run — rejects an existing
-  run-id), `add-unit` (rejects a duplicate id or an unknown dependency),
+  run-id), `add-step` (rejects a duplicate id or an unknown dependency),
   `reshape-deps` (rejects a cycle), `force-skip` (requires a reason — R20; cannot
   bury an existing finding — R16), `register-session` (join the PreToolUse
   ownership set — R21).
+
+This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
+derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb
+is not named here. The set-equality test in `tests/unit/ledger.test.sh` binds
+`describe` ↔ `_VERBS`; the fence extends that binding to this prose, so a renamed
+or added verb cannot silently leave the contract stale.
+
+**Not in this surface:** `lib/recipes.py migrate` (and its revert) are *operator*
+utilities for upgrading a workflow file on disk — deliberately kept out of
+`_VERBS`/`describe` so the locked, set-equality-enforced agent verb surface stays
+the set of verbs an agent actually drives a run with.
 
 ## What stays deterministic
 

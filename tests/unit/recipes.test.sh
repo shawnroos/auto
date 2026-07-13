@@ -97,9 +97,9 @@ elif op == "resolve-recipe-file":
         print("ERROR:%s" % e)
 elif op == "review-vs-w-distinct":
     # U11: review.json must be MEANINGFULLY distinct from w.json. review is a
-    # genuine work-only ["work"] recipe whose single unit invokes the `review`
+    # genuine work-only ["work"] recipe whose single step invokes the `review`
     # backend op (one review/fix loop to P3). w (v0.4.3 KTD-15) is no longer its
-    # work-only twin — it's plan_presatisfied, so its plan unit invokes
+    # work-only twin — it's plan_presatisfied, so its plan step invokes
     # `next_plan_step` (the plan-loop sequencer) and it enumerates a reviewed plan
     # into work. Surface both ops so a silent convergence still trips this.
     with open(os.path.join(auto_root, "recipes", "review.json")) as f:
@@ -123,17 +123,17 @@ elif op == "validate-firsterr":
         if "unknown top-level field" in m:
             print("toplevel-unknown")
         elif "missing required field" in m or "must be a non-empty string" in m \
-                or "units must be a list" in m:
+                or "steps must be a list" in m:
             print("toplevel-shape")
         elif "phase_order" in m or "terminal_phase" in m:
             print("phase_order")
-        elif "unit" in m:
+        elif "step" in m:
             print("steps")
         else:
             print("other:" + m)
 elif op == "verification-cap":
-    # v0.7.0 (U2): the per-unit `verification` array is capped at 16 criteria to
-    # bound gate-evaluation cost. Build a unit carrying 17 INDIVIDUALLY-VALID
+    # v0.7.0 (U2): the per-step `verification` array is capped at 16 criteria to
+    # bound gate-evaluation cost. Build a step carrying 17 INDIVIDUALLY-VALID
     # `human` criteria (unique ids) so the ONLY violation is the over-cap length
     # — proves the cap fires independent of per-criterion validity. Inlining 17
     # criteria as a shell JSON string is unwieldy, so build it here.
@@ -159,14 +159,14 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[],
 
 # Order-preserving decomposition (M-? regression): a doubly-malformed recipe
 # must surface the EARLIER sub-validator's error. validate() runs
-# _validate_toplevel → _validate_phase_order → _validate_units → … in a fixed
+# _validate_toplevel → _validate_phase_order → _validate_steps → … in a fixed
 # order; the 58 single-violation tests below cannot catch a transposition, so
 # pin two cross-block boundaries explicitly.
 it "validate order: unknown top-level field + bad phase_order -> top-level error wins (toplevel before phase_order)"
 assert_eq "toplevel-unknown" "$(rec validate-firsterr '{"name":"x","version":"1","steps":[],"bogus":1,"phase_order":[]}')"
 
-it "validate order: bad terminal_phase + malformed unit -> phase_order error wins (phase_order before units)"
-assert_eq "phase_order" "$(rec validate-firsterr '{"name":"x","version":"1","phase_order":["work"],"terminal_phase":"nope","steps":[{"bad":"unit"}]}')"
+it "validate order: bad terminal_phase + malformed step -> phase_order error wins (phase_order before steps)"
+assert_eq "phase_order" "$(rec validate-firsterr '{"name":"x","version":"1","phase_order":["work"],"terminal_phase":"nope","steps":[{"bad":"step"}]}')"
 
 it "reserved python_hook accepted (R3)"
 assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[],"python_hook":"x"}')"
@@ -174,27 +174,27 @@ assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[],"py
 # v0.6.0 U6: the literal allow-list gate is gone — a multi-phase grammar that
 # is STRUCTURALLY sound (non-empty-string phases, terminal_phase ∈ phase_order)
 # now validates. Pre-U6 this exact recipe was REJECTED (the A3 grammar was not
-# in _V1_ALLOWED_PHASE_ORDERS); U6 deliberately unlocks it. Units list is
-# non-empty here (each unit's phase ∈ phase_order) so the work-only empty-units
+# in _V1_ALLOWED_PHASE_ORDERS); U6 deliberately unlocks it. Steps list is
+# non-empty here (each step's phase ∈ phase_order) so the work-only empty-steps
 # guard is not in play.
 it "U6: structurally-sound non-default phase_order now VALIDATES (literal allow-list dropped)"
 assert_eq "valid" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","steps":[{"id":"s","phase":"work_sketch","invokes":{}}]}')"
 
-it "work-only phase_order [work] accepted when units are pre-declared (KTD-15)"
+it "work-only phase_order [work] accepted when steps are pre-declared (KTD-15)"
 assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[{"id":"u1","phase":"work","invokes":{}}]}')"
 
-# Fix-pass D (P1 #6): a work-only recipe with NO pre-declared units is
+# Fix-pass D (P1 #6): a work-only recipe with NO pre-declared steps is
 # unrunnable in v0.2.0 — init-time enumeration ships in v0.2.1 (KTD-15).
 # validate() must hard-reject this shape so the engine never creates a
-# zero-unit ledger that re-arms forever without dispatching.
-it "fix-pass D: work-only phase_order [work] with empty units REJECTED (v0.2.1 reservation)"
+# zero-step ledger that re-arms forever without dispatching.
+it "fix-pass D: work-only phase_order [work] with empty steps REJECTED (v0.2.1 reservation)"
 assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[]}')"
 
 # Deliberate-fail proof: the new rule must NOT fire on the default phase_order
-# with empty units (still a vacuous run, but a different — and lint-warned —
+# with empty steps (still a vacuous run, but a different — and lint-warned —
 # shape, not the work-only init-time gap). Surfaces a false-positive if the
 # check ever broadens too far.
-it "fix-pass D: default phase_order with empty units NOT rejected by the work-only rule"
+it "fix-pass D: default phase_order with empty steps NOT rejected by the work-only rule"
 assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[]}')"
 
 it "unregistered producer name rejected"
@@ -203,19 +203,19 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"
 it "prompt_template path traversal rejected (security Finding 1)"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"u","phase":"plan","invokes":{"prompt_template":"../../etc/passwd"}}]}')"
 
-it "depends_on referencing unknown unit rejected"
+it "depends_on referencing unknown step rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"u","phase":"plan","depends_on":["ghost"],"invokes":{}}]}')"
 
-it "missing required field (units) rejected"
+it "missing required field (steps) rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
 
-# ─── v0.7.0 U2: typed `verification` block on a (gate) unit (KTD-1/2/3) ───────
-# A unit MAY carry an optional `verification` array of typed, checkable done-
+# ─── v0.7.0 U2: typed `verification` block on a (gate) step (KTD-1/2/3) ───────
+# A step MAY carry an optional `verification` array of typed, checkable done-
 # conditions (programmatic | model_judge | advisor_judge | human), validated at
 # LOAD time in validate() — the SAME gate the skill's write-time
 # validate_and_lint runs (KTD-3). Shape per
 # skills/auto-design/references/verification-taxonomy.md. The base recipe is the
-# minimal valid shape (one plan-phase unit, default phase_order); only the
+# minimal valid shape (one plan-phase step, default phase_order); only the
 # `verification` array varies, so a valid/rejected verdict isolates the criterion
 # validator. Covers AE1 (schema half).
 it "U2: programmatic exit_zero criterion → valid"
@@ -251,7 +251,7 @@ assert_eq "rejected" "$(rec verification-cap)"
 it "U2: criterion missing type → rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1"}]}]}')"
 
-it "U2: duplicate criterion id within a unit → rejected"
+it "U2: duplicate criterion id within a step → rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"dup","type":"human"},{"id":"dup","type":"human"}]}]}')"
 
 # Regression anchor: the four built-ins (none carry a `verification` array) MUST
@@ -262,7 +262,7 @@ assert_eq "a1:valid,a2:valid,a4:valid,w:valid" "$(rec validate-builtins)"
 # ─── v0.6.0 U6: structural phase_order validator (literal allow-list dropped) ─
 # U6 replaced the `phase_order not in _V1_ALLOWED_PHASE_ORDERS` literal gate
 # with a STRUCTURAL rule: every element a non-empty string, members cross-
-# checked downstream (terminal_phase / unit phase / phase_transitions). The
+# checked downstream (terminal_phase / step phase / phase_transitions). The
 # spine ["brainstorm","plan","handoff","work"] must now validate; a1/a2/a4/w must
 # STILL validate unchanged (Scenario 1 above covers the four built-ins).
 it "U6: brainstorm-rooted spine phase_order validates (structural rule unlocks it)"
@@ -271,7 +271,7 @@ assert_eq "valid" "$(rec validate-json '{"name":"pipeline","version":"1","phase_
 it "U6: terminal_phase not in phase_order → rejected (downstream member-check intact)"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"ship","steps":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
 
-it "U6: a unit whose phase is not in phase_order → rejected"
+it "U6: a step whose phase is not in phase_order → rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"work","steps":[{"id":"u","phase":"deploy","invokes":{}}]}')"
 
 it "U6: phase_order with a non-string element → rejected (structural)"
@@ -280,7 +280,7 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_orde
 it "U6: phase_order with an empty-string element → rejected (structural)"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan","","work"],"terminal_phase":"work","steps":[{"id":"u","phase":"plan","invokes":{}}]}')"
 
-it "U6: work-only empty-units guard STILL fires (regression — guard retained)"
+it "U6: work-only empty-steps guard STILL fires (regression — guard retained)"
 assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[]}')"
 
 it "U6: phase_transitions naming an unregistered producer STILL rejected on a spine"
@@ -418,27 +418,27 @@ elif op == "validate-traversal-name":
     except recipes.RecipeError as e:
         print("raised" if "invalid recipe name" in str(e) else "raised-wrong-message")
 
-elif op == "unit-for-traversal":
-    # unit_for re-validates the prompt_template path bound (2nd enforcement point).
+elif op == "step-for-traversal":
+    # step_for re-validates the prompt_template path bound (2nd enforcement point).
     try:
-        recipes.unit_for({"id": "u", "phase": "work",
+        recipes.step_for({"id": "u", "phase": "work",
             "invokes": {"prompt_template": "../../etc/passwd"}}, {})
         print("NO-RAISE")
     except recipes.RecipeError:
         print("raised")
 
-elif op == "unit-for-merge":
-    u = recipes.unit_for({"id": "u", "phase": "work",
+elif op == "step-for-merge":
+    u = recipes.step_for({"id": "u", "phase": "work",
         "invokes": {"backend_op": "do_step", "prompt_template": "p/x.md"}}, {})
     print("%s,%s,%s" % (u["id"], u["dispatch_context"]["backend_op"],
                         u["dispatch_context"]["prompt_template"]))
 
 elif op == "lint-empty-phase":
-    # validate_and_lint warns on a phase with no units + no producer targeting it.
+    # validate_and_lint warns on a phase with no steps + no producer targeting it.
     warns = recipes.validate_and_lint({"name": "x", "version": "1",
         "phase_order": ["plan","handoff","work"], "terminal_phase": "work",
         "steps": [{"id":"plan","phase":"plan","invokes":{}}]})
-    # work phase has no units and (no phase_transitions) no producer → a warning.
+    # work phase has no steps and (no phase_transitions) no producer → a warning.
     print("warned" if any("work" in w for w in warns) else "no-warning")
 PYEOF
 }
@@ -472,20 +472,20 @@ assert_eq "a1:built-in,a2:built-in,my-recipe:not-found,team_foo:not-found,v2.1:n
 it "fix-pass B: validate() rejects an unsafe recipe.name field"
 assert_eq "raised" "$(reg validate-traversal-name)"
 
-it "unit_for re-validates prompt_template traversal (2nd enforcement point)"
-assert_eq "raised" "$(reg unit-for-traversal)"
+it "step_for re-validates prompt_template traversal (2nd enforcement point)"
+assert_eq "raised" "$(reg step-for-traversal)"
 
-it "unit_for merges invokes into dispatch_context"
-assert_eq "u,do_step,p/x.md" "$(reg unit-for-merge)"
+it "step_for merges invokes into dispatch_context"
+assert_eq "u,do_step,p/x.md" "$(reg step-for-merge)"
 
-it "validate_and_lint warns: phase with no units + no producer"
+it "validate_and_lint warns: phase with no steps + no producer"
 assert_eq "warned" "$(reg lint-empty-phase)"
 
 # ─── U5 (v0.3.0): iteration + emit_templates validation ─────────────────────
 # Twelve scenarios covering R2, R3, R7 (a1/W backward compat), the pairing
 # rule per round-3 P2 #21 (iteration WITHOUT emit_templates is valid IFF
 # iteration.emit_template is also absent), and the editorial warnings.
-# Plus one DELIBERATE-FAIL probe (gate_unit ghost) — Edit removes the check,
+# Plus one DELIBERATE-FAIL probe (gate_step ghost) — Edit removes the check,
 # the test goes RED, Edit restores.
 itr() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
@@ -576,7 +576,7 @@ elif op == "w-still-valid":
     with open(os.path.join(auto_root, "recipes", "w.json")) as f:
         print(vresult(json.load(f)))
 
-elif op == "gate-unit-ghost":
+elif op == "gate-step-ghost":
     r = a2_v030()
     r["iteration"]["gate_step"] = "ghost"
     print(vresult(r))
@@ -639,7 +639,7 @@ elif op == "lint-max-wall-short":
     print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
 
 elif op == "u6-depends-on-id-prefix-valid":
-    # v0.3.0 U6 (F4-tightened): a structural unit may forward-reference units
+    # v0.3.0 U6 (F4-tightened): a structural step may forward-reference steps
     # produced by an emit_template. With F4 SCHEMA TIGHTENING the recipe must
     # DECLARE the producer-produced ids via `expected_emit_outputs` — they are
     # no longer accepted on prefix-match alone. A4's `compare` is the canonical
@@ -668,7 +668,7 @@ elif op == "u6-depends-on-id-prefix-valid":
 
 elif op == "u6-depends-on-unrelated-rejected":
     # The carve-out is NARROW: depends_on must either reference an existing
-    # unit id, an iterate-shaped id ({id_prefix}{positive_int}), or a member
+    # step id, an iterate-shaped id ({id_prefix}{positive_int}), or a member
     # of expected_emit_outputs. An unrelated string ("totally-unrelated")
     # still rejects — proving the carve-out is not a blanket "accept any
     # forward reference."
@@ -829,7 +829,7 @@ elif op == "g1-isdigit-unicode-superscript":
     # would crash the validator with an unhandled exception instead of
     # rejecting cleanly. G1 swaps isdigit→isdecimal: `'²'.isdecimal()` is
     # False, so "build-²" falls through to "not iterate-shaped" and the
-    # validator rejects it via the existing unknown-unit path — same final
+    # validator rejects it via the existing unknown-step path — same final
     # verdict the author intended.
     #
     # The DF revert (Edit isdecimal→isdigit in lib/recipes.py) shows the
@@ -856,14 +856,14 @@ elif op == "g1-isdigit-unicode-superscript":
 elif op == "verif-on-gate":
     # R3: verification on the iteration.gate_step ("judge") → no warning.
     r = a2_v030()
-    r["steps"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate unit
+    r["steps"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate step
     print(lint_verif(r))
 
 elif op == "verif-off-gate":
-    # R3: verification on a non-gate unit (iteration present) → exactly one warning
-    # naming the unit + the gate.
+    # R3: verification on a non-gate step (iteration present) → exactly one warning
+    # naming the step + the gate.
     r = a2_v030()
-    r["steps"][0]["verification"] = [_verif()]  # plan-1 is not the gate unit
+    r["steps"][0]["verification"] = [_verif()]  # plan-1 is not the gate step
     print(lint_verif(r))
 
 elif op == "verif-no-iteration":
@@ -876,7 +876,7 @@ elif op == "verif-no-iteration":
     print(lint_verif(r))
 
 elif op == "verif-two-off-gate":
-    # R3: two non-gate units each carrying verification → one warning each.
+    # R3: two non-gate steps each carrying verification → one warning each.
     r = a2_v030()
     r["steps"][0]["verification"] = [_verif()]  # plan-1
     r["steps"][1]["verification"] = [_verif()]  # plan-2
@@ -945,8 +945,8 @@ assert_eq "valid" "$(itr a1-still-valid)"
 it "U5 R7: W (no iteration, no emit_templates) still validates"
 assert_eq "valid" "$(itr w-still-valid)"
 
-it "U5 error: iteration.gate_step references nonexistent unit ('ghost') → rejected"
-assert_eq "rejected" "$(itr gate-unit-ghost)"
+it "U5 error: iteration.gate_step references nonexistent step ('ghost') → rejected"
+assert_eq "rejected" "$(itr gate-step-ghost)"
 
 it "U5 error: iteration.emit_template references missing template key → rejected"
 assert_eq "rejected" "$(itr emit-template-missing)"
@@ -976,7 +976,7 @@ it "U5 editorial: validate_and_lint warns on max_wall_seconds < 60"
 assert_eq "warned" "$(itr lint-max-wall-short)"
 
 # ── v0.3.0 U6: depends_on may forward-reference emit_template id_prefixes ──
-# This carve-out (mirror of the gate_unit carve-out) is mandated by U6's
+# This carve-out (mirror of the gate_step carve-out) is mandated by U6's
 # "compare is structural" contract — A4's `compare` declares
 # depends_on: [build-clarity, build-perf] in steps[], but those concrete ids
 # don't exist at validate-time; they're materialized by the bias-builder
@@ -1035,7 +1035,7 @@ assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 # (unhandled ValueError escapes through `validate` → caller). G1 uses
 # `isdecimal()` which matches exactly the chars `int()` accepts, so
 # "build-²" is treated as not-iterate-shaped and rejected via the standard
-# unknown-unit path (i.e. with a RecipeError, not a ValueError).
+# unknown-step path (i.e. with a RecipeError, not a ValueError).
 #
 # DF-verified (commit message): with the production fix reverted
 # (isdecimal → isdigit), this test fails RED — vresult returns a
@@ -1045,27 +1045,27 @@ it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode
 assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
 
 # ── v0.7.0 U2 (R3): verification must live on the iteration.gate_step ────────
-# validate() accepts `verification` on any unit (additive, load must still
-# succeed), but only the gate unit's block is evaluated. validate_and_lint warns
+# validate() accepts `verification` on any step (additive, load must still
+# succeed), but only the gate step's block is evaluated. validate_and_lint warns
 # when a non-empty block sits off the gate, or when there's no iteration block at
 # all (criteria can never be evaluated). The "valid:N" prefix on each case also
 # asserts validate() still passes (R3).
-it "U2: verification on the gate unit (iteration present) → no warning"
+it "U2: verification on the gate step (iteration present) → no warning"
 assert_eq "valid:0" "$(itr verif-on-gate)"
 
-it "U2: verification on a non-gate unit (iteration present) → one warning"
+it "U2: verification on a non-gate step (iteration present) → one warning"
 assert_eq "valid:1" "$(itr verif-off-gate)"
 
 it "U2: verification present but no iteration block → one warning (never evaluated)"
 assert_eq "valid:1" "$(itr verif-no-iteration)"
 
-it "U2: two non-gate units with verification → one warning each"
+it "U2: two non-gate steps with verification → one warning each"
 assert_eq "valid:2" "$(itr verif-two-off-gate)"
 
 it "U2: no verification anywhere → no new warning"
 assert_eq "valid:0" "$(itr verif-none)"
 
-# ── U2 (this unit): description-spoofing guard scans ALL built-ins ────────────
+# ── U2 (this step): description-spoofing guard scans ALL built-ins ────────────
 # The guard used to loop a stale ("a1","a2","a4","w") tuple, silently missing the
 # pipeline/review built-ins. It now scans recipes/ dynamically. The pipeline and
 # review cases below are the deliberate-fail proof: they return spoof:0 (✗) on the

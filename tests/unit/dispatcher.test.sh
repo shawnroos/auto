@@ -2,7 +2,7 @@
 # auto U10 unit test: lib/dispatcher.py — the agent-driven fan-out
 # layer. It exposes THREE operations against the ledger schema contract:
 #
-#   * ready_units(repo, run)                 -> dispatchable-now unit ids (READER)
+#   * ready_steps(repo, run)                 -> dispatchable-now step ids (READER)
 #   * dispatch_batch(repo, run, ids, cap, *, launch_fn=None)
 #                                            -> pending->dispatched + launch (WRITER)
 #   * converge(repo, run)                    -> reconcile/READ over durable state
@@ -14,17 +14,17 @@
 # not yet present). When U2 lands, this file may migrate to them.
 #
 # Scenarios (mapped to the U10 plan, tested against dispatcher.py's ACTUAL
-# surface — ready_units / dispatch_batch / converge):
-#   1. ready_units: 4 independent pending units -> all returned
+# surface — ready_steps / dispatch_batch / converge):
+#   1. ready_steps: 4 independent pending steps -> all returned
 #   2. dependency gating (the "satisfied" definition): U_b depends on U_a;
-#      U_a verdict-returned WITH an open blocker -> ready_units EXCLUDES U_b;
+#      U_a verdict-returned WITH an open blocker -> ready_steps EXCLUDES U_b;
 #      clear the finding (still verdict-returned, no blockers) -> U_b appears;
 #      AND the literal plan path: U_a -> fixed (no blockers) -> U_b appears
 #   3. stalled-ancestor: U_a stalled, U_b depends on U_a -> ready excludes U_b
 #   4. dispatch_batch cap: 10 ready, cap=3 -> exactly 3 dispatched (with
 #      dispatched_at); next call picks the next wave
 #   5. in-flight resize: dispatch cap=8 (of 16), then cap=2 next wave -> only 2
-#   6. dispatch idempotency: dispatch_batch on an already-dispatched unit ->
+#   6. dispatch idempotency: dispatch_batch on an already-dispatched step ->
 #      rejected, no second launch, no duplicate/changed dispatched_at
 #   7. VERDICT SURVIVES SESSION DEATH: a separate process self-writes a verdict
 #      AFTER the driving session "exited"; a fresh converge READS it and does NOT
@@ -73,15 +73,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers ────────────────────────────────────────────────────
-# ledger_init <run> <json-units> [backend] [phase]  — create a ledger.
+# ledger_init <run> <json-steps> [backend] [phase]  — create a ledger.
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -98,7 +98,7 @@ print(eval(expr))
 PYEOF
 }
 
-# orch_ready <run>  — print ready unit ids, comma-joined (declaration order).
+# orch_ready <run>  — print ready step ids, comma-joined (declaration order).
 orch_ready() {
   local run="$1"
   "$PY" - "$REPO" "$run" "$ORCH_PY" <<'PYEOF'
@@ -106,39 +106,39 @@ import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
-print(",".join(o.ready_units(repo, run)))
+print(",".join(o.ready_steps(repo, run)))
 PYEOF
 }
 
-# ledger_transition <run> <unit> <state>  — grammar transition via ledger.py.
+# ledger_transition <run> <step> <state>  — grammar transition via ledger.py.
 ledger_transition() {
-  local run="$1" unit="$2" state="$3"
-  "$PY" - "$REPO" "$run" "$unit" "$state" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" step="$2" state="$3"
+  "$PY" - "$REPO" "$run" "$step" "$state" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, unit, state, ledger_py = sys.argv[1:6]
+repo, run, step, state, ledger_py = sys.argv[1:6]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.transition(repo, run, unit, state)
+m.transition(repo, run, step, state)
 PYEOF
 }
 
-# ledger_verdict <run> <unit> <findings-json>  — record_verdict via ledger.py.
+# ledger_verdict <run> <step> <findings-json>  — record_verdict via ledger.py.
 ledger_verdict() {
-  local run="$1" unit="$2" findings="$3"
-  "$PY" - "$REPO" "$run" "$unit" "$findings" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" step="$2" findings="$3"
+  "$PY" - "$REPO" "$run" "$step" "$findings" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, unit, findings, ledger_py = sys.argv[1:6]
+repo, run, step, findings, ledger_py = sys.argv[1:6]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.record_verdict(repo, run, unit, json.loads(findings))
+m.record_verdict(repo, run, step, json.loads(findings))
 PYEOF
 }
 
 # ════════════════════════════════════════════════════════════════════════════
 echo "dispatcher.test.sh"
 
-# ─── Scenario 1: ready_units — 4 independent pending units -> all returned ────
-it "ready_units: 4 independent pending units -> all four returned (declaration order)"
+# ─── Scenario 1: ready_steps — 4 independent pending steps -> all returned ────
+it "ready_steps: 4 independent pending steps -> all four returned (declaration order)"
 ledger_init "ready-4" \
   '[{"id":"U1","state":"pending"},{"id":"U2","state":"pending"},{"id":"U3","state":"pending"},{"id":"U4","state":"pending"}]' \
   >/dev/null 2>&1
@@ -147,7 +147,7 @@ assert_eq "U1,U2,U3,U4" "$ready"
 
 # ─── Scenario 2: dependency gating — the "satisfied" definition ───────────────
 # U_b depends on U_a. While U_a is verdict-returned WITH an open blocker, U_a is
-# NOT satisfied -> ready_units must EXCLUDE U_b (U_a itself is not pending, so it
+# NOT satisfied -> ready_steps must EXCLUDE U_b (U_a itself is not pending, so it
 # is never ready either). Clearing the finding (re-verdict to []) keeps U_a
 # verdict-returned but now satisfied -> U_b becomes ready.
 it "dependency gating: verdict-returned U_a WITH an open blocker -> ready EXCLUDES dependent U_b"
@@ -178,7 +178,7 @@ ready_fixed="$(orch_ready "dep-fixed")"
 assert_eq "Ub" "$ready_fixed"
 
 # ─── Scenario 3: stalled-ancestor gate ────────────────────────────────────────
-# U_a stalled, U_b depends on U_a -> ready_units excludes U_b (the transitive
+# U_a stalled, U_b depends on U_a -> ready_steps excludes U_b (the transitive
 # stalled-ancestor gate; U_a is not pending so is not ready either).
 it "stalled-ancestor: stalled U_a with dependent U_b -> ready excludes U_b"
 ledger_init "stall-gate" \
@@ -200,11 +200,11 @@ repo, run, orch_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 # Wave 1: 10 ready, cap=3.
-r1 = o.ready_units(repo, run)
+r1 = o.ready_steps(repo, run)
 res1 = o.dispatch_batch(repo, run, r1, 3)
 d1 = [uid for uid, st in res1 if st == "dispatched"]
 # Wave 2: from the remaining pending, cap=3 again -> the next three.
-r2 = o.ready_units(repo, run)
+r2 = o.ready_steps(repo, run)
 res2 = o.dispatch_batch(repo, run, r2, 3)
 d2 = [uid for uid, st in res2 if st == "dispatched"]
 print(json.dumps({"d1": d1, "d2": d2, "r2_len": len(r2)}))
@@ -215,7 +215,7 @@ d2_count="$("$PY" -c "import json,sys;print(len(json.loads(sys.argv[1])['d2']))"
 r2_len="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['r2_len'])" "$wave")"
 # After wave 1: exactly 3 dispatched; remaining ready == 7 (the 3 are now
 # 'dispatched', not pending). Wave 2 dispatches the next 3.
-# Each dispatched unit must have a non-null dispatched_at.
+# Each dispatched step must have a non-null dispatched_at.
 disp_at_nulls="$(ledger_field "cap-run" 'sum(1 for u in L["steps"] if u["state"]=="dispatched" and u["dispatched_at"] is None)')"
 dispatched_total="$(ledger_field "cap-run" 'sum(1 for u in L["steps"] if u["state"]=="dispatched")')"
 if [ "$d1_count" = "3" ] && [ "$r2_len" = "7" ] && [ "$d2_count" = "3" ] \
@@ -236,10 +236,10 @@ repo, run, orch_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 # Wave 1: cap=8.
-r1 = o.ready_units(repo, run)
+r1 = o.ready_steps(repo, run)
 n1 = len([1 for uid, st in o.dispatch_batch(repo, run, r1, 8) if st == "dispatched"])
 # Wave 2: cap shrinks to 2.
-r2 = o.ready_units(repo, run)
+r2 = o.ready_steps(repo, run)
 n2 = len([1 for uid, st in o.dispatch_batch(repo, run, r2, 2) if st == "dispatched"])
 print(json.dumps({"n1": n1, "n2": n2, "r1_len": len(r1), "r2_len": len(r2)}))
 PYEOF
@@ -258,12 +258,12 @@ else
   fail "r1_len=$r1_len n1=$n1 r2_len=$r2_len n2=$n2 total_dispatched=$total_dispatched (expected 16/8/8/2/10)"
 fi
 
-# ─── Scenario 6: dispatch idempotency — already-dispatched unit is rejected ────
+# ─── Scenario 6: dispatch idempotency — already-dispatched step is rejected ────
 # Instrument launch_fn to count launches. First dispatch_batch launches U1 once
 # and stamps dispatched_at. A second dispatch_batch on the SAME (now-dispatched)
-# unit must REJECT it (rejected:not-pending(dispatched)), launch nothing more,
+# step must REJECT it (rejected:not-pending(dispatched)), launch nothing more,
 # and leave dispatched_at byte-identical (no second stamp).
-it "dispatch idempotency: re-dispatching an already-dispatched unit -> rejected, no second launch, dispatched_at unchanged"
+it "dispatch idempotency: re-dispatching an already-dispatched step -> rejected, no second launch, dispatched_at unchanged"
 ledger_init "idem-run" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 idem="$("$PY" - "$REPO" "idem-run" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
@@ -279,7 +279,7 @@ def counting_launch(uid, attempt=0):
 res1 = o.dispatch_batch(repo, run, ["U1"], 4, launch_fn=counting_launch)
 disp_at_1 = o.read_ledger(repo, run)["steps"][0]["dispatched_at"]
 
-# Second dispatch on the now-dispatched unit: must be rejected (idempotency),
+# Second dispatch on the now-dispatched step: must be rejected (idempotency),
 # no second launch, dispatched_at unchanged.
 res2 = o.dispatch_batch(repo, run, ["U1"], 4, launch_fn=counting_launch)
 disp_at_2 = o.read_ledger(repo, run)["steps"][0]["dispatched_at"]
@@ -305,13 +305,13 @@ else
 fi
 
 # ─── Scenario 6b: backend_op validation (U12) ─────────────────────────────────
-# dispatch_batch rejects a unit whose declared backend_op is not in
+# dispatch_batch rejects a step whose declared backend_op is not in
 # VALID_BACKEND_OPS — the op must NOT flow to launch. The backend_op is injected
-# on `dispatch_context` (the durable home: _normalize_unit preserves
+# on `dispatch_context` (the durable home: _normalize_step preserves
 # dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_step)
 # and is the deliberate-fail CONTROL: same injected shape, valid value -> it
 # dispatches and launches, proving the guard keys on the op VALUE, not on the
-# unit's presence.
+# step's presence.
 it "backend_op: unknown op -> rejected:bad-backend-op, not launched, stays pending; valid op dispatches (control)"
 ledger_init "backend-op" \
   '[{"id":"Uvalid","state":"pending","dispatch_context":{"backend_op":"do_step"}},{"id":"Ubad","state":"pending","dispatch_context":{"backend_op":"totally-bogus-op"}}]' \
@@ -358,8 +358,8 @@ fi
 # The load-bearing property. A background agent self-writes its verdict to the
 # durable ledger AFTER the driving session has exited. A FRESH converge (a
 # resumed session) reads the verdict straight off disk and does NOT re-dispatch
-# the unit (it is 'completed', not 'in_flight').
-it "verdict survives session death: a separately-written verdict is read by a fresh converge (unit completed, NOT in-flight)"
+# the step (it is 'completed', not 'in_flight').
+it "verdict survives session death: a separately-written verdict is read by a fresh converge (step completed, NOT in-flight)"
 ledger_init "survive-run" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 # Driving session dispatches U1 (now 'dispatched' / in-flight), then "exits".
 "$PY" - "$REPO" "survive-run" "$ORCH_PY" <<'PYEOF' >/dev/null 2>&1
@@ -379,13 +379,13 @@ repo, run, orch_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 c = o.converge(repo, run)
-# A resumed session would re-dispatch only units still 'pending'/ready. After a
+# A resumed session would re-dispatch only steps still 'pending'/ready. After a
 # durable verdict, U1 is verdict-returned -> completed, NOT in_flight, and NOT
 # ready (never re-dispatchable from converge's read).
 print(json.dumps({
     "in_flight": c["in_flight"],
     "completed": c["completed"],
-    "ready_after": o.ready_units(repo, run),
+    "ready_after": o.ready_steps(repo, run),
 }))
 PYEOF
 )"
@@ -398,7 +398,7 @@ else
   fail "completed=[$completed] in_flight=[$in_flight] ready_after=[$ready_after] (expected U1 / empty / empty)"
 fi
 
-it "deliberate-fail control: WITHOUT the self-written verdict, the dispatched unit stays in-flight (re-dispatchable) — proves S7 measures the verdict, not a tautology"
+it "deliberate-fail control: WITHOUT the self-written verdict, the dispatched step stays in-flight (re-dispatchable) — proves S7 measures the verdict, not a tautology"
 ledger_init "survive-control" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 # Same dispatch, but the background agent NEVER self-writes (session died before
 # the verdict landed).
@@ -428,7 +428,7 @@ else
 fi
 
 # ─── Scenario 8: concurrent self-write — flock serializes the RMW ─────────────
-# Two background agents on two distinct units self-write verdicts CONCURRENTLY
+# Two background agents on two distinct steps self-write verdicts CONCURRENTLY
 # (the bash `&` + PYEOF race pattern from ledger.test.sh). The flock serializes
 # the full read-modify-write, so neither clobbers the other: both findings
 # persist and the recomputed predicate (blockers/majors) reflects BOTH.
@@ -440,16 +440,16 @@ ledger_init "concurrent-run" \
 # race window (sleep inside the locked RMW) maximizes the chance a missing lock
 # would clobber; with the lock both must land.
 verdict_writer() {
-  # verdict_writer <unit> <severity>
+  # verdict_writer <step> <severity>
   "$PY" - "$REPO" "concurrent-run" "$1" "$2" "$LEDGER_PY" <<'PYEOF' &
 import sys, importlib.util, time
-repo, run, unit, severity, ledger_py = sys.argv[1:6]
+repo, run, step, severity, ledger_py = sys.argv[1:6]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 # record_verdict routes through the single locked RMW chokepoint; the sleep
 # below only widens the OS-scheduling window between the two processes.
 time.sleep(0.02)
-m.record_verdict(repo, run, unit, [{"severity": severity, "note": unit}])
+m.record_verdict(repo, run, step, [{"severity": severity, "note": step}])
 PYEOF
 }
 verdict_writer "U1" "blocker"
@@ -474,11 +474,11 @@ else
 fi
 
 # ─── Scenario 9: Bug #8 — a launch raise does not abandon the wave ────────────
-# launch_fn raises on unit 2 of 4. The guarded launch must: (a) still process
-# units 1, 3, 4 (they dispatch + launch normally), (b) record unit 2 as
+# launch_fn raises on step 2 of 4. The guarded launch must: (a) still process
+# steps 1, 3, 4 (they dispatch + launch normally), (b) record step 2 as
 # launch-failed and mark it `stalled` with a launch last_error (NOT a phantom
 # `dispatched` with no agent), and (c) NOT propagate the raise / abandon the batch.
-it "Bug #8: launch_fn raises on unit 2 of 4 -> units 1,3,4 still dispatched, unit 2 recorded launch-failed (stalled), batch not abandoned"
+it "Bug #8: launch_fn raises on step 2 of 4 -> steps 1,3,4 still dispatched, step 2 recorded launch-failed (stalled), batch not abandoned"
 ledger_init "launch-fail" \
   '[{"id":"U1","state":"pending"},{"id":"U2","state":"pending"},{"id":"U3","state":"pending"},{"id":"U4","state":"pending"}]' \
   >/dev/null 2>&1
@@ -525,7 +525,7 @@ u2state="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u2_state'])"
 u1state="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u1_state'])" "$lf")"
 u2errcall="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['u2_err_call'])" "$lf")"
 nres="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['n_results'])" "$lf")"
-# Units 1,3,4 launched + dispatched; U2 launch-failed -> stalled w/ a launch
+# Steps 1,3,4 launched + dispatched; U2 launch-failed -> stalled w/ a launch
 # last_error (not a phantom dispatched); all 4 in the results (batch not abandoned).
 if [ "$launched" = "U1,U3,U4" ] && [ "$u1s" = "dispatched" ] && [ "$u2sp" = "launch-failed" ] \
    && [ "$u3s" = "dispatched" ] && [ "$u4s" = "dispatched" ] && [ "$u2state" = "stalled" ] \
@@ -553,8 +553,8 @@ PYEOF
 assert_eq "raised" "$raised8"
 
 it "Bug #8: attempt counter increments on dispatch (the burnt-attempt record for a launch failure)"
-# Verify the Bug #6 attempt bump happens at dispatch: a fresh pending unit goes to
-# attempt 1 on its first dispatch (so a launch-failed unit's burnt attempt is
+# Verify the Bug #6 attempt bump happens at dispatch: a fresh pending step goes to
+# attempt 1 on its first dispatch (so a launch-failed step's burnt attempt is
 # recorded, and a later retry would be attempt 2).
 ledger_init "attempt-bump" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 a0="$(ledger_field "attempt-bump" 'L["steps"][0]["attempt"]')"
@@ -576,11 +576,11 @@ fi
 # Scenario 10: CLASS-1 — scale-aware gating, end to end, blocker-only run.
 #
 # The Bug #3 livelock class: a `blocker-only` run with a MAJOR-only finding must
-# (a) treat the major-bearing unit as TERMINAL (converge), (b) NOT churn it
+# (a) treat the major-bearing step as TERMINAL (converge), (b) NOT churn it
 # fix→re-enqueue forever (advance_work_loop), and (c) UNBLOCK its dependents
-# (ready_units), so the run reaches met=True. Majors are advisory under
+# (ready_steps), so the run reaches met=True. Majors are advisory under
 # blocker-only; only a blocker gates. We drive ONE ledger through all three
-# engine entry points the brief names: ready_units, converge, advance_work_loop.
+# engine entry points the brief names: ready_steps, converge, advance_work_loop.
 #
 # The whole point is to prove the CLASS is closed, not one instance: the
 # deliberate-fail control (Scenario 11) sets CLAUDE_AUTO_TEST_FORCE_THREETIER_
@@ -590,7 +590,7 @@ fi
 # a green Scenario 10 + a red Scenario 11 means no site bypasses the scale.
 PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
 
-it "CLASS-1 (blocker-only): a major-only unit is TERMINAL + its dependent UNBLOCKS + advance_work_loop does NOT churn -> run reaches met=True (no livelock)"
+it "CLASS-1 (blocker-only): a major-only step is TERMINAL + its dependent UNBLOCKS + advance_work_loop does NOT churn -> run reaches met=True (no livelock)"
 bo="$("$PY" - "$REPO" "$ORCH_PY" "$LEDGER_PY" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, orch_py, ledger_py, pulse_py = sys.argv[1:5]
@@ -602,21 +602,21 @@ run="class1-bo"
 # blocker-only run: Ua (will carry a major), Ub depends on Ua.
 m.init_ledger(repo, run, backend="native", backend_scale="blocker-only",
               loop_phase="work",
-              units=[{"id":"Ua","state":"pending"},
+              steps=[{"id":"Ua","state":"pending"},
                      {"id":"Ub","state":"pending","depends_on":["Ua"]}])
 # Drive Ua: pending -> dispatched -> verdict-returned WITH a MAJOR (advisory under
 # blocker-only, so it must NOT gate).
 m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z")
 m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"advisory"}])
 
-# (a) ready_units: Ua's major does NOT make it unsatisfied, so dependent Ub is READY.
-ready = o.ready_units(repo, run)
+# (a) ready_steps: Ua's major does NOT make it unsatisfied, so dependent Ub is READY.
+ready = o.ready_steps(repo, run)
 
 # (b) converge: Ua (verdict-returned, major-only) is TERMINAL under blocker-only.
 conv = o.converge(repo, run)
 
 # (c) advance_work_loop: must NOT pick Ua as fix-due (a major is advisory under
-# blocker-only). Drive Ub to a clean verdict so all units terminal, then confirm
+# blocker-only). Drive Ub to a clean verdict so all steps terminal, then confirm
 # the loop does not churn and the predicate is met.
 led = m.read_ledger(repo, run)
 # advance over the current state: Ua has a major-only verdict -> no fix-due,
@@ -673,11 +673,11 @@ o=load("dispatcher",orch_py); m=load("ledger",ledger_py); t=load("pulse",pulse_p
 run="class1-bo-fail"
 m.init_ledger(repo, run, backend="native", backend_scale="blocker-only",
               loop_phase="work",
-              units=[{"id":"Ua","state":"pending"},
+              steps=[{"id":"Ua","state":"pending"},
                      {"id":"Ub","state":"pending","depends_on":["Ua"]}])
 m.transition(repo, run, "Ua", "dispatched", dispatched_at="2026-05-21T14:00:00Z")
 m.record_verdict(repo, run, "Ua", [{"severity":"major","note":"now-gates"}])
-ready = o.ready_units(repo, run)              # Ub should be BLOCKED now.
+ready = o.ready_steps(repo, run)              # Ub should be BLOCKED now.
 conv = o.converge(repo, run)                  # Ua should NOT be terminal now.
 adv = t.pulse_advance.advance_work_loop(repo, run, m.read_ledger(repo, run), set())  # fix-due now.
 pred = (m.read_ledger(repo, run).get("exit_predicate_result") or {})
@@ -703,7 +703,7 @@ else
   fail "ready=[$bf_ready] ua_terminal=$bf_uaterm advanced=$bf_adv met=$bf_met (expected empty/False/fix-applied/False — control did not go RED, class-1 not proven closed)"
 fi
 
-# ─── U6: round-robin plan-unit selector + stalled exclusion ─────────────────
+# ─── U6: round-robin plan-step selector + stalled exclusion ─────────────────
 rr() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json
@@ -712,44 +712,44 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 orch = load_lib_module("dispatcher")
 ledger = json.loads(sys.argv[2])
-print(orch.pick_next_plan_unit_to_advance(ledger))
+print(orch.pick_next_plan_step_to_advance(ledger))
 PYEOF
 }
 
 it "round-robin: all never-advanced → first by declaration order"
 assert_eq "plan-1" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
-it "round-robin: a never-advanced unit beats an already-advanced one"
+it "round-robin: a never-advanced step beats an already-advanced one"
 assert_eq "plan-2" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
 it "round-robin: all advanced → oldest last_advanced_at wins"
 assert_eq "plan-3" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:02Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:01Z"},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"}]}')"
 
-it "round-robin: stalled plan unit excluded; next eligible wins (adversarial F3)"
+it "round-robin: stalled plan step excluded; next eligible wins (adversarial F3)"
 assert_eq "plan-2" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"stalled","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
-it "round-robin: no eligible plan unit → None"
+it "round-robin: no eligible plan step → None"
 assert_eq "None" "$(rr '{"steps":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
 
 # ════════════════════════════════════════════════════════════════════════════
 # U3 — should_escalate: the retry-budget predicate (R8 / KTD4). A pure read of
 # the EXISTING `attempt` counter (bumped mechanically on each pending->dispatched
 # dispatch). At `attempt >= max_attempts` (default 2) the driver STOPS auto-
-# retrying a wedged unit and pause-escalates to the operator instead of looping.
+# retrying a wedged step and pause-escalates to the operator instead of looping.
 # ════════════════════════════════════════════════════════════════════════════
 esc() {
-  # esc <unit-json> [max_attempts]  — print should_escalate(unit[, max_attempts]).
+  # esc <step-json> [max_attempts]  — print should_escalate(step[, max_attempts]).
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 orch = load_lib_module("dispatcher")
-unit = json.loads(sys.argv[2])
+step = json.loads(sys.argv[2])
 if len(sys.argv) > 3:
-    print(orch.should_escalate(unit, int(sys.argv[3])))
+    print(orch.should_escalate(step, int(sys.argv[3])))
 else:
-    print(orch.should_escalate(unit))
+    print(orch.should_escalate(step))
 PYEOF
 }
 
@@ -762,7 +762,7 @@ assert_eq "True" "$(esc '{"attempt":2}')"
 it "should_escalate: attempt 3 (past the default budget) -> True (escalate)"
 assert_eq "True" "$(esc '{"attempt":3}')"
 
-it "should_escalate: missing/zero attempt -> False (a fresh unit never escalates)"
+it "should_escalate: missing/zero attempt -> False (a fresh step never escalates)"
 assert_eq "False" "$(esc '{}')"
 
 it "should_escalate: respects a custom max_attempts -> attempt 2 under max=3 is False"
@@ -773,9 +773,9 @@ assert_eq "True" "$(esc '{"attempt":3}' 3)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # U14 — edge-driven ordering of a producer fan-out (the readiness engine, once
-# fed real depends_on edges, sequences the work units). This is the consumer
-# side of U14: unit-emitters.test.sh proves the edges are materialized; here we
-# prove ready_units ORDERS on them.
+# fed real depends_on edges, sequences the work steps). This is the consumer
+# side of U14: step-producers.test.sh proves the edges are materialized; here we
+# prove ready_steps ORDERS on them.
 # ════════════════════════════════════════════════════════════════════════════
 
 # ─── Ordering: w3 depends on BOTH w1 and w2; edges gate its readiness ─────────
@@ -799,7 +799,7 @@ assert_eq "" "$(orch_ready "u14-order")"
 
 it "U14 ordering: satisfy w1 too -> w3 appears (edge-driven, not incidental)"
 ledger_verdict "u14-order" "w1" '[]' >/dev/null 2>&1
-# Both edges satisfied -> w3 is the only pending unit and becomes ready.
+# Both edges satisfied -> w3 is the only pending step and becomes ready.
 assert_eq "w3" "$(orch_ready "u14-order")"
 
 # ─── Regression: an edgeless fan-out (a1/pipeline) — all siblings ready now ───
@@ -814,8 +814,8 @@ assert_eq "w1,w2,w3" "$(orch_ready "u14-edgeless")"
 # ════════════════════════════════════════════════════════════════════════════
 # U14 P2 anti-livelock — the FULL chain proves no silent stall. A bad
 # model-emitted depends_on (dangling / self / cycle) enters via
-# set_enumerated_units, flows through the A1 producer, materializes onto a work
-# ledger, and ready_units MUST still return a dispatchable unit (never the empty
+# set_enumerated_steps, flows through the A1 producer, materializes onto a work
+# ledger, and ready_steps MUST still return a dispatchable step (never the empty
 # set forever). ledger-mutators.test.sh proves the edge is cleaned; here we
 # prove the readiness engine is actually un-stalled — the real cure for the
 # livelock the finding describes.
@@ -827,15 +827,15 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module, load_ledger
 m = load_ledger()
-e = load_lib_module("unit_emitters")
+e = load_lib_module("step_producers")
 o = load_lib_module("dispatcher")
 op = sys.argv[2]
 
 
 def chain(run, batch):
-    """plan ledger → set_enumerated_units(batch) → A1 producer → work ledger →
-    ready_units. Returns the comma-joined ready ids of the materialized work
-    units. A non-empty result means the livelock is cured."""
+    """plan ledger → set_enumerated_steps(batch) → A1 producer → work ledger →
+    ready_steps. Returns the comma-joined ready ids of the materialized work
+    steps. A non-empty result means the livelock is cured."""
     repo = os.path.join(os.environ["HOME"], "chain-repo")
     os.makedirs(repo, exist_ok=True)
     p = m.ledger_path(repo, run)
@@ -843,20 +843,20 @@ def chain(run, batch):
         os.unlink(p)
     m.init_ledger(repo, run, backend="ce", loop_phase="plan",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=[{"id": "plan", "state": "pending", "phase": "plan"}])
-    m.set_enumerated_units(repo, run, "plan", batch)
+                  steps=[{"id": "plan", "state": "pending", "phase": "plan"}])
+    m.set_enumerated_steps(repo, run, "plan", batch)
     led = m.read_ledger(repo, run)
     work = e.plan_output_to_work_steps(led, "work")
     wrun = run + "-w"
     wp = m.ledger_path(repo, wrun)
     if os.path.exists(wp):
         os.unlink(wp)
-    units = [{"id": w["id"], "state": "pending", "phase": "work",
+    steps = [{"id": w["id"], "state": "pending", "phase": "work",
               "depends_on": w["depends_on"]} for w in work]
     m.init_ledger(repo, wrun, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=units)
-    print(",".join(o.ready_units(repo, wrun)))
+                  steps=steps)
+    print(",".join(o.ready_steps(repo, wrun)))
 
 
 if op == "dangling":
@@ -884,10 +884,10 @@ elif op == "mixed":
 PYEOF
 }
 
-it "U14 no-hang: dangling id edge → work unit materializes ready (NOT permanently pending)"
+it "U14 no-hang: dangling id edge → work step materializes ready (NOT permanently pending)"
 assert_eq "w1" "$(livelock_chain dangling)"
 
-it "U14 no-hang: self-edge → work unit materializes ready (a self-dep never satisfies)"
+it "U14 no-hang: self-edge → work step materializes ready (a self-dep never satisfies)"
 assert_eq "w1" "$(livelock_chain self)"
 
 it "U14 no-hang: 2-cycle → broken; w2 becomes ready (progress, not a mutual dead-lock)"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto v0.4.3 unit test: the plan-loop FEEDBACK CLI surface — set-gaps-open and
-# set-enumerated-units (project_auto_v042_stuck_root_causes ④).
+# set-enumerated-steps (project_auto_v042_stuck_root_causes ④).
 #
 # WHY THIS TEST EXISTS: the model drives the plan-loop through Bash — its only
 # ledger-write tool is `lib/ledger.sh`, NOT the Python mutators. Before v0.4.3
@@ -30,7 +30,7 @@ fail() {
   return 0
 }
 
-# Hermetic repo with one plan-phase unit on the ledger.
+# Hermetic repo with one plan-phase step on the ledger.
 REPO="$(mktemp -d)"
 export CLAUDE_AUTO_REPO="$REPO"
 mkdir -p "$REPO/.claude/auto"
@@ -42,7 +42,7 @@ def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
 ledger.init_ledger(repo, "rF", backend="ce",
-                   units=[{"id":"plan","phase":"plan","invokes":{"backend_op":"next_plan_step"}}],
+                   steps=[{"id":"plan","phase":"plan","invokes":{"backend_op":"next_plan_step"}}],
                    loop_phase="plan")
 PYEOF
 
@@ -59,13 +59,13 @@ print(eval(expr))
 PYEOF
 }
 
-# ─── set-enumerated-units persists via the CLI (repo auto-resolved) ──────────
-it "ledger.sh set-enumerated-units persists onto the plan unit (run-id only)"
-bash "$LEDGER_SH" set-enumerated-units rF plan '[{"id":"w1","invokes":{"backend_op":"do_step"}}]' >/dev/null 2>&1
+# ─── set-enumerated-steps persists via the CLI (repo auto-resolved) ──────────
+it "ledger.sh set-enumerated-steps persists onto the plan step (run-id only)"
+bash "$LEDGER_SH" set-enumerated-steps rF plan '[{"id":"w1","invokes":{"backend_op":"do_step"}}]' >/dev/null 2>&1
 got="$(read_field '[u for u in led["steps"] if u["phase"]=="plan"][0]["dispatch_context"].get("enumerated_steps")')"
 case "$got" in
   *"w1"*) pass ;;
-  *) fail "enumerated_units not persisted via CLI: ${got}" ;;
+  *) fail "enumerated_steps not persisted via CLI: ${got}" ;;
 esac
 
 # ─── set-gaps-open persists via the CLI ─────────────────────────────────────
@@ -76,7 +76,7 @@ got_g="$(read_field 'led["exit_predicate_result"]["gaps_open"]')"
 
 # ─── deliberate-fail: malformed enumerate payload is rejected (non-zero) ─────
 it "deliberate-fail: a non-array enumerate payload is rejected (rc != 0)"
-if bash "$LEDGER_SH" set-enumerated-units rF plan '{"not":"an array"}' >/dev/null 2>&1; then
+if bash "$LEDGER_SH" set-enumerated-steps rF plan '{"not":"an array"}' >/dev/null 2>&1; then
   fail "non-array payload was accepted (should have failed)"
 else
   pass
@@ -91,18 +91,76 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
+# U7 (concept-vocabulary rename): the work-node CLI verbs were HARD-CUT to their
+# `step` spelling with NO deprecated aliases (KTD-4 — verbs are never persisted,
+# so the only callers are this repo's skills, updated atomically, and driving
+# agents, which the agent-tool-surface contract tells to orient via `describe`).
+#
+# Two things must hold, and only a CLI-level test can prove either:
+#   1. the NEW verb actually round-trips through `lib/ledger.sh` (add → reshape-deps
+#      → transition). The Python mutators are covered in steering-verbs.test.sh, but
+#      the model's ONLY ledger-write tool is this shell CLI — the same
+#      uninvokable-instruction bug class this file exists for.
+#   2. the RETIRED verb is a hard exit 2, not a silent no-op, and the error points at
+#      `describe` so a stale-vocabulary agent can re-orient in one step.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ─── add-step round-trip through the CLI (add → reshape-deps → transition) ───
+it "add-step round-trip: add a step, reshape its deps, then transition it"
+rt_err=""
+bash "$LEDGER_SH" add-step rF w-rt '[]' work >/dev/null 2>&1 \
+  || rt_err="add-step failed"
+# depend it on the plan step (an existing id) — reshape-deps must accept the edge
+[ -z "$rt_err" ] && { bash "$LEDGER_SH" reshape-deps rF w-rt '["plan"]' >/dev/null 2>&1 \
+  || rt_err="reshape-deps failed"; }
+# transition takes the explicit <repo> argv (the legacy read-verb shape)
+[ -z "$rt_err" ] && { bash "$LEDGER_SH" transition "$REPO" rF w-rt dispatched >/dev/null 2>&1 \
+  || rt_err="transition failed"; }
+if [ -z "$rt_err" ]; then
+  rt_state="$(read_field '[u for u in led["steps"] if u["id"]=="w-rt"][0]["state"]')"
+  rt_deps="$(read_field '[u for u in led["steps"] if u["id"]=="w-rt"][0]["depends_on"]')"
+  if [ "$rt_state" = "dispatched" ] && [ "$rt_deps" = "['plan']" ]; then
+    pass
+  else
+    fail "add-step round-trip landed wrong: state=${rt_state} depends_on=${rt_deps}"
+  fi
+else
+  fail "add-step round-trip broke at: ${rt_err}"
+fi
+
+# ─── the retired verbs are GONE: exit 2, and the error names `describe` ──────
+# NB: the loop below necessarily SPELLS the retired verb names — it is the only place
+# in the tree that may. The vocabulary-audit exempts exactly those two tokens, in
+# exactly this file (path + content anchored), so any OTHER stale token from the
+# retired vocabulary still fails the audit here.
+for retired in add-unit set-enumerated-units; do
+  it "hard-cut (KTD-4): retired verb '${retired}' exits 2 and points at describe"
+  hc_out="$(bash "$LEDGER_SH" "$retired" rF plan '[]' 2>&1)"
+  hc_rc=$?
+  if [ "$hc_rc" -ne 2 ]; then
+    fail "retired verb '${retired}' exited ${hc_rc}, expected 2 (bad-args) — an alias may have crept back in"
+  elif ! printf '%s' "$hc_out" | grep -q "unknown subcommand"; then
+    fail "retired verb '${retired}' did not report 'unknown subcommand'; got: ${hc_out}"
+  elif ! printf '%s' "$hc_out" | grep -q "describe"; then
+    fail "retired verb '${retired}' rejected but did NOT point at \`describe\` — a stale-vocabulary agent cannot re-orient. got: ${hc_out}"
+  else
+    pass
+  fi
+done
+
+# ════════════════════════════════════════════════════════════════════════════
 # Work-loop VERDICT channel (v0.6.8) — record-verdict / set-verdict-decision.
 # Same uninvokable-instruction bug class as the v0.4.3 feedback verbs: the
 # work-loop drives through Bash, so the verdict + gate-decision mutators must be
 # reachable as CLI verbs, repo auto-resolved from $CLAUDE_AUTO_REPO.
 # ════════════════════════════════════════════════════════════════════════════
 
-# record_verdict only writes from a dispatched/verdict-returned/stalled unit, so
-# move the seed plan unit to dispatched first (transition takes an explicit repo).
+# record_verdict only writes from a dispatched/verdict-returned/stalled step, so
+# move the seed plan step to dispatched first (transition takes an explicit repo).
 bash "$LEDGER_SH" transition "$REPO" rF plan dispatched >/dev/null 2>&1
 
 # ─── record-verdict round-trips findings into the ledger (run-id only) ───────
-it "ledger.sh record-verdict persists findings + flips the unit to verdict-returned"
+it "ledger.sh record-verdict persists findings + flips the step to verdict-returned"
 bash "$LEDGER_SH" record-verdict rF plan '[{"severity":"blocker","note":"boom"}]' >/dev/null 2>&1
 got_state="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["state"]')"
 got_note="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["findings"][0]["note"]')"
@@ -148,10 +206,10 @@ else
   pass
 fi
 
-# ─── deliberate-fail: unknown gate unit rejected (rc != 0) ───────────────────
-it "deliberate-fail: set-verdict-decision on an unknown unit is rejected (rc != 0)"
+# ─── deliberate-fail: unknown gate step rejected (rc != 0) ───────────────────
+it "deliberate-fail: set-verdict-decision on an unknown step is rejected (rc != 0)"
 if bash "$LEDGER_SH" set-verdict-decision rF nosuchunit advance >/dev/null 2>&1; then
-  fail "unknown unit accepted (should have failed)"
+  fail "unknown step accepted (should have failed)"
 else
   pass
 fi

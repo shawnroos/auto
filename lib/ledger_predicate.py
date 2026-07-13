@@ -4,9 +4,9 @@
 Extracted from ledger_core (U16) so the core file stays under the size budget
 and the predicate evaluator has a home of its own. This module holds the pure,
 side-effect-free predicate surface: ``recompute_predicate`` and its B7 helpers
-(``_count_severities_by_unit``, ``_read_cached_gaps_open``,
+(``_count_severities_by_step``, ``_read_cached_gaps_open``,
 ``_compute_terminality``, ``_evaluate_met``, ``_compute_iteration_pending``),
-plus ``gating_severities``, ``unit_is_terminal``, and ``is_orphaned``.
+plus ``gating_severities``, ``step_is_terminal``, and ``is_orphaned``.
 
 Topology (the load-bearing acyclic discipline): this module imports ONLY
 ``ledger_core`` (for the constants ``GATING_SEVERITIES`` / ``GRACE_SECONDS``, the
@@ -88,11 +88,11 @@ def gating_severities(scale: str = "three-tier") -> tuple:
     return ("blocker",) if scale == "blocker-only" else ledger_core.GATING_SEVERITIES
 
 
-def unit_is_terminal(unit: dict, scale: str = "three-tier") -> bool:
+def step_is_terminal(step: dict, scale: str = "three-tier") -> bool:
     """terminal(u) per §4.1 of the contract.
 
-    A unit is terminal iff it is ``terminal-skip``, OR it is ``verdict-returned``
-    / ``fixed`` AND carries no open *gating* finding. A ``fixed`` unit with a stale
+    A step is terminal iff it is ``terminal-skip``, OR it is ``verdict-returned``
+    / ``fixed`` AND carries no open *gating* finding. A ``fixed`` step with a stale
     gating finding is NOT terminal (the findings-closure livelock guard).
 
     SCALE-AWARE (Bug #3): which severities gate is decided by the SINGLE helper
@@ -103,26 +103,26 @@ def unit_is_terminal(unit: dict, scale: str = "three-tier") -> bool:
     cannot disagree about done-ness.
     """
     gating = gating_severities(scale)
-    state = unit.get("state")
+    state = step.get("state")
     if state == "terminal-skip":
         return True
     if state in ("verdict-returned", "fixed"):
-        for finding in unit.get("findings") or []:
+        for finding in step.get("findings") or []:
             if finding.get("severity") in gating:
                 return False
         return True
     return False
 
 
-def _count_severities_by_unit(ledger: dict) -> tuple:
-    """B7 helper: total (blockers, majors, minors) finding counts across all units.
+def _count_severities_by_step(ledger: dict) -> tuple:
+    """B7 helper: total (blockers, majors, minors) finding counts across all steps.
 
     Extracted VERBATIM from ``recompute_predicate``'s leading count loop — pure,
     no mutation, byte-equivalent tallies.
     """
     blockers = majors = minors = 0
-    for unit in ledger.get("steps", []):
-        for finding in unit.get("findings") or []:
+    for step in ledger.get("steps", []):
+        for finding in step.get("findings") or []:
             sev = finding.get("severity")
             if sev == "blocker":
                 blockers += 1
@@ -157,7 +157,7 @@ def _compute_terminality(ledger: dict) -> dict:
     """B7 helper: compute the phase-scoped + global terminality facts.
 
     Returns a dict with keys ``current_phase``, ``terminal_phase``, ``scale``,
-    ``all_units_terminal_global`` (bool), ``current_phase_units`` (list). Extracted
+    ``all_steps_terminal_global`` (bool), ``current_phase_steps`` (list). Extracted
     VERBATIM from ``recompute_predicate``'s terminality block — pure, no mutation.
 
     The current-phase read routes through ``phase_grammar.current_phase`` (the one
@@ -168,15 +168,15 @@ def _compute_terminality(ledger: dict) -> dict:
     load-order discipline the ledger surface needs.
 
     v0.2.0 fix-pass A.1 (correctness P0 #3 / api-contract AC-2): the work-loop
-    exit predicate's terminal check is scoped to the units in the CURRENT phase,
-    not the global unit set. Pre-v0.2.0 (units=[] in the plan phase, the handoff
-    synthesized work units), the global all() was equivalent. v0.2.0 declares
-    plan units explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
-    plan units stay `pending` after plan-done is reached (the plan-loop's
-    advance is recorded in plan_step, not via a unit state transition). A global
+    exit predicate's terminal check is scoped to the steps in the CURRENT phase,
+    not the global step set. Pre-v0.2.0 (steps=[] in the plan phase, the handoff
+    synthesized work steps), the global all() was equivalent. v0.2.0 declares
+    plan steps explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
+    plan steps stay `pending` after plan-done is reached (the plan-loop's
+    advance is recorded in plan_step, not via a step state transition). A global
     all_steps_terminal would block work-met forever. Scoping by phase makes each
     phase have its own terminality. terminal_phase from the recipe gates which
-    phase's units count for run-exit (AC-2 — the doc promised this but the code
+    phase's steps count for run-exit (AC-2 — the doc promised this but the code
     didn't honor it). Global all_steps_terminal is retained for the
     exit_predicate_result reporting field (downstream consumers may want it).
     """
@@ -184,18 +184,18 @@ def _compute_terminality(ledger: dict) -> dict:
     scale = ledger.get("backend_scale", "three-tier")
     current_phase = phase_grammar.current_phase(ledger)
     terminal_phase = ledger.get("terminal_phase") or "work"
-    all_units_terminal_global = all(
-        unit_is_terminal(u, scale) for u in ledger.get("steps", [])
+    all_steps_terminal_global = all(
+        step_is_terminal(u, scale) for u in ledger.get("steps", [])
     )
-    current_phase_units = [
+    current_phase_steps = [
         u for u in ledger.get("steps", []) if u.get("phase") == current_phase
     ]
     return {
         "current_phase": current_phase,
         "terminal_phase": terminal_phase,
         "scale": scale,
-        "all_units_terminal_global": all_units_terminal_global,
-        "current_phase_units": current_phase_units,
+        "all_steps_terminal_global": all_steps_terminal_global,
+        "current_phase_steps": current_phase_steps,
     }
 
 
@@ -211,7 +211,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
 
       * ``loop_phase == "plan"`` — plan-loop exit is ``gaps_open == 0 AND
         plan_step == "review_plan"`` (backend-contract §5 + schema §3.1). There
-        are no work units yet, so ``all_steps_terminal`` is NOT a requirement in
+        are no work steps yet, so ``all_steps_terminal`` is NOT a requirement in
         the plan phase. The ``plan_step == "review_plan"`` conjunct mirrors the
         backend coherence guard one-to-one: a DEFAULT ``gaps_open == 0`` BEFORE
         any review has run (at ``plan`` / ``deepen`` / ``null``) must NOT
@@ -220,19 +220,19 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
       * otherwise (``"work"`` / ``"handoff"`` / ``"done"``) — the work-loop exit,
         SCALE-AWARE on ``backend_scale`` (§2.2 ``met`` row):
           - ``"three-tier"`` (CE; the default for any missing/unknown value):
-            ``blockers == 0 AND majors == 0 AND all_steps_terminal AND units``.
+            ``blockers == 0 AND majors == 0 AND all_steps_terminal AND steps``.
           - ``"blocker-only"`` (native): majors are advisory (surfaced at exit,
-            not gating), so ``blockers == 0 AND all_steps_terminal AND units``.
+            not gating), so ``blockers == 0 AND all_steps_terminal AND steps``.
         The ``steps`` (non-empty) conjunct closes the vacuous-exit hole: a work
-        phase with ZERO dispatched units must NOT declare done (``all([]) ==
+        phase with ZERO dispatched steps must NOT declare done (``all([]) ==
         True`` would otherwise short-circuit it before any fan-out). A *plan*
-        phase with no units is fine — it never reaches this branch.
+        phase with no steps is fine — it never reaches this branch.
     """
     blockers, majors, minors = counts
     scale = term["scale"]
     current_phase = term["current_phase"]
     terminal_phase = term["terminal_phase"]
-    current_phase_units = term["current_phase_units"]
+    current_phase_steps = term["current_phase_steps"]
 
     if current_phase == "plan":
         # Plan-loop exit: a REAL review reported zero gaps AND a review_plan
@@ -257,22 +257,22 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # CE (or any missing/unknown value) defaults to the three-tier gate where
         # majors DO gate. Unknown → three-tier is the safe default (gates more,
         # never under-blocks). I-2: all_steps_terminal stays required either way.
-        # `scale` is read once above and also drives unit_is_terminal so the
+        # `scale` is read once above and also drives step_is_terminal so the
         # terminality check and the met predicate agree on whether majors gate.
         # Whether majors gate is decided by the SINGLE helper (the one source of
         # truth) — never a hardcoded scale comparison here.
         no_majors = "major" not in gating_severities(scale) or majors == 0
         # Bug #4 — vacuous work-phase exit. all([]) is vacuously True, so a
-        # phase flip with ZERO units dispatched would declare met before the
+        # phase flip with ZERO steps dispatched would declare met before the
         # dispatcher fans out work. The phase-scoped check
-        # (all_terminal_in_eval_phase + has_units_in_phase) addresses both this AND
-        # the v0.2.0 fix-pass A.1 (plan units in declared recipes shouldn't gate
+        # (all_terminal_in_eval_phase + has_steps_in_phase) addresses both this AND
+        # the v0.2.0 fix-pass A.1 (plan steps in declared recipes shouldn't gate
         # the work-loop's terminal check).
         # AC-2 fix: `met` requires loop_phase == terminal_phase (the run doesn't
-        # exit until the terminal phase is reached AND its own units are terminal).
+        # exit until the terminal phase is reached AND its own steps are terminal).
         # Post-terminal: "done" is the exit sentinel set BY a met-triggered pulse
         # (the LAST member of LOOP_PHASES, never a member of any recipe's
-        # phase_order). At "done", phase-scoped units would be empty (no unit
+        # phase_order). At "done", phase-scoped steps would be empty (no step
         # declares phase=done), so we'd vacuously flip met→false on the recompute
         # that fires when set_loop writes "done". Treat "done" as
         # terminal-equivalent for predicate purposes: the run already exited at
@@ -282,21 +282,21 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # For v0.2.0's recipes terminal_phase is always "work"; v0.2.1's A3 will
         # have non-work terminal phases and this gate becomes load-bearing.
         eval_phase = terminal_phase if current_phase == "done" else current_phase
-        eval_phase_units = (
-            current_phase_units
+        eval_phase_steps = (
+            current_phase_steps
             if current_phase != "done"
             else [u for u in ledger.get("steps", []) if u.get("phase") == terminal_phase]
         )
         all_terminal_in_eval_phase = all(
-            unit_is_terminal(u, scale) for u in eval_phase_units
+            step_is_terminal(u, scale) for u in eval_phase_steps
         )
-        has_units_in_phase = bool(eval_phase_units)
+        has_steps_in_phase = bool(eval_phase_steps)
         met = (
             eval_phase == terminal_phase
             and blockers == 0
             and no_majors
             and all_terminal_in_eval_phase
-            and has_units_in_phase
+            and has_steps_in_phase
         )
     return bool(met)
 
@@ -304,21 +304,21 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
 def recompute_predicate(ledger: dict) -> dict:
     """Compute ``exit_predicate_result`` purely from the ledger's current state.
 
-    Counts findings across all units, computes ``all_steps_terminal``, and sets
+    Counts findings across all steps, computes ``all_steps_terminal``, and sets
     ``met`` PHASE-AWARELY (I-2, contract §5). See the B7 helpers
-    (``_count_severities_by_unit``, ``_read_cached_gaps_open``,
+    (``_count_severities_by_step``, ``_read_cached_gaps_open``,
     ``_compute_terminality``, ``_evaluate_met``, ``_compute_iteration_pending``)
     for the decomposed pure steps — this function is their composition.
 
     v0.3.0 (U2 / KTD §B): the returned dict gains an ``iteration_pending: bool``
     field, and the new met rule is ``met = (existing met conditions) AND NOT
     iteration_pending``. ``iteration_pending`` is True iff the run declares an
-    ``iteration`` block AND the gate unit's verdict.decision is ``"iterate"``
+    ``iteration`` block AND the gate step's verdict.decision is ``"iterate"``
     AND the bound is unbreached (``iteration_attempts < max_attempts`` AND
     ``active_wall_seconds < max_wall_seconds``). Without the AND-NOT clause, a
-    recipe that emits new plan-N units while ``loop_phase == "work"`` would see
+    recipe that emits new plan-N steps while ``loop_phase == "work"`` would see
     work-met fire spuriously (the work-loop branch above scopes terminality to
-    current-phase units; pending plan-N units are phase=plan, invisible) — see
+    current-phase steps; pending plan-N steps are phase=plan, invisible) — see
     KTD §A. The gate-decision read routes through ``iteration.read_decision`` to
     keep the ledger surface off the AST-lint's allowlist for that semantic — the
     lint permits the literal in the writer site but the convention is to consume
@@ -327,7 +327,7 @@ def recompute_predicate(ledger: dict) -> dict:
 
     Returns the new dict (does NOT mutate ``ledger``; the caller assigns it).
     """
-    blockers, majors, minors = _count_severities_by_unit(ledger)
+    blockers, majors, minors = _count_severities_by_step(ledger)
     gaps_open = _read_cached_gaps_open(ledger)
     term = _compute_terminality(ledger)
     met = _evaluate_met(ledger, (blockers, majors, minors), gaps_open, term)
@@ -345,7 +345,7 @@ def recompute_predicate(ledger: dict) -> dict:
         "majors": majors,
         "minors": minors,
         "gaps_open": gaps_open,
-        "all_steps_terminal": bool(term["all_units_terminal_global"]),
+        "all_steps_terminal": bool(term["all_steps_terminal_global"]),
         "iteration_pending": iteration_pending,
     }
 

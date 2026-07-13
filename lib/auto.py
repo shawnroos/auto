@@ -21,8 +21,8 @@ dispatch space-separated subcommands, per memory
                                   default is the loop's own exit predicate).
 
 A new run starts at loop_phase="plan" with an EMPTY steps[] — the plan-loop
-(backend-driven, via the pulse) populates the work units later; /auto does
-NOT parse units from the plan. init_ledger's defaults are exactly this shape.
+(backend-driven, via the pulse) populates the work steps later; /auto does
+NOT parse steps from the plan. init_ledger's defaults are exactly this shape.
 
 The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
 no slot for any of them, and ledger.py is the locked contract). They ride in the
@@ -290,23 +290,23 @@ def _make_run_id(ledger, repo_root: str, plan: str) -> str:
     return candidate
 
 
-def _bind_presatisfied_plan(presatisfied: bool, init_units: list, plan: str):
+def _bind_presatisfied_plan(presatisfied: bool, init_steps: list, plan: str):
     """v0.4.3 KTD-15: wire a plan_presatisfied run's init state. Returns the
     plan_step to pass to init_ledger ("review_plan" when presatisfied, else None).
 
     A plan_presatisfied recipe (W) declares its plan phase already done. The
     engine inits plan_step="review_plan" (here) and gaps_open=0 (post-init, in
-    run()) so the FIRST pulse's next_plan_step returns "done" → enumerate_plan_units
+    run()) so the FIRST pulse's next_plan_step returns "done" → enumerate_plan_steps
     → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
     "auto re-plans a finished plan" bug). The plan doc path has no top-level
-    ledger slot (schema §2), so we bind it to the single plan unit's
+    ledger slot (schema §2), so we bind it to the single plan step's
     dispatch_context.plan_path — the durable home the backend's
-    enumerate_plan_units reads to tell the model WHICH plan to enumerate. The
-    validator guarantees exactly one plan unit when presatisfied is true.
+    enumerate_plan_steps reads to tell the model WHICH plan to enumerate. The
+    validator guarantees exactly one plan step when presatisfied is true.
     """
     if not presatisfied:
         return None
-    for u in init_units:
+    for u in init_steps:
         if u.get("phase") == "plan":
             u.setdefault("dispatch_context", {})["plan_path"] = plan
             break
@@ -419,16 +419,16 @@ def run(argv) -> int:
         )
 
     # Build the initial ledger topology FROM the recipe (KTD-4). The recipe's
-    # declared units become the initial ledger units; phase_order / terminal_phase
-    # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan unit,
+    # declared steps become the initial ledger steps; phase_order / terminal_phase
+    # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan step,
     # default grammar — R13 regression).
-    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("steps", [])]
+    init_steps = [recipes.step_for(u, recipe) for u in recipe.get("steps", [])]
     phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
     # v0.4.3 KTD-15: plan_presatisfied (W) — init the plan phase already-done.
     presatisfied = bool(recipe.get("plan_presatisfied"))
-    init_plan_step = _bind_presatisfied_plan(presatisfied, init_units, plan)
+    init_plan_step = _bind_presatisfied_plan(presatisfied, init_steps, plan)
 
     # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
     # Frozen on the ledger so the bare-/auto hypothesis funnel can render it
@@ -448,7 +448,7 @@ def run(argv) -> int:
             repo_root,
             run_id,
             backend=backend,
-            units=init_units,
+            steps=init_steps,
             loop_phase=phase_order[0],
             recipe={"name": recipe["name"], "source_tier": source_tier},
             phase_order=phase_order,

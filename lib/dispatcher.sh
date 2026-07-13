@@ -17,8 +17,8 @@ set -uo pipefail
 CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # auto::dispatcher <subcommand> [args...]
-#   ready    <repo> <run>                     -> one ready unit id per line
-#   dispatch <repo> <run> <cap> <unit...>     -> "<unit>\t<status>" per line
+#   ready    <repo> <run>                     -> one ready step id per line
+#   dispatch <repo> <run> <cap> <step...>     -> "<step>\t<status>" per line
 #   converge <repo> <run>                     -> converge summary JSON on stdout
 #
 # NOTE: the agent-launch boundary (launch_fn) is a Python-level injected

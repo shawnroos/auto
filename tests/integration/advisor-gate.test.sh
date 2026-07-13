@@ -7,7 +7,7 @@
 # JSON (fed on stdin, as the harness would). Nothing is mocked.
 #
 # `driving_session_id` is recorded on the ledger by U5 (the arm-time setter),
-# which is not part of THIS unit. So — exactly as hooks.test.sh hand-ages
+# which is not part of THIS step. So — exactly as hooks.test.sh hand-ages
 # last_beat_at — we inject driving_session_id by a direct read-edit-write of the
 # ledger JSON. Without it the defensive read finds the key absent and ALLOWS, so
 # every deny scenario depends on this injection.
@@ -145,7 +145,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 set_driving_session "$REPO" liverun "sess-AAA"
 ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
@@ -181,7 +181,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"nosid",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
@@ -201,7 +201,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"terminal-skip"}])
+L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done")
 PYEOF
 set_driving_session "$REPO" donerun "sess-AAA"
@@ -216,7 +216,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"manualrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"manualrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"manualrun",driver="manual")
 PYEOF
 set_driving_session "$REPO" manualrun "sess-AAA"
@@ -231,7 +231,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util, json, datetime
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleself",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"staleself",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
 p = L.ledger_path(repo,"staleself")
@@ -270,7 +270,7 @@ mk_live_owned() {  # mk_live_owned <name> <run> <sid>
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
   set_driving_session "$repo" "$2" "$3"
   printf '%s' "$repo"
@@ -547,7 +547,7 @@ REPO="$(mkrepo action-stale)"
 import sys, importlib.util, json, datetime
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleact",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"staleact",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
 p = L.ledger_path(repo,"staleact")
@@ -651,7 +651,7 @@ mk_paused_owned() {  # mk_paused_owned <name> <run> <sid>
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,run,driver="manual",blocked_on="waiting on a human")
 PYEOF
   set_driving_session "$repo" "$2" "$3"
@@ -689,7 +689,7 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Legacy ledger (recipe=None) so advance_to_phase falls through to the raw
 # set_loop branch; a handoff pause is the precondition for the handoff->work flip.
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual",handoff_paused=True)
 PYEOF
 set_driving_session "$REPO" handoffrun "sess-AAA"
@@ -744,7 +744,7 @@ REPO="$(mkrepo resume-steal)"
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,run,driver="self",beat=True)   # LIVE: self-driven + fresh heartbeat
 PYEOF
 set_driving_session "$REPO" stealrun sess-AAA

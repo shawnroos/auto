@@ -4,7 +4,7 @@
 # ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
-# After U6, a4's `compare` unit is declared structurally in steps[] (with
+# After U6, a4's `compare` step is declared structurally in steps[] (with
 # depends_on: [build-clarity, build-perf] forward-referencing the bias-builder
 # emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
@@ -24,8 +24,8 @@
 #   build-clarity + build-perf (NOT compare — structural already on ledger).
 #   Then compare verdicts per scenario.
 #
-# STRUCTURE: init via auto.run with --recipe a4; prime the plan unit's
-# enumerated_units (2 items so builders carry plan_items); pulse auto=True →
+# STRUCTURE: init via auto.run with --recipe a4; prime the plan step's
+# enumerated_steps (2 items so builders carry plan_items); pulse auto=True →
 # auto-flips to work emitting builders; mark builders fixed; record_verdict +
 # set_verdict_decision on compare per scenario; pulse again.
 #
@@ -93,13 +93,13 @@ assert led0.get("iteration"), f"iteration block missing on ledger after init: {s
 assert led0["iteration"]["gate_step"] == "compare", led0["iteration"]
 assert led0.get("emit_templates", {}).get("bias-builder"), led0.get("emit_templates")
 # Compare structural: in steps[] from init (NOT producer-synthesized).
-unit_ids_at_init = sorted(u["id"] for u in led0["steps"])
-assert "compare" in unit_ids_at_init, f"compare not in initial steps[]: {unit_ids_at_init!r}"
+step_ids_at_init = sorted(u["id"] for u in led0["steps"])
+assert "compare" in step_ids_at_init, f"compare not in initial steps[]: {step_ids_at_init!r}"
 
-# Step 2: prime the plan unit's enumerated_units (the producer passes these to
+# Step 2: prime the plan step's enumerated_steps (the producer passes these to
 # each builder's dispatch_context as plan_items). Set gaps_open=0 + plan_step=
 # review_plan so plan-met fires.
-ledger.set_enumerated_units(repo, run_id, "plan",
+ledger.set_enumerated_steps(repo, run_id, "plan",
     [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
      {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
 ledger.set_gaps_open(repo, run_id, 0)
@@ -179,7 +179,7 @@ res="$(drive_a4 green)"
 # Expected: iteration logic does NOT fire (advance_iteration_loop returns
 # {"action":"advance"}). Compare is in verdict-returned. iteration_attempts=0.
 # loop_phase: depends on predicate composition. With compare verdict-returned
-# and no other pending work units, the work predicate met=True → done.
+# and no other pending work steps, the work predicate met=True → done.
 case "$res" in
   "done|0||verdict-returned|no") pass ;;
   *) fail "expected 'done|0||verdict-returned|no', got '$res'" ;;

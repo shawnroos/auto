@@ -1,5 +1,5 @@
 ---
-argument-hint: "[continue|advance|pause|abort|retry|skip] [<run>] [<unit>] | freeform sentence"
+argument-hint: "[continue|advance|pause|abort|retry|skip] [<run>] [<step>] | freeform sentence"
 allowed-tools: Bash, AskUserQuestion
 ---
 
@@ -21,11 +21,11 @@ then invoke the script with exactly that form:
 | Canonical                  | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
 | `continue [<run>]`         | Re-acquire, arm a fresh pulse chain, flip paused handoff to `work`.     |
-| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a pulse to enumerate work units. At a handoff: same as `continue`. In the work phase: no-op. |
+| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a pulse to enumerate work steps. At a handoff: same as `continue`. In the work phase: no-op. |
 | `pause <run> [why]`        | Blocked on a human/external action — flip to manual, record why, stay resumable. NOT a cancellation. |
 | `abort <run>`              | Flip the run to `done` with a cancellation marker. **Destructive.** |
-| `retry <run> <unit>`       | Reset stalled unit to pending, clear `last_error`.                  |
-| `skip <run> <unit>`        | Mark stalled unit `terminal-skip`, skip its transitive dependents.  |
+| `retry <run> <step>`       | Reset stalled step to pending, clear `last_error`.                  |
+| `skip <run> <step>`        | Mark stalled step `terminal-skip`, skip its transitive dependents.  |
 
 Routing rules:
 
@@ -41,16 +41,16 @@ Routing rules:
    - "keep going" / "resume" / "pick up where we left off" → `continue`
    - "the plan's done, move on" / "stop re-planning, it's ready" / "skip to the work" → `advance <run>`
    - "stop it" / "kill the run" / "cancel" → `abort <run>` (DESTRUCTIVE — must confirm via AskUserQuestion, see below)
-   - "retry the failing one" / "try unit X again" → `retry <run> <unit>`
-   - "skip the broken one" / "give up on that unit" → `skip <run> <unit>`
+   - "retry the failing one" / "try step X again" → `retry <run> <step>`
+   - "skip the broken one" / "give up on that step" → `skip <run> <step>`
 
 4. **Ambiguous on EITHER axis** — fire `AskUserQuestion`:
    - **Run ambiguous** (multiple resumable / "the auth one" matches two)
      — list candidates with most-recent as Recommended.
-   - **Unit ambiguous** (retry/skip with multiple stalled units) — first
+   - **Step ambiguous** (retry/skip with multiple stalled steps) — first
      `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh"` to enumerate the
-     stalled units, then `AskUserQuestion` with each as an option (include
-     each unit's `last_error` in its description so the user can choose
+     stalled steps, then `AskUserQuestion` with each as an option (include
+     each step's `last_error` in its description so the user can choose
      informed).
    - **Subcommand ambiguous** (e.g. "fix the run" — retry? skip? abort?)
      — list the candidates with descriptions of what each does, no

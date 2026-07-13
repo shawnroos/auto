@@ -60,7 +60,7 @@ emitter=done
 adapter=done
 tick=done
 seam=done
-unit=pending
+unit=done
 recipe=pending
 ledger=pending"
 
@@ -86,10 +86,19 @@ SCAN_ROOTS=(lib skills commands docs/contracts tests recipes presets .claude/hoo
 #     that has to spell the old key to look for it. Same rationale as
 #     lib/format_compat.py: these are the files whose JOB is to know both.
 #   * This test file itself — it names every old term in prose/patterns.
+#
+# U7 REMOVED `lib/ledger.py` + `lib/ledger.sh` from this list. They were added in
+# U6 in ANTICIPATION of becoming KTD-4 forwarding stubs — but that only happens at
+# U9, when `ledger.py` → `run_record.py` and `ledger.py` is left behind as the
+# re-export shim. TODAY they are the REAL facade and the REAL bash entrypoint, and
+# `lib/ledger.py` owns `_VERBS` — the CLI verb registry U7 renames (`add-unit` →
+# `add-step`, `set-enumerated-units` → `set-enumerated-steps`). Whitelisting it made
+# the audit structurally unable to police the `unit` term inside the one file that
+# defines the term's entire CLI surface. Both are clean for every currently-`done`
+# term, so they scan like any other file. **U9 re-adds `lib/ledger.py`** (and
+# `lib/ledger.sh`) here at the moment they actually become stubs.
 GLOBAL_PATH_WHITELIST=(
   'lib/format_compat.py'
-  'lib/ledger.py'
-  'lib/ledger.sh'
   'lib/tick.sh'
   'lib/orchestrator.sh'
   'lib/adapter-ce.sh'
@@ -178,21 +187,124 @@ audit_term_hits() {
   done
 
   # ── global content whitelist ──
-  raw="$(printf '%s\n' "$raw" | grep -vE "$GLOBAL_CONTENT_WHITELIST_RE" || true)"
+  # TOKEN-SCRUBBED, not line-dropped. The whole-line `grep -vE` this replaces was the
+  # SAME defect class that let U7's sweep silently corrupt the read-compat tables: an
+  # exemption meant for a breadcrumb ("supersedes …", "(formerly auto-adapter)") also
+  # swallowed any real stale identifier that happened to share the line. Probed and
+  # confirmed: `formerly the add_unit verb lived here` sailed through GREEN.
+  #
+  #   * `<!--legacy-->` rows are still dropped WHOLESALE — a read-compat row's job is
+  #     to name retired keys across its full width, so there is nothing to scrub. That
+  #     exemption is now EARNED rather than assumed: Scenario 1b independently proves
+  #     every such row still names a retired term and is not a tautology.
+  #   * `supersedes …` / `(formerly …)` — only the trailing breadcrumb CLAUSE is
+  #     scrubbed. Anything before it on the line is still audited.
+  # NB one awk pass, not a per-line sed|grep loop: the deliberate-fail control audits
+  # a still-PENDING term whose old identifier is still everywhere (thousands of hits),
+  # and spawning two processes per hit took the audit from 1.3s to 19s.
+  #
+  # `(^|[^a-z0-9])<term>` on a lower-cased copy is exactly `regex_for_term`'s
+  # `(\b|_)<term>` -i: `_` is not alphanumeric, so the one class covers both the
+  # word-boundary and the leading-underscore alternative.
+  raw="$(printf '%s\n' "$raw" | grep -vF -- '<!--legacy-->' || true)"
+  [ -z "$raw" ] && return 0
+  #
+  # Both scrubs are BOUNDED to the real breadcrumb shape. An unbounded
+  # `supersedes.*$` / `[Ff]ormerly [^)]*` runs to end-of-line, so a line reading
+  # `supersedes: add_unit is still callable` is scrubbed to nothing and rides
+  # through GREEN — the very hole this rewrite closes. What the tree actually
+  # contains is a re-lock banner (`supersedes <name> <version>`, KTD-5) and a
+  # parenthesised skill breadcrumb (`(formerly auto-adapter)`, KTD-4), so:
+  #   * `supersedes` exempts only the NEXT one or two tokens (a name, then an
+  #     optional version) — not the rest of the line;
+  #   * `formerly` exempts only the PARENTHESISED form.
+  raw="$(printf '%s\n' "$raw" | awk -v term="$term" '
+    {
+      p = $0
+      gsub(/supersedes[:,]?[ ]+`?[A-Za-z0-9_.\/-]+`?([ ]+\(?v?[0-9][A-Za-z0-9_.-]*\)?)?/, "@SUPERSEDES@", p)
+      gsub(/\([Ff]ormerly [^)]*\)/, "@FORMERLY@", p)
+      if (tolower(p) ~ "(^|[^a-z0-9])" tolower(term)) print $0
+    }' || true)"
   [ -z "$raw" ] && return 0
 
   # ── term-specific whitelist ──
   case "$term" in
     unit)
-      # The `unit` term is entangled with unavoidable non-renamed noise:
-      #   * the tests/unit/ directory PATH (keyed to the test suite layout,
-      #     not the renamed concept);
-      #   * the literal prose "unit test" / "unit tests";
-      #   * plan_step / PLAN_STEPS / next_plan_step — the plan-phase sub-state,
-      #     a deliberate "don't rename" carve-out (Key Decisions / CONCEPTS.md).
-      raw="$(printf '%s\n' "$raw" | grep -vE '^tests/unit/' || true)"
-      raw="$(printf '%s\n' "$raw" | grep -viE 'unit tests?' || true)"
-      raw="$(printf '%s\n' "$raw" | grep -vE 'plan_step|PLAN_STEPS|next_plan_step' || true)"
+      # The `unit` term is entangled with unavoidable non-renamed noise. U7 makes
+      # the exemption TOKEN-SCRUBBING, not line-dropping — see the block comment.
+      #
+      # PERMANENT noise (the U7 whitelist):
+      #   * the `tests/unit` directory PATH — keyed to the test-suite layout, not
+      #     the renamed concept. It appears BOTH as the path of a hit
+      #     (`tests/unit/foo.test.sh:12:…`) AND as a cross-reference inside lib/
+      #     and docs/ prose (`see tests/unit/recipes.test.sh`).
+      #   * the prose "unit test" / "unit tests" / "unit-test" / "unit-testable"
+      #     (the hyphenated adjective form lives in lib/iteration.py,
+      #     lib/verification.py, lib/goal-route.py — a bare `unit tests?` misses it).
+      #   * plan_step / PLAN_STEPS / next_plan_step — the plan-phase sub-state, a
+      #     deliberate "don't rename" carve-out (Key Decisions / CONCEPTS.md).
+      #     These carry no `unit` token so they cannot trip the regex; scrubbed
+      #     defensively so a future `plan_unit`-shaped revival can't hide behind them.
+      #   * tests/run.sh — the ONE file where the test-suite TIER name is a code
+      #     identifier (`unit_files`, `[unit|integration|smoke|all]`, `=== UNIT ===`).
+      #     That `unit` is the tests/unit/ tier, not a workflow step; renaming it
+      #     would break `bash tests/run.sh unit` for every caller.
+      #
+      # WHY SCRUBBING, NOT DROPPING (U7 hardening — this was a real hole):
+      # U1 wrote this as `grep -vE '^tests/unit/'`, which DROPS EVERY HIT IN EVERY
+      # FILE UNDER tests/unit/ — all 61 unit-test files. The `unit` term's biggest
+      # code surface is exactly those files' symbols and asserts, so the audit was
+      # structurally blind to the bulk of what U7 had to rename: a stale `add_unit`
+      # in a unit test could never fail it. Likewise `grep -viE 'unit tests?'`
+      # dropped the WHOLE LINE, so any real `unit` symbol sharing a line with the
+      # words "unit test" vanished too.
+      # Now: strip the whitelisted TOKENS from a copy of each line, then keep the
+      # line only if a `unit` identifier SURVIVES the strip. The whitelist exempts
+      # the noise token, never the line and never the file.
+      # One awk pass (see the perf note on the global-content scrub above).
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          gsub(/tests\/unit/, "@TIER@", p)
+
+          # LEFT-BOUNDARY matters. A bare `[Uu]nit[ -][Tt]est` scrub also eats the
+          # TAIL of a real identifier whose next token starts with "test" —
+          # `add-unit test-run`, `add_unit test_id` — and the line sails through
+          # GREEN. That is exactly the retired-verb-plus-a-test-arg shape a doc
+          # example or a new test would reintroduce. So: an `unit test` ATTACHED to
+          # an identifier char is a REAL symbol — normalize it to a bare token so it
+          # still HITS. Only the free-standing prose form is scrubbed.
+          gsub(/[-_A-Za-z0-9][Uu]nit[ -][Tt]est[A-Za-z]*/, " unit ", p)   # real symbol → keep
+          gsub(/[Uu]nit[ -][Tt]est[A-Za-z]*/, "@UT@", p)                  # prose → scrub
+          gsub(/UNIT[ -]TEST[A-Z]*/, "@UT@", p)
+
+          gsub(/plan_step|PLAN_STEPS|next_plan_step/, "@PLANSTEP@", p)
+
+          # tests/run.sh: the test-suite TIER name is a real identifier there
+          # (`unit_files`, `[unit|integration|smoke|all]`, `=== UNIT (`). Scrub those
+          # TOKENS — do NOT drop the whole file, or run.sh becomes the very kind of
+          # file-level blind spot this branch was rewritten to eliminate.
+          if ($0 ~ /^tests\/run\.sh:/) {
+            gsub(/unit_files/,        "@TIER@_files",      p)
+            gsub(/unit\|integration/, "@TIER@|integration", p)
+            gsub(/= "unit"/,          "= \"@TIER@\"",      p)
+            gsub(/=== UNIT /,         "=== @TIER@ ",       p)
+            gsub(/ unit \+/,          " @TIER@ +",         p)
+            gsub(/ unit  /,           " @TIER@  ",         p)
+          }
+
+          # PERMANENT (KTD-4 hard-cut): the retired CLI verbs have NO aliases, and the
+          # regression test that PINS that they now exit 2 has to NAME them to invoke
+          # them. Same path+content anchoring as the `tick` branch below: only those
+          # two tokens, only in the one test that asserts they are gone — any OTHER
+          # stale `unit` in that file still fails the audit. (Matched on $0, the RAW
+          # line: `p` has already had tests/unit scrubbed to @TIER@.)
+          if ($0 ~ /^tests\/unit\/ledger-cli-feedback\.test\.sh:/) {
+            gsub(/add-unit|set-enumerated-units/, "@RETIRED@", p)
+          }
+
+          if (tolower(p) ~ /(^|[^a-z0-9])unit/) print $0
+        }' || true)"
       ;;
     adapter)
       # PERMANENT: the KTD-4 flag-alias branch in lib/auto.py::_parse_args keeps
@@ -232,19 +344,22 @@ audit_term_hits() {
       # path-whitelisted.)
       #
       # Two-term MODULE FAMILIES whose final name lands in a later unit (KTD-3):
-      # lib/unit_emitters.py renames at U7 (with the `unit` family) and
-      # lib/ledger_emitters.py at U9 (with the `ledger` family) — one file move
-      # each, not two. Until then both the module name and its sibling test file
-      # (unit-emitters.test.sh / ledger-emitters.test.sh, whose summary line MUST
-      # equal the on-disk filename for tests/run.sh to tally it) legitimately
-      # carry the `emitters` token, as does every `load_lib_module("…_emitters")`
-      # call site.
+      # each gets ONE file move, in the unit that owns its FAMILY, not two.
+      #   * lib/unit_emitters.py → lib/step_producers.py — LANDED IN U7 (the `unit`
+      #     family). Its sibling test moved with it (unit-emitters.test.sh →
+      #     step-producers.test.sh, summary line updated so tests/run.sh still
+      #     tallies it), and every `load_lib_module("unit_emitters")` call site was
+      #     repointed. The `unit_emitters` token no longer exists in the tree.
+      #   * lib/ledger_emitters.py → lib/run_record_producers.py — STILL PENDING
+      #     (U9, the `ledger` family). Until then the module name, its sibling test
+      #     (ledger-emitters.test.sh), and every `load_lib_module("ledger_emitters")`
+      #     call site legitimately carry the `emitters` token.
       #
       # NB (U6): the `_`-prefixed forms became VISIBLE to this audit only when
       # regex_for_term gained its `_` alternative — a bare `\bemitter` never
-      # matched `unit_emitters` at all. So this exemption is newly load-bearing;
-      # it is scoped to the `[_-]emitters` token so any un-renamed emitter ROLE
-      # prose or symbol still fails. Both branches drop out at U7 / U9.
+      # matched `ledger_emitters` at all. So this exemption is load-bearing; it is
+      # scoped to the `[_-]emitters` token so any un-renamed emitter ROLE prose or
+      # symbol still fails. This branch drops out entirely at U9.
       raw="$(printf '%s\n' "$raw" | grep -vE '[_-]emitters' || true)"
       ;;
   esac
@@ -276,6 +391,71 @@ else
   fail "vocabulary audit found stale identifiers:${report}"
 fi
 
+# ─── Scenario 1b: the `<!--legacy-->` exemption is EARNED, not assumed ───────
+# THE BUG THIS EXISTS TO PREVENT (found in U7 review, after it had already bitten):
+# `GLOBAL_CONTENT_WHITELIST_RE` drops any line tagged `<!--legacy-->` — the
+# read-compat appendix rows of the three schema-bearing contracts (KTD-5 step 3).
+# It has to: a read-compat row's whole PURPOSE is to name the retired key.
+#
+# But an exemption that is never verified is a blind spot, and U7's rename sweep
+# walked straight through it — rewriting the LEGACY (v1) column of 12 rows into the
+# NEW spelling, so `units → steps` became `steps → steps`. Every row still had its
+# `<!--legacy-->` tag, so the audit dropped them all and stayed green while the
+# normative compat table said the v1 on-disk key for the step array *is* `steps`.
+# Exactly backwards — and U9 will read these tables to reason about the shim.
+#
+# So: whatever the audit EXEMPTS here, it must also POLICE. Two properties, both
+# cheap and deterministic:
+#   (a) a legacy row's v1 column must actually NAME a retired term (else it isn't a
+#       legacy row and has no business claiming the exemption);
+#   (b) a legacy row must not be a TAUTOLOGY (v1 column == v2 column) — that is the
+#       precise signature of a rename sweep having eaten the old spelling.
+# `lib/format_compat.py` is the runtime authority for these names; this check keeps
+# the DOCS honest against the same retired vocabulary the shim maps.
+it "every <!--legacy--> read-compat row still names the RETIRED key (not a tautology)"
+legacy_bad=""
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  file="${hit%%:*}"
+  rest="${hit#*:}"
+  lineno="${rest%%:*}"
+  row="${rest#*:}"
+  # table rows only; skip the header (its v1 cell is the words "legacy (v1) key")
+  case "$row" in
+    \|*) ;;
+    *) continue ;;
+  esac
+  case "$row" in *"legacy (v1) key"*) continue ;; esac
+  # `| <v1> | <v2> | …` → strip the leading pipe, take the first two cells.
+  body="${row#|}"
+  c1="${body%%|*}"
+  c2_rest="${body#*|}"
+  c2="${c2_rest%%|*}"
+  # normalize: drop backticks, quotes, "(value)", and surrounding space
+  norm() {
+    printf '%s' "$1" | sed -E 's/`//g; s/"//g; s/\(value\)//g; s/^ +//; s/ +$//'
+  }
+  n1="$(norm "$c1")"
+  n2="$(norm "$c2")"
+  [ -z "$n1" ] && continue
+  # (a) the v1 cell must name one of the 8 retired terms
+  if ! printf '%s' "$n1" \
+       | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger)'; then
+    legacy_bad="${legacy_bad}
+    ${file}:${lineno}: legacy row's v1 cell names NO retired term: '${n1}'"
+  fi
+  # (b) a legacy row that maps a name to ITSELF has lost the old spelling
+  if [ "$n1" = "$n2" ]; then
+    legacy_bad="${legacy_bad}
+    ${file}:${lineno}: legacy row is a TAUTOLOGY ('${n1}' → '${n2}') — the v1 column was overwritten with the v2 name"
+  fi
+done <<< "$(cd "$AUTO_ROOT" && grep -rn -- '<!--legacy-->' docs/contracts --include='*.md' 2>/dev/null || true)"
+if [ -z "$legacy_bad" ]; then
+  pass
+else
+  fail "the <!--legacy--> exemption is being claimed by rows that are not legacy:${legacy_bad}"
+fi
+
 # ─── Scenario 2: deliberate-fail control — force a still-PENDING term `done` ──
 # Probe a term that has NOT yet been renamed (its old identifier still lives all
 # over the tree): auditing it as `done` MUST produce hits that name offending
@@ -287,8 +467,9 @@ fi
 # renamed it no longer produces non-whitelisted hits, so the control would go
 # vacuous itself; each rename unit re-points this to the next still-pending term.
 # U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`;
-# U5 renamed `tick`; U6 renamed `seam`, so it now probes `unit` (pending until U7).
-DF_TERM="unit"
+# U5 renamed `tick`; U6 renamed `seam`; U7 renamed `unit`, so it now probes
+# `recipe` (pending until U8).
+DF_TERM="recipe"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then

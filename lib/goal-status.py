@@ -52,9 +52,9 @@ def _build_reason(predicate: dict, all_terminal: bool) -> str:
         parts.append(f"{majors} major{'s' if majors != 1 else ''}")
     if not all_terminal:
         # The I-2 work-loop gate: counters may be zero while a stalled / pending
-        # unit lurks. Name it so the operator knows the loop is not actually
+        # step lurks. Name it so the operator knows the loop is not actually
         # clean even with no findings.
-        parts.append("units not yet terminal")
+        parts.append("steps not yet terminal")
     if not parts:
         return "loop exit condition not met"
     return "loop exit condition not met: " + " / ".join(parts) + " remain"

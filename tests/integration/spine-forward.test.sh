@@ -48,8 +48,8 @@ export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
 
 # ── Shared driver. Builds a spine run, advances brainstorm→plan→work forward,
 # then optionally injects an upstream cluster and pulses once. Prints a CSV.
-#   inject_cluster=1 → write role-tagged cluster_findings on the work unit.
-# Output CSV: forward_ok | pulse_reason | loop_phase | driver | blocked_on_named | top_keys_unchanged | work_unit_state
+#   inject_cluster=1 → write role-tagged cluster_findings on the work step.
+# Output CSV: forward_ok | pulse_reason | loop_phase | driver | blocked_on_named | top_keys_unchanged | work_step_state
 drive_spine() {
   inject_cluster="${1:-0}"
   "$PY" - "$AUTO_ROOT" "$inject_cluster" <<'PYEOF'
@@ -91,7 +91,7 @@ forward_ok = (entry.get("loop_phase") == "brainstorm"
 # Step 2: forward advance brainstorm → plan through the REAL per-pulse path
 # (round-1 P1 fix: this leg used to hand-call advance_to_phase, which masked the
 # missing brainstorm advance trigger — the feature livelocked in a real run
-# while the test stayed green). Prime the brainstorm unit verdict-returned with
+# while the test stayed green). Prime the brainstorm step verdict-returned with
 # its requirements-doc output, then drive dispatch_pulse exactly as the plan→work
 # leg below does. dispatch_pulse's brainstorm branch fires the U8
 # brainstorm_output_to_plan_step producer on advance to plan (producer-driven, not
@@ -107,14 +107,14 @@ with open(path, "w") as fh:
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
-plan_units = [u["id"] for u in led["steps"] if u["phase"] == "plan"]
-forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_units) == 1
+plan_steps = [u["id"] for u in led["steps"] if u["phase"] == "plan"]
+forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_steps) == 1
 
-# Step 3: forward advance plan → work. Prime plan-done (enumerated units +
+# Step 3: forward advance plan → work. Prime plan-done (enumerated steps +
 # gaps_open=0 + plan_step=review_plan) and auto-flip; the plan→work producer
-# materializes the work unit.
-plan_uid = plan_units[0]
-ledger.set_enumerated_units(
+# materializes the work step.
+plan_uid = plan_steps[0]
+ledger.set_enumerated_steps(
     repo, run_id, plan_uid,
     [{"id": "w-alpha", "invokes": {"backend_op": "do_step"}}])
 ledger.set_gaps_open(repo, run_id, 0)
@@ -122,10 +122,10 @@ ledger.set_loop(repo, run_id, plan_step="review_plan")
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
-work_units = [u["id"] for u in led["steps"] if u["phase"] == "work"]
-forward_ok = forward_ok and led.get("loop_phase") == "work" and "w-alpha" in work_units
+work_steps = [u["id"] for u in led["steps"] if u["phase"] == "work"]
+forward_ok = forward_ok and led.get("loop_phase") == "work" and "w-alpha" in work_steps
 
-# Step 4: bring the work unit to verdict-returned with a GATING finding (so the
+# Step 4: bring the work step to verdict-returned with a GATING finding (so the
 # work-loop has a fix to apply absent any cluster — the negative-control path).
 w_uid = "w-alpha"
 ledger.transition(repo, run_id, w_uid, "dispatched")
@@ -170,7 +170,7 @@ PYEOF
 }
 
 # ── First-brainstorm-pulse dispatch driver (P0 fix-round-3). A REAL first pulse:
-# brainstorm unit PENDING, NO requirements_doc — the state advance_brainstorm_loop
+# brainstorm step PENDING, NO requirements_doc — the state advance_brainstorm_loop
 # re-arms on. Asserts the rearm intent's operator_guidance surfaces the DISPATCH
 # half (run /ce-brainstorm + record the doc + self-write verdict-returned), which
 # the pre-seeded forward-advance leg above CANNOT cover (it skips straight to the
@@ -196,7 +196,7 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# x\n")
 
-# Spine run at brainstorm entry; brainstorm unit is PENDING (init state), NO
+# Spine run at brainstorm entry; brainstorm step is PENDING (init state), NO
 # requirements_doc — do NOT pre-seed it (that is exactly the green-by-construction
 # masking this scenario exists to remove).
 with contextlib.redirect_stdout(io.StringIO()):
@@ -223,7 +223,7 @@ PYEOF
 res0="$(drive_first_brainstorm_pulse)"
 IFS='|' read -r action0 has_cmd has_doc adv_reason <<< "$res0"
 
-it "first brainstorm pulse re-arms (pending unit, no requirements_doc yet)"
+it "first brainstorm pulse re-arms (pending step, no requirements_doc yet)"
 assert_eq "rearm" "$action0"
 
 it "first brainstorm pulse advance is brainstorm-pending (advance half not yet ready)"

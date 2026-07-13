@@ -7,7 +7,7 @@ the authoring skill (U9, showing a draft back), and auto-status (the run's
 topology). One renderer = the three surfaces can't drift (the same "two
 validators" anti-pattern KTD-2 guards against, applied to rendering).
 
-It derives the card from recipe STRUCTURE (phase_order spine, units grouped by
+It derives the card from recipe STRUCTURE (phase_order spine, steps grouped by
 phase, depends_on edges, phase_transitions emit-boundaries) — so a user-authored
 recipe renders just like a built-in. No hardcoded per-recipe art.
 
@@ -20,15 +20,15 @@ from __future__ import annotations
 _DEFAULT_WIDTH = 60
 
 
-def _phase_units(recipe: dict, phase: str) -> list:
-    """Unit ids declared for `phase`, in declaration order (stable)."""
+def _phase_steps(recipe: dict, phase: str) -> list:
+    """Step ids declared for `phase`, in declaration order (stable)."""
     return [u["id"] for u in recipe.get("steps", []) if u.get("phase") == phase]
 
 
 def _producer_for_arrival(recipe: dict, to_phase: str):
     """The producer that fires when the run ARRIVES at `to_phase`.
 
-    Recipes declare producers by their `to` phase (the phase whose units the
+    Recipes declare producers by their `to` phase (the phase whose steps the
     producer produces) — e.g. A1's `{from: plan, to: work}` fires when the run
     reaches the work phase, even though phase_order routes plan → handoff → work.
     Keying on `to` (not the exact adjacent pair) is what makes the handoff a
@@ -45,8 +45,8 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
     """Return a multi-line ASCII card for `recipe`. Deterministic.
 
     Layout: name + description header, then each phase in `phase_order` as a
-    boxed row listing its declared units (or "(emitted at runtime)" when a phase
-    has no declared units but is an emit target), with the producer named on the
+    boxed row listing its declared steps (or "(emitted at runtime)" when a phase
+    has no declared steps but is an emit target), with the producer named on the
     transition arrow between phases. The terminal phase is marked.
     """
     width = max(24, int(width_hint or _DEFAULT_WIDTH))
@@ -71,12 +71,12 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
     lines.append("")
 
     for i, phase in enumerate(phase_order):
-        units = _phase_units(recipe, phase)
+        steps = _phase_steps(recipe, phase)
         is_terminal = phase == terminal
         label = phase.upper() + ("  (terminal)" if is_terminal else "")
         lines.append(f"  ┌─ {label}")
-        if units:
-            for uid in units:
+        if steps:
+            for uid in steps:
                 deps = next(
                     (u.get("depends_on", []) for u in recipe.get("steps", []) if u["id"] == uid),
                     [],
@@ -84,7 +84,7 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
                 dep_note = f"  ← {', '.join(deps)}" if deps else ""
                 lines.append(f"  │   • {uid}{dep_note}")
         else:
-            lines.append("  │   • (units emitted at runtime)")
+            lines.append("  │   • (steps emitted at runtime)")
         lines.append("  └─")
         # Inter-phase arrow + the producer that fires arriving at the NEXT phase.
         if i + 1 < len(phase_order):

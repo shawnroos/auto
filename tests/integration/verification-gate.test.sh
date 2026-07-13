@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U8 integration test: typed-verification gate end-to-end.
 #
-# Ties together the three units: a recipe with a verification gate VALIDATES
+# Ties together the three steps: a recipe with a verification gate VALIDATES
 # (lib/recipes.py), then lib/iteration.py::resolve_gate_verification runs its
 # programmatic criteria (lib/verification.py) and folds in an injected advisor
 # verdict to produce the advance/iterate SIGNAL — with the deterministic exit
@@ -38,7 +38,7 @@ recipes = load_lib_module("recipes")
 iteration = load_lib_module("iteration")
 op = sys.argv[2]
 
-# A recipe whose work-phase gate unit carries a typed verification block:
+# A recipe whose work-phase gate step carries a typed verification block:
 # one programmatic criterion + one advisor_judge criterion.
 def recipe(prog_argv):
     return {
@@ -60,7 +60,7 @@ def recipe(prog_argv):
     }
 
 def led_from(recipe_dict):
-    # minimal ledger mirror of the gate unit (engine reads steps[])
+    # minimal ledger mirror of the gate step (engine reads steps[])
     gate = next(u for u in recipe_dict["steps"] if u["id"] == "gate")
     return {"steps": [{"id": "gate", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": {}, "verification": gate["verification"]}]}
@@ -88,7 +88,7 @@ elif op == "advisor-pending":
     print(f'{r["signal"]}|{",".join(r["pending_judges"])}')
 
 elif op == "predicate-untouched":
-    # A verification block on a unit must not break the predicate recompute path
+    # A verification block on a step must not break the predicate recompute path
     # (compute_pending_state is called on every ledger write). No iteration block
     # here → iteration_pending must be False regardless of the verification data.
     led = led_from(recipe(["true"]))

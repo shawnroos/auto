@@ -10,22 +10,22 @@
 # transition_and_emit in isolation passes; a unit test on producers.resolve()
 # passes; but neither proves that the engine ACTUALLY CALLS THEM on a real
 # plan→work transition. This test does: it drives a1 from plan-done to a met
-# work-loop state and asserts the producer populated the work-phase units.
+# work-loop state and asserts the producer populated the work-phase steps.
 #
-# STRUCTURE: prime the ledger to look like "plan unit is done, enumerated_units
+# STRUCTURE: prime the ledger to look like "plan step is done, enumerated_steps
 # stashed, gaps_open=0" (the post-backend-handoff state), call dispatch_pulse once
 # in auto mode, then read the ledger:
 #   - loop_phase must have advanced past "plan" (to "work" via auto-flip)
-#   - new units must appear with phase="work" (the producer ran)
-#   - the emitted unit ids must match the enumerated_units we stashed (the
+#   - new steps must appear with phase="work" (the producer ran)
+#   - the emitted step ids must match the enumerated_steps we stashed (the
 #     producer actually shaped them; this isn't just an artifact of init)
 #
 # DELIBERATE-FAIL CONTROL (memory feedback_new_tests_need_deliberate_fail_smoke_check):
 # at the END of this file, we re-run the same scenario AFTER REPLACING
 # transition_and_emit with a no-op (via monkey-patch on a fresh load). The test
-# MUST observe zero new work units in that branch — proving this test FAILS
+# MUST observe zero new work steps in that branch — proving this test FAILS
 # when the wire is broken. Without that proof the green-path could be passing
-# vacuously (e.g. if units were always emitted at init).
+# vacuously (e.g. if steps were always emitted at init).
 
 set -uo pipefail
 
@@ -47,7 +47,7 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Drive a1 to plan-done, then call dispatch_pulse once and read back. Returns CSV:
-#   loop_phase | work_unit_ids (comma-joined, sorted)
+#   loop_phase | work_step_ids (comma-joined, sorted)
 # producer_off=1 monkey-patches transition_and_emit to a no-op (deliberate-fail
 # control); legacy_no_recipe=1 strips the recipe field to exercise the v0.1.x
 # fallback path.
@@ -77,7 +77,7 @@ os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
 # Step 1: /auto plan.md (default recipe a1). This creates the ledger with one
-# plan unit `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_steps}].
+# plan step `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan])
 run_id = None
@@ -86,25 +86,25 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         run_id = os.path.basename(f).rsplit(".json", 1)[0]
         break
 
-# Step 2: prime to plan-done. Stash enumerated_units on the plan unit, set
+# Step 2: prime to plan-done. Stash enumerated_steps on the plan step, set
 # gaps_open=0, plan_step=review_plan (the cached predicate sees plan-met).
 enumerated = [
     {"id": "u-alpha", "invokes": {"backend_op": "do_step"}},
     {"id": "u-beta",  "invokes": {"backend_op": "do_step"}},
 ]
-# v0.6.2 producer handshake: with no_stash we SKIP set_enumerated_units to model
+# v0.6.2 producer handshake: with no_stash we SKIP set_enumerated_steps to model
 # the production reality (the model hasn't run the enumerate prepare op yet). The
 # handshake must then KEEP the run in the plan phase (enumerate-pending) instead
-# of flipping to a work phase with zero units.
+# of flipping to a work phase with zero steps.
 if not no_stash:
-    ledger.set_enumerated_units(repo, run_id, "plan", enumerated)
+    ledger.set_enumerated_steps(repo, run_id, "plan", enumerated)
 ledger.set_gaps_open(repo, run_id, 0)
 # Force plan_step=review_plan so plan-met fires (the predicate requires it).
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 2b (legacy branch): strip the recipe field on disk to simulate a v0.1.x
 # ledger resumed under v0.2.0. The advance_to_phase helper MUST take the
-# raw-set_loop fallback (no producer, no new units), so the test asserts the
+# raw-set_loop fallback (no producer, no new steps), so the test asserts the
 # legacy contract is honored.
 if legacy_no_recipe:
     path = os.path.join(repo, ".claude", "auto", f"{run_id}.json")
@@ -117,7 +117,7 @@ if legacy_no_recipe:
 
 # Step 3 (deliberate-fail control): monkey-patch transition_and_emit to a no-op
 # BEFORE the pulse fires. If the engine routes through this primitive (it does
-# in the green branch), the no-op will produce zero new units even though the
+# in the green branch), the no-op will produce zero new steps even though the
 # recipe declares one.
 if producer_off:
     def _noop(*a, **kw): pass
@@ -129,29 +129,29 @@ with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-work_units = sorted(u["id"] for u in led["steps"] if u.get("phase") == "work")
-print("%s|%s" % (led["loop_phase"], ",".join(work_units)))
+work_steps = sorted(u["id"] for u in led["steps"] if u.get("phase") == "work")
+print("%s|%s" % (led["loop_phase"], ",".join(work_steps)))
 PYEOF
 }
 
-it "fix-pass A.2: a1 plan-done → auto-flip fires the producer (work units appear)"
+it "fix-pass A.2: a1 plan-done → auto-flip fires the producer (work steps appear)"
 res="$(drive_plan_to_work 0 0)"
 # After auto-flip the pulse reads predicate.met and sets loop_phase="done" (work
-# loop is vacuously met if no work units — but the producer ran FIRST and added
+# loop is vacuously met if no work steps — but the producer ran FIRST and added
 # u-alpha + u-beta, both pending, so all_steps_terminal=false and met=false →
 # stays at work). loop_phase MUST be "work" (or "done" if predicate flipped),
-# units MUST contain u-alpha,u-beta.
+# steps MUST contain u-alpha,u-beta.
 case "$res" in
   "work|u-alpha,u-beta") pass ;;
   *) fail "expected 'work|u-alpha,u-beta', got '$res'" ;;
 esac
 
-it "fix-pass A.2 DELIBERATE-FAIL: with transition_and_emit no-op'd, no work units appear"
+it "fix-pass A.2 DELIBERATE-FAIL: with transition_and_emit no-op'd, no work steps appear"
 res_off="$(drive_plan_to_work 1 0)"
 # With the primitive no-op'd, the green-path assertion above MUST NOT hold —
 # the proof this test isn't passing vacuously. The legacy fallback also doesn't
 # emit, but we're on the recipe path, so the helper would have RAISED if it
-# couldn't find the producer — only the no-op produces zero new units silently.
+# couldn't find the producer — only the no-op produces zero new steps silently.
 case "$res_off" in
   "work|u-alpha,u-beta") fail "deliberate-fail FAILED: producer ran despite the no-op patch" ;;
   *) pass ;;
@@ -159,19 +159,19 @@ esac
 
 it "fix-pass A.2 LEGACY: a v0.1.x ledger (no recipe) falls back to set_loop, no emission"
 res_legacy="$(drive_plan_to_work 0 1)"
-# Legacy ledger: no recipe → advance_to_phase uses raw set_loop, no work units
-# emitted. The plan-loop's `plan` unit stays but no new units appear at work.
+# Legacy ledger: no recipe → advance_to_phase uses raw set_loop, no work steps
+# emitted. The plan-loop's `plan` step stays but no new steps appear at work.
 case "$res_legacy" in
   "work|") pass ;;
-  *) fail "expected 'work|' (no work units; legacy fallback), got '$res_legacy'" ;;
+  *) fail "expected 'work|' (no work steps; legacy fallback), got '$res_legacy'" ;;
 esac
 
-# v0.6.2 PRODUCER HANDSHAKE: plan-done with NO enumerated_units yet (the model
+# v0.6.2 PRODUCER HANDSHAKE: plan-done with NO enumerated_steps yet (the model
 # hasn't run the enumerate prepare op) must NOT flip to a work phase with zero
-# units (vacuous-exit → wedged run). The handshake keeps it in the plan phase
-# until units are persisted. Without this, a1's plan→work producer is unrunnable
+# steps (vacuous-exit → wedged run). The handshake keeps it in the plan phase
+# until steps are persisted. Without this, a1's plan→work producer is unrunnable
 # end-to-end (the bug the missing /auto-pulse had masked).
-it "producer handshake: plan-done with no enumerated units stays in plan (no empty work flip)"
+it "producer handshake: plan-done with no enumerated steps stays in plan (no empty work flip)"
 res_nostash="$(drive_plan_to_work 0 0 1)"
 case "$res_nostash" in
   "plan|") pass ;;

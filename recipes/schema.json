@@ -27,7 +27,7 @@
     "phase_order": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "The run's phase sequence. Validated STRUCTURALLY (v0.6.0/U6): every element a non-empty string; terminal_phase, every unit/emit_template phase, and every phase_transition from/to MUST be a member. Default [\"plan\",\"handoff\",\"work\"]."
+      "description": "The run's phase sequence. Validated STRUCTURALLY (v0.6.0/U6): every element a non-empty string; terminal_phase, every step/emit_template phase, and every phase_transition from/to MUST be a member. Default [\"plan\",\"handoff\",\"work\"]."
     },
     "terminal_phase": {
       "type": "string",
@@ -56,8 +56,8 @@
     },
     "steps": {
       "type": "array",
-      "description": "The declared units. MUST be non-empty for a work-only ([\"work\"]) recipe.",
-      "items": { "$ref": "#/$defs/unit" }
+      "description": "The declared steps. MUST be non-empty for a work-only ([\"work\"]) recipe.",
+      "items": { "$ref": "#/$defs/step" }
     },
     "iteration": {
       "type": "object",
@@ -80,7 +80,7 @@
     },
     "emit_templates": {
       "type": "object",
-      "description": "(v0.3.0, additive) Map of <template_name> -> partial unit shape materialized by iterate_template — see recipe-format.md §7.",
+      "description": "(v0.3.0, additive) Map of <template_name> -> partial step shape materialized by iterate_template — see recipe-format.md §7.",
       "additionalProperties": {
         "type": "object",
         "required": ["phase", "invokes", "id_prefix"],
@@ -95,7 +95,7 @@
     "expected_emit_outputs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "(v0.3.0, additive — F4) Unit ids materialized by a phase-boundary producer, declared so depends_on integrity accepts them — see recipe-format.md §8."
+      "description": "(v0.3.0, additive — F4) Step ids materialized by a phase-boundary producer, declared so depends_on integrity accepts them — see recipe-format.md §8."
     },
     "plan_presatisfied": {
       "type": "boolean",
@@ -106,7 +106,7 @@
     }
   },
   "$defs": {
-    "unit": {
+    "step": {
       "type": "object",
       "required": ["id", "phase"],
       "additionalProperties": false,
@@ -116,16 +116,16 @@
         "depends_on": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Unit ids this unit waits for. Each member must be in steps[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
+          "description": "Step ids this step waits for. Each member must be in steps[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
         },
         "invokes": {
           "type": "object",
-          "description": "What the unit invokes — backend_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
+          "description": "What the step invokes — backend_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
         },
         "verification": {
           "type": "array",
           "maxItems": 16,
-          "description": "(v0.7.0, U2 — KTD-1) Optional array of typed, checkable done-conditions layered onto the existing iterate/advance/exit gate decision. Capped at 16 to bound gate-evaluation cost. Criterion ids must be unique within the unit. Shape per skills/auto-design/references/verification-taxonomy.md.",
+          "description": "(v0.7.0, U2 — KTD-1) Optional array of typed, checkable done-conditions layered onto the existing iterate/advance/exit gate decision. Capped at 16 to bound gate-evaluation cost. Criterion ids must be unique within the step. Shape per skills/auto-design/references/verification-taxonomy.md.",
           "items": { "$ref": "#/$defs/verification_criterion" }
         }
       }

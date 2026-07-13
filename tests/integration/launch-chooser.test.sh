@@ -29,11 +29,11 @@
 #        notice names the a1 exit predicate, not a literal programmatic check.
 #   AE2  reviewed-plan → skip; router agrees on w@work; w no-compile.
 #   AE3  design-task → two_step; a2 + advisor_judge compiles+validates+resolves
-#        at workspace, gate_unit `judge` carries the verification; contrast block
+#        at workspace, gate_step `judge` carries the verification; contrast block
 #        marks a2.
 #   AE4  no-built-in-fits → two_step (custom rule 1); custom spike-before-build
 #        validates and renders; contrast block marks the custom.
-#   AE5  shape override a2→a4 → a4-<slug> compiles, gate_unit `compare` (distinct
+#   AE5  shape override a2→a4 → a4-<slug> compiles, gate_step `compare` (distinct
 #        from a2's `judge`), resolves at workspace.
 #   AE6  self-driven/headless ownership signal → silent-apply by construction,
 #        no question path (asserts the entry guard prose, the only headless handoff).
@@ -171,13 +171,13 @@ def atomic_write(path, recipe):
 
 def builtin_variant(builtin, slug, *, description):
     """A run-scoped variant of a gated built-in (a2/a4): distinct stem, the
-    operator's typed gate attached to the built-in's OWN declared gate_unit."""
+    operator's typed gate attached to the built-in's OWN declared gate_step."""
     r = load_builtin(builtin)
     r["name"] = builtin + "-" + slug
     r["description"] = description
-    gate_unit = r["iteration"]["gate_step"]
+    gate_step = r["iteration"]["gate_step"]
     for u in r["steps"]:
-        if u["id"] == gate_unit:
+        if u["id"] == gate_step:
             u["verification"] = [
                 {"id": "design-sound", "type": "advisor_judge",
                  "rubric_ref": "verification-rubric"}
@@ -269,7 +269,7 @@ elif op == "ae4-custom":
           % (valid, out.count(MARK), after, has_custom_header))
 
 elif op == "ae5-override-a4":
-    # Shape override a2→a4: the compiled variant is a4-<slug>, gate_unit `compare`
+    # Shape override a2→a4: the compiled variant is a4-<slug>, gate_step `compare`
     # — distinct from a2's `judge` (the dispatch shape differs by construction).
     a4 = compile_variant("a4", sys.argv[4])
     a2_gate = load_builtin("a2")["iteration"]["gate_step"]
@@ -310,7 +310,7 @@ echo "launch-chooser (U7 AE1–AE6 acceptance harness)"
 # ════════════════════════════════════════════════════════════════════════════
 # AE1 — typo fix: a1 with a tests-pass-ish gate is obvious → skip, a1 notice.
 #   Covers R8, R9, R10. router agrees on a1 (the skip cross-check); a1 takes the
-#   no-compile branch (no iteration gate_unit), so skip dispatches the built-in.
+#   no-compile branch (no iteration gate_step), so skip dispatches the built-in.
 # ════════════════════════════════════════════════════════════════════════════
 it "AE1: typo-fix (0.95,0.95,builtin,[],True) → skip"
 AE1_TIER="$(tier 0.95 0.95 builtin "" true)"
@@ -320,7 +320,7 @@ it "AE1: the router (recommender) picks a1 for clear-intent-no-plan → router_a
 A1_ROUTER="$(router clear-intent-no-plan)"
 assert_eq "a1 plan recipe" "$A1_ROUTER"
 
-it "AE1: a1 takes the no-compile branch — no declared iteration gate_unit (skip ⇒ dispatch built-in)"
+it "AE1: a1 takes the no-compile branch — no declared iteration gate_step (skip ⇒ dispatch built-in)"
 NC="$(drv ae1ae2-nocompile)"
 assert_eq "none" "$(field a1_gate "$NC")"
 
@@ -340,12 +340,12 @@ assert_eq "skip" "$(tier 0.9 0.88 builtin "" true)"
 it "AE2: the router picks w@work for reviewed-plan → router_agrees is real"
 assert_eq "w work recipe" "$(router reviewed-plan)"
 
-it "AE2: w takes the no-compile branch — no declared iteration gate_unit"
+it "AE2: w takes the no-compile branch — no declared iteration gate_step"
 assert_eq "none" "$(field w_gate "$NC")"
 
 # ════════════════════════════════════════════════════════════════════════════
 # AE3 — high-uncertainty design task → two_step; a2 with an advisor_judge gate
-#   compiles + validates + resolves at workspace, gate_unit `judge` carries the
+#   compiles + validates + resolves at workspace, gate_step `judge` carries the
 #   verification. Covers R5, R6, R7, R8.
 # ════════════════════════════════════════════════════════════════════════════
 it "AE3: design-task (0.7,0.6,builtin,[advisor_judge],True) → two_step (judge gate forbids skip)"
@@ -360,9 +360,9 @@ it "AE3: resolve('a2-design') returns the variant at tier workspace (wins over t
 assert_eq "workspace" "$(field resolve_variant "$AE3")"
 it "AE3: the canonical built-in a2 stays built-in (the variant does not shadow it)"
 assert_eq "built-in" "$(field resolve_builtin "$AE3")"
-it "AE3: the verification rides a2's declared gate_unit 'judge'"
+it "AE3: the verification rides a2's declared gate_step 'judge'"
 assert_eq "judge" "$(field gate_step "$AE3")"
-it "AE3: the gate unit carries the operator-edited advisor_judge verification array"
+it "AE3: the gate step carries the operator-edited advisor_judge verification array"
 assert_eq "1" "$(field gate_has_verif "$AE3")"
 
 it "AE3: the contrast block marks exactly the recommended a2 card (one renderer)"
@@ -385,17 +385,17 @@ assert_eq "valid=valid|markers=1|after=recipe: spike-spike|customhdr=True" "$AE4
 
 # ════════════════════════════════════════════════════════════════════════════
 # AE5 — the operator overrides the recommended a2 and picks a4 at step 1 → the
-#   compiled run-scoped recipe is a4-<slug>, gate_unit `compare` (NOT a2's
+#   compiled run-scoped recipe is a4-<slug>, gate_step `compare` (NOT a2's
 #   `judge`): the dispatch shape is re-derived for a4. Covers R7.
 #   (The R7 re-derivation logic itself is U3/U4 prose; U7 proves the a4 dispatch
-#   shape is distinct from a2's by the gate_unit the compiled recipe carries.)
+#   shape is distinct from a2's by the gate_step the compiled recipe carries.)
 # ════════════════════════════════════════════════════════════════════════════
 AE5="$(drv ae5-override-a4 override)"
 it "AE5: the a4 override variant resolves at tier workspace"
 assert_eq "workspace" "$(field resolve_variant "$AE5")"
-it "AE5: the a4 variant's gate rides a4's declared gate_unit 'compare'"
+it "AE5: the a4 variant's gate rides a4's declared gate_step 'compare'"
 assert_eq "compare" "$(field gate_step "$AE5")"
-it "AE5: a4's gate_unit differs from a2's 'judge' (gates re-derived for a4, not a2)"
+it "AE5: a4's gate_step differs from a2's 'judge' (gates re-derived for a4, not a2)"
 assert_eq "1" "$(field differs "$AE5")"
 it "AE5: the a4 variant carries the typed verification array"
 assert_eq "1" "$(field gate_has_verif "$AE5")"

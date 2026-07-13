@@ -21,10 +21,10 @@ The "many same-role local findings" negative case falls out for free: one role
 contributes distinct-role-count == 1 to any phase, below the threshold.
 
 WHERE THE METADATA LIVES (the `decision` / `winner_step_id` precedent —
-lib/iteration.py, lib/ledger_mutators.set_winner_unit_id): `record_verdict`
+lib/iteration.py, lib/ledger_mutators.set_winner_step_id): `record_verdict`
 NORMALIZES findings to ``{severity, note}`` only (lib/ledger_mutators.py:150),
 so any reviewer-role / target-phase tag on a finding is STRIPPED on the
-canonical write path. Role-tagged findings therefore survive on the unit's
+canonical write path. Role-tagged findings therefore survive on the step's
 ``dispatch_context`` (preserved by ``transition`` / the verdict-write path with
 no normalize step), exactly as the iteration ``decision`` does. This classifier
 reads a list of finding-records of the shape::

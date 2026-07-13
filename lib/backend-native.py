@@ -4,7 +4,7 @@
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-native.py`, prefers a module-level ``Backend`` factory, and
 calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_step(unit) / review(unit)``.
+deepen(ledger) / review_plan(ledger) / do_step(step) / review(step)``.
 
 The pure logic (severity validation + the plan-step state machine) is here so
 pulse.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
@@ -117,25 +117,25 @@ class Backend:
     def next_plan_step(self, ledger):
         return _next_plan_step(ledger)
 
-    def enumerate_plan_units(self, ledger):
-        """PREPARE the plan→work-units enumeration (v0.2.0 contract re-lock, KTD-4).
+    def enumerate_plan_steps(self, ledger):
+        """PREPARE the plan→work-steps enumeration (v0.2.0 contract re-lock, KTD-4).
 
         Native counterpart of the CE op. Prepare-only: the model reads the
-        reviewed prose plan and returns a list of unit dicts; the engine persists
-        them to the plan unit's dispatch_context.enumerated_steps (U6) and the
-        producers (U5b) shape them into ledger units. The producer the producers
+        reviewed prose plan and returns a list of step dicts; the engine persists
+        them to the plan step's dispatch_context.enumerated_steps (U6) and the
+        producers (U5b) shape them into ledger steps. The producer the producers
         read — resolves the F4 gap.
 
-        U14 (KTD-1): each enumerated item carries a depends_on list (sibling unit
+        U14 (KTD-1): each enumerated item carries a depends_on list (sibling step
         ids that must complete first; empty [] when independent) so the readiness
         engine can order the fan-out. Prepare-only, so this invocation string is
         where the model is instructed to originate the edges."""
         return {
             "backend": BACKEND_NAME,
-            "op": "enumerate_plan_units",
+            "op": "enumerate_plan_steps",
             "invocation": (
-                "enumerate-plan-work-units; each item is {id, invokes, "
-                "depends_on}, where depends_on lists the sibling unit ids that "
+                "enumerate-plan-work-steps; each item is {id, invokes, "
+                "depends_on}, where depends_on lists the sibling step ids that "
                 "must complete first (empty [] if independent)"
             ),
         }
@@ -159,28 +159,28 @@ class Backend:
         }
 
     # ── work-loop ops ──────────────────────────────────────────────────────
-    def do_step(self, unit):
+    def do_step(self, step):
         """PREPARE a native edit / Task dispatch. Returns an opaque
         dispatch_handle the dispatcher (U10) correlates the in-flight agent
         with; U10 defines the correlation contract over this shape."""
-        unit_id = unit.get("id") if isinstance(unit, dict) else unit
+        step_id = step.get("id") if isinstance(step, dict) else step
         return {
             "backend": BACKEND_NAME,
             "op": "do_step",
-            "unit_id": unit_id,
-            "invocation": "native-task %s" % unit_id,
+            "step_id": step_id,
+            "invocation": "native-task %s" % step_id,
         }
 
-    def review(self, unit):
+    def review(self, step):
         """PARSE half of `review`: the native self-review tags findings against
         the rubric (a model action); this validates the result is on the shared
         scale and passes it through. The engine records it via record_verdict.
 
-        Accepts the tagged findings on ``unit["findings"]`` or as a bare list."""
-        if isinstance(unit, dict):
-            findings = unit.get("findings", [])
+        Accepts the tagged findings on ``step["findings"]`` or as a bare list."""
+        if isinstance(step, dict):
+            findings = step.get("findings", [])
         else:
-            findings = unit
+            findings = step
         return validate_findings(findings)
 
 

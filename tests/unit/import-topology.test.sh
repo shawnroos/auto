@@ -24,8 +24,14 @@
 #   ledger_emitters → ledger_core, ledger_mutators
 #   ledger (facade) → ledger_core, ledger_mutators, ledger_emitters
 #   pulse_guidance → ledger (facade), phase-grammar         [leaf]
-#   pulse_advance  → ledger, iteration, producers, pulse_guidance
-#   pulse          → ledger, iteration, producers, pulse_advance, pulse_guidance
+#   pulse_advance  → ledger, iteration, step_producers, pulse_guidance
+#   pulse          → ledger, iteration, step_producers, pulse_advance, pulse_guidance
+#   step_producers → (nothing; leaf — the phase-boundary producers are pure)
+#
+# The producer module took its final name at U7 (KTD-3). NB: pulse_advance reaches it
+# via a PLAIN `import step_producers as producers`, NOT load_lib_module(), so
+# `loads_sibling` cannot see that edge — the existence assert near the bottom is what
+# makes a botched rename go red here instead of at runtime.
 #   _bootstrap     → format_compat           (load_ledger_safe — read chokepoint 2)
 #   recipe_validate → format_compat          (the validate_and_lint WRITE gate)
 #   recipes        → recipe_validate, format_compat   (resolve() read shim)
@@ -133,7 +139,7 @@ for f in "$LIB"/*.py; do
   # The split files themselves are allowed to import their DAG siblings.
   # ledger_steering (v0.13.0) is a facade LAYER, not a consumer: it holds the
   # agent-facing steering verbs and imports ledger_mutators for the two graph
-  # helpers add_unit/reshape_deps reuse (core ← mutators ← steering ← facade).
+  # helpers add_step/reshape_deps reuse (core ← mutators ← steering ← facade).
   case "$base" in
     ledger.py|ledger_core.py|ledger_mutators.py|ledger_emitters.py|ledger_steering.py) continue ;;
   esac
@@ -216,6 +222,36 @@ if [ -f "$LIB/format_compat.py" ]; then
   pass
 else
   fail "lib/format_compat.py is missing — the U6 read/write shim did not land"
+fi
+
+# ─── file-existence assert for the U7-renamed producer module (F13) ──────────
+# The producer module took its final name at U7 (KTD-3: the two-term file — it carried
+# BOTH renamed terms, so it moves exactly once, alongside the rest of its family, and
+# never twice). Same anti-vacuity reasoning as the
+# backend/pulse asserts above — but with a sharper edge here, because the pulse DAG
+# reaches this module through a PLAIN `import step_producers as producers` in
+# pulse_advance.py, NOT a load_lib_module() string, so `loads_sibling` cannot see the
+# edge at all. A botched rename would surface as an ImportError deep in a live run,
+# not as a red lint. Pin the file's presence.
+#
+# (A resurrected import of the PRE-RENAME module name needs no assert here: the
+# vocabulary-audit greps the whole tree for the retired term and fails on it — which
+# is why this lint deliberately does not spell that name.)
+it "lib/step_producers.py exists (the U7-renamed producer module)"
+if [ -f "$LIB/step_producers.py" ]; then
+  pass
+else
+  fail "lib/step_producers.py is missing — the U7 producer-module rename did not land"
+fi
+
+# The producer module is a LEAF: pulse/pulse_advance import it, it imports no
+# sibling back. A back-edge to pulse* or the ledger facade would close a cycle.
+it "step_producers.py does NOT back-import pulse/pulse_advance (leaf)"
+if grep -qE '^\s*import (pulse|pulse_advance)\b|load_lib_module\("(pulse|pulse_advance)"\)' \
+     "$LIB/step_producers.py"; then
+  fail "step_producers.py must not import pulse/pulse_advance — the producers are a leaf; that closes a cycle"
+else
+  pass
 fi
 
 # The shim must stay a TRUE DAG root: pure stdlib, importing no sibling. If it

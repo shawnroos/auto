@@ -53,7 +53,7 @@
 # is a two-part shape, honored at the handoff, not faked:
 #   1. PREPARE — emit the invocation envelope / rubric the model should act on.
 #   2. PARSE   — validate the model's structured output onto the contract shape.
-# The PARSE half (severity validation, gap-set passthrough) is pure and unit-
+# The PARSE half (severity validation, gap-set passthrough) is pure and step-
 # tested. `deepen` is a genuine no-op (native has no deepen step — see
 # next_plan_step), and `next_plan_step` is a fully pure state machine.
 #

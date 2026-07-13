@@ -10,7 +10,7 @@ U17 (v0.9.0) split the former ~981-LOC recipes.py BY CONCERN: the ~700-LOC
 validation family moved to lib/recipe_validate.py (the DAG root — pure stdlib,
 imports no sibling), and THIS file is the thin registry facade. It re-exports the
 validation surface (``validate`` / ``validate_and_lint`` / ``RecipeError`` /
-``V1_PRODUCER_NAMES`` / the ``_validate_*`` helpers ``resolve``/``unit_for`` need)
+``V1_PRODUCER_NAMES`` / the ``_validate_*`` helpers ``resolve``/``step_for`` need)
 so existing callers that do ``recipes.validate(...)``, ``except recipes.RecipeError``,
 ``recipes.V1_PRODUCER_NAMES`` etc. keep resolving unchanged — exactly the pattern
 the ledger facade uses for ledger_core/mutators/producers. ``RecipeError`` lives in
@@ -19,7 +19,7 @@ modules with no import cycle (facade → recipe_validate, one direction).
 
 This module holds:
   U3 — the three-tier registry (``resolve``, ``list_available``,
-       ``load_and_validate``, ``unit_for``, ``workspace_recipe_path``, ``_tier_dirs``).
+       ``load_and_validate``, ``step_for``, ``workspace_recipe_path``, ``_tier_dirs``).
   U7 — ``A1_BUILTIN`` constant (the canonical runtime fallback).
 Validation (``validate`` / ``validate_and_lint`` / format rules) → recipe_validate.
 """
@@ -57,11 +57,11 @@ validate = recipe_validate.validate
 validate_and_lint = recipe_validate.validate_and_lint
 
 # Public constant consumers read as recipes.V1_PRODUCER_NAMES (e.g. the U5b
-# symmetry test that cross-checks it against unit_emitters.REGISTRY).
+# symmetry test that cross-checks it against step_producers.REGISTRY).
 V1_PRODUCER_NAMES = recipe_validate.V1_PRODUCER_NAMES
 
 # Format constants + the private validation helpers the registry below reaches:
-# resolve() calls _validate_recipe_name + _bad; unit_for() calls
+# resolve() calls _validate_recipe_name + _bad; step_for() calls
 # _check_prompt_template; _tier_dirs() reads _BUILTIN_DIR. Re-exported so both
 # the facade internals AND any consumer that referenced them via recipes.<name>
 # before the split keep resolving.
@@ -236,21 +236,21 @@ def load_and_validate(name: str, repo_root: str):
     return recipe, tier
 
 
-def unit_for(recipe_unit: dict, recipe: dict) -> dict:
-    """Project a RECIPE unit dict onto a LEDGER unit dict (the shape
+def step_for(recipe_step: dict, recipe: dict) -> dict:
+    """Project a RECIPE step dict onto a LEDGER step dict (the shape
     ``ledger.init_ledger`` expects). Merges recipe-side ``invokes`` metadata
     (``prompt_template`` etc.) into ``dispatch_context`` — RE-VALIDATING the
     path bound (the second enforcement point; the first is ``validate``). The
     ``backend_op`` stays in ``dispatch_context`` so the backend reads it via the
-    unit at dispatch.
+    step at dispatch.
     """
-    inv = dict(recipe_unit.get("invokes") or {})
+    inv = dict(recipe_step.get("invokes") or {})
     if "prompt_template" in inv:
-        _check_prompt_template(inv["prompt_template"], f"unit {recipe_unit.get('id')!r}")
+        _check_prompt_template(inv["prompt_template"], f"step {recipe_step.get('id')!r}")
     return {
-        "id": recipe_unit["id"],
-        "phase": recipe_unit.get("phase", "work"),
-        "depends_on": list(recipe_unit.get("depends_on") or []),
+        "id": recipe_step["id"],
+        "phase": recipe_step.get("phase", "work"),
+        "depends_on": list(recipe_step.get("depends_on") or []),
         "dispatch_context": inv,
     }
 

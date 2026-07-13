@@ -3,9 +3,9 @@
 
 The emission layer of the ledger surface (see lib/ledger.py for the facade and
 docs/contracts/ledger-schema.md for the authoritative spec). Holds the shared
-emit/validate/append helper (``_emit_units_core``), the phase-transition primitive
+emit/validate/append helper (``_emit_steps_core``), the phase-transition primitive
 (``transition_and_emit``), the in-phase iteration emit (``emit_within_phase`` +
-``_apply_emit``), and the gate-unit re-engagement combo (``reset_for_iteration`` +
+``_apply_emit``), and the gate-step re-engagement combo (``reset_for_iteration`` +
 ``_reset_gate_for_iteration`` + ``atomic_iterate_step``).
 
 Sits ABOVE ledger_core in the acyclic DAG (dependency order:
@@ -37,8 +37,8 @@ from _bootstrap import load_lib_module  # noqa: E402
 ledger_core = load_lib_module("ledger_core")
 
 
-def _emit_units_core(ledger: dict, to_phase: str, producer) -> list:
-    """Pure shared helper: emit + validate + append units. NO flock acquire,
+def _emit_steps_core(ledger: dict, to_phase: str, producer) -> list:
+    """Pure shared helper: emit + validate + append steps. NO flock acquire,
     NO loop_phase write, NO counter bump — callers add those.
 
     Factored out of ``transition_and_emit`` and ``_apply_emit`` (F3 / maint-1)
@@ -48,27 +48,27 @@ def _emit_units_core(ledger: dict, to_phase: str, producer) -> list:
       - ``_apply_emit`` additionally bumps ``iteration_emit_count``.
 
     Keeping that divergence at the call sites means the SHARED contract
-    (per-unit id-required, no collision; normalize via ``_normalize_unit``
+    (per-step id-required, no collision; normalize via ``_normalize_step``
     with current ``loop_phase``; default to ``to_phase``) lives in one
     place. The two prior copy-paste loops were byte-equivalent on the
     emit-loop body and would have drifted on any future field added to a
-    new unit's normalization.
+    new step's normalization.
 
-    Returns the list of newly-appended unit ids.
+    Returns the list of newly-appended step ids.
     """
-    new_units = producer(ledger, to_phase) or []
+    new_steps = producer(ledger, to_phase) or []
     existing_ids = {u["id"] for u in ledger.get("steps", [])}
     appended = []
-    for nu in new_units:
+    for nu in new_steps:
         if "id" not in nu:
-            raise ledger_core.LedgerError("emitted unit missing 'id'")
+            raise ledger_core.LedgerError("emitted step missing 'id'")
         if nu["id"] in existing_ids:
-            raise ledger_core.LedgerError(f"emitted unit id collides: {nu['id']!r}")
-        # Emitted units default to the arriving phase unless they declare one.
+            raise ledger_core.LedgerError(f"emitted step id collides: {nu['id']!r}")
+        # Emitted steps default to the arriving phase unless they declare one.
         nu = dict(nu)
         nu.setdefault("phase", to_phase)
         ledger.setdefault("steps", []).append(
-            ledger_core._normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+            ledger_core._normalize_step(nu, loop_phase=ledger.get("loop_phase", "plan"))
         )
         existing_ids.add(nu["id"])
         appended.append(nu["id"])
@@ -78,37 +78,37 @@ def _emit_units_core(ledger: dict, to_phase: str, producer) -> list:
 def transition_and_emit(
     repo_root, run_id, to_phase, producer: Callable[[dict, str], list]
 ):
-    """Advance ``loop_phase`` to ``to_phase`` AND emit that phase's units, in ONE
+    """Advance ``loop_phase`` to ``to_phase`` AND emit that phase's steps, in ONE
     atomic write (v0.2.0 U5b / KTD-6 — the G3/F2 fix).
 
     This is the phase-transition primitive. The round-1 framing tried to do the
     advance and the emission as SEPARATE locked writes (`set_loop` then an emit),
     which left a torn-state window: a reader between the two writes would see the
-    new phase with zero emitted units, and `recompute_predicate` could fire
+    new phase with zero emitted steps, and `recompute_predicate` could fire
     ``met`` prematurely (e.g. A2's judge terminal → all_steps_terminal with no
-    work units yet). Doing both inside one ``_with_locked_ledger`` body closes
-    that window: the producer's units are appended BEFORE ``_atomic_write``'s
+    work steps yet). Doing both inside one ``_with_locked_ledger`` body closes
+    that window: the producer's steps are appended BEFORE ``_atomic_write``'s
     mandatory predicate recompute, so ``met`` is always computed against the
-    post-emission unit set.
+    post-emission step set.
 
-    ``producer`` is a PURE callable ``(ledger, to_phase) -> list[new_unit_dict]``.
+    ``producer`` is a PURE callable ``(ledger, to_phase) -> list[new_step_dict]``.
     It MUST NOT call any ledger mutator (`transition`, `record_verdict`,
     `set_loop`, …): those re-acquire the flock on a fresh fd and would deadlock
     inside this already-locked body (F3). The producer only READS the passed
-    ledger dict and RETURNS new partial unit dicts; this primitive normalizes and
-    appends them. New unit ids must not collide with existing ones.
+    ledger dict and RETURNS new partial step dicts; this primitive normalizes and
+    appends them. New step ids must not collide with existing ones.
 
-    Returns the list of newly-appended unit ids.
+    Returns the list of newly-appended step ids.
 
-    F3 / maint-1: emit body delegates to ``_emit_units_core``; this path adds
+    F3 / maint-1: emit body delegates to ``_emit_steps_core``; this path adds
     the ``loop_phase``/``handoff_paused`` advance that distinguishes a transition
     from an in-phase emit.
     """
     def mutate(ledger):
-        appended = _emit_units_core(ledger, to_phase, producer)
-        # Advance the phase AFTER emission (the units belong to to_phase; setting
+        appended = _emit_steps_core(ledger, to_phase, producer)
+        # Advance the phase AFTER emission (the steps belong to to_phase; setting
         # loop_phase first or last is equivalent here since both happen in one
-        # snapshot, but advancing last keeps "emit produces units FOR to_phase"
+        # snapshot, but advancing last keeps "emit produces steps FOR to_phase"
         # readable). handoff_paused tracks the phase per the v0.1.x rule.
         ledger["loop_phase"] = to_phase
         ledger["handoff_paused"] = to_phase == "handoff"
@@ -118,25 +118,25 @@ def transition_and_emit(
 
 
 def _apply_emit(ledger: dict, to_phase: str, producer) -> list:
-    """Pure helper: run ``producer(ledger, to_phase)``, validate + append units,
-    bump ``iteration_emit_count`` per emitted unit. NEVER acquires the flock —
+    """Pure helper: run ``producer(ledger, to_phase)``, validate + append steps,
+    bump ``iteration_emit_count`` per emitted step. NEVER acquires the flock —
     the caller already holds it (the F3 deadlock guard).
 
     Used by both ``emit_within_phase`` and ``atomic_iterate_step`` from within
-    their respective locked bodies. Returns the list of newly-appended unit
+    their respective locked bodies. Returns the list of newly-appended step
     ids. Mirrors ``transition_and_emit``'s body shape exactly EXCEPT it does
-    NOT write ``loop_phase`` — emission stays within the gate unit's current
+    NOT write ``loop_phase`` — emission stays within the gate step's current
     phase. Validation parity (missing id; collision) matches transition_and_emit.
 
-    F3 / maint-1: emit body delegates to ``_emit_units_core``; this path adds
-    the per-unit ``iteration_emit_count`` bump that distinguishes an iterating
+    F3 / maint-1: emit body delegates to ``_emit_steps_core``; this path adds
+    the per-step ``iteration_emit_count`` bump that distinguishes an iterating
     emit from a phase-transition emit.
     """
-    appended = _emit_units_core(ledger, to_phase, producer)
-    # KTD §D / OQ4: bump the monotonic emit-id counter PER emitted unit.
+    appended = _emit_steps_core(ledger, to_phase, producer)
+    # KTD §D / OQ4: bump the monotonic emit-id counter PER emitted step.
     # Drives `iterate_template` (U3)'s id assignment via
-    # `id_prefix + (counter+1)`; replaces "recount existing units" which
-    # would collide after a partial-emit crash deleted units.
+    # `id_prefix + (counter+1)`; replaces "recount existing steps" which
+    # would collide after a partial-emit crash deleted steps.
     if appended:
         ledger["iteration_emit_count"] = (
             int(ledger.get("iteration_emit_count", 0)) + len(appended)
@@ -145,21 +145,21 @@ def _apply_emit(ledger: dict, to_phase: str, producer) -> list:
 
 
 def emit_within_phase(repo_root, run_id, to_phase: str, producer):
-    """Emit new units into ``to_phase`` WITHOUT advancing ``loop_phase``.
+    """Emit new steps into ``to_phase`` WITHOUT advancing ``loop_phase``.
 
     Sibling to ``transition_and_emit``: same atomicity contract (one
     ``_with_locked_ledger`` body wraps emit+normalize+append+recompute), but
     NO ``loop_phase`` write and NO ``handoff_paused`` flip. Re-emission stays
-    within the gate unit's current phase per KTD §D — the iteration loop adds
+    within the gate step's current phase per KTD §D — the iteration loop adds
     siblings rather than transitioning the run.
 
-    ``producer`` is a PURE callable ``(ledger, to_phase) -> list[new_unit_dict]``.
+    ``producer`` is a PURE callable ``(ledger, to_phase) -> list[new_step_dict]``.
     Same constraint as ``transition_and_emit``: it MUST NOT call any ledger
     mutator (F3 deadlock — fresh-fd flock re-acquire on a held lock).
 
-    Per emitted unit, ``iteration_emit_count`` is incremented atomically
+    Per emitted step, ``iteration_emit_count`` is incremented atomically
     (closes round-3 P0-R3-2's "recount on resume after partial-emit crash"
-    failure mode). Returns the list of newly-appended unit ids.
+    failure mode). Returns the list of newly-appended step ids.
 
     Implementer's OQ-resolved shape (plan "Deferred to Implementation"): a
     NEW PUBLIC FUNCTION rather than a ``transition_and_emit`` parameter
@@ -174,12 +174,12 @@ def emit_within_phase(repo_root, run_id, to_phase: str, producer):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
-def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -> dict:
-    """Pure helper: the atomic gate-unit reset combo (KTD §C). The caller
+def _reset_gate_for_iteration(ledger: dict, gate_step_id: str, new_depends_on) -> dict:
+    """Pure helper: the atomic gate-step reset combo (KTD §C). The caller
     already holds the flock — this is the F3 deadlock guard, mirroring
     ``_apply_emit``.
 
-    In ONE pass mutates the gate unit:
+    In ONE pass mutates the gate step:
       (a) state ``verdict-returned → pending`` (validates the EXISTING edge in
           ``ALLOWED_TRANSITIONS`` — v0.3.0 does NOT add a new edge; the contract
           is the atomic COMBO, not a new grammar move).
@@ -198,7 +198,7 @@ def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -
     deliberate-fail #2 / #3 controls assert (e) and (c) respectively are
     load-bearing.
     """
-    gate = ledger_core._find_unit(ledger, gate_unit_id)
+    gate = ledger_core._find_step(ledger, gate_step_id)
     current = gate.get("state")
     # The verdict-returned → pending edge ALREADY exists in
     # ALLOWED_TRANSITIONS — v0.3.0 does NOT add a new state edge. We replicate
@@ -206,7 +206,7 @@ def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -
     # F3 deadlock).
     if "pending" not in ledger_core.ALLOWED_TRANSITIONS.get(current, set()):
         raise ledger_core.InvalidTransition(
-            f"{current!r} -> 'pending' not permitted for unit {gate_unit_id!r} "
+            f"{current!r} -> 'pending' not permitted for step {gate_step_id!r} "
             f"(reset_for_iteration requires source state 'verdict-returned')"
         )
     gate["state"] = "pending"
@@ -224,8 +224,8 @@ def _reset_gate_for_iteration(ledger: dict, gate_unit_id: str, new_depends_on) -
     return gate
 
 
-def reset_for_iteration(repo_root, run_id, gate_unit_id, new_depends_on):
-    """Atomic gate-unit reset combo per KTD §C. The engine-only caller for the
+def reset_for_iteration(repo_root, run_id, gate_step_id, new_depends_on):
+    """Atomic gate-step reset combo per KTD §C. The engine-only caller for the
     atomic re-engagement combination over the EXISTING
     ``verdict-returned → pending`` edge in ``ALLOWED_TRANSITIONS``.
 
@@ -235,23 +235,23 @@ def reset_for_iteration(repo_root, run_id, gate_unit_id, new_depends_on):
     need the reset standalone.
     """
     def mutate(ledger):
-        _reset_gate_for_iteration(ledger, gate_unit_id, new_depends_on)
+        _reset_gate_for_iteration(ledger, gate_step_id, new_depends_on)
         return "pending"
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
 def atomic_iterate_step(
-    repo_root, run_id, gate_unit_id, producer, new_depends_on
+    repo_root, run_id, gate_step_id, producer, new_depends_on
 ):
     """The composite mutator that runs ONE full iteration step atomically
     (round-3 P1-R3-1 / KTD §C+D). Wraps THREE writes into ONE
     ``_with_locked_ledger`` body:
 
       1. ``iteration_attempts`` increments (KTD §D bound counter).
-      2. ``producer`` runs; new units are validated, normalized, appended; per
-         unit ``iteration_emit_count`` increments (KTD §D monotonic id).
-      3. Gate unit reset (state ``verdict-returned → pending``, depends_on
+      2. ``producer`` runs; new steps are validated, normalized, appended; per
+         step ``iteration_emit_count`` increments (KTD §D monotonic id).
+      3. Gate step reset (state ``verdict-returned → pending``, depends_on
          replaced, dispatch_context.decision / decision_payload cleared,
          verdict_at cleared, findings cleared — KTD §C).
 
@@ -271,24 +271,24 @@ def atomic_iterate_step(
 
     def mutate(ledger):
         # Validate gate exists up front so we don't half-increment then fail
-        # later (a typo'd gate_unit_id would otherwise let increment land
+        # later (a typo'd gate_step_id would otherwise let increment land
         # before _reset_gate_for_iteration's lookup raised; lookup-first
         # keeps the all-or-nothing contract intact).
-        ledger_core._find_unit(ledger, gate_unit_id)
+        ledger_core._find_step(ledger, gate_step_id)
         # Step 1: increment iteration_attempts (bound counter).
         ledger["iteration_attempts"] = int(ledger.get("iteration_attempts", 0)) + 1
-        # Step 2: emit new units inline (gate unit's current phase).
-        gate = ledger_core._find_unit(ledger, gate_unit_id)
+        # Step 2: emit new steps inline (gate step's current phase).
+        gate = ledger_core._find_step(ledger, gate_step_id)
         to_phase = gate.get("phase") or ledger.get("loop_phase", "plan")
         appended = _apply_emit(ledger, to_phase, producer)
-        # Step 3: reset the gate unit atomically with the emit. The caller
+        # Step 3: reset the gate step atomically with the emit. The caller
         # supplies the new depends_on (union of gate's prior deps + newly-
         # emitted ids); we honor it verbatim. If the caller passed `None`
         # we compute the union here as a defensive default.
         deps = caller_depends_on
         if deps is None:
             deps = list(gate.get("depends_on") or []) + list(appended)
-        _reset_gate_for_iteration(ledger, gate_unit_id, deps)
+        _reset_gate_for_iteration(ledger, gate_step_id, deps)
         return appended
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)

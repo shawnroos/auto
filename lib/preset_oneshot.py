@@ -18,7 +18,7 @@ flow, no pulse, no `/goal`):
      (U4) — the TERMINAL verdict: fold the ratified criteria + resolved results
      into a single ``verification.aggregate`` call and re-label the aggregator's
      advance/iterate SIGNAL as a terminal ``pass``/``fail`` (KTD-1). It takes the
-     ratified criteria list DIRECTLY (there is no synthesized unit) and is
+     ratified criteria list DIRECTLY (there is no synthesized step) and is
      READ-ONLY over them: it reports a verdict, it does NOT commit an iteration
      decision.
 
@@ -87,7 +87,7 @@ def validate_oneshot_criteria(criteria) -> tuple:
     EDITED — AE2) are checked BEFORE the op is launched. It REUSES
     ``recipe_validate._validate_verification`` (KTD-2 reuse discipline) — the SAME
     shape check the recipe validator applies at both write time and engine-load
-    time — by wrapping the list in a synthetic unit. So a malformed proposed
+    time — by wrapping the list in a synthetic step. So a malformed proposed
     criterion (a `programmatic` with a shell string instead of an argv list, an
     unknown `type`, >16 criteria, a per-type unknown field) is rejected here with
     the exact same rules the engine would enforce.
@@ -96,11 +96,11 @@ def validate_oneshot_criteria(criteria) -> tuple:
     valid (vacuous-pass) run, so an empty/None list validates ``ok``.
     """
     # `_validate_verification` reads `u["id"]` + `u.get("verification")` and
-    # RAISES RecipeError on the first violation. A synthetic unit adapts the
+    # RAISES RecipeError on the first violation. A synthetic step adapts the
     # raise-on-first-error contract to the collect-and-return one this gate wants.
-    synthetic_unit = {"id": "one-shot", "verification": criteria}
+    synthetic_step = {"id": "one-shot", "verification": criteria}
     try:
-        _validate_verification(synthetic_unit)
+        _validate_verification(synthetic_step)
     except RecipeError as e:
         return False, [str(e)]
     return True, []

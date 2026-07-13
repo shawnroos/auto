@@ -38,14 +38,14 @@ def _operator_guidance_for(phase, advance_result, led):
     """Build the prepare/execute reminder block that rides every rearm intent.
 
     v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
-    field bug where an agent pulsed 5 times expecting units to populate. Root
+    field bug where an agent pulsed 5 times expecting steps to populate. Root
     cause was invisible contract: the pulse prepares invocations; the model
     EXECUTES them; if the model doesn't, the ledger doesn't progress. The
     rearm intent now carries this reminder explicitly. Phase-aware so plan-
     loop and work-loop get the right framing.
 
     v0.3.0 R9 (KTD §D operator-diagnostics):
-      * If the gate unit just had `bound_override` written on this pulse →
+      * If the gate step just had `bound_override` written on this pulse →
         prepend a notice naming which bound tripped + the best-so-far state
         from the gate's last decision_payload (OQ2). Operators see WHY the
         loop exited and WHAT we tried before bound.
@@ -57,8 +57,8 @@ def _operator_guidance_for(phase, advance_result, led):
     iteration_prefix = _iteration_guidance_prefix(led)
 
     # v0.4.3 producer handshake: the plan is complete but the work-loop has no
-    # units yet. The rearm must tell the model to EXECUTE the enumerate prepare
-    # op (read the plan → produce work units → set_enumerated_units), else the
+    # steps yet. The rearm must tell the model to EXECUTE the enumerate prepare
+    # op (read the plan → produce work steps → set_enumerated_steps), else the
     # run sits in the plan phase forever. Named explicitly so the generic
     # plan-step message ("Just-prepared step: None") doesn't mislead.
     if isinstance(advance_result, dict) and (
@@ -68,12 +68,12 @@ def _operator_guidance_for(phase, advance_result, led):
         plan_path = envelope.get("plan_path")
         whence = f" from {plan_path}" if plan_path else ""
         body = (
-            "plan complete — ENUMERATE its work units. Read the reviewed plan"
-            f"{whence}, produce the work-unit list, then PERSIST it via Bash: "
-            "`bash \"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-enumerated-units "
-            "<run> <plan-unit-id> '[{\"id\":\"...\",\"invokes\":{...}}]'`. The "
+            "plan complete — ENUMERATE its work steps. Read the reviewed plan"
+            f"{whence}, produce the work-step list, then PERSIST it via Bash: "
+            "`bash \"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-enumerated-steps "
+            "<run> <plan-step-id> '[{\"id\":\"...\",\"invokes\":{...}}]'`. The "
             "NEXT pulse transitions to the work-loop. Re-pulsing WITHOUT "
-            "persisting leaves the run in the plan phase with no units to "
+            "persisting leaves the run in the plan phase with no steps to "
             "dispatch."
         )
         return iteration_prefix + body if iteration_prefix else body
@@ -90,7 +90,7 @@ def _operator_guidance_for(phase, advance_result, led):
             "(after /ce-doc-review, persist gaps via `bash "
             "\"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-gaps-open <run> <N>`). "
             "Re-pulsing without running "
-            f"the invocation is a NO-OP — units will stay []. Just-prepared "
+            f"the invocation is a NO-OP — steps will stay []. Just-prepared "
             f"step: {step!r}; expected invocation: {invocation}. "
             "If this plan is ALREADY reviewed and you're re-deriving finished "
             "work, run `/auto-resume advance <run>` to declare it satisfied and "
@@ -99,24 +99,24 @@ def _operator_guidance_for(phase, advance_result, led):
         return iteration_prefix + body if iteration_prefix else body
     if phase == "brainstorm":
         # v0.6.0 U7/U8 (P0 fix-round-3): the spine's brainstorm phase is a
-        # SINGLE-unit, model-driven step (like plan, NOT a work-loop fan-out).
+        # SINGLE-step, model-driven step (like plan, NOT a work-loop fan-out).
         # The CE backend has no `brainstorm` op, so nothing dispatches it for
         # the model — the driver MUST run /ce-brainstorm itself, then record the
-        # two conditions advance_brainstorm_loop/_brainstorm_unit_ready gate on:
-        # (i) the requirements-doc path on the brainstorm unit's
-        # dispatch_context.requirements_doc, AND (ii) self-write that unit
+        # two conditions advance_brainstorm_loop/_brainstorm_step_ready gate on:
+        # (i) the requirements-doc path on the brainstorm step's
+        # dispatch_context.requirements_doc, AND (ii) self-write that step
         # `verdict-returned`. Without BOTH, the forward brainstorm→plan producer
         # never fires and every pulse re-arms identically (the livelock the U7
         # success criterion forbids; feedback_plan_documents_transition_code_
-        # doesnt_wire_it). Mirrors the single-unit plan-phase guidance, not the
+        # doesnt_wire_it). Mirrors the single-step plan-phase guidance, not the
         # work-loop fan-out reminder.
         body = (
             "prepare/execute contract: I PREPARED the brainstorm step; YOU "
             "must run it. Invoke /ce-brainstorm to explore the conversation "
             "context and produce a requirements doc. THEN, on the `brainstorm` "
-            "unit, record BOTH (i) dispatch_context.requirements_doc = <the doc "
+            "step, record BOTH (i) dispatch_context.requirements_doc = <the doc "
             "path> AND (ii) state `verdict-returned`, via the existing mutators "
-            "in THIS order (the unit starts `pending`, from which record_verdict "
+            "in THIS order (the step starts `pending`, from which record_verdict "
             "would raise): ledger.transition(repo, run, 'brainstorm', "
             "'dispatched', dispatch_context={'requirements_doc': <path>}) then "
             "ledger.record_verdict(repo, run, 'brainstorm', []). Both conditions "
@@ -131,7 +131,7 @@ def _operator_guidance_for(phase, advance_result, led):
         # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
         body = (
             "prepare/execute contract: in the work-loop YOU drive the "
-            "dispatcher fan-out (dispatcher.ready_units + dispatch_batch); "
+            "dispatcher fan-out (dispatcher.ready_steps + dispatch_batch); "
             "after dispatching, YIELD silently — the harness re-invokes you "
             "when a verdict lands (fix-pass G). Re-pulsing without running "
             "dispatch is a no-op."
@@ -218,7 +218,7 @@ def _gaps_open_guard(phase, led):
     plan-loop cycles `plan → deepen → review_plan → deepen → review_plan → …`
     forever unless the operator runs a real review and feeds back
     ``set_gaps_open(N)``. Without that, gaps_open stays null, plan-met never
-    fires, and units never materialize.
+    fires, and steps never materialize.
 
     The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
     ``gaps_open is None``. We do NOT key only on review_plan because the pulse
@@ -239,7 +239,7 @@ def _gaps_open_guard(phase, led):
         "gaps_open is NULL — plan-met cannot fire until a real review_plan "
         "step has run and you call ledger.set_gaps_open(<N>) with the gap "
         "count from /ce-doc-review's output. Without this the plan-loop will "
-        "deepen↔review_plan forever and units will never materialize. "
+        "deepen↔review_plan forever and steps will never materialize. "
         "Feeding back gaps_open=0 closes the loop and starts the work-loop."
     )
 
@@ -260,7 +260,7 @@ def _build_report(led):
     for u in led.get("steps", []):
         for f in u.get("findings") or []:
             if f.get("severity") == "minor":
-                minors.append({"unit": u.get("id"), "note": f.get("note", "")})
+                minors.append({"step": u.get("id"), "note": f.get("note", "")})
     return {
         phase_grammar.LOOP_PHASE_KEY: phase_grammar.current_phase(led),
         "blockers": pred.get("blockers", 0),

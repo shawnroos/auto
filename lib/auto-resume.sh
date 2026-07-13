@@ -13,8 +13,8 @@
 #                        paused handoff -> work first if needed).
 #   continue <run>       explicit continue (handoff -> work, arm a pulse).
 #   abort <run>          flip the run to loop_phase="done" (cancellation).
-#   retry <run> <unit>   stalled unit -> pending; clears last_error.
-#   skip <run> <unit>    stalled unit -> terminal-skip (counts as terminal).
+#   retry <run> <step>   stalled step -> pending; clears last_error.
+#   skip <run> <step>    stalled step -> terminal-skip (counts as terminal).
 #
 # DOUBLE-DRIVE GUARD (process-held flock, released on clean exit — NO stale
 # sentinel file): this script ADDS NO NEW FLOCK. State transitions route through

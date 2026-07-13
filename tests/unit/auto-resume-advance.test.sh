@@ -8,7 +8,7 @@
 #   * plan  → mark satisfied (plan_step=review_plan, gaps_open=0) + arm a pulse;
 #             the next pulse enumerates straight to work, no re-planning.
 #   * handoff  → identical to continue (handoff→work).
-#   * work  → no-op (work advances by unit verdicts, not by fiat).
+#   * work  → no-op (work advances by step verdicts, not by fiat).
 
 set -uo pipefail
 
@@ -76,8 +76,8 @@ if scenario == "plan":
     epr = led.get("exit_predicate_result") or {}
     emitted = out.getvalue().strip()
     is_arm = '"action": "arm-pulse"' in emitted or '"action":"arm-pulse"' in emitted
-    # Then a pulse (model stashed the enumerated units) → should reach work.
-    ledger.set_enumerated_units(repo, run_id, "plan", [
+    # Then a pulse (model stashed the enumerated steps) → should reach work.
+    ledger.set_enumerated_steps(repo, run_id, "plan", [
         {"id": "u-x", "invokes": {"backend_op": "do_step"}},
     ])
     with contextlib.redirect_stdout(io.StringIO()):
@@ -133,7 +133,7 @@ elif scenario == "pause_operator":
 elif scenario == "pause_backstop":
     # U9: the shared core with backstop_latched=True (the backstop path) LATCHES
     # the fail-closed gate so it keeps firing on a second destructive command in
-    # the same turn. Exercise apply_pause directly (the shared core is the unit;
+    # the same turn. Exercise apply_pause directly (the shared core is the step;
     # the full hook path is covered by advisor-gate/hooks suites).
     ledger.apply_pause(repo, run_id, "destructive command denied", backstop_latched=True)
     led = read()

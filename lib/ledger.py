@@ -16,13 +16,13 @@ the contract wins and the code is the bug).
   * ledger_core      — constants, errors, paths, time helpers, the atomic-write +
                        flock primitives, and init_ledger / read_ledger.
   * ledger_predicate — the pure predicate logic (recompute_predicate + B7 helpers,
-                       gating_severities, unit_is_terminal, is_orphaned); imports
+                       gating_severities, step_is_terminal, is_orphaned); imports
                        only ledger_core, reached from core's _atomic_write via a
                        deferred lazy-load (U16).
   * ledger_mutators  — the grammar-checked, flock-serialized scalar mutators
                        (transition, record_verdict, set_loop, set_gaps_open,
                        set_*, accumulate_active_time, increment_iteration_attempts).
-  * ledger_steering  — the AGENT-facing steering verbs (force_skip, add_unit,
+  * ledger_steering  — the AGENT-facing steering verbs (force_skip, add_step,
                        reshape_deps, register_session). Imports mutators for two
                        graph helpers; never the reverse.
   * ledger_emitters  — phase-transition + iteration emission/composite paths
@@ -68,7 +68,7 @@ DRIVER_SELF_STALE_SECONDS = ledger_core.DRIVER_SELF_STALE_SECONDS
 LOOP_PHASES = ledger_core.LOOP_PHASES
 PLAN_STEPS = ledger_core.PLAN_STEPS
 ExitReason = ledger_core.ExitReason
-UNIT_STATES = ledger_core.UNIT_STATES
+STEP_STATES = ledger_core.STEP_STATES
 SEVERITIES = ledger_core.SEVERITIES
 GATING_SEVERITIES = ledger_core.GATING_SEVERITIES
 ALLOWED_TRANSITIONS = ledger_core.ALLOWED_TRANSITIONS
@@ -82,7 +82,7 @@ LedgerNotFound = ledger_core.LedgerNotFound
 LedgerExists = ledger_core.LedgerExists
 InvalidTransition = ledger_core.InvalidTransition
 StaleVerdict = ledger_core.StaleVerdict
-UnknownUnit = ledger_core.UnknownUnit
+UnknownStep = ledger_core.UnknownStep
 
 # Paths + time helpers (now_iso / parse_iso are the public time surface).
 ledger_path = ledger_core.ledger_path
@@ -92,7 +92,7 @@ parse_iso = ledger_core.parse_iso
 
 # Pure predicate logic (extracted to ledger_predicate.py in U16).
 gating_severities = ledger_predicate.gating_severities
-unit_is_terminal = ledger_predicate.unit_is_terminal
+step_is_terminal = ledger_predicate.step_is_terminal
 recompute_predicate = ledger_predicate.recompute_predicate
 _compute_iteration_pending = ledger_predicate._compute_iteration_pending
 is_orphaned = ledger_predicate.is_orphaned
@@ -110,8 +110,8 @@ transition = ledger_mutators.transition
 record_verdict = ledger_mutators.record_verdict
 set_loop = ledger_mutators.set_loop
 set_gaps_open = ledger_mutators.set_gaps_open
-set_enumerated_units = ledger_mutators.set_enumerated_units
-set_winner_unit_id = ledger_mutators.set_winner_unit_id
+set_enumerated_steps = ledger_mutators.set_enumerated_steps
+set_winner_step_id = ledger_mutators.set_winner_step_id
 set_verdict_decision = ledger_mutators.set_verdict_decision
 set_bound_override = ledger_mutators.set_bound_override
 set_driving_session_id = ledger_mutators.set_driving_session_id
@@ -126,7 +126,7 @@ increment_iteration_attempts = ledger_mutators.increment_iteration_attempts
 # reject. Split out of ledger_mutators when that file crossed its size budget.
 
 force_skip = ledger_steering.force_skip              # R3/R20 — reason mandatory
-add_unit = ledger_steering.add_unit                  # R3
+add_step = ledger_steering.add_step                  # R3
 reshape_deps = ledger_steering.reshape_deps          # R3
 register_session = ledger_steering.register_session  # R21 — hook ownership set
 
@@ -291,8 +291,8 @@ def _h_is_orphaned(argv):
 
 
 def _h_transition(argv):
-    repo, run, unit, state = argv[1], argv[2], argv[3], argv[4]
-    transition(repo, run, unit, state)
+    repo, run, step, state = argv[1], argv[2], argv[3], argv[4]
+    transition(repo, run, step, state)
     return 0
 
 
@@ -305,30 +305,30 @@ def _h_set_gaps_open(argv):
     return 0
 
 
-def _h_set_enumerated_units(argv):
-    # set-enumerated-units <run> <plan-unit-id> <json-array>
+def _h_set_enumerated_steps(argv):
+    # set-enumerated-steps <run> <plan-step-id> <json-array>
     # json-array: [{"id": "...", "invokes": {...}, "dispatch_context"?: {...}}, ...]
-    run, unit, payload = argv[1], argv[2], argv[3]
-    set_enumerated_units(resolve_repo(), run, unit, _json_array(payload, "payload"))
+    run, step, payload = argv[1], argv[2], argv[3]
+    set_enumerated_steps(resolve_repo(), run, step, _json_array(payload, "payload"))
     return 0
 
 
 def _h_record_verdict(argv):
-    # record-verdict <run> <unit> <json-findings> [attempt]
-    run, unit, payload = argv[1], argv[2], argv[3]
+    # record-verdict <run> <step> <json-findings> [attempt]
+    run, step, payload = argv[1], argv[2], argv[3]
     findings = _json_array(payload, "findings")
     attempt = int(argv[4]) if len(argv) > 4 else None
-    record_verdict(resolve_repo(), run, unit, findings, attempt=attempt)
+    record_verdict(resolve_repo(), run, step, findings, attempt=attempt)
     return 0
 
 
 def _h_set_verdict_decision(argv):
-    # set-verdict-decision <run> <gate-unit> <decision> [json-payload]
-    run, gate_unit, decision = argv[1], argv[2], argv[3]
+    # set-verdict-decision <run> <gate-step> <decision> [json-payload]
+    run, gate_step, decision = argv[1], argv[2], argv[3]
     payload = json.loads(argv[4]) if len(argv) > 4 else None
     if payload is not None and not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
-    set_verdict_decision(resolve_repo(), run, gate_unit, decision, payload=payload)
+    set_verdict_decision(resolve_repo(), run, gate_step, decision, payload=payload)
     return 0
 
 
@@ -336,43 +336,43 @@ def _h_set_verdict_decision(argv):
 
 
 def _h_init(argv):
-    # init <run> <units-json> [backend] [loop-phase]   (R4 — CREATE a run from
+    # init <run> <steps-json> [backend] [loop-phase]   (R4 — CREATE a run from
     # the tool surface). backend/loop-phase are validated INSIDE init_ledger
     # against its authoritative sets before any write (invalid → LedgerError, no
     # file), and an existing run-id raises LedgerExists leaving the ledger
     # untouched — so the CLI never re-guesses the allowed set.
     run = argv[1]
-    units = _json_array(argv[2], "steps") if len(argv) > 2 and argv[2] else None
+    steps = _json_array(argv[2], "steps") if len(argv) > 2 and argv[2] else None
     backend = argv[3] if len(argv) > 3 and argv[3] else "ce"
     loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
-    init_ledger(resolve_repo(), run, backend=backend, units=units, loop_phase=loop_phase)
+    init_ledger(resolve_repo(), run, backend=backend, steps=steps, loop_phase=loop_phase)
     return 0
 
 
 def _h_force_skip(argv):
-    # force-skip <run> <unit> <reason>   (R3/R20 — reason mandatory; the mutator
+    # force-skip <run> <step> <reason>   (R3/R20 — reason mandatory; the mutator
     # rejects a blank one under the lock).
-    run, unit, reason = argv[1], argv[2], argv[3]
-    force_skip(resolve_repo(), run, unit, reason)
+    run, step, reason = argv[1], argv[2], argv[3]
+    force_skip(resolve_repo(), run, step, reason)
     return 0
 
 
-def _h_add_unit(argv):
-    # add-unit <run> <unit-id> [json-depends-on] [phase]. The `and argv[4]` guard
+def _h_add_step(argv):
+    # add-step <run> <step-id> [json-depends-on] [phase]. The `and argv[4]` guard
     # mirrors init: an explicit EMPTY phase reads as absent (→ the run-phase
-    # default in _normalize_unit), not phase="" — a "" unit is in neither the
+    # default in _normalize_step), not phase="" — a "" step is in neither the
     # current- nor terminal-phase eval set and would silently never dispatch.
-    run, unit = argv[1], argv[2]
+    run, step = argv[1], argv[2]
     depends_on = _json_array(argv[3], "depends_on") if len(argv) > 3 and argv[3] else None
     phase = argv[4] if len(argv) > 4 and argv[4] else None
-    add_unit(resolve_repo(), run, unit, depends_on=depends_on, phase=phase)
+    add_step(resolve_repo(), run, step, depends_on=depends_on, phase=phase)
     return 0
 
 
 def _h_reshape_deps(argv):
-    # reshape-deps <run> <unit-id> <json-depends-on>
-    run, unit, payload = argv[1], argv[2], argv[3]
-    reshape_deps(resolve_repo(), run, unit, _json_array(payload, "depends_on"))
+    # reshape-deps <run> <step-id> <json-depends-on>
+    run, step, payload = argv[1], argv[2], argv[3]
+    reshape_deps(resolve_repo(), run, step, _json_array(payload, "depends_on"))
     return 0
 
 
@@ -403,42 +403,42 @@ _VERBS = {
     "is-orphaned": _Verb(_h_is_orphaned, "<repo> <run>", reads=True),
     "transition": _Verb(
         _h_transition,
-        "<repo> <run> <unit> <state>",
+        "<repo> <run> <step> <state>",
         rejects="InvalidTransition for any edge not in ALLOWED_TRANSITIONS; "
         "LedgerError if used to write findings (use record-verdict).",
     ),
     # verdict-feedback (engine's own write path)
     "record-verdict": _Verb(
         _h_record_verdict,
-        "<run> <unit> <findings-json> [attempt]",
-        rejects="StaleVerdict if attempt is older than the unit's current dispatch "
+        "<run> <step> <findings-json> [attempt]",
+        rejects="StaleVerdict if attempt is older than the step's current dispatch "
         "generation; InvalidTransition from a non-verdict-writable state.",
     ),
     "set-gaps-open": _Verb(_h_set_gaps_open, "<run> <n>"),
-    "set-enumerated-units": _Verb(_h_set_enumerated_units, "<run> <unit> <payload-json>"),
-    "set-verdict-decision": _Verb(_h_set_verdict_decision, "<run> <gate-unit> <decision>"),
+    "set-enumerated-steps": _Verb(_h_set_enumerated_steps, "<run> <step> <payload-json>"),
+    "set-verdict-decision": _Verb(_h_set_verdict_decision, "<run> <gate-step> <decision>"),
     # agent steering verbs (the reshape surface)
     "init": _Verb(
         _h_init,
-        "<run> <units-json> [backend] [loop-phase]",
+        "<run> <steps-json> [backend] [loop-phase]",
         rejects="LedgerExists if the run-id already exists (existing ledger "
         "untouched); LedgerError on an unknown backend.",
     ),
     "force-skip": _Verb(
         _h_force_skip,
-        "<run> <unit> <reason>",
+        "<run> <step> <reason>",
         rejects="LedgerError on a blank reason (R20); InvalidTransition from a state "
         "with no terminal-skip edge. A skip cannot bury an existing finding.",
     ),
-    "add-unit": _Verb(
-        _h_add_unit,
-        "<run> <unit-id> [depends-on-json] [phase]",
-        rejects="LedgerError on a duplicate id or a dependency on an unknown unit.",
+    "add-step": _Verb(
+        _h_add_step,
+        "<run> <step-id> [depends-on-json] [phase]",
+        rejects="LedgerError on a duplicate id or a dependency on an unknown step.",
     ),
     "reshape-deps": _Verb(
         _h_reshape_deps,
-        "<run> <unit-id> <depends-on-json>",
-        rejects="LedgerError on a dependency cycle or an edge to an unknown unit.",
+        "<run> <step-id> <depends-on-json>",
+        rejects="LedgerError on a dependency cycle or an edge to an unknown step.",
     ),
     "register-session": _Verb(
         _h_register_session,
@@ -463,7 +463,17 @@ def _cli(argv):
         return 2
     verb = _VERBS.get(argv[0])
     if verb is None:
-        sys.stderr.write(f"ledger.py: unknown subcommand {argv[0]!r}\n")
+        # U7 (concept-vocabulary rename) HARD-CUT the work-node verbs to their
+        # `step` spelling with NO deprecated aliases: verbs are never persisted
+        # (KTD-4), so the only callers are this repo's skills (updated atomically)
+        # and driving agents. An agent holding a pre-rename verb name must not be
+        # left guessing — point it at `describe`, the machine-readable mirror of
+        # `_VERBS` that docs/contracts/agent-tool-surface.md contractually tells it
+        # to orient by. Exit 2 (bad args), never a silent no-op.
+        sys.stderr.write(
+            f"ledger.py: unknown subcommand {argv[0]!r}\n"
+            "  run `python3 lib/ledger.py describe` for the authoritative verb set.\n"
+        )
         return 2
     try:
         return verb.handler(argv)

@@ -21,10 +21,10 @@ Subcommands:
                        (plan_step=review_plan, gaps_open=0) so the next pulse goes
                        straight to enumerate -> work; at a handoff it behaves like
                        continue; in the work phase it is a no-op (work advances by
-                       unit verdicts, not by fiat).
+                       step verdicts, not by fiat).
     abort <run>        loop_phase -> "done" (cancellation marker).
-    retry <run> <unit> stalled unit -> pending (clears last_error via ledger.py).
-    skip <run> <unit>  stalled unit -> terminal-skip (terminal for I-2).
+    retry <run> <step> stalled step -> pending (clears last_error via ledger.py).
+    skip <run> <step>  stalled step -> terminal-skip (terminal for I-2).
 
 Ambiguity: if no run-id is given and >1 run is resumable, list them and ask the
 operator to disambiguate (exit 0 — surfacing, not an error).
@@ -198,7 +198,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
         # handoff -> work: route through pulse.advance_to_phase so the recipe's
         # producer fires the same way it does on the auto-flip path (P0 #1
         # fix-pass A.2 — without this the manual resume would silently skip
-        # emission and the work-loop would start with empty units). Legacy
+        # emission and the work-loop would start with empty steps). Legacy
         # ledgers (no recipe) fall through to set_loop inside the helper,
         # preserving v0.1.x behavior. handoff_paused=False is written by both
         # paths inside the helper.
@@ -264,13 +264,13 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
 
       * plan  — mark the plan satisfied: plan_step="review_plan" + gaps_open=0,
         the exact pre-satisfied state W inits with. The next pulse's next_plan_step
-        returns "done" → enumerate_plan_units → plan→work, no re-derivation. We
-        arm a pulse so the model enumerates the (already-in-context) plan's units.
+        returns "done" → enumerate_plan_steps → plan→work, no re-derivation. We
+        arm a pulse so the model enumerates the (already-in-context) plan's steps.
       * handoff  — identical to `continue` (handoff→work); delegate so there's one
         code path for the handoff advance.
-      * work  — no-op: the work-loop advances by unit verdicts, not by fiat;
-        forcing it would skip unfinished units. Point the operator at the real
-        levers (let units land, or `abort`).
+      * work  — no-op: the work-loop advances by step verdicts, not by fiat;
+        forcing it would skip unfinished steps. Point the operator at the real
+        levers (let steps land, or `abort`).
       * done  — already terminal.
     """
     try:
@@ -288,8 +288,8 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     if phase == "work":
         sys.stdout.write(
             f"resume: run {run_id!r} is in the work phase — nothing to force-"
-            "advance. The work-loop exits when its units reach terminal verdicts "
-            "(only P3 remaining). Let the units land, or `/auto-resume abort "
+            "advance. The work-loop exits when its steps reach terminal verdicts "
+            "(only P3 remaining). Let the steps land, or `/auto-resume abort "
             f"{run_id}` to stop.\n"
         )
         return 0
@@ -307,7 +307,7 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     ledger.set_gaps_open(repo_root, run_id, 0)
     return _emit_rearm(
         run_id,
-        "plan declared satisfied (advance); arm a pulse to enumerate work units",
+        "plan declared satisfied (advance); arm a pulse to enumerate work steps",
     )
 
 
@@ -321,28 +321,28 @@ def _cmd_abort(ledger, repo_root: str, run_id: str) -> int:
     return 0
 
 
-def _cmd_retry(ledger, repo_root: str, run_id: str, unit_id: str) -> int:
+def _cmd_retry(ledger, repo_root: str, run_id: str, step_id: str) -> int:
     # stalled -> pending; ledger.transition clears last_error on this edge.
     try:
-        ledger.transition(repo_root, run_id, unit_id, "pending")
+        ledger.transition(repo_root, run_id, step_id, "pending")
     except (ledger.LedgerError,) as exc:
         sys.stderr.write(f"resume: {exc}\n")
         return 1
     sys.stdout.write(
-        f"resume: unit {unit_id!r} of run {run_id!r} retried "
+        f"resume: step {step_id!r} of run {run_id!r} retried "
         f"(stalled -> pending; last_error cleared).\n"
     )
     return 0
 
 
-def _cmd_skip(ledger, repo_root: str, run_id: str, unit_id: str) -> int:
+def _cmd_skip(ledger, repo_root: str, run_id: str, step_id: str) -> int:
     try:
-        ledger.transition(repo_root, run_id, unit_id, "terminal-skip")
+        ledger.transition(repo_root, run_id, step_id, "terminal-skip")
     except (ledger.LedgerError,) as exc:
         sys.stderr.write(f"resume: {exc}\n")
         return 1
     sys.stdout.write(
-        f"resume: unit {unit_id!r} of run {run_id!r} skipped (-> terminal-skip).\n"
+        f"resume: step {step_id!r} of run {run_id!r} skipped (-> terminal-skip).\n"
     )
     return 0
 
@@ -379,7 +379,7 @@ def run(argv) -> int:
         sub = rest.pop(0)
 
     run_arg = rest[0] if len(rest) >= 1 else None
-    unit_arg = rest[1] if len(rest) >= 2 else None
+    step_arg = rest[1] if len(rest) >= 2 else None
 
     if sub in (None, "continue"):
         run_id = _resolve_run_or_disambiguate(ledger, repo_root, run_arg)
@@ -416,12 +416,12 @@ def run(argv) -> int:
         return _cmd_abort(ledger, repo_root, run_id)
 
     if sub in ("retry", "skip"):
-        if not run_arg or not unit_arg:
-            sys.stderr.write(f"resume: {sub} requires <run> <unit>\n")
+        if not run_arg or not step_arg:
+            sys.stderr.write(f"resume: {sub} requires <run> <step>\n")
             return 2
         if sub == "retry":
-            return _cmd_retry(ledger, repo_root, run_arg, unit_arg)
-        return _cmd_skip(ledger, repo_root, run_arg, unit_arg)
+            return _cmd_retry(ledger, repo_root, run_arg, step_arg)
+        return _cmd_skip(ledger, repo_root, run_arg, step_arg)
 
     sys.stderr.write(f"resume: unknown subcommand {sub!r}\n")
     return 2

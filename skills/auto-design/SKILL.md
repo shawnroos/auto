@@ -81,7 +81,7 @@ criterion yet.
 ### 3. Elicit typed verification — `references/verification-rubric.md` + `references/verification-taxonomy.md`
 
 Turn the goal's definition of done into the `verification` array auto attaches to
-a gate unit. Coach **deterministic-first**: if a claim *can* be a command +
+a gate step. Coach **deterministic-first**: if a claim *can* be a command +
 check, it must be — don't reach for a judge to dodge writing the check.
 
 The four criterion types, with the field shape the validator enforces
@@ -118,7 +118,7 @@ auto's existing, engine-enforced bounds on the recipe's `iteration` block:
   before the engine forces `iterate → exit`.
 - `iteration.bound.max_wall_seconds` (optional) — caps cumulative *active*
   wall-time for open-ended work.
-- Plus the ledger's existing per-unit stall and per-run dead-chain gates.
+- Plus the ledger's existing per-step stall and per-run dead-chain gates.
 
 A gate whose only verdict source is a judge (`revise_until_clean`-style) needs
 an `advisor_judge` or `human` criterion or it can never resolve — flag that.
@@ -139,7 +139,7 @@ python3 -c "import sys; sys.path.insert(0,'lib'); from _bootstrap import load_li
 m=load_lib_module('topology-render'); print(m.render(<draft-recipe-dict>, 60))"
 ```
 
-Show the card, point at where the gate unit (carrying the `verification` array)
+Show the card, point at where the gate step (carrying the `verification` array)
 sits, and ask "does this match the loop you want?" Iterate on the draft until it
 does.
 
@@ -149,7 +149,7 @@ Two writes, each through an existing skill (no consolidation — both backends
 stay separate; this skill orchestrates them). R3.
 
 - **Recipe → `auto-author-recipe`.** Hand it the confirmed draft, with the
-  `verification` array on the unit named by `iteration.gate_step`. That skill
+  `verification` array on the step named by `iteration.gate_step`. That skill
   owns the write gate: `lib/recipes.py::validate_and_lint` before write, atomic
   mkstemp+rename, and read-back verification. The typed `verification` block
   rides on the *existing* `iteration.gate_step` mechanism — no new producer, no

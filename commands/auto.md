@@ -89,7 +89,7 @@ report. `advisor` is in `allowed-tools` for this reason. Full behavior:
 
 `/auto <plan>` now PROCEEDS past the plan→work handoff by default. Pass
 `--review-plan` to opt in to the pause for first-pass plans where you
-want to inspect the planned units before work fans out. The legacy
+want to inspect the planned steps before work fans out. The legacy
 `auto` positional token still parses (no-op against the new default)
 so scripted callers keep working without forced rewrites. A one-time
 stderr notice fires on the first post-upgrade run.

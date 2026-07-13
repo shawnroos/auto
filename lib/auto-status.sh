@@ -4,8 +4,8 @@
 # /auto-status [<run>] reads the durable ledger(s) at
 # <repo>/.claude/auto/<run-slug>.json and prints a human-readable status:
 # loop_phase (+ plan_step), the CACHED exit_predicate_result (blockers / majors
-# / minors / gaps_open / met), per-unit states, the driver, last_beat_at +
-# liveness vs the orphan GRACE, and any stalled units with their last_error
+# / minors / gaps_open / met), per-step states, the driver, last_beat_at +
+# liveness vs the orphan GRACE, and any stalled steps with their last_error
 # cause. With no run-id and >1 active run, it lists them.
 #
 # READ-ONLY: it never mutates the ledger, never arms a pulse, never takes a write

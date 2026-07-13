@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# auto U5b unit test: lib/unit_emitters.py (3 producers + registry) and the
+# auto U5b unit test: lib/step_producers.py (3 producers + registry) and the
 # ledger.transition_and_emit primitive (atomic emit).
 #
 # v0.3.0 / U3 additions: iterate_template producer scenarios + judge_winner
-# gate-unit generalization + backward-compat fallback + counter-integration
+# gate-step generalization + backward-compat fallback + counter-integration
 # through emit_within_phase.
 #
 # SELF-CONTAINED inline harness.
 #
 # Scenarios:
 #   1. registry ↔ validator consistency: producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES
-#   2. plan_output_to_work_steps: 1 plan unit's enumerated_units → N work units
-#   3. plan_output_to_work_steps: empty enumerated_units → [] (vacuous, no crash)
-#   4. judge_winner_to_work_steps: emits the WINNER's enumerated_units
+#   2. plan_output_to_work_steps: 1 plan step's enumerated_steps → N work steps
+#   3. plan_output_to_work_steps: empty enumerated_steps → [] (vacuous, no crash)
+#   4. judge_winner_to_work_steps: emits the WINNER's enumerated_steps
 #   5. judge_winner_to_work_steps: no winner in findings → raises (hard error)
 #   6. plan_output_to_paired_builders: 2 biased builders + comparator depends_on both
 #   7. transition_and_emit: emits + advances + recomputes atomically within ONE
 #      _with_locked_ledger body; a reader BETWEEN the emit and the advance sees
 #      a consistent (predicate-recomputed-post-emit) snapshot — there is no
 #      torn intermediate state (G3/F2 property). Narrower than "one write": no
-#      external observer can witness new-phase-without-new-units OR
-#      new-units-without-recomputed-predicate.
+#      external observer can witness new-phase-without-new-steps OR
+#      new-steps-without-recomputed-predicate.
 #   8. producers are pure: a registry producer never calls a ledger mutator (smoke:
 #      transition_and_emit with a real producer completes without deadlock)
-#   9. iterate_template happy: 3 plan-* units, counter=3, emit_count=1 → plan-4
+#   9. iterate_template happy: 3 plan-* steps, counter=3, emit_count=1 → plan-4
 #  10. iterate_template happy: emit_count=2 → plan-4, plan-5
-#  11. iterate_template counter-resume: counter=7, units plan-1..plan-4, emit_count=1 → plan-8
-#  12. judge_winner generalized: iteration.gate_step="custom_judge", no "judge" unit → still emits
-#  13. judge_winner backward-compat: no iteration field, unit "judge" exists → still emits
+#  11. iterate_template counter-resume: counter=7, steps plan-1..plan-4, emit_count=1 → plan-8
+#  12. judge_winner generalized: iteration.gate_step="custom_judge", no "judge" step → still emits
+#  13. judge_winner backward-compat: no iteration field, step "judge" exists → still emits
 #  14. iterate_template no-iteration: ledger lacks iteration field → raises
 #  15. iterate_template missing counter: legacy ledger w/o iteration_emit_count → defaults to 0
 #  16. emit_count validation: 0, 11, "five", -1, 1.5, True all raise
@@ -59,7 +59,7 @@ import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module, load_ledger
-producers = load_lib_module("unit_emitters")
+producers = load_lib_module("step_producers")
 recipes = load_lib_module("recipes")
 ledger = load_ledger()
 op = sys.argv[2]
@@ -67,18 +67,18 @@ op = sys.argv[2]
 
 # U3 helper: build an in-memory ledger dict for the iterate_template producer
 # to read. The producer is PURE — it reads ledger.iteration, ledger.emit_templates,
-# ledger.iteration_emit_count, and the gate unit's dispatch_context.
+# ledger.iteration_emit_count, and the gate step's dispatch_context.
 # decision_payload. No flock needed; no file needed.
-def _ledger_for_iter(units, *, gate_unit="judge", template_name="plan-candidate",
+def _ledger_for_iter(steps, *, gate_step="judge", template_name="plan-candidate",
                     id_prefix="plan-", phase="plan", counter=0,
                     invokes=None, missing_iteration=False, missing_template=False):
     led = {
-        "steps": units,
+        "steps": steps,
         "iteration_emit_count": counter,
     }
     if not missing_iteration:
         led["iteration"] = {
-            "gate_step": gate_unit, "emit_template": template_name,
+            "gate_step": gate_step, "emit_template": template_name,
         }
     if not missing_template:
         led["emit_templates"] = {
@@ -107,8 +107,8 @@ elif op == "a1-empty":
 
 # ─── v0.6.0 U8: brainstorm_output_to_plan_step ──────────────────────────────
 elif op == "brainstorm-emit":
-    # The brainstorm unit carries its requirements-doc output on
-    # dispatch_context.requirements_doc; the producer materializes ONE plan unit
+    # The brainstorm step carries its requirements-doc output on
+    # dispatch_context.requirements_doc; the producer materializes ONE plan step
     # (5-key dict) carrying that path, invoking next_plan_step (a1's plan shape).
     led = {"steps": [
         {"id": "brainstorm", "phase": "brainstorm",
@@ -123,7 +123,7 @@ elif op == "brainstorm-emit":
 
 elif op == "brainstorm-pure":
     # The producer is PURE — it must not mutate the input ledger dict. Snapshot
-    # the units list identity + content before/after; both must be unchanged.
+    # the steps list identity + content before/after; both must be unchanged.
     led = {"steps": [
         {"id": "brainstorm", "phase": "brainstorm",
          "dispatch_context": {"requirements_doc": "docs/x.md"}}]}
@@ -132,8 +132,8 @@ elif op == "brainstorm-pure":
     after = json.dumps(led, sort_keys=True)
     print("unchanged" if before == after else "MUTATED")
 
-elif op == "brainstorm-no-unit":
-    # No brainstorm unit at all → RecipeError (not a silent empty emit).
+elif op == "brainstorm-no-step":
+    # No brainstorm step at all → RecipeError (not a silent empty emit).
     led = {"steps": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
     try:
         producers.brainstorm_output_to_plan_step(led, "plan"); print("NO-RAISE")
@@ -141,7 +141,7 @@ elif op == "brainstorm-no-unit":
         print("raised")
 
 elif op == "brainstorm-no-output":
-    # brainstorm unit exists but carries no requirements_doc → RecipeError
+    # brainstorm step exists but carries no requirements_doc → RecipeError
     # (mirrors A2/A4 producer failure; silent empty emit would leave plan vacuous).
     led = {"steps": [{"id": "brainstorm", "phase": "brainstorm", "dispatch_context": {}}]}
     try:
@@ -150,7 +150,7 @@ elif op == "brainstorm-no-output":
         print("raised")
 
 elif op == "judge-winner":
-    # Fix-pass I (P0): winner_unit_id lives on judge.dispatch_context, NOT on
+    # Fix-pass I (P0): winner_step_id lives on judge.dispatch_context, NOT on
     # findings — record_verdict's findings normalize strips every key except
     # {severity, note}, so the prior findings-based contract was unreachable
     # from any production write path. dispatch_context is preserved by
@@ -166,7 +166,7 @@ elif op == "judge-winner":
 elif op == "judge-no-winner":
     led = {"steps": [
         {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_steps": []}},
-        # No winner_unit_id on dispatch_context, AND any leftover findings
+        # No winner_step_id on dispatch_context, AND any leftover findings
         # are ignored by the new contract (the producer only reads dispatch_context).
         {"id": "judge", "phase": "work", "dispatch_context": {}, "findings": [{"note": "undecided"}]},
     ]}
@@ -199,18 +199,18 @@ elif op == "atomic-emit":
         recipe={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
-        units=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
+        steps=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
                 "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]}}])
     appended = ledger.transition_and_emit(repo, run, "work",
         producers.plan_output_to_work_steps)
     led = ledger.read_ledger(repo, run)
-    work_units = [u["id"] for u in led["steps"] if u["phase"] == "work"]
-    # phase advanced to work; 2 work units appended; predicate saw them (not met —
+    work_steps = [u["id"] for u in led["steps"] if u["phase"] == "work"]
+    # phase advanced to work; 2 work steps appended; predicate saw them (not met —
     # they're pending, so all_steps_terminal is False).
     print("%s|%s|%s|%s" % (
         led["loop_phase"], ",".join(sorted(appended)),
-        ",".join(sorted(work_units)), led["exit_predicate_result"]["met"]))
+        ",".join(sorted(work_steps)), led["exit_predicate_result"]["met"]))
 
 # ─── U3 (v0.3.0) iterate_template scenarios ───────────────────────────────
 # The _ledger_for_iter helper is defined at the top (it must precede the
@@ -218,9 +218,9 @@ elif op == "atomic-emit":
 # in-memory ledger and exercises one facet of the iterate_template contract.
 
 elif op == "iter-tpl-happy-1":
-    # 3 plan-* units exist, counter=3, emit_count=1 (default) → plan-4
+    # 3 plan-* steps exist, counter=3, emit_count=1 (default) → plan-4
     led = _ledger_for_iter(
-        units=[
+        steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
             {"id": "plan-3", "phase": "plan"},
@@ -235,7 +235,7 @@ elif op == "iter-tpl-happy-1":
 elif op == "iter-tpl-happy-2":
     # emit_count=2 → plan-4, plan-5
     led = _ledger_for_iter(
-        units=[
+        steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
             {"id": "plan-3", "phase": "plan"},
@@ -251,7 +251,7 @@ elif op == "iter-tpl-counter-resume":
     # Counter=7 but only plan-1..plan-4 exist (partial-emit crash deleted 5/6/7).
     # emit_count=1 → plan-8 (NOT plan-5). Closes round-3 P0-R3-2.
     led = _ledger_for_iter(
-        units=[
+        steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
             {"id": "plan-3", "phase": "plan"},
@@ -265,7 +265,7 @@ elif op == "iter-tpl-counter-resume":
     print(",".join(u["id"] for u in out))
 
 elif op == "judge-generalized":
-    # iteration.gate_step = "custom_judge", NO unit named "judge" exists.
+    # iteration.gate_step = "custom_judge", NO step named "judge" exists.
     # judge_winner_to_work_steps must find the gate via iteration.gate_step.
     led = {
         "iteration": {"gate_step": "custom_judge"},
@@ -328,15 +328,15 @@ elif op == "iter-tpl-missing-counter":
 
 elif op == "iter-tpl-emit-count-validation":
     # All out-of-range or wrong-type values must raise RecipeError.
-    base_units = [
+    base_steps = [
         {"id": "plan-1", "phase": "plan"},
         {"id": "judge", "phase": "work",
          "dispatch_context": {"decision_payload": {"emit_count": None}}},
     ]
     results = []
     for bad in (0, 11, "five", -1, 1.5, True):
-        base_units[1]["dispatch_context"]["decision_payload"]["emit_count"] = bad
-        led = _ledger_for_iter(units=list(base_units), counter=1)
+        base_steps[1]["dispatch_context"]["decision_payload"]["emit_count"] = bad
+        led = _ledger_for_iter(steps=list(base_steps), counter=1)
         try:
             producers.iterate_template(led, "plan")
             results.append(f"{bad!r}:NO-RAISE")
@@ -368,15 +368,15 @@ elif op == "iter-tpl-bad-template-ref":
 
 elif op == "iter-tpl-integration":
     # Integration: emit_within_phase + iterate_template prove the counter
-    # advances atomically PER emitted unit through the locked body. Without
-    # this scenario, both the producer (pure read) and _apply_emit (per-unit
+    # advances atomically PER emitted step through the locked body. Without
+    # this scenario, both the producer (pure read) and _apply_emit (per-step
     # bump) could be individually correct but the composition broken.
     repo = tempfile.mkdtemp(); run = "iter-integration"
     ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a2", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="plan",
-        units=[
+        steps=[
             {"id": "plan-1", "phase": "plan", "state": "fixed"},
             {"id": "plan-2", "phase": "plan", "state": "fixed"},
             {"id": "plan-3", "phase": "plan", "state": "fixed"},
@@ -413,7 +413,7 @@ elif op == "iter-tpl-integration":
 elif op == "a1-passthrough":
     # U14 passthrough (DELIBERATE-FAIL before the Site-1 fix): an enumerated
     # item carrying a non-empty depends_on must materialize onto the ledger
-    # unit. Driven through the FULL transition_and_emit path so _normalize_unit's
+    # step. Driven through the FULL transition_and_emit path so _normalize_step's
     # edge preservation is proven end-to-end (not just the producer's return dict).
     # Prints "w2.depends_on|w1.depends_on": after the fix "w1|" (w2 depends on
     # w1; w1 carries none — regression coverage in the same assertion). On
@@ -423,7 +423,7 @@ elif op == "a1-passthrough":
         recipe={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
-        units=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
+        steps=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
                 "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}},
                     {"id": "w2", "invokes": {}, "depends_on": ["w1"]}]}}])
@@ -449,7 +449,7 @@ elif op == "judge-passthrough":
     print(";".join(u["id"] + ":" + ",".join(u["depends_on"]) for u in out))
 
 elif op == "a4-depends-stay-empty":
-    # U14 Site 4 STAYS []: plan_output_to_paired_builders has no per-unit source
+    # U14 Site 4 STAYS []: plan_output_to_paired_builders has no per-step source
     # (it builds the SAME plan twice, bias-differentiated). Even when a plan item
     # carries a depends_on, the two builders must materialize with []. Regression
     # guard that the passthrough change does NOT leak into Sites 2 & 4.
@@ -464,15 +464,15 @@ elif op == "origination-ce":
     # instruct the model to emit a per-item depends_on — otherwise the model is
     # never told to produce edges and passthrough carries []. Asserts the
     # contract is real, not just injectable. _bound_plan_path({}) -> None (no
-    # plan unit), so the bare-dict no-plan branch is exercised without a crash.
+    # plan step), so the bare-dict no-plan branch is exercised without a crash.
     ce = load_lib_module("backend-ce")
-    env = ce.Backend().enumerate_plan_units({})
+    env = ce.Backend().enumerate_plan_steps({})
     print("yes" if "depends_on" in env["invocation"] else "no")
 
 elif op == "origination-native":
     # U14 part (i), native counterpart — same contract in backend-native.py.
     nat = load_lib_module("backend-native")
-    env = nat.Backend().enumerate_plan_units({})
+    env = nat.Backend().enumerate_plan_steps({})
     print("yes" if "depends_on" in env["invocation"] else "no")
 PYEOF
 }
@@ -482,7 +482,7 @@ it "producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES (no drift)"
 assert_eq "match" "$(em registry-consistency)"
 
 # ─── Scenario 2-3: plan_output_to_work_steps ────────────────────────────────
-it "plan_output_to_work_steps: enumerated → work units (phase set)"
+it "plan_output_to_work_steps: enumerated → work steps (phase set)"
 assert_eq "w1:work,w2:work" "$(em a1-emit)"
 
 it "plan_output_to_work_steps: empty enumerated → [] (vacuous, no crash)"
@@ -490,31 +490,31 @@ assert_eq "0" "$(em a1-empty)"
 
 # ─── v0.6.0 U8: brainstorm_output_to_plan_step ──────────────────────────────
 # The spine producer that fires on arrival at `plan` from `brainstorm`: it reads
-# the brainstorm unit's requirements-doc output and emits ONE structural plan
-# unit (5-key dict), invoking next_plan_step so the downstream plan→work
+# the brainstorm step's requirements-doc output and emits ONE structural plan
+# step (5-key dict), invoking next_plan_step so the downstream plan→work
 # machinery is identical to a1's plan-entry path. Registry symmetry (Scenario 1)
 # already asserts this producer is in BOTH REGISTRY and V1_PRODUCER_NAMES.
-it "U8: brainstorm_output_to_plan_step → one plan unit (5-key, requirements-doc carried)"
+it "U8: brainstorm_output_to_plan_step → one plan step (5-key, requirements-doc carried)"
 assert_eq "1|plan|plan|next_plan_step|docs/brainstorms/x-requirements.md|depends_on,dispatch_context,id,invokes,phase" "$(em brainstorm-emit)"
 
 it "U8: brainstorm_output_to_plan_step is pure (no ledger mutation)"
 assert_eq "unchanged" "$(em brainstorm-pure)"
 
-it "U8: no brainstorm unit → RecipeError (not a silent empty emit)"
-assert_eq "raised" "$(em brainstorm-no-unit)"
+it "U8: no brainstorm step → RecipeError (not a silent empty emit)"
+assert_eq "raised" "$(em brainstorm-no-step)"
 
-it "U8: brainstorm unit with missing requirements_doc → RecipeError"
+it "U8: brainstorm step with missing requirements_doc → RecipeError"
 assert_eq "raised" "$(em brainstorm-no-output)"
 
 # ─── Scenario 4-5: judge_winner_to_work_steps ───────────────────────────────
-it "judge_winner_to_work_steps: emits the WINNER's units"
+it "judge_winner_to_work_steps: emits the WINNER's steps"
 assert_eq "wB" "$(em judge-winner)"
 
 it "judge_winner_to_work_steps: no winner → raises (hard error)"
 assert_eq "raised" "$(em judge-no-winner)"
 
 # ─── Scenario 6: plan_output_to_paired_builders (v0.3.0 U6 — compare structural) ──
-# Before v0.3.0 U6, this producer synthesized 3 units (build-clarity, build-perf,
+# Before v0.3.0 U6, this producer synthesized 3 steps (build-clarity, build-perf,
 # compare). U6 moved compare into a4.json's `steps[]` (declared with
 # depends_on: [build-clarity, build-perf] — forward-referencing the bias-builder
 # emit_template id_prefix). The producer now produces ONLY the two builders;
@@ -524,11 +524,11 @@ it "plan_output_to_paired_builders: 2 biased builders only; compare is structura
 assert_eq "build-clarity,build-perf|clarity,perf|no" "$(em a4-pair)"
 
 # ─── Scenario 7: transition_and_emit atomic (G3/F2) ─────────────────────────
-it "transition_and_emit: appends units + advances phase + predicate sees post-emission set"
+it "transition_and_emit: appends steps + advances phase + predicate sees post-emission set"
 assert_eq "work|w1,w2|w1,w2|False" "$(em atomic-emit)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# U3 (v0.3.0) — iterate_template producer + judge_winner gate-unit generalization
+# U3 (v0.3.0) — iterate_template producer + judge_winner gate-step generalization
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ─── Scenario 9: iterate_template happy emit_count=1 ────────────────────────
@@ -540,11 +540,11 @@ it "iterate_template: emit_count=2 → plan-4,plan-5"
 assert_eq "plan-4,plan-5" "$(em iter-tpl-happy-2)"
 
 # ─── Scenario 11: counter-resume after partial-emit crash (P0-R3-2) ─────────
-it "iterate_template: counter=7 with units 1-4 → plan-8 (monotonic counter wins)"
+it "iterate_template: counter=7 with steps 1-4 → plan-8 (monotonic counter wins)"
 assert_eq "plan-8" "$(em iter-tpl-counter-resume)"
 
 # ─── Scenario 12: judge_winner generalized via iteration.gate_step ──────────
-it "judge_winner_to_work_steps: reads gate_unit from iteration block (no 'judge' literal)"
+it "judge_winner_to_work_steps: reads gate_step from iteration block (no 'judge' literal)"
 assert_eq "wB" "$(em judge-generalized)"
 
 # ─── Scenario 13: judge_winner backward-compat (no iteration field) ─────────
@@ -568,9 +568,9 @@ it "iterate_template: emit_template names unknown key → raises RecipeError"
 assert_eq "raised" "$(em iter-tpl-bad-template-ref)"
 
 # ─── Scenario 18: integration through emit_within_phase (counter atomicity) ─
-# Proves the counter-producer contract composes: producer returns N units off
+# Proves the counter-producer contract composes: producer returns N steps off
 # pre-emit counter=3, _apply_emit appends them under flock and bumps the
-# counter PER unit (3 → 5). Without this, both sides could be individually
+# counter PER step (3 → 5). Without this, both sides could be individually
 # green but the composition broken.
 it "iterate_template ⇆ emit_within_phase: 2 emits → counter advances 3→5 atomically"
 assert_eq "plan-4,plan-5|plan-4,plan-5|5" "$(em iter-tpl-integration)"
@@ -581,27 +581,27 @@ assert_eq "plan-4,plan-5|plan-4,plan-5|5" "$(em iter-tpl-integration)"
 
 # ─── Passthrough (DELIBERATE-FAIL before Site 1): edge survives materialization ─
 # An enumerated item carrying depends_on:["w1"] must land on the materialized
-# ledger unit (full transition_and_emit path, so _normalize_unit preservation is
+# ledger step (full transition_and_emit path, so _normalize_step preservation is
 # proven too). RED on current code ("|"); GREEN after ("w1|").
-it "U14 Site1: enumerated item's depends_on materializes onto the work unit (deliberate-fail)"
+it "U14 Site1: enumerated item's depends_on materializes onto the work step (deliberate-fail)"
 assert_eq "w1|" "$(em a1-passthrough)"
 
 # ─── Passthrough Site 3 (judge winner) ──────────────────────────────────────
 it "U14 Site3: judge_winner_to_work_steps propagates the winner's per-item depends_on"
 assert_eq "wA:;wB:wA" "$(em judge-passthrough)"
 
-# ─── Regression: Sites 2 & 4 have no per-unit source → STAY [] ───────────────
-it "U14 Site4: paired builders stay depends_on:[] (no per-unit source; passthrough must not leak here)"
+# ─── Regression: Sites 2 & 4 have no per-step source → STAY [] ───────────────
+it "U14 Site4: paired builders stay depends_on:[] (no per-step source; passthrough must not leak here)"
 assert_eq "build-clarity:;build-perf:" "$(em a4-depends-stay-empty)"
 
 # ─── Origination part (i): the enumerate op instructs per-item depends_on ────
-it "U14 originate: CE enumerate_plan_units invocation instructs per-item depends_on"
+it "U14 originate: CE enumerate_plan_steps invocation instructs per-item depends_on"
 assert_eq "yes" "$(em origination-ce)"
 
-it "U14 originate: native enumerate_plan_units invocation instructs per-item depends_on"
+it "U14 originate: native enumerate_plan_steps invocation instructs per-item depends_on"
 assert_eq "yes" "$(em origination-native)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "unit-emitters.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "step-producers.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

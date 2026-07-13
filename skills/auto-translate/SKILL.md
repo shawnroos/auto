@@ -15,7 +15,7 @@ description: >
 
 # auto-translate (loop/recipe → execution tree)
 
-An **execution tree** is the runnable shape of a recipe: which units run in
+An **execution tree** is the runnable shape of a recipe: which steps run in
 parallel, in what wave order, which fan-out `do_step` children nest under which
 parent, and which substrate the loop targets. This skill derives that tree from a
 recipe and shows it — it does NOT invent a new artifact and it does NOT dispatch.
@@ -24,18 +24,18 @@ reports the result. (R9, R10, R11.)
 
 It sits DOWNSTREAM of loop design: hand it a recipe that `auto-design` /
 `auto-author-recipe` already wrote (or a built-in like `a2` / `a4`). It composes
-with the dependency engine (`lib/dispatcher.py::ready_units` / `dispatch_batch`)
+with the dependency engine (`lib/dispatcher.py::ready_steps` / `dispatch_batch`)
 and the two-handoff `do_step` split rather than replacing them — the same readiness
 frontier drives both the preview here and the real run.
 
 ## What stays true throughout
 
-- **Parallelism is implicit in the DAG — no wave field.** Units sharing a phase
-  with independent `depends_on` run concurrently; a multi-dep unit is a fan-in.
+- **Parallelism is implicit in the DAG — no wave field.** Steps sharing a phase
+  with independent `depends_on` run concurrently; a multi-dep step is a fan-in.
   The derivation reuses `dispatcher._is_ready` / `_dependency_satisfied` to walk
   waves — it never invents a second parallelism model. (KTD6.)
 - **The fan-out `cap` bounds each wave.** A wave wider than `cap` spills its excess
-  to the next wave, exactly as `dispatch_batch` leaves over-cap units pending for a
+  to the next wave, exactly as `dispatch_batch` leaves over-cap steps pending for a
   later call. Pass the active work-loop cap.
 - **Native subagent-tree is the only executable target this run.** `workflow-script`
   is a **routing label + a topology preview**, an inert annotation — NOT a runnable
@@ -81,10 +81,10 @@ print('waves:', res['waves'])"
 `derive_execution_tree(recipe, cap)` returns `{recipe, cap, waves, nesting,
 substrate, emitted, preview}` — pure and deterministic. It:
 
-- **expands producer-produced units first** — recipes like `a4` declare their paired
+- **expands producer-produced steps first** — recipes like `a4` declare their paired
   builders in `expected_emit_outputs` (materialized at runtime by a phase-boundary
   producer, NOT in `steps[]`), so the derivation synthesizes placeholder nodes for
-  them before the frontier walk. `a2`'s parallel units are static — no expansion.
+  them before the frontier walk. `a2`'s parallel steps are static — no expansion.
 - **walks ordered waves** from the expanded `depends_on` DAG, bounding each to `cap`.
 - **nests fan-out `do_step` children** under their producer parent.
 - **routes a substrate** (step 4).
@@ -102,7 +102,7 @@ rendered over the DERIVED waves rather than the raw recipe.
 Report the routing decision and what it means:
 
 - **`subagent-tree`** — the default and the **only executable** target this run
-  (`lib/dispatcher.py::dispatch_batch`). A loop with per-unit ce-work/`review`
+  (`lib/dispatcher.py::dispatch_batch`). A loop with per-step ce-work/`review`
   dispatch or long-lived verdicts routes here.
 - **`workflow-script`** — an **inert routing label** for a self-contained bounded
   parallel-fan-in loop (single-phase, no `do_step`/`review` op, an engine-enforced
@@ -129,7 +129,7 @@ executes on the native subagent-tree — the label is a forward-looking annotati
 - It does not dispatch, mutate the ledger, or touch a run. Derivation is pure; the
   real run goes through `/auto` and `dispatch_batch`.
 - It does not replace `auto-design` / `auto-author-recipe` (it consumes their
-  output) or the dependency engine (it reuses `ready_units` / `_is_ready`). (R11.)
+  output) or the dependency engine (it reuses `ready_steps` / `_is_ready`). (R11.)
 - It does not invent a new recipe field or a wave annotation — parallelism stays
   implicit in `depends_on` (KTD6, no recipe-format change).
 
@@ -137,7 +137,7 @@ executes on the native subagent-tree — the label is a forward-looking annotati
 
 - **Reuse the frontier, don't re-derive it.** Waves come from
   `dispatcher._is_ready`, bounded by `cap` — never a second parallelism model.
-- **Expand producer-produced units before the walk**, or a recipe whose builders
+- **Expand producer-produced steps before the walk**, or a recipe whose builders
   live in `expected_emit_outputs` (a4) yields only `{plan}` and its dependents
   never become ready.
 - **Native is the only executable target.** `workflow-script` is a routing label +

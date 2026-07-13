@@ -24,7 +24,7 @@
 #   on-stop:
 #     - predicate unmet (driver=self) -> blocks (decision JSON)
 #     - met -> allows stop (no decision)
-#     - all_steps_terminal gate: counters zero but a stalled unit lurking -> blocked
+#     - all_steps_terminal gate: counters zero but a stalled step lurking -> blocked
 #     - handoff-paused (driver=manual) -> ALLOWS stop (engine's own stop-point signal)
 #     - stop_hook_active==true -> ALLOWS stop (loop-safety; no inescapable block)
 #   goal-status freshness:
@@ -110,7 +110,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"orphanrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -123,7 +123,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util, datetime, json, os
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleorphan",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"staleorphan",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 # Hand-age last_beat_at well beyond GRACE_SECONDS while keeping driver=self
 # (so ONLY the time branch can flag it — proves the GRACE path, not driver).
 old = (datetime.datetime.now(datetime.timezone.utc)
@@ -144,7 +144,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -159,7 +159,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"terminal-skip"}])
+L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -186,7 +186,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"unmet",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
@@ -223,27 +223,27 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # verdict-returned with ONLY a minor (does not gate) -> terminal -> met==true.
 L.init_ledger(repo,"clean",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"nit"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"nit"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── on-stop: all_steps_terminal gate (counters zero, stalled unit lurking) ───
-it "on-stop: counters zero but a stalled unit lurks -> still BLOCKED (I-2 gate)"
+# ─── on-stop: all_steps_terminal gate (counters zero, stalled step lurking) ───
+it "on-stop: counters zero but a stalled step lurks -> still BLOCKED (I-2 gate)"
 REPO="$(mkrepo stop-stalled)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# A dispatched unit -> stalled (NOT terminal). No findings anywhere, so
+# A dispatched step -> stalled (NOT terminal). No findings anywhere, so
 # blockers==majors==0, but all_steps_terminal==false => met==false.
-L.init_ledger(repo,"lurking",backend="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
+L.init_ledger(repo,"lurking",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"lurking","U1","stalled")
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
-it "on-stop: the stalled-unit block reason cites units-not-terminal (not findings)"
-assert_contains "$out" "units not yet terminal"
+it "on-stop: the stalled-step block reason cites steps-not-terminal (not findings)"
+assert_contains "$out" "steps not yet terminal"
 
 # ─── on-stop: handoff-paused (driver=manual) -> ALLOWS stop ──────────────────────
 # The handoff pause is the engine's OWN signal that this is a valid stop-point
@@ -254,7 +254,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"handoffstop",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"handoffstop",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffstop",driver="manual")
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -268,7 +268,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"unmet2",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{"stop_hook_active":true}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "" "$(jget "$out" decision)"
@@ -295,7 +295,7 @@ s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.mo
 # older than DRIVER_SELF_STALE_SECONDS (yet still younger than GRACE, so this is
 # specifically the stale-block window, not the orphan window).
 L.init_ledger(repo,"deadself",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
 p = L.ledger_path(repo,"deadself")
@@ -315,7 +315,7 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # init_ledger stamps last_beat_at = now (fresh) and driver=self; unmet (blocker).
 L.init_ledger(repo,"liveself",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
@@ -330,7 +330,7 @@ import sys, importlib.util, json, datetime
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"deadself2",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
 p = L.ledger_path(repo,"deadself2")
@@ -350,11 +350,11 @@ printf 'not json' > "${REPO}/.claude/auto/x.json"
 assert_eq "0" "$?"
 
 # ─── goal-status freshness: met flips true->false (re-review reopens) ─────────
-# A clean unit (met==true) is re-reviewed and the verdict reopens a blocker.
+# A clean step (met==true) is re-reviewed and the verdict reopens a blocker.
 # Because goal-status reads exit_predicate_result.met DIRECTLY (no cached copy),
 # the status MUST flip done:true -> done:false in the SAME snapshot — proving
 # there is no staleness window where it says done while the ledger says not.
-it "goal-status: done flips true with a clean (met) unit"
+it "goal-status: done flips true with a clean (met) step"
 REPO="$(mkrepo gs-fresh)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
@@ -362,7 +362,7 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Start clean: verdict-returned with no gating findings -> terminal -> met.
 L.init_ledger(repo,"reopen",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[]}])
 PYEOF
 out1="$(bash "$GOAL_STATUS_SH" "$REPO" reopen)"
 assert_eq "True" "$(jget "$out1" done)"
@@ -387,7 +387,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"contrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"contrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"contrun",driver="manual")
 PYEOF
 # fix-round-6 P1: continue RE-records driving_session_id, so it needs the
@@ -412,7 +412,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"abortrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"abortrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" abort abortrun >/dev/null
 phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','abortrun')['loop_phase'])")"
@@ -426,7 +426,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.init_ledger(repo,"pauserun",backend="ce",loop_phase="work",
-              units=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
+              steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 L.set_loop(repo,"pauserun",driver="self",beat=True)  # a LIVE chain.
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" pause pauserun "run bf auth login --env dev4" >/dev/null
@@ -449,13 +449,13 @@ assert_eq "arm-pulse" "$(jget "$cout" action)"
 assert_eq "None" "$(rd "l['loop'].get('blocked_on')")"
 
 # ─── resume retry: stalled -> pending + clears last_error ─────────────────────
-it "resume retry: stalled unit -> pending"
+it "resume retry: stalled step -> pending"
 REPO="$(mkrepo resume-retry)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"retryrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
+L.init_ledger(repo,"retryrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"retryrun","U1","stalled",last_error={"call":"plan","message":"boom","at":"2026-01-01T00:00:00Z"})
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" retry retryrun U1 >/dev/null
@@ -466,13 +466,13 @@ le="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LED
 assert_eq "None" "$le"
 
 # ─── resume skip: stalled -> terminal-skip ────────────────────────────────────
-it "resume skip: stalled unit -> terminal-skip (counts as terminal for I-2)"
+it "resume skip: stalled step -> terminal-skip (counts as terminal for I-2)"
 REPO="$(mkrepo resume-skip)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"skiprun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
+L.init_ledger(repo,"skiprun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"skiprun","U1","stalled")
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" skip skiprun U1 >/dev/null
@@ -487,7 +487,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 for r in ("alpha","beta"):
-    L.init_ledger(repo,r,backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+    L.init_ledger(repo,r,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
     L.set_loop(repo,r,driver="manual")  # both resumable (orphaned).
 PYEOF
 out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH")"
@@ -502,7 +502,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"solo",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"solo",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"solo",driver="manual")
 PYEOF
 # fix-round-6 P1: bare resume defaults to `continue`, which re-records

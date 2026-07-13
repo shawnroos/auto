@@ -105,7 +105,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"orphanrun",driver="manual")  # -> is_orphaned() true.
 PYEOF
 reset_log
@@ -137,7 +137,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"liverun",driver="manual")  # orphaned by predicate...
 PYEOF
 # Resolve the pulse-lock path and HOLD it from a backgrounded Python "live pulse".
@@ -189,7 +189,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # init_ledger sets driver=self + last_beat_at=now -> NOT orphaned.
-L.init_ledger(repo,"freshrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"freshrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
 reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
@@ -202,7 +202,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"terminal-skip"}])
+L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done",driver="manual")
 PYEOF
 reset_log
@@ -218,7 +218,7 @@ repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # handoff phase + driver=manual -> is_orphaned() would be TRUE, but handoff_paused
 # excludes it from auto-resume.
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 reset_log
@@ -232,7 +232,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"optinrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"optinrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"optinrun",driver="manual")
 PYEOF
 reset_log
@@ -250,7 +250,7 @@ pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"runawayrun",backend="ce",loop_phase="work",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"runawayrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"runawayrun",driver="manual")
 PYEOF
 reset_log

@@ -118,7 +118,7 @@ def aggregate(criteria, programmatic_results: dict, judge_verdicts: dict) -> dic
     literal "decision").
 
     Args:
-      criteria: the unit's ``verification`` list (each ``{id, type, ...}``).
+      criteria: the step's ``verification`` list (each ``{id, type, ...}``).
       programmatic_results: ``{criterion_id: "pass"|"fail"}`` for programmatic
         criteria already run by the engine.
       judge_verdicts: ``{criterion_id: "pass"|"fail"}`` for model_judge /

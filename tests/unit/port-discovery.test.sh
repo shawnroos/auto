@@ -12,7 +12,7 @@
 #      distinct ports.
 #
 # These tests exercise the private helpers (_scan_in_use_ports, _pick_port)
-# directly so the unit doesn't depend on cmux availability.
+# directly so the step doesn't depend on cmux availability.
 
 set -uo pipefail
 

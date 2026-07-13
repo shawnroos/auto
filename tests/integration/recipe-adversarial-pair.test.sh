@@ -5,15 +5,15 @@
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # Unit tests on plan_output_to_paired_builders (producers.test.sh scenario 6)
 # cover the producer in isolation; a1's integration test covers the engine wire
-# for the simple case. Neither proves the engine routes a4 — one plan unit
+# for the simple case. Neither proves the engine routes a4 — one plan step
 # producing TWO bias-differentiated builders plus a comparator gating on both —
 # through the auto-flip path correctly (the comparator's depends_on links the
 # emitted builder ids, so a routing bug that drops one builder makes the
 # comparator unsatisfiable).
 #
 # STRUCTURE: init via auto.run with --recipe a4; the recipe declares one plan
-# unit + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
-# Prime the plan unit's enumerated_units (2 items so the bias-applied builders
+# step + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
+# Prime the plan step's enumerated_steps (2 items so the bias-applied builders
 # carry real plan_items), set gaps_open=0 + plan_step=review_plan,
 # dispatch_pulse(auto=True). Auto-flip fires the producer which produces:
 #   build-clarity (depends_on=[]),
@@ -21,10 +21,10 @@
 #   compare       (depends_on=[build-clarity, build-perf]).
 #
 # Scenarios:
-#   1. green: 2 enumerated items → 3 work units (build-clarity, build-perf,
+#   1. green: 2 enumerated items → 3 work steps (build-clarity, build-perf,
 #      compare) with correct depends_on and bias dispatch_context.
-#   2. deliberate-fail: empty enumerated_units → producer returns [] (per
-#      producers.py lines 113-116), no work units appear.
+#   2. deliberate-fail: empty enumerated_steps → producer returns [] (per
+#      producers.py lines 113-116), no work steps appear.
 
 set -uo pipefail
 
@@ -46,11 +46,11 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Drive a4 from a primed plan-done state through one dispatch_pulse. Args:
-#   $1 = empty_plan:  "0" | "1" (1 → don't stash any enumerated_units, deliberate-fail)
+#   $1 = empty_plan:  "0" | "1" (1 → don't stash any enumerated_steps, deliberate-fail)
 #   $2 = producer_off: "0" | "1" (1 → monkey-patch transition_and_emit to a no-op,
 #                                deliberate-fail control parity with a1's test)
 # Returns a pipe-delimited string:
-#   loop_phase | emitted_work_unit_ids (sorted) | compare.depends_on (sorted) | builder_biases (sorted)
+#   loop_phase | emitted_work_step_ids (sorted) | compare.depends_on (sorted) | builder_biases (sorted)
 drive_a4() {
   empty_plan="${1:-0}"
   producer_off="${2:-0}"
@@ -75,7 +75,7 @@ os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
 # Step 1: init via /auto plan.md --recipe a4. Creates a ledger with one plan
-# unit (`plan`) + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
+# step (`plan`) + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan, "--recipe", "a4"])
 run_id = None
@@ -84,7 +84,7 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         run_id = os.path.basename(f).rsplit(".json", 1)[0]
         break
 
-# Step 2: prime the plan unit's enumerated_units. The producer passes these
+# Step 2: prime the plan step's enumerated_steps. The producer passes these
 # through as plan_items on each builder's dispatch_context (per producers.py
 # lines 119-126). For the deliberate-fail scenario we set an EXPLICIT EMPTY list
 # (not absent): v0.4.3's producer handshake distinguishes "model ran enumerate
@@ -92,11 +92,11 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 # "model hasn't enumerated yet" (key absent) — which waits. The empty-emission
 # property under test is the former, so we set [].
 if not empty_plan:
-    ledger.set_enumerated_units(repo, run_id, "plan",
+    ledger.set_enumerated_steps(repo, run_id, "plan",
         [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
          {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
 else:
-    ledger.set_enumerated_units(repo, run_id, "plan", [])
+    ledger.set_enumerated_steps(repo, run_id, "plan", [])
 
 # Set gaps_open=0 + plan_step=review_plan so plan-met fires.
 ledger.set_gaps_open(repo, run_id, 0)
@@ -105,7 +105,7 @@ ledger.set_loop(repo, run_id, plan_step="review_plan")
 # Step 2b (deliberate-fail control parity with a1): monkey-patch
 # transition_and_emit to a no-op BEFORE the pulse fires. If the engine routes
 # through this primitive (it does in the green branch), the no-op produces
-# zero new units even though the recipe declares a producer for {to:work}.
+# zero new steps even though the recipe declares a producer for {to:work}.
 if producer_off:
     def _noop(*a, **kw): pass
     ledger.transition_and_emit = _noop
@@ -117,13 +117,13 @@ with contextlib.redirect_stdout(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-work_units = [u for u in led["steps"] if u.get("phase") == "work"]
-work_ids = sorted(u["id"] for u in work_units)
-compare = next((u for u in work_units if u["id"] == "compare"), None)
+work_steps = [u for u in led["steps"] if u.get("phase") == "work"]
+work_ids = sorted(u["id"] for u in work_steps)
+compare = next((u for u in work_steps if u["id"] == "compare"), None)
 compare_deps = ",".join(sorted(compare["depends_on"])) if compare else ""
 builder_biases = sorted(
     (u.get("dispatch_context") or {}).get("bias", "")
-    for u in work_units if u["id"].startswith("build-")
+    for u in work_steps if u["id"].startswith("build-")
 )
 print("%s|%s|%s|%s" % (
     led["loop_phase"], ",".join(work_ids),
@@ -131,10 +131,10 @@ print("%s|%s|%s|%s" % (
 PYEOF
 }
 
-# ─── Scenario 1: green — 3 work units with correct dependencies and bias ────
+# ─── Scenario 1: green — 3 work steps with correct dependencies and bias ────
 it "fix-pass C T3 GREEN: a4 plan-done → producer produces build-clarity, build-perf, compare"
 res="$(drive_a4 0 0)"
-# Expected: loop_phase=work; work units {build-clarity, build-perf, compare}
+# Expected: loop_phase=work; work steps {build-clarity, build-perf, compare}
 # sorted alphabetically; compare.depends_on = [build-clarity, build-perf];
 # builder biases = [clarity, perf]. All four fields are load-bearing:
 #   - work_ids proves the producer ran and produced the right shape
@@ -146,14 +146,14 @@ case "$res" in
   *) fail "expected 'work|build-clarity,build-perf,compare|build-clarity,build-perf|clarity,perf', got '$res'" ;;
 esac
 
-# ─── Scenario 2: deliberate-fail — empty enumerated_units → no builders ─────
-it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_units → producer returns [], no builders (compare structural remains)"
+# ─── Scenario 2: deliberate-fail — empty enumerated_steps → no builders ─────
+it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_steps → producer returns [], no builders (compare structural remains)"
 res_empty="$(drive_a4 1 0)"
 # v0.3.0 U6: compare is now STRUCTURAL (declared in a4.json's steps[]) so it
-# is on the ledger from init regardless of producer output. Empty enumerated_units
+# is on the ledger from init regardless of producer output. Empty enumerated_steps
 # returns [] from the producer; transition_and_emit appends no builders then
 # advances loop_phase to "work". So:
-#   loop_phase=work, work_ids="compare" (the structural unit; no builders),
+#   loop_phase=work, work_ids="compare" (the structural step; no builders),
 #   compare_deps="build-clarity,build-perf" (declared in the recipe),
 #   biases="" (no builders emitted).
 # This is the DELIBERATE-FAIL CONTROL per memory
@@ -172,7 +172,7 @@ esac
 # proof (parity with the a1 integration test): a green scenario alone could be
 # vacuous if the primitive were never called; this asserts that disabling the
 # primitive flips the outcome.
-it "fix-pass C T3 DELIBERATE-FAIL (no-op): transition_and_emit no-op'd → no work units appear"
+it "fix-pass C T3 DELIBERATE-FAIL (no-op): transition_and_emit no-op'd → no work steps appear"
 res_off="$(drive_a4 0 1)"
 case "$res_off" in
   "work|build-clarity,build-perf,compare|build-clarity,build-perf|clarity,perf")

@@ -122,7 +122,7 @@ elif op == "v1-workflow":
 
     wf, tier = recipes.resolve("legacy", repo)      # read shim fires here
     recipes.validate(wf)                            # the v2 validator accepts it
-    projected = [recipes.unit_for(u, wf) for u in wf["steps"]]
+    projected = [recipes.step_for(u, wf) for u in wf["steps"]]
     out = {
         "tier": tier,
         "steps": [u["id"] for u in wf["steps"]],
@@ -139,7 +139,7 @@ elif op == "producer-registry":
     # The producer-name VALUE carried by the v1 record must resolve in the REGISTRY
     # after upgrade (the value renamed with the key).
     ledger = load_lib_module("ledger")
-    producers = load_lib_module("unit_emitters")
+    producers = load_lib_module("step_producers")
     led = ledger.read_ledger(repo, "parked")
     name = led["phase_transitions"][0]["producer"]
     out = {

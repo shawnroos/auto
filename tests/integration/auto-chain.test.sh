@@ -82,16 +82,16 @@ jqf() { "$PY" -c "import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])" "
 echo "dispatch-chain.test.sh"
 
 # ─── Scenario 1: full chain exits on work predicate, emits minors report ──────
-# A work-loop run that reaches exit: one unit verdict-returned with ONLY a minor
-# finding (minors do not gate; the unit is therefore terminal). The driver runs
-# the work-loop: ready/auto is a no-op (no pending units), and the REAL pulse
+# A work-loop run that reaches exit: one step verdict-returned with ONLY a minor
+# finding (minors do not gate; the step is therefore terminal). The driver runs
+# the work-loop: ready/auto is a no-op (no pending steps), and the REAL pulse
 # reads exit_predicate_result.met==true off the ledger, flips to done, and emits
 # a report whose minor_findings carry the minor for operator promotion (R6).
 #
 # NOTE: this scenario starts in loop_phase="work". The plan->work / plan->handoff
 # transition is exercised structurally in Scenario 3; see the gaps noted there
 # (the committed engine cannot currently drive a live plan->work flip with
-# pending work units, because the plan predicate also requires all_steps_terminal
+# pending work steps, because the plan predicate also requires all_steps_terminal
 # and nothing writes gaps_open). Starting in work isolates the work-loop exit +
 # report path, which is what R5/R6 specify.
 it "full chain: work-loop exits on work predicate (met), emits minors report (R6)"
@@ -104,7 +104,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py); orch=load("dispat
 
 run="full-chain"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned",
+                   steps=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"minor","note":"nit on U1"}]}],
                    loop_phase="work")
 
@@ -118,7 +118,7 @@ BUDGET=20; report=None
 for _ in range(BUDGET):
     L=ledger.read_ledger(repo, run)
     if L.get("loop_phase")=="work":
-        ready=orch.ready_units(repo, run)
+        ready=orch.ready_steps(repo, run)
         if ready:
             orch.dispatch_batch(repo, run, ready, cap=4, launch_fn=launch_fn)
             orch.converge(repo, run)
@@ -146,15 +146,15 @@ else
 fi
 
 # ─── Scenario 2: findings-closure loop (the livelock guard) ───────────────────
-# Seed a work-loop unit verdict-returned WITH one blocker. Drive the work-loop:
-# the pulse applies a fix (verdict-returned -> fixed). A `fixed` unit with a STALE
+# Seed a work-loop step verdict-returned WITH one blocker. Drive the work-loop:
+# the pulse applies a fix (verdict-returned -> fixed). A `fixed` step with a STALE
 # blocker must NOT let the loop exit (all_steps_terminal==false). The driver then
 # re-enqueues (fixed -> pending), re-dispatches, and the agent re-reviews with a
 # CLEAN verdict -> verdict-returned with no blockers -> met.
 #
 # GAP THIS SURFACES: per the plan's state-grammar table the PULSE owns BOTH
 # verdict-returned->fixed AND fixed->pending (re-enqueue). The committed pulse
-# (advance_work_loop / _ready_fix_unit) only does verdict-returned->fixed; nothing
+# (advance_work_loop / _ready_fix_step) only does verdict-returned->fixed; nothing
 # re-enqueues a fixed-with-stale-blocker, so a driver relying on the pulse alone
 # livelocks at `fixed`. We assert the closure REQUIREMENT and bound the loop so
 # the gap fails LOUDLY (never hangs).
@@ -168,7 +168,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py); orch=load("dispat
 
 run="closure"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned",
+                   steps=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
 
@@ -185,7 +185,7 @@ for _ in range(BUDGET):
             no_stale_exit=False
     if pred.get("met"):
         break
-    ready=orch.ready_units(repo, run)
+    ready=orch.ready_steps(repo, run)
     if ready:
         orch.dispatch_batch(repo, run, ready, cap=4, launch_fn=launch_fn)
         orch.converge(repo, run)
@@ -210,7 +210,7 @@ fstate2="$(jqf "$out2" final_state)"
 if [ "$nostale2" = "True" ] && [ "$met2" = "True" ]; then
   pass
 elif [ "$pulses2" = "$budget2" ] && [ "$met2" != "True" ]; then
-  fail "LIVELOCK GAP: loop never closed in ${budget2} pulses (final unit state=${fstate2}). Committed pulse does the verdict-to-fixed edge but NOT the fixed-to-pending re-enqueue, so a stale-blocker fixed unit is never re-reviewed. no_stale_exit=${nostale2}"
+  fail "LIVELOCK GAP: loop never closed in ${budget2} pulses (final step state=${fstate2}). Committed pulse does the verdict-to-fixed edge but NOT the fixed-to-pending re-enqueue, so a stale-blocker fixed step is never re-reviewed. no_stale_exit=${nostale2}"
 else
   fail "met=${met2} no_stale_exit=${nostale2} final_state=${fstate2} pulses=${pulses2}"
 fi
@@ -229,7 +229,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py)
 
 run="closure-noreenqueue"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned",
+                   steps=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
 BUDGET=12; exited=False
@@ -249,7 +249,7 @@ assert_eq "False" "$exited2b"
 # This re-runs Scenario 2's FULL setup — WITH launch_fn re-dispatch ready to fire
 # — but disables the pulse's fixed->pending re-enqueue via the test-only hatch
 # CLAUDE_AUTO_TEST_NO_REENQUEUE=1 (schema §7). With the re-enqueue gone the
-# unit fixes once (verdict-returned -> fixed) and is NEVER re-enqueued, so it is
+# step fixes once (verdict-returned -> fixed) and is NEVER re-enqueued, so it is
 # never re-dispatched, the stale blocker holds, and the loop livelocks at `fixed`.
 # If the re-enqueue is removed from advance_work_loop, this whole closure goes RED
 # in Scenario 2 — this control proves the positive scenario's exit comes from the
@@ -264,7 +264,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py); orch=load("dispat
 
 run="closure-noreenqueue-engine"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned",
+                   steps=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"boom"}]}],
                    loop_phase="work")
 
@@ -276,7 +276,7 @@ for _ in range(BUDGET):
     L=ledger.read_ledger(repo, run)
     if L.get("exit_predicate_result",{}).get("met"):
         exited=True; break
-    ready=orch.ready_units(repo, run)
+    ready=orch.ready_steps(repo, run)
     if ready:
         orch.dispatch_batch(repo, run, ready, cap=4, launch_fn=launch_fn)
         orch.converge(repo, run)
@@ -319,7 +319,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py)
 
 run="handoff-manual"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"pending"}], loop_phase="handoff")
+                   steps=[{"id":"U1","state":"pending"}], loop_phase="handoff")
 intent=pulse.dispatch_pulse(repo, run)
 L=ledger.read_ledger(repo, run)
 print(json.dumps({
@@ -362,14 +362,14 @@ run="handoff-auto"
 # must seed the zero-gap count explicitly to model a completed review. (A plan
 # ledger before any review runs is NOT met — that is the deepen-loop guard.)
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned","findings":[]}],
+                   steps=[{"id":"U1","state":"verdict-returned","findings":[]}],
                    loop_phase="plan", plan_step="review_plan")
 ledger.set_gaps_open(repo, run, 0)  # a real review ran and found zero gaps.
-# v0.4.3 producer handshake: the model must have ENUMERATED the plan's work units
-# before plan→work transitions (else it'd flip to a work phase with no units).
+# v0.4.3 producer handshake: the model must have ENUMERATED the plan's work steps
+# before plan→work transitions (else it'd flip to a work phase with no steps).
 # This test exercises handoff ROUTING (auto-flip vs manual-pause), so stash the
-# units the model would have produced; the gate then lets the auto-flip proceed.
-ledger.set_enumerated_units(repo, run, "U1", [{"id":"w1","invokes":{}}])
+# steps the model would have produced; the gate then lets the auto-flip proceed.
+ledger.set_enumerated_steps(repo, run, "U1", [{"id":"w1","invokes":{}}])
 L=ledger.read_ledger(repo, run)
 met_plan=L.get("exit_predicate_result",{}).get("met")
 # Exercise the auto handoff branch directly (the engine function), as the pulse would.
@@ -395,7 +395,7 @@ else
 fi
 
 # ─── Scenario 4: dispatcher-driven fan-out + in-flight cap resize ───────────
-# 6 independent pending work units. Wave 1: driver picks cap=4 -> 4 dispatched,
+# 6 independent pending work steps. Wave 1: driver picks cap=4 -> 4 dispatched,
 # 2 left pending. Wave 2: driver RESIZES to cap=2 (machine pressure) -> the
 # remaining 2 dispatch. Confirms the DRIVER (not the pulse) decides batch size,
 # per-wave, resizable.
@@ -408,16 +408,16 @@ def load(n,p):
 ledger=load("ledger",ledger_py); orch=load("dispatcher",orch_py)
 
 run="fanout"
-units=[{"id":"U%d"%i,"state":"pending"} for i in range(1,7)]
-ledger.init_ledger(repo, run, backend="native", units=units, loop_phase="work")
+steps=[{"id":"U%d"%i,"state":"pending"} for i in range(1,7)]
+ledger.init_ledger(repo, run, backend="native", steps=steps, loop_phase="work")
 
 def n_disp():
     return sum(1 for u in ledger.read_ledger(repo, run)["steps"] if u["state"]=="dispatched")
 
-r1=orch.ready_units(repo, run)
+r1=orch.ready_steps(repo, run)
 res1=orch.dispatch_batch(repo, run, r1, cap=4)
 d1=n_disp()
-r2=orch.ready_units(repo, run)
+r2=orch.ready_steps(repo, run)
 res2=orch.dispatch_batch(repo, run, r2, cap=2)
 d2=n_disp()
 print(json.dumps({
@@ -453,7 +453,7 @@ ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py)
 
 run="goaled"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"verdict-returned",
+                   steps=[{"id":"U1","state":"verdict-returned",
                            "findings":[{"severity":"blocker","note":"open"}]}],
                    loop_phase="work")
 intent=pulse.dispatch_pulse(repo, run)   # one advance; predicate still unmet -> hook HOLDS

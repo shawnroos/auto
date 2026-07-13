@@ -13,10 +13,10 @@
 # Scenarios (mapped to the U4 plan, tested against pulse.py's ACTUAL surface):
 #   1. predicate NOT met -> pulse advances one step + signals re-arm (action=rearm)
 #   2. predicate met -> emits report, action=stop, does NOT re-arm
-#   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
+#   3. stalled step (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. backend raises mid-pulse -> unit.last_error recorded + unit marked stalled;
+#   4. backend raises mid-pulse -> step.last_error recorded + step marked stalled;
 #      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
@@ -38,7 +38,7 @@
 #      does NOT fire after one un-reviewed pass. Deliberate-fail control replicates
 #      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
 #      outcome (the discriminator).
-#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
+#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a step stuck
 #      `dispatched` past its stall_threshold (the dispatcher rescue-swallow P3
 #      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
 #      stays dispatched.
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
+# init <run> <json-steps> [backend] [phase]  — create a ledger with given steps.
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -131,7 +131,7 @@ echo "pulse-iteration.test.sh"
 # through `iteration.evaluate_decision` and the ledger mutators U2 ships.
 
 # Test driver: a python helper that seeds a ledger with an iteration block,
-# optionally walks the gate unit to a desired state + decision, then runs
+# optionally walks the gate step to a desired state + decision, then runs
 # dispatch_pulse and prints a JSON blob with the post-pulse state.
 u4_driver() {
   "$PY" - "$AUTO_ROOT" "$REPO" "$@" <<'PYEOF'
@@ -147,24 +147,24 @@ op = sys.argv[3]
 
 
 def init_a2(run, *, decision=None, attempts=0, active_wall=0,
-            max_attempts=5, max_wall=None, plan_units=("plan-1","plan-2","plan-3"),
+            max_attempts=5, max_wall=None, plan_steps=("plan-1","plan-2","plan-3"),
             gate_state="verdict-returned", emit_count=None):
-    """Build an A2-shaped ledger: 3 plan units (all 'fixed' so terminal) +
-    a 'judge' gate unit. The gate is walked to ``gate_state`` (default
+    """Build an A2-shaped ledger: 3 plan steps (all 'fixed' so terminal) +
+    a 'judge' gate step. The gate is walked to ``gate_state`` (default
     verdict-returned via record_verdict) and optionally tagged with the
     given ``decision`` via set_verdict_decision."""
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    units = [
+    steps = [
         {"id": pid, "state": "fixed", "phase": "plan",
          "findings": []}
-        for pid in plan_units
+        for pid in plan_steps
     ]
-    units.append({"id": "judge", "state": "pending", "phase": "work",
-                  "depends_on": list(plan_units)})
+    steps.append({"id": "judge", "state": "pending", "phase": "work",
+                  "depends_on": list(plan_steps)})
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     # Seed iteration + emit_templates block.
     def seed(L):
         bound = {"max_attempts": max_attempts}
@@ -180,7 +180,7 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
         }
         L["iteration_attempts"] = attempts
         L["active_wall_seconds"] = active_wall
-        L["iteration_emit_count"] = len(plan_units)
+        L["iteration_emit_count"] = len(plan_steps)
         # Walk gate to verdict-returned via grammar-valid edges if requested.
         for u in L["steps"]:
             if u["id"] == "judge":
@@ -195,26 +195,26 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
             payload = {"emit_count": emit_count}
         m.set_verdict_decision(repo, run, "judge", decision, payload=payload)
     if gate_state == "verdict-returned" and decision == "advance":
-        # Advance requires winner_unit_id for downstream producers; set it.
-        m.set_winner_unit_id(repo, run, "judge", plan_units[0])
+        # Advance requires winner_step_id for downstream producers; set it.
+        m.set_winner_step_id(repo, run, "judge", plan_steps[0])
 
 
-def init_a1(run, units=None):
-    """a1-shape: no iteration block, no gate_unit, no emit_templates. U4
+def init_a1(run, steps=None):
+    """a1-shape: no iteration block, no gate_step, no emit_templates. U4
     must early-return at step 1 with zero ledger writes."""
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    u = units or [{"id": "U1", "state": "verdict-returned",
+    u = steps or [{"id": "U1", "state": "verdict-returned",
                    "findings": [{"severity": "blocker", "note": "open"}]}]
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=u)
+                  steps=u)
 
 
 if op == "advance":
     # GREEN: gate says advance. evaluate_decision returns "advance"; the
     # caller falls through to the standard flow. Because the gate hasn't
-    # set winner_unit_id (no winner needed in this minimal test), the
+    # set winner_step_id (no winner needed in this minimal test), the
     # short-circuit at lines 564-576 should fire normally (work phase, met
     # composed against not-iteration_pending which is False here).
     init_a2("u4-advance", decision="advance", attempts=0)
@@ -229,8 +229,8 @@ if op == "advance":
 
 elif op == "iterate-under-bound":
     # GREEN: gate says iterate, attempts < max. advance_iteration_loop calls
-    # atomic_iterate_step (increment + emit 2 units + reset). After the pulse
-    # the gate is pending again, attempts=2, two new plan units appear,
+    # atomic_iterate_step (increment + emit 2 steps + reset). After the pulse
+    # the gate is pending again, attempts=2, two new plan steps appear,
     # gate depends_on now includes them, and the pulse re-arms.
     init_a2("u4-iter-under", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
@@ -308,7 +308,7 @@ elif op == "finally-crash-accumulates":
     p2 = m.ledger_path(repo, "u4-fin-raise")
     if os.path.exists(p2): os.unlink(p2)
     m.init_ledger(repo, "u4-fin-raise", backend="ce", loop_phase="plan",
-                  units=[{"id": "U1", "state": "dispatched",
+                  steps=[{"id": "U1", "state": "dispatched",
                           "dispatched_at": "2026-01-01T00:00:00Z",
                           "stall_threshold_seconds": 600}])
     before2 = m.read_ledger(repo, "u4-fin-raise").get("active_wall_seconds", 0)
@@ -327,7 +327,7 @@ elif op == "shortcircuit-suppressed-by-iteration":
     # branch would otherwise compute met=True. The short-circuit at lines
     # 564-576 yields; advance_iteration_loop runs FIRST and iterates.
     init_a2("u4-shortcircuit", decision="iterate", attempts=1, emit_count=1)
-    # All plan units terminal + judge verdict-returned with NO findings →
+    # All plan steps terminal + judge verdict-returned with NO findings →
     # blocker=0/major=0/all_steps_terminal=True. Without iteration_pending,
     # met would be True. With it, met=False and the loop iterates.
     led = m.read_ledger(repo, "u4-shortcircuit")
@@ -343,7 +343,7 @@ elif op == "shortcircuit-suppressed-by-iteration":
 elif op == "a1-early-return":
     # R7 a1: no iteration block → advance_iteration_loop returns None at
     # step 1. Zero ledger writes from the helper. The pulse proceeds as
-    # v0.2.1 (a fix-applied advance on the verdict-returned+blocker unit).
+    # v0.2.1 (a fix-applied advance on the verdict-returned+blocker step).
     init_a1("u4-a1")
     before = json.dumps(m.read_ledger(repo, "u4-a1")["steps"][0], sort_keys=True)
     # Probe the helper directly to assert it returns None.
@@ -359,13 +359,13 @@ elif op == "a1-early-return":
     }))
 
 elif op == "w-early-return":
-    # R7 W: same shape as a1 — no iteration block. Different unit set;
+    # R7 W: same shape as a1 — no iteration block. Different step set;
     # helper still early-returns at step 1.
     p = m.ledger_path(repo, "u4-w")
     if os.path.exists(p): os.unlink(p)
     m.init_ledger(repo, "u4-w", backend="ce", loop_phase="work",
                   phase_order=["work"], terminal_phase="work",
-                  units=[{"id": "W1", "state": "verdict-returned",
+                  steps=[{"id": "W1", "state": "verdict-returned",
                           "findings": [{"severity": "blocker", "note": "x"}]}])
     led = m.read_ledger(repo, "u4-w")
     direct = t.pulse_advance.advance_iteration_loop(repo, "u4-w", led)
@@ -384,7 +384,7 @@ elif op == "r9-last-attempt-guidance":
     # be honored before bound trip, so the "next iterate trips bound"
     # text was a lie).
     init_a2("u4-r9-last", decision=None, attempts=5, max_attempts=5)
-    # Add a verdict-returned blocker unit so the pulse produces a rearm.
+    # Add a verdict-returned blocker step so the pulse produces a rearm.
     def seed(L):
         L["steps"].append({
             "id": "X1", "state": "verdict-returned", "phase": "work",
@@ -470,13 +470,13 @@ elif op == "integration-a2-iterate":
     }))
 
 elif op == "integration-a4-iterate":
-    # A4-shape: 1 plan unit, 2 builders ("build-clarity", "build-perf"), and
+    # A4-shape: 1 plan step, 2 builders ("build-clarity", "build-perf"), and
     # a "compare" gate. Comparator writes decision="iterate" with emit_count=
     # 1 → pulse re-emits a 3rd builder + resets compare with extended
     # depends_on.
     p = m.ledger_path(repo, "u4-int-a4")
     if os.path.exists(p): os.unlink(p)
-    units = [
+    steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
         {"id": "build-clarity", "state": "fixed", "phase": "work",
          "depends_on": ["plan-1"], "findings": []},
@@ -487,7 +487,7 @@ elif op == "integration-a4-iterate":
     ]
     m.init_ledger(repo, "u4-int-a4", backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     def seed(L):
         L["iteration"] = {"gate_step": "compare", "emit_template":
                           "bias-builder", "bound": {"max_attempts": 3}}
@@ -506,18 +506,18 @@ elif op == "integration-a4-iterate":
     t.dispatch_pulse(repo, "u4-int-a4")
     led = m.read_ledger(repo, "u4-int-a4")
     builders = sorted(u["id"] for u in led["steps"] if (u.get("id") or "").startswith("build-"))
-    cmp_unit = next(u for u in led["steps"] if u["id"] == "compare")
+    cmp_step = next(u for u in led["steps"] if u["id"] == "compare")
     print(json.dumps({
         "builders": builders,
         "iteration_attempts": led.get("iteration_attempts"),
-        "compare_state": cmp_unit.get("state"),
-        "compare_depends_on": sorted(cmp_unit.get("depends_on") or []),
+        "compare_state": cmp_step.get("state"),
+        "compare_depends_on": sorted(cmp_step.get("depends_on") or []),
     }))
 
 elif op == "shortcircuit-yielded-met-recompose":
     # Per advisor's note (R6): probe that when decision==iterate is set on a
-    # gate unit, the predicate composition gives iteration_pending=True and
-    # met=False even with all-terminal work units.
+    # gate step, the predicate composition gives iteration_pending=True and
+    # met=False even with all-terminal work steps.
     init_a2("u4-r6-recompose", decision="iterate", attempts=0)
     led = m.read_ledger(repo, "u4-r6-recompose")
     pred = led.get("exit_predicate_result") or {}
@@ -537,7 +537,7 @@ it "U4 GREEN advance: evaluate_decision returns advance → caller falls through
 res="$(u4_driver advance)"
 action="$("$PY" -c "import json,sys;d=json.loads(sys.argv[1]);print(d['action'])" "$res")"
 attempts="$("$PY" -c "import json,sys;d=json.loads(sys.argv[1]);print(d['iteration_attempts'])" "$res")"
-# The "advance" path falls through the short-circuit; with no winner_unit_id
+# The "advance" path falls through the short-circuit; with no winner_step_id
 # set, the existing flow doesn't terminate cleanly — the gate is verdict-
 # returned in the work phase. We assert that advance_iteration_loop returned
 # without mutating iteration_attempts.
@@ -688,7 +688,7 @@ else
 fi
 
 # ─── U4 Scenario 14: predicate composition recomposes met under iteration ────
-it "U4 R6 predicate composition: setting decision=iterate on terminal-units ledger → met=False, iteration_pending=True"
+it "U4 R6 predicate composition: setting decision=iterate on terminal-steps ledger → met=False, iteration_pending=True"
 res="$(u4_driver shortcircuit-yielded-met-recompose)"
 pending="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['iteration_pending'])" "$res")"
 met="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['met'])" "$res")"
@@ -756,13 +756,13 @@ def _init_iter(run, **kw):
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     plans = kw.get("plans", ["plan-1","plan-2","plan-3"])
-    units = [{"id": pid, "state": "fixed", "phase": "plan", "findings": []}
+    steps = [{"id": pid, "state": "fixed", "phase": "plan", "findings": []}
              for pid in plans]
-    units.append({"id":"judge","state":"pending","phase":"work",
+    steps.append({"id":"judge","state":"pending","phase":"work",
                   "depends_on":list(plans)})
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     def seed(L):
         bound = {"max_attempts": kw.get("max_attempts", 5)}
         L["iteration"] = {"gate_step": "judge", "emit_template":
@@ -830,7 +830,7 @@ elif op == "df-finally-skipped":
     p = m.ledger_path(repo, "u4-df-fin")
     if os.path.exists(p): os.unlink(p)
     m.init_ledger(repo, "u4-df-fin", backend="ce", loop_phase="plan",
-                  units=[{"id":"U1","state":"dispatched",
+                  steps=[{"id":"U1","state":"dispatched",
                           "dispatched_at":"2026-01-01T00:00:00Z",
                           "stall_threshold_seconds":600}])
     before = m.read_ledger(repo, "u4-df-fin").get("active_wall_seconds", 0)
@@ -866,7 +866,7 @@ result, it always takes the iterate branch — bound is functionally skipped."""
 import os, sys
 p = os.path.join(sys.argv[1], "pulse_advance.py")  # B4: anchor moved to pulse_advance
 src = open(p).read()
-old = 'eval_result = iteration.evaluate_decision(\n        led, gate_unit_id, now_monotonic=time.monotonic()\n    )'
+old = 'eval_result = iteration.evaluate_decision(\n        led, gate_step_id, now_monotonic=time.monotonic()\n    )'
 new = (old + '\n'
        '    if eval_result.get("original_decision") == "iterate":\n'
        '        eval_result["decision_effective"] = "iterate"  # DF#1: bound check skipped\n'
@@ -1024,7 +1024,7 @@ src = open(p).read()
 old = (
     "    try:\n"
     "        iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)\n"
-    "    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
+    "    except (ledger.UnknownStep, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
 )
 if old not in src:
     sys.exit("DF#5 anchor 1 not found")
@@ -1062,7 +1062,7 @@ old = (
     '        ledger.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'
-    '            gate_unit_id,\n'
+    '            gate_step_id,\n'
     '            producer=producer,\n'
     '            new_depends_on=None,\n'
     '        )'
@@ -1071,7 +1071,7 @@ new = (
     '        ledger.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'
-    '            gate_unit_id,\n'
+    '            gate_step_id,\n'
     '            producer=producers.iterate_template,  # DF#6 PATCH\n'
     '            new_depends_on=None,\n'
     '        )'
@@ -1144,7 +1144,7 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
     and the corresponding green-path test."""
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    units = [
+    steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
         {"id": "build-clarity", "state": "fixed", "phase": "work",
          "depends_on": ["plan-1"], "findings": []},
@@ -1155,7 +1155,7 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
     ]
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     def seed(L):
         # iteration WITHOUT emit_template (validator allows it; see
         # lib/recipes.py:380-393). No emit_templates declared either.
@@ -1175,14 +1175,14 @@ def _init_iter_bad_decision(run):
     prove the unwrapped path wedges."""
     p = m.ledger_path(repo, run)
     if os.path.exists(p): os.unlink(p)
-    units = [
+    steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
         {"id": "judge", "state": "pending", "phase": "work",
          "depends_on": ["plan-1"]},
     ]
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     def seed(L):
         L["iteration"] = {"gate_step": "judge", "emit_template":
                           "plan-candidate", "bound": {"max_attempts": 5}}
@@ -1328,14 +1328,14 @@ t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 run = "g2-anw1"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-units = [
+steps = [
     {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
     {"id": "judge", "state": "pending", "phase": "work",
      "depends_on": ["plan-1"]},
 ]
 m.init_ledger(repo, run, backend="ce", loop_phase="work",
               phase_order=["plan","handoff","work"], terminal_phase="work",
-              units=units)
+              steps=steps)
 def seed(L):
     L["iteration"] = {"gate_step": "judge", "emit_template":
                       "plan-candidate", "bound": {"max_attempts": 5}}
@@ -1382,17 +1382,17 @@ else
 fi
 
 # G2 GREEN test #2 (rel-r2-2): when advance_iteration_loop raises a
-# LedgerError SUBCLASS (UnknownUnit / InvalidTransition / StaleVerdict — these
+# LedgerError SUBCLASS (UnknownStep / InvalidTransition / StaleVerdict — these
 # indicate a workflow-bug caller, NOT a torn ledger), F2's try/except must
 # catch it via the NARROWED branch and emit reason="workflow-bug". The bare
 # `except ledger.LedgerError: raise` MUST come AFTER the subclass tuple, or
 # the parent catch would shadow the subclasses (they ARE LedgerError).
 # We monkey-patch advance_iteration_loop on the production pulse module to
-# raise UnknownUnit directly — same shape as a workflow-bug field bug.
+# raise UnknownStep directly — same shape as a workflow-bug field bug.
 # DF cycle (operator probe): swap the except-order in lib/pulse.py so the
 # bare LedgerError catch precedes the subclass tuple → this test sees the
 # raise propagate (no stop intent, no exit_reason on the ledger).
-it "G2 rel-r2-2: ledger.UnknownUnit from advance_iteration_loop → stop reason=workflow-bug + exit_reason persisted"
+it "G2 rel-r2-2: ledger.UnknownStep from advance_iteration_loop → stop reason=workflow-bug + exit_reason persisted"
 g2_recipe="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
@@ -1406,16 +1406,16 @@ run = "g2-relr22"
 p = m.ledger_path(repo, run)
 if os.path.exists(p): os.unlink(p)
 # Plan-loop ledger so the iteration check normally returns None — but the
-# monkey-patched advance_iteration_loop forces an UnknownUnit raise
-# regardless of ledger shape. We seed it with one pending plan unit so
+# monkey-patched advance_iteration_loop forces an UnknownStep raise
+# regardless of ledger shape. We seed it with one pending plan step so
 # dispatch_pulse reaches the iteration check.
-units = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
+steps = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
 m.init_ledger(repo, run, backend="ce", loop_phase="plan",
               phase_order=["plan","work"], terminal_phase="work",
-              units=units)
+              steps=steps)
 
 # Monkey-patch the advance helper — replace advance_iteration_loop with one
-# that raises ledger.UnknownUnit. Post-B4 the function lives in the sibling
+# that raises ledger.UnknownStep. Post-B4 the function lives in the sibling
 # pulse_advance module and the dispatcher calls it qualified
 # (pulse_advance.advance_iteration_loop), so we patch it THERE (patching the
 # pulse-module re-export alias would not affect the qualified call site). The
@@ -1423,7 +1423,7 @@ m.init_ledger(repo, run, backend="ce", loop_phase="plan",
 # (shared via load_lib_module's __file__-keyed cache), so the isinstance
 # check matches.
 def _boom(repo_root, run_id, led):
-    raise m.UnknownUnit("workflow-bug: gate_unit refers to a unit not in steps[]")
+    raise m.UnknownStep("workflow-bug: gate_step refers to a step not in steps[]")
 t.pulse_advance.advance_iteration_loop = _boom
 
 try:
@@ -1455,10 +1455,10 @@ exit_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['exit_reaso
 err_type="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['error_type'])" "$g2_recipe")"
 if [ "$raised" = "False" ] && [ "$intent_action" = "stop" ] \
    && [ "$intent_reason" = "workflow-bug" ] && [ "$exit_kind" = "workflow-bug" ] \
-   && [ "$err_type" = "UnknownUnit" ]; then
+   && [ "$err_type" = "UnknownStep" ]; then
   pass
 else
-  fail "G2 rel-r2-2 expected raised=False action=stop reason=workflow-bug exit_kind=workflow-bug err_type=UnknownUnit; got $g2_recipe"
+  fail "G2 rel-r2-2 expected raised=False action=stop reason=workflow-bug exit_kind=workflow-bug err_type=UnknownStep; got $g2_recipe"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

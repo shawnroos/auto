@@ -7,11 +7,11 @@ routes through ``ledger_core._with_locked_ledger`` (the one RMW primitive), whic
 recomputes the predicate in the SAME atomic snapshot as the write (I-1). Each is a
 single-purpose mutator: ``transition``, ``record_verdict``, ``set_loop``,
 ``set_gaps_open``,
-``set_enumerated_units``, ``set_winner_unit_id``,
+``set_enumerated_steps``, ``set_winner_step_id``,
 ``set_verdict_decision``, ``set_bound_override``, ``set_driving_session_id``,
 ``append_advisor_audit``, ``set_exit_reason``, ``accumulate_active_time``,
 ``increment_iteration_attempts``. The AGENT-facing steering verbs
-(``force_skip``, ``add_unit``, ``reshape_deps``, ``register_session``) live in
+(``force_skip``, ``add_step``, ``reshape_deps``, ``register_session``) live in
 ``ledger_steering``, which imports this module for its two graph helpers.
 
 Sits ABOVE ledger_core in the acyclic DAG (core ← mutators ← producers ← facade):
@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import sys
 
-# Import ledger_core via the standard bootstrap loader (mirrors unit_emitters.py).
+# Import ledger_core via the standard bootstrap loader (mirrors step_producers.py).
 # The ledger surface is loaded from many sites by file path (the test harness
 # uses spec_from_file_location, which does NOT add lib/ to sys.path), so a plain
 # `import ledger_core` is not guaranteed to resolve. Prepending lib/ + routing
@@ -38,41 +38,41 @@ from _bootstrap import DRIVING_SESSION_KEY, load_lib_module  # noqa: E402
 ledger_core = load_lib_module("ledger_core")
 
 
-def transition(repo_root, run_id, unit_id, new_state, **fields):
-    """Grammar-checked unit state change under flock.
+def transition(repo_root, run_id, step_id, new_state, **fields):
+    """Grammar-checked step state change under flock.
 
     Rejects any transition not in ALLOWED_TRANSITIONS (raises InvalidTransition;
-    the ledger is NOT written). Optional ``fields`` update unit attributes in the
+    the ledger is NOT written). Optional ``fields`` update step attributes in the
     same write (e.g. dispatched_at, last_error). Predicate recomputed + atomic.
 
     NOTE: ``record_verdict`` is the dedicated path for dispatched -> verdict-returned
     (it owns findings semantics). ``transition`` can also perform it but does NOT
     touch findings; callers writing findings should use ``record_verdict``.
     """
-    if new_state not in ledger_core.UNIT_STATES:
+    if new_state not in ledger_core.STEP_STATES:
         raise ledger_core.InvalidTransition(f"unknown target state {new_state!r}")
 
     def mutate(ledger):
-        unit = ledger_core._find_unit(ledger, unit_id)
-        current = unit.get("state")
+        step = ledger_core._find_step(ledger, step_id)
+        current = step.get("state")
         if new_state not in ledger_core.ALLOWED_TRANSITIONS.get(current, set()):
             raise ledger_core.InvalidTransition(
-                f"{current!r} -> {new_state!r} not permitted for unit {unit_id!r}"
+                f"{current!r} -> {new_state!r} not permitted for step {step_id!r}"
             )
-        unit["state"] = new_state
+        step["state"] = new_state
         # stalled -> pending (retry) clears last_error per the contract.
         if current == "stalled" and new_state == "pending":
-            unit["last_error"] = None
+            step["last_error"] = None
         # Capture the dispatch-generation counter BEFORE the fields loop (which may
         # itself carry an explicit attempt=) so the mechanical bump below reconciles
         # against the PRE-transition value, not a value the loop just wrote.
-        prev_attempt = int(unit.get("attempt", 0) or 0)
+        prev_attempt = int(step.get("attempt", 0) or 0)
         for key, value in fields.items():
             if key == "findings":
                 raise ledger_core.LedgerError(
                     "use record_verdict() to write findings, not transition()"
                 )
-            unit[key] = value
+            step[key] = value
         # Bug #6 (attempt-identity), made MECHANICAL (P2): the dispatch generation
         # counter MUST advance on every pending -> dispatched edge, in the SAME
         # atomic snapshot as the state change. We bump it HERE — at the transition
@@ -87,15 +87,15 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
         # consistent, a caller that passes nothing still advances by one, and a
         # stale/lower explicit value can never lower the counter. Crucially we use
         # the PRE-loop ``prev_attempt`` — the fields loop above may have written the
-        # passed value into ``unit["attempt"]`` already, so reading it back would
+        # passed value into ``step["attempt"]`` already, so reading it back would
         # double-count.
         if current == "pending" and new_state == "dispatched":
             passed = fields.get("attempt")
-            unit["attempt"] = max(
+            step["attempt"] = max(
                 prev_attempt + 1,
                 int(passed) if passed is not None else 0,
             )
-        return unit["state"]
+        return step["state"]
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
@@ -121,7 +121,7 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
 _VERDICT_WRITABLE_STATES = frozenset({"dispatched", "verdict-returned", "stalled"})
 
 
-def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
+def record_verdict(repo_root, run_id, step_id, findings, attempt=None):
     """{dispatched, verdict-returned, stalled} -> verdict-returned: OVERWRITE
     findings + set verdict_at.
 
@@ -130,9 +130,9 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
     Predicate recomputed in the same atomic snapshot (I-1).
 
     ``attempt`` (Bug #6 — attempt-identity): the dispatch generation the verdict is
-    written FOR. The dispatcher increments a unit's ``attempt`` on each
+    written FOR. The dispatcher increments a step's ``attempt`` on each
     pending->dispatched dispatch; a background agent launched for attempt N carries
-    N here. A verdict whose ``attempt`` is OLDER than the unit's current ``attempt``
+    N here. A verdict whose ``attempt`` is OLDER than the step's current ``attempt``
     is REJECTED (``StaleVerdict``) — it is a stale verdict from a SUPERSEDED attempt
     (e.g. a slow agent A stalled, the operator retried, agent B was dispatched as a
     fresh attempt and verdicted; A then finishes and tries to clobber B's verdict
@@ -140,7 +140,7 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
     tests that do not track attempts behave exactly as before). Equal-attempt is
     ACCEPTED (the legitimate re-review / recovery path).
 
-    Bug #7 (late-verdict recovery): a genuine verdict arriving from a unit currently
+    Bug #7 (late-verdict recovery): a genuine verdict arriving from a step currently
     in ``stalled`` is RECOVERED to verdict-returned (it is real work — see
     ``_VERDICT_WRITABLE_STATES``), UNLESS Bug #6's attempt check rejects it as
     stale. The two interact: recovery is only for the CURRENT attempt; a late
@@ -157,23 +157,23 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
     skip_recovery = ledger_core._test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALLED_RECOVERY")
 
     def mutate(ledger):
-        unit = ledger_core._find_unit(ledger, unit_id)
-        current = unit.get("state")
+        step = ledger_core._find_step(ledger, step_id)
+        current = step.get("state")
 
         # Bug #6: reject a verdict from a superseded attempt BEFORE any write. This
         # is checked first so a stale late verdict is never recovered (it interacts
         # with Bug #7's recovery: only a current-attempt late verdict recovers).
         if not skip_attempt and attempt is not None:
-            cur_attempt = int(unit.get("attempt", 0) or 0)
+            cur_attempt = int(step.get("attempt", 0) or 0)
             if int(attempt) < cur_attempt:
                 raise ledger_core.StaleVerdict(
-                    f"verdict for unit {unit_id!r} carries attempt {attempt} "
+                    f"verdict for step {step_id!r} carries attempt {attempt} "
                     f"but current attempt is {cur_attempt} — superseded; rejected"
                 )
 
-        # Bug #7: a stalled unit's GENUINE late verdict is recoverable. The
+        # Bug #7: a stalled step's GENUINE late verdict is recoverable. The
         # deliberate-fail hatch forces the old (pre-fix) check that ONLY permitted
-        # dispatched/verdict-returned, so a late verdict from a stalled unit is
+        # dispatched/verdict-returned, so a late verdict from a stalled step is
         # lost to InvalidTransition.
         writable = (
             {"dispatched", "verdict-returned"}
@@ -182,15 +182,15 @@ def record_verdict(repo_root, run_id, unit_id, findings, attempt=None):
         )
         if current not in writable:
             raise ledger_core.InvalidTransition(
-                f"{current!r} -> 'verdict-returned' not permitted for unit {unit_id!r}"
+                f"{current!r} -> 'verdict-returned' not permitted for step {step_id!r}"
             )
 
-        unit["state"] = "verdict-returned"
-        unit["findings"] = norm
-        unit["verdict_at"] = ledger_core.now_iso()
+        step["state"] = "verdict-returned"
+        step["findings"] = norm
+        step["verdict_at"] = ledger_core.now_iso()
         # A recovered late verdict is real work — clear any stale last_error so the
-        # unit no longer looks like an unresolved timeout/raise.
-        unit["last_error"] = None
+        # step no longer looks like an unresolved timeout/raise.
+        step["last_error"] = None
         return norm
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
@@ -306,9 +306,9 @@ def _find_depends_on_back_edge(adj):
     cycle, else ``None``. Iterative colour-DFS in insertion (batch) order so the
     edge chosen for removal is deterministic.
 
-    ``adj`` maps a batch unit id → its list of batch-internal dep ids. A dep that
+    ``adj`` maps a batch step id → its list of batch-internal dep ids. A dep that
     is NOT itself an ``adj`` key is a leaf (either an edge to an existing ledger
-    unit or a batch unit with no outgoing edge) and cannot continue a cycle — the
+    step or a batch step with no outgoing edge) and cannot continue a cycle — the
     ``v not in adj`` guard skips it, so ``color[v]`` is never indexed for a
     non-node (no KeyError).
     """
@@ -344,19 +344,19 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
 
     Returns ``(sanitized, dropped)`` — ``sanitized`` is a fresh list of the same
     item dicts with cleaned ``depends_on`` lists; ``dropped`` is a list of
-    ``(unit_id, dep_id, reason)`` for the on-ledger forensic marker.
+    ``(step_id, dep_id, reason)`` for the on-ledger forensic marker.
 
-    An edge ``unit -> dep`` is VALID only if ``dep`` names EITHER a sibling
-    enumerated unit in THIS batch (forward-refs allowed — mirrors
+    An edge ``step -> dep`` is VALID only if ``dep`` names EITHER a sibling
+    enumerated step in THIS batch (forward-refs allowed — mirrors
     ``recipes._validate_depends_on`` tolerating producer-output forward-refs) OR an
     id already present in the ledger. Three failure classes are dropped, because
     each leaves ``dispatcher._is_ready`` unable to ever return True:
       * ``dangling`` — dep names no known id → ``_is_ready`` sees ``dep is None``
         and returns False forever.
-      * ``self`` — a unit depending on itself is never satisfiable.
-      * ``cycle`` — two-or-more units mutually depending → none ever satisfiable.
+      * ``self`` — a step depending on itself is never satisfiable.
+      * ``cycle`` — two-or-more steps mutually depending → none ever satisfiable.
 
-    Edges to existing ledger units cannot re-enter the batch, so only
+    Edges to existing ledger steps cannot re-enter the batch, so only
     batch-internal edges can cycle; cycle-breaking runs over that subgraph alone.
     """
     # Batch node ids (string, non-empty), in declaration order.
@@ -372,7 +372,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
     dropped = []
 
     # Pass 1: drop self-edges and dangling ids, preserving order.
-    cleaned_deps = {}   # unit_id -> [deps kept after pass 1]
+    cleaned_deps = {}   # step_id -> [deps kept after pass 1]
     for it in enumerated:
         if not isinstance(it, dict):
             continue
@@ -386,7 +386,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
                 # malformed model output (a list/dict where a string id belongs):
                 # drop it rather than let `d not in valid_targets` raise TypeError
                 # inside the locked mutate body — a raise here materializes zero
-                # work units, the same stall class this sanitizer exists to prevent.
+                # work steps, the same stall class this sanitizer exists to prevent.
                 dropped.append((uid, d, "dangling"))
                 continue
             if d == uid:
@@ -434,57 +434,57 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
     return sanitized, dropped
 
 
-def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
-    """Persist a plan unit's ``enumerate_plan_units`` output onto its
+def set_enumerated_steps(repo_root, run_id, step_id, enumerated):
+    """Persist a plan step's ``enumerate_plan_steps`` output onto its
     ``dispatch_context.enumerated_steps`` (v0.2.0 U6, the producer-persist).
 
-    Called at plan-done with the backend's enumerated work-unit list. The
-    phase-transition producer (U5b) reads it from here when emitting work units —
+    Called at plan-done with the backend's enumerated work-step list. The
+    phase-transition producer (U5b) reads it from here when emitting work steps —
     so this is the on-ledger bridge between "the plan finished" and "here are its
-    work units," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is
-    a list of partial unit dicts (each at least an ``id``). Raises if the named
-    unit doesn't exist. Atomic (predicate recompute is a no-op here — the plan
-    unit's own state is unchanged — but the write stays on the I-1 path).
+    work steps," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is
+    a list of partial step dicts (each at least an ``id``). Raises if the named
+    step doesn't exist. Atomic (predicate recompute is a no-op here — the plan
+    step's own state is unchanged — but the write stays on the I-1 path).
 
     depends_on GUARD (U14 P2 anti-livelock): each item's model-emitted
     ``depends_on`` is sanitized here — the single chokepoint where runtime model
-    output enters the ledger. An edge that names no known id (dangling), a unit's
+    output enters the ledger. An edge that names no known id (dangling), a step's
     own id (self), or that participates in a cycle would leave the materialized
-    work unit permanently un-``_is_ready`` (``dep is None -> False``, or a
+    work step permanently un-``_is_ready`` (``dep is None -> False``, or a
     mutually-unsatisfiable cycle): never ready, never dispatched, dispatch-timeout
     never fires, ``all_steps_terminal`` false FOREVER → a silent full-run
     livelock. The recipe-authored path already rejects unknown-id references at
     author time (``recipes._validate_depends_on``).
 
-    DROP, don't raise (deliberate divergence from ``set_winner_unit_id``, which
+    DROP, don't raise (deliberate divergence from ``set_winner_step_id``, which
     raises on a bad single reference): this validates a whole BATCH of runtime
     model output, and a raise would abort the persist → the plan phase
-    materializes ZERO work units → also a stall. So invalid edges are dropped and
+    materializes ZERO work steps → also a stall. So invalid edges are dropped and
     recorded on ``dispatch_context.dropped_depends_on_edges`` (a durable, testable
     forensic marker) plus a one-line stderr warning, and the run continues.
-    Valid edges — including forward-refs to sibling enumerated units — are
+    Valid edges — including forward-refs to sibling enumerated steps — are
     preserved verbatim (behavior-preserving happy path).
     """
     if not isinstance(enumerated, list):
-        raise ledger_core.LedgerError("enumerated units must be a list")
+        raise ledger_core.LedgerError("enumerated steps must be a list")
 
     def mutate(ledger):
-        unit = ledger_core._find_unit(ledger, unit_id)
+        step = ledger_core._find_step(ledger, step_id)
         existing_ids = {u.get("id") for u in ledger.get("steps", [])}
         sanitized, dropped = _sanitize_enumerated_depends_on(
             enumerated, existing_ids
         )
-        dc = unit.setdefault("dispatch_context", {})
+        dc = step.setdefault("dispatch_context", {})
         dc["enumerated_steps"] = list(sanitized)
         if dropped:
             # U6: the forensic dropped-edge record keys the offending node as
-            # `step` (v1 spelled it `unit`; format_compat maps it on read).
+            # `step` (v1 spelled it `step`; format_compat maps it on read).
             dc["dropped_depends_on_edges"] = [
                 {"step": u, "dep": d, "reason": r} for (u, d, r) in dropped
             ]
             sys.stderr.write(
                 f"auto: dropped {len(dropped)} invalid model-emitted depends_on "
-                f"edge(s) on unit {unit_id!r} (dangling/self/cycle) to avoid a "
+                f"edge(s) on step {step_id!r} (dangling/self/cycle) to avoid a "
                 f"silent readiness stall; see dispatch_context."
                 f"dropped_depends_on_edges\n"
             )
@@ -496,11 +496,11 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
-def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
+def set_winner_step_id(repo_root, run_id, judge_step_id, winner_id):
     """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_step_id``
     (v0.2.0 round-2 P0 fix — fix-pass I).
 
-    A2's ``judge_winner_to_work_steps`` producer needs to know which plan unit won.
+    A2's ``judge_winner_to_work_steps`` producer needs to know which plan step won.
     The original design read it from ``findings[].winner_step_id``, but
     ``record_verdict`` normalizes findings to ``{severity, note}`` only —
     stripping the winner before the producer ever runs. Production A2 was
@@ -510,9 +510,9 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
 
     The judge agent (or its launcher) calls THIS mutator alongside
     ``record_verdict`` to declare the winner. ``winner_id`` must be a non-empty
-    string AND must reference an existing unit id in the ledger (defensive — a
+    string AND must reference an existing step id in the ledger (defensive — a
     typo'd winner would surface as a hard error here rather than a confusing
-    producer raise later). Raises if the judge unit doesn't exist or the winner
+    producer raise later). Raises if the judge step doesn't exist or the winner
     is invalid. Atomic (predicate recompute is a no-op here — the judge's own
     state is unchanged — but the write stays on the I-1 path).
     """
@@ -522,24 +522,24 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
         )
 
     def mutate(ledger):
-        judge = ledger_core._find_unit(ledger, judge_unit_id)
-        # The eligible-winner set is "every unit except the judge itself"
+        judge = ledger_core._find_step(ledger, judge_step_id)
+        # The eligible-winner set is "every step except the judge itself"
         # (round-3 P3 promotion — fix-pass J). The previous check accepted
         # the judge naming itself as winner, which would pass the guard, the
-        # producer would call _enumerated_units(judge) which returns [] (judges
-        # don't carry enumerated_units), and the run would silently emit no
-        # work units — exactly the failure mode the design was trying to
+        # producer would call _enumerated_steps(judge) which returns [] (judges
+        # don't carry enumerated_steps), and the run would silently emit no
+        # work steps — exactly the failure mode the design was trying to
         # prevent ("malformed judge verdict is a hard error, not silent empty
-        # emission"). Excluding judge_unit_id from existing_ids tightens the
-        # contract to "winner must be SOME OTHER unit" and surfaces the
+        # emission"). Excluding judge_step_id from existing_ids tightens the
+        # contract to "winner must be SOME OTHER step" and surfaces the
         # malformed case as the LedgerError it deserves.
         existing_ids = {
             u.get("id") for u in ledger.get("steps", [])
-        } - {judge_unit_id}
+        } - {judge_step_id}
         if winner_id not in existing_ids:
             raise ledger_core.LedgerError(
-                f"winner_id {winner_id!r} does not name an eligible unit "
-                f"(must differ from judge {judge_unit_id!r}); "
+                f"winner_id {winner_id!r} does not name an eligible step "
+                f"(must differ from judge {judge_step_id!r}); "
                 f"known: {sorted(i for i in existing_ids if i)!r}"
             )
         dc = judge.setdefault("dispatch_context", {})
@@ -560,7 +560,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
 #
 # Why the surface is wider than round-1 priced: the round-2 doc-review pinned
 # three architectural locks (KTD §A control-flow placement, §B predicate
-# composition, §C gate-unit re-engagement) that require dedicated mutators
+# composition, §C gate-step re-engagement) that require dedicated mutators
 # rather than letting the pulse stitch raw writes — see plan U2 §Approach.
 #
 # The composite/emit paths (emit_within_phase, atomic_iterate_step, etc.) live in
@@ -568,10 +568,10 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
 
 
 def set_verdict_decision(
-    repo_root, run_id, gate_unit_id, decision: str, payload=None
+    repo_root, run_id, gate_step_id, decision: str, payload=None
 ):
-    """Persist the gate unit's verdict.decision onto its dispatch_context
-    (KTD §D / U2). Mirrors the ``set_winner_unit_id`` precedent (v0.2.0 round-2
+    """Persist the gate step's verdict.decision onto its dispatch_context
+    (KTD §D / U2). Mirrors the ``set_winner_step_id`` precedent (v0.2.0 round-2
     P0 fix — fix-pass I): the decision lives on ``dispatch_context.decision``,
     NOT on ``findings[]``, because ``record_verdict`` normalizes findings to
     ``{severity, note}`` only and would strip the decision before any reader
@@ -586,7 +586,7 @@ def set_verdict_decision(
     ``dispatch_context.decision_payload`` — used by ``iterate_template`` to
     read e.g. ``emit_count`` (U3).
 
-    Raises ``LedgerError`` if the gate unit is missing OR the decision is not
+    Raises ``LedgerError`` if the gate step is missing OR the decision is not
     in the enum.
     """
     # Lazy load (same load-order discipline as recompute_predicate).
@@ -602,7 +602,7 @@ def set_verdict_decision(
         )
 
     def mutate(ledger):
-        gate = ledger_core._find_unit(ledger, gate_unit_id)
+        gate = ledger_core._find_step(ledger, gate_step_id)
         dc = gate.setdefault("dispatch_context", {})
         dc["decision"] = decision
         if payload is not None:
@@ -613,13 +613,13 @@ def set_verdict_decision(
 
 
 def set_bound_override(
-    repo_root, run_id, gate_unit_id, bound_type: str, original_decision: str
+    repo_root, run_id, gate_step_id, bound_type: str, original_decision: str
 ):
     """Record that the engine overrode an ``iterate`` decision to ``exit``
     because the iteration bound was breached (KTD §D / U2).
 
     Writes ``dispatch_context.bound_override = {bound: <bound_type>,
-    original_decision: <original>, at: <iso>}`` on the gate unit. Mirrors the
+    original_decision: <original>, at: <iso>}`` on the gate step. Mirrors the
     ``winner_step_id`` precedent — operator-diagnostic data lives on
     ``dispatch_context``, not on findings or a top-level field. The operator
     on ``/auto-status`` reads from here (R9 surface).
@@ -644,7 +644,7 @@ def set_bound_override(
         )
 
     def mutate(ledger):
-        gate = ledger_core._find_unit(ledger, gate_unit_id)
+        gate = ledger_core._find_step(ledger, gate_step_id)
         dc = gate.setdefault("dispatch_context", {})
         dc["bound_override"] = {
             "bound": bound_type,
@@ -733,7 +733,7 @@ def append_advisor_audit(
 
     Models ``set_bound_override``'s ENVELOPE (validated inputs, ``now_iso``
     timestamp) but is run-scoped and APPENDS to a top-level list rather than
-    writing one unit's ``dispatch_context``. The append happens INSIDE the
+    writing one step's ``dispatch_context``. The append happens INSIDE the
     ``mutate`` closure, so it runs under the SAME flock as every other write —
     that serialization is the concurrent-safety mechanism: a fan-out wave's
     ``record_verdict`` writes landing on the ledger at the same moment cannot
@@ -851,7 +851,7 @@ def accumulate_active_time(repo_root, run_id, delta_seconds: float):
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
 
 
-def increment_iteration_attempts(repo_root, run_id, gate_unit_id):
+def increment_iteration_attempts(repo_root, run_id, gate_step_id):
     """Atomic ``iteration_attempts += 1``. KTD §D / U2.
 
     Called by U4's ``advance_iteration_loop`` when honoring an iterate decision
@@ -866,13 +866,13 @@ def increment_iteration_attempts(repo_root, run_id, gate_unit_id):
     calling here — the F3 deadlock guard. The standalone mutator exists for
     completeness (tests, future paths) and for the deliberate-fail #6 control.
 
-    ``gate_unit_id`` is required (and validated) so the increment can NEVER be
+    ``gate_step_id`` is required (and validated) so the increment can NEVER be
     silently called against a missing/typo'd gate — defensive. The value is
     the new count; the return is the new count for caller convenience.
     """
     def mutate(ledger):
-        # Validate the gate unit exists; raises UnknownUnit on typo.
-        ledger_core._find_unit(ledger, gate_unit_id)
+        # Validate the gate step exists; raises UnknownStep on typo.
+        ledger_core._find_step(ledger, gate_step_id)
         cur = int(ledger.get("iteration_attempts", 0))
         ledger["iteration_attempts"] = cur + 1
         return ledger["iteration_attempts"]

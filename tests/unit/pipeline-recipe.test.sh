@@ -9,7 +9,7 @@
 #   2. Init at `brainstorm` bakes loop_phase="brainstorm" + the full phase_order
 #      (the recipe-generic `loop_phase=phase_order[0]` init line threads it; no
 #      auto.py change needed — init_ledger validates membership, line ~808).
-#   3. Forward advance brainstorm→plan emits the plan unit via the PRODUCER path
+#   3. Forward advance brainstorm→plan emits the plan step via the PRODUCER path
 #      (transition_and_emit / direct-dict-mutation), not predicate-met.
 #   4. A spine-phase loop_phase write via the direct-mutation path
 #      (transition_and_emit) SUCCEEDS; via set_loop it RAISES — documents the
@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 recipes = load_lib_module("recipes")
 ledger = load_lib_module("ledger")
-producers = load_lib_module("unit_emitters")
+producers = load_lib_module("step_producers")
 op = sys.argv[2]
 
 
@@ -56,10 +56,10 @@ def _init_from_recipe(repo, run, name):
     """Init a ledger from a built-in recipe exactly as lib/auto.py does (the
     recipe-generic init call: loop_phase=phase_order[0])."""
     r, tier = recipes.load_and_validate(name, repo)
-    init_units = [recipes.unit_for(u, r) for u in r.get("steps", [])]
+    init_steps = [recipes.step_for(u, r) for u in r.get("steps", [])]
     po = r.get("phase_order", ["plan", "handoff", "work"])
     ledger.init_ledger(
-        repo, run, backend="ce", units=init_units,
+        repo, run, backend="ce", steps=init_steps,
         loop_phase=po[0],
         recipe={"name": r["name"], "source_tier": tier},
         phase_order=po, terminal_phase=r.get("terminal_phase", "work"),
@@ -84,8 +84,8 @@ elif op == "init-brainstorm":
 elif op == "forward-advance":
     # Record the brainstorm output, then advance brainstorm→plan via
     # transition_and_emit (the direct-mutation/producer path). Asserts the plan
-    # unit is PRODUCER-driven (appended), loop_phase moved to plan, and the
-    # requirements-doc rode through onto the plan unit's dispatch_context.
+    # step is PRODUCER-driven (appended), loop_phase moved to plan, and the
+    # requirements-doc rode through onto the plan step's dispatch_context.
     repo = tempfile.mkdtemp()
     _init_from_recipe(repo, "pl", "pipeline")
     path = ledger.ledger_path(repo, "pl")
@@ -146,11 +146,11 @@ it "U7: pipeline.json validates + resolves (built-in, brainstorm-rooted spine, t
 assert_eq "pipeline:built-in:brainstorm,plan,handoff,work:work" "$(pl validate-resolve)"
 
 # ─── Scenario 2: init at brainstorm ─────────────────────────────────────────
-it "U7: init bakes loop_phase=brainstorm + full phase_order + the brainstorm unit"
+it "U7: init bakes loop_phase=brainstorm + full phase_order + the brainstorm step"
 assert_eq "brainstorm|brainstorm,plan,handoff,work|brainstorm" "$(pl init-brainstorm)"
 
 # ─── Scenario 3: forward advance brainstorm→plan (producer-driven) ───────────
-it "U7: forward advance brainstorm→plan emits the plan unit (producer path), carries the req-doc"
+it "U7: forward advance brainstorm→plan emits the plan step (producer path), carries the req-doc"
 assert_eq "plan|plan|docs/req.md" "$(pl forward-advance)"
 
 # ─── Scenario 4: set_loop rejects brainstorm (KTD-3 constraint) ─────────────

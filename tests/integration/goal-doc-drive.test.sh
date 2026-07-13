@@ -4,7 +4,7 @@
 # The boss drives from one editable goal doc. The fuzzy "is the next step clear?"
 # judgment stays in the model; the CRISP outcome is one of two ledger writes, and
 # THAT is what this test pins down — never the judgment:
-#   - next step clear   -> materialize a unit via a steering verb, keep driving
+#   - next step clear   -> materialize a step via a steering verb, keep driving
 #                          (driver stays self, Stop hook keeps blocking)
 #   - next step unclear -> hand back via auto-resume pause (driver -> manual),
 #                          Stop hook's HANDOFF/MANUAL carve-out allows the stop
@@ -19,7 +19,7 @@
 #      the predicate, and it moves with real verdicts — not with the doc)
 #   3. AE4: next step unclear -> auto-resume pause writes driver=manual, and the
 #      Stop hook then ALLOWS the stop (clean hand-back)
-#   4. R15: a "next step" is materialized as a ledger unit via add-unit (the clear
+#   4. R15: a "next step" is materialized as a ledger step via add-step (the clear
 #      branch), and while it is pending+driver=self the Stop hook BLOCKS
 #   5. R17: a human edit between pulses is observable — re-reading the ledger sees
 #      the operator's pause (the human's steering channel)
@@ -72,14 +72,14 @@ rd_met() {
   "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$1','$2');print(l['exit_predicate_result'].get('met'))"
 }
 
-# init a work-phase run with the given units json
-mk_run() {  # <name> <run> <units-json>
+# init a work-phase run with the given steps json
+mk_run() {  # <name> <run> <steps-json>
   local repo; repo="$(mkrepo "$1")"
   "$PY" - "$repo" "$2" "$3" "$LEDGER_PY" <<'PYEOF'
 import sys, json, importlib.util
-repo, run, units_json, ledger_py = sys.argv[1:5]
+repo, run, steps_json, ledger_py = sys.argv[1:5]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo, run, backend="ce", loop_phase="work", units=json.loads(units_json))
+L.init_ledger(repo, run, backend="ce", loop_phase="work", steps=json.loads(steps_json))
 PYEOF
   printf '%s' "$repo"
 }
@@ -122,15 +122,15 @@ it "AE4: after hand-back the Stop hook ALLOWS the stop (HANDOFF/MANUAL carve-out
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_empty "$(jget "$out" decision)"
 
-# ─── 4. R15: the clear branch — a next step becomes a ledger unit ─────────────
-it "R15: a 'next step' materializes as a pending unit via add-unit"
+# ─── 4. R15: the clear branch — a next step becomes a ledger step ─────────────
+it "R15: a 'next step' materializes as a pending step via add-step"
 REPO="$(mk_run gd-add goaldoc '[{"id":"U1","state":"verdict-returned","findings":[]}]')"
 export CLAUDE_AUTO_REPO="$REPO"
-"$PY" "$LEDGER_PY" add-unit goaldoc U2 >/dev/null
+"$PY" "$LEDGER_PY" add-step goaldoc U2 >/dev/null
 unset CLAUDE_AUTO_REPO
 state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','goaldoc');print(next(x['state'] for x in l['steps'] if x['id']=='U2'))")"
 assert_eq "pending" "$state"
-it "R15: while the new unit is pending+driver=self, the Stop hook BLOCKS (keep driving)"
+it "R15: while the new step is pending+driver=self, the Stop hook BLOCKS (keep driving)"
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
 

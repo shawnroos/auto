@@ -17,7 +17,7 @@ things, a **container** (its flow-local slot: `id`, `phase`, `depends_on`) and a
 **preset** (the payload that runs there: one `backend_op` invocation, optionally
 tuned by a `prompt_template`). This spec covers the *preset*; the container stays
 part of the recipe/flow — see [`recipe-format.md` §3 (`steps[]`
-entries)](recipe-format.md), where a unit's `invokes` is exactly the preset
+entries)](recipe-format.md), where a step's `invokes` is exactly the preset
 embedded in a container.
 
 A preset is **pure payload**: it carries **no** verification gate (R2). When a

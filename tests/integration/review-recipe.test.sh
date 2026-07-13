@@ -6,12 +6,12 @@
 # WHY THIS TEST EXISTS (round-2 P2, lib/backend-ce.py):
 # recipes.test.sh already pins that review.json validates / resolves / is
 # distinct from w. But the DISPATCH path was never driven: review.json's work
-# unit carries `dispatch_context.backend_op == "review"` (NOT "do_step"), and the
+# step carries `dispatch_context.backend_op == "review"` (NOT "do_step"), and the
 # DRIVER — not the backend, not the dispatcher — maps that backend_op to the
 # skill it launches (`review` → /ce-code-review; `do_step` → /ce-work). This test
 # drives the real engine end-to-end so the off-spine review path is locked, not
 # inferred:
-#   * init via `--recipe review` enters at `work` with one `review` unit whose
+#   * init via `--recipe review` enters at `work` with one `review` step whose
 #     dispatch_context.backend_op is "review" (the model-facing dispatch label —
 #     driver-reference.md §7, SKILL.md §4);
 #   * a clean (P3-only) verdict drives the single phase to `loop_phase == "done"`;
@@ -21,7 +21,7 @@
 # the SECOND scenario records a GATING (blocker) verdict instead of a clean one.
 # The work-loop MUST then NOT reach `done` (all_steps_terminal == false) — proving
 # the `done` in scenario 1 is caused by the clean verdict, not an artifact of the
-# single-unit recipe.
+# single-step recipe.
 
 set -uo pipefail
 
@@ -47,9 +47,9 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 export CLAUDE_AUTO_TEST_HARNESS=1
 export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
 
-# Drive review.json: init at work, dispatch the review unit, record a verdict
+# Drive review.json: init at work, dispatch the review step, record a verdict
 # (clean if clean=1 else a blocker), pulse once, read back. Prints a CSV:
-#   backend_op | entry_phase | phase_order | loop_phase_after | unit_state
+#   backend_op | entry_phase | phase_order | loop_phase_after | step_state
 drive_review() {
   clean="${1:-1}"
   "$PY" - "$AUTO_ROOT" "$clean" <<'PYEOF'
@@ -84,15 +84,15 @@ def ld():
         return json.load(fh)
 
 entry = ld()
-review_unit = next(u for u in entry["steps"] if u["id"] == "review")
+review_step = next(u for u in entry["steps"] if u["id"] == "review")
 # The model-facing dispatch label: backend_op lands on dispatch_context (the
 # canonical write path strips it off `invokes`). review → /ce-code-review.
-backend_op = (review_unit.get("dispatch_context") or {}).get("backend_op")
+backend_op = (review_step.get("dispatch_context") or {}).get("backend_op")
 entry_phase = entry.get("loop_phase")
 phase_order = ",".join(entry.get("phase_order") or [])
 
-# Step 2: dispatch the review unit, then the agent self-writes its verdict. A
-# clean verdict (P3-only — modelled as empty findings) makes the unit terminal;
+# Step 2: dispatch the review step, then the agent self-writes its verdict. A
+# clean verdict (P3-only — modelled as empty findings) makes the step terminal;
 # a blocker keeps it gating.
 ledger.transition(repo, run_id, "review", "dispatched")
 findings = [] if clean else [{"severity": "blocker", "note": "flaw"}]
@@ -105,9 +105,9 @@ with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 
 after = ld()
-unit_state = next(u for u in after["steps"] if u["id"] == "review")["state"]
+step_state = next(u for u in after["steps"] if u["id"] == "review")["state"]
 print("%s|%s|%s|%s|%s" % (
-    backend_op, entry_phase, phase_order, after.get("loop_phase"), unit_state))
+    backend_op, entry_phase, phase_order, after.get("loop_phase"), step_state))
 PYEOF
 }
 
@@ -115,9 +115,9 @@ echo "review-recipe.test.sh"
 
 # ─── Scenario 1: clean verdict → single phase drives to done ──────────────────
 res="$(drive_review 1)"
-IFS='|' read -r backend_op entry_phase phase_order loop_phase unit_state <<< "$res"
+IFS='|' read -r backend_op entry_phase phase_order loop_phase step_state <<< "$res"
 
-it "review unit carries dispatch_context.backend_op == 'review' (the dispatch label → /ce-code-review)"
+it "review step carries dispatch_context.backend_op == 'review' (the dispatch label → /ce-code-review)"
 assert_eq "review" "$backend_op"
 
 it "review.json enters at the work phase (off-spine, no plan phase)"
@@ -131,7 +131,7 @@ assert_eq "done" "$loop_phase"
 
 # ─── Scenario 2 (DELIBERATE-FAIL CONTROL): a blocker does NOT reach done ──────
 res_blk="$(drive_review 0)"
-IFS='|' read -r _ _ _ loop_phase_blk unit_state_blk <<< "$res_blk"
+IFS='|' read -r _ _ _ loop_phase_blk step_state_blk <<< "$res_blk"
 
 it "DELIBERATE-FAIL: a GATING (blocker) verdict does NOT reach done (work-loop still open)"
 case "$loop_phase_blk" in
@@ -139,10 +139,10 @@ case "$loop_phase_blk" in
   *) pass ;;
 esac
 
-it "control: with a blocker the review unit is NOT clean-terminal (it has a fix to drive)"
-case "$unit_state_blk" in
+it "control: with a blocker the review step is NOT clean-terminal (it has a fix to drive)"
+case "$step_state_blk" in
   verdict-returned|fixed|pending|dispatched) pass ;;
-  *) fail "unexpected unit state with a gating verdict: $unit_state_blk" ;;
+  *) fail "unexpected step state with a gating verdict: $step_state_blk" ;;
 esac
 
 # ── summary ─────────────────────────────────────────────────────────────────

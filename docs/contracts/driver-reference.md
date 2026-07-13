@@ -22,20 +22,20 @@ common operator trap (multiple field bugs, two separate agents).
   "plan"}, ...}`).
 - **YOU EXECUTE.** When the INTENT names a `plan_step` (`plan`,
   `deepen`, `review_plan`), YOU run the corresponding invocation
-  (`/ce-plan`, `/ce-doc-review`, …). When work-loop units exist, YOU
+  (`/ce-plan`, `/ce-doc-review`, …). When work-loop steps exist, YOU
   drive `dispatcher.dispatch_batch`. The pulse does NOT dispatch
   agents, does NOT run `/ce-plan`, does NOT write verdicts.
 
 **Re-pulsing without running the prepared invocation is a no-op.**
-Pulsing 5x in a bash loop produces `units: []`. The ledger advances
+Pulsing 5x in a bash loop produces `steps: []`. The ledger advances
 ONLY when you feed structured results back: `ledger.set_gaps_open(N)`
 after a `review_plan`, `ledger.record_verdict(...)` from each
-background unit-agent, etc.
+background step-agent, etc.
 
 ### Two specific traps
 
 1. **The bash-loop trap.** Calling `pulse.sh` in a loop just cycles the
-   state machine; it never executes prepared invocations. Units stay 0.
+   state machine; it never executes prepared invocations. Steps stay 0.
 2. **The deepen↔review livelock.** Plan-met requires `plan_step ==
    "review_plan" AND gaps_open == 0`. If you never run a real review
    and call `set_gaps_open`, `gaps_open` stays null and the plan-loop
@@ -59,10 +59,10 @@ context runs out, the routine continuation is a normal `/auto-resume`
   dict on stdout. The pulse CANNOT call `ScheduleWakeup` (model tool,
   not CLI). YOU read the intent and, when `action == "rearm"`, issue
   the `ScheduleWakeup(delay, prompt)` call.
-- **`lib/dispatcher.py`** — `ready_units`, `dispatch_batch`,
-  `converge`. Surfaces ready-and-independent units; YOU decide the
+- **`lib/dispatcher.py`** — `ready_steps`, `dispatch_batch`,
+  `converge`. Surfaces ready-and-independent steps; YOU decide the
   cap. Never hardcodes concurrency.
-- **`lib/ledger.py`** — disk-persisted per-unit ledger. Read
+- **`lib/ledger.py`** — disk-persisted per-step ledger. Read
   `exit_predicate_result.met` from it; never re-derive.
 
 ---
@@ -70,7 +70,7 @@ context runs out, the routine continuation is a normal `/auto-resume`
 ## 2. Outcomes-gated emission (v0.3.0)
 
 A recipe may declare an `iteration` block letting a designated gate
-unit's `verdict.decision` drive the loop directly.
+step's `verdict.decision` drive the loop directly.
 
 ### How it routes
 
@@ -83,14 +83,14 @@ short-circuit at the top of `_pulse_body`:
   predicate-met flow; loop advances to `done`.
 - **`decision == "iterate"` under bound** → engine calls
   `ledger.atomic_iterate_step` in ONE locked body: increments
-  `iteration_attempts`, emits N sibling units via `iterate_template`
+  `iteration_attempts`, emits N sibling steps via `iterate_template`
   (N from `decision_payload.emit_count`, default 1, capped at 10),
-  resets the gate unit (`verdict-returned → pending`, `depends_on`
+  resets the gate step (`verdict-returned → pending`, `depends_on`
   extended, `dispatch_context.decision` cleared). Pulse emits a rearm
-  intent; next pulse dispatches the new units.
+  intent; next pulse dispatches the new steps.
 - **`decision == "exit"` OR `"iterate"` over bound** → engine writes
   `dispatch_context.bound_override = { bound, original_decision, at }`
-  on the gate unit and flips loop directly to `done` /
+  on the gate step and flips loop directly to `done` /
   `driver = "manual"`. The bound breach is a recorded decision, not
   an error — surface it from the `bound_override` audit trail when
   reporting the run's exit.
@@ -108,7 +108,7 @@ A misbehaving gate agent cannot loop forever.
 
 ### Typed verification (v0.7.0, U4)
 
-A gate unit may carry a typed `verification` block (criteria of kind
+A gate step may carry a typed `verification` block (criteria of kind
 `programmatic` / `model_judge` / `advisor_judge` / `human` — see
 `recipe-format.md` and `skills/auto-design/references/verification-taxonomy.md`).
 `lib/iteration.py::resolve_gate_verification` runs the `programmatic` criteria
@@ -136,7 +136,7 @@ Every consumer routes through `lib/iteration.py::read_decision` /
 `evaluate_decision`. The AST lint
 (`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"`
 literal anywhere in `lib/*.py` except `lib/iteration.py` +
-`lib/ledger.py` (the writer). NEVER reach into a unit's
+`lib/ledger.py` (the writer). NEVER reach into a step's
 `dispatch_context["decision"]` from the driver — the lint exists
 because that's how the "plan documents a behavior the code never
 wires" build-bug class keeps happening.
@@ -149,7 +149,7 @@ See `docs/contracts/recipe-format.md` §6 + §7 (recipe shape) and
 ## 3. Goal binding (every run is goaled)
 
 - **Default goal:** the loop's own exit predicate — *until only P3
-  (minor) findings remain* (no blockers AND no majors AND every unit
+  (minor) findings remain* (no blockers AND no majors AND every step
   terminal). This is the work-loop's `exit_predicate_result.met`
   becoming true.
 - **Compound goal (operator-supplied via `--goal`):** stricter — e.g.
@@ -186,7 +186,7 @@ Each pulse returns a JSON INTENT. The action's handling is phase-aware:
 | `action` | phase | what the driver does |
 |----------|-------|----------------------|
 | `rearm`  | `plan` | issue `ScheduleWakeup(intent.delay, intent.prompt)` — plan-loop runs backend steps inline, no background wake needed |
-| `rearm`  | `work` | yield to the harness re-invocation on next verdict AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` (delay clamped to `[60, 3600]s`) so a pulse fires even while work is in flight — a verdict landing first makes it a no-op. The LONG-delay (1200s+) ScheduleWakeup still applies when no background work is in flight and no ready units to dispatch (genuinely stalled) |
+| `rearm`  | `work` | yield to the harness re-invocation on next verdict AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` (delay clamped to `[60, 3600]s`) so a pulse fires even while work is in flight — a verdict landing first makes it a no-op. The LONG-delay (1200s+) ScheduleWakeup still applies when no background work is in flight and no ready steps to dispatch (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. If `reason == "predicate-met*"`, emit report; if `reason == "handoff-pause"`, surface handoff |
 | `noop`   | any   | another live pulse holds the lock (double-drive guard); do nothing; do NOT re-arm |
 
@@ -247,13 +247,13 @@ polling antipattern the Agent tool explicitly forbids.
 
 ### Per-wave loop
 
-1. `units = dispatcher.ready_units(repo, run)` — units dispatchable
+1. `steps = dispatcher.ready_steps(repo, run)` — steps dispatchable
    RIGHT NOW (pending, dependencies satisfied, no stalled ancestor).
 2. **Decide a cap for THIS wave.** Live per-wave decision — resize
    between waves under machine pressure (16 when idle, 3 when
    grinding, 1 to serialize a probe). No fixed constant.
-3. `dispatcher.dispatch_batch(repo, run, units, cap, launch_fn=...)`
-   — marks up to `cap` units `pending → dispatched` and launches each
+3. `dispatcher.dispatch_batch(repo, run, steps, cap, launch_fn=...)`
+   — marks up to `cap` steps `pending → dispatched` and launches each
    background agent. **The agent self-writes its own verdict**
    (`ledger.record_verdict`) atomically on completion — durable the
    moment the agent finishes, independent of whether this driving
@@ -278,36 +278,36 @@ polling antipattern the Agent tool explicitly forbids.
    re-dispatch them. After converge:
    - if `exit_predicate_result.met` → exit (no wait, act immediately
      on the cached predicate)
-   - if `ready_units()` returns work → dispatch the next wave (back
+   - if `ready_steps()` returns work → dispatch the next wave (back
      to step 1)
    - if work still in flight → yield again; next verdict re-invokes
 6. The pulses **apply fixes** from converged verdicts: `verdict-returned
    → fixed`. A fix does NOT clear findings (closure only via a fresh
-   verdict); the unit is re-enqueued (`fixed → pending`), re-dispatched,
+   verdict); the step is re-enqueued (`fixed → pending`), re-dispatched,
    re-reviewed until a fresh verdict returns clean. Loop terminates
-   only when every unit reaches a clean terminal verdict.
+   only when every step reaches a clean terminal verdict.
 
 The driver owns the batching; the pulse is mechanical; the harness
 owns the wake signal.
 
 ### Stalled-node policy — reap → retry → escalate
 
-Whenever a unit is `stalled` — put there by EITHER the watchdog-heartbeat
-timeout (`detect_and_halt_stalled`) OR the death path (`reap_unit`) —
+Whenever a step is `stalled` — put there by EITHER the watchdog-heartbeat
+timeout (`detect_and_halt_stalled`) OR the death path (`reap_step`) —
 the driver applies this per stalled node:
 
 1. **Reap the live agent (model-side).** No reaping primitive exists in
    `lib/`, so the driver owns the kill: `TaskStop` the agent, then
    `kill -TERM` its process (the reap sequence — TaskStop then SIGTERM).
 2. **Clear the reap marker.** `pulse_advance.clear_reap_pending(<run>,
-   <unit>)` right after issuing the kill. The `dispatched → stalled`
+   <step>)` right after issuing the kill. The `dispatched → stalled`
    flip set `reap_pending=True` to record a kill was owed; clearing it
    is the driver's confirmation it issued one.
 3. **Retry or escalate on the `attempt` budget.** If
-   `dispatcher.should_escalate(<unit>)` is False (`attempt < 2`) →
-   `bash lib/auto-resume.py retry <run> <unit>` (`stalled → pending`,
+   `dispatcher.should_escalate(<step>)` is False (`attempt < 2`) →
+   `bash lib/auto-resume.py retry <run> <step>` (`stalled → pending`,
    clears `last_error`) to re-dispatch. If True (`attempt ≥ 2`) →
-   `bash lib/auto-resume.py pause <run> "<unit> wedged after 2
+   `bash lib/auto-resume.py pause <run> "<step> wedged after 2
    attempts"` to escalate to the operator instead of looping forever
    (the §4.5-style pause handoff; `driver=manual`, resumable).
 
@@ -318,37 +318,37 @@ whole wave.
 
 **Nested `do_step` reap.** A `do_step` fan-out agent is not its own
 ledger row (KTD-5), so a wedged nested agent is reaped through its
-**parent** fan-out unit: the parent flips to `stalled` and its entire
+**parent** fan-out step: the parent flips to `stalled` and its entire
 fan-out wave is reaped and re-dispatched together (coarse-grained v1;
 node-level reap of a single nested agent is deferred). The watch view
 still surfaces the individual wedged node.
 
 **`reap_pending` semantics.** The stalled transition sets the marker;
 the driver clears it (step 2) after the kill;
-`pulse_advance.units_awaiting_reap(ledger)` returns the `stalled` units
+`pulse_advance.steps_awaiting_reap(ledger)` returns the `stalled` steps
 whose marker is still set. An **uncleared marker on a later pulse means
 "kill owed but unconfirmed"** — a forgotten kill (and its zombie agent)
 that is otherwise invisible, since the kill itself is model-side and
 Python owns only the marker.
 
-### Work-unit `backend_op` → invocation (the model-facing dispatch label)
+### Work-step `backend_op` → invocation (the model-facing dispatch label)
 
-`dispatcher.dispatch_batch` is backend-agnostic: it flips the unit
+`dispatcher.dispatch_batch` is backend-agnostic: it flips the step
 `pending → dispatched` and calls the driver-injected `launch_fn`; it
-NEVER consults the backend. So the DRIVER must map each work unit's
+NEVER consults the backend. So the DRIVER must map each work step's
 `invokes.backend_op` to the ce skill it launches in the background
 `Agent`. The CE backend (`lib/backend-ce.py`) exposes two work-loop ops,
 and the dispatch label differs per op:
 
 | `invokes.backend_op` | launch this skill | used by |
 |----------------------|-------------------|---------|
-| `do_step`            | `/ce-work <unit-id>` | `a1` / `w` / `pipeline` work units (the default) |
-| `review`             | `/ce-code-review`    | `review.json` off-spine unit (U11) |
+| `do_step`            | `/ce-work <step-id>` | `a1` / `w` / `pipeline` work steps (the default) |
+| `review`             | `/ce-code-review`    | `review.json` off-spine step (U11) |
 
-`review.json`'s single unit carries `backend_op: "review"` — a work unit
+`review.json`'s single step carries `backend_op: "review"` — a work step
 that runs a single review/fix loop to a P3-only terminal verdict (the
 work-loop's own exit predicate, KTD-1), so it must dispatch as
-`/ce-code-review`, NOT `/ce-work`. Defaulting every work unit to
+`/ce-code-review`, NOT `/ce-work`. Defaulting every work step to
 `/ce-work` would run the wrong skill for an off-spine review run. The
 backend's `do_step()` returns `"invocation": "/ce-work %s"` and `review()`
 is the PARSE half (it maps the returned findings onto the shared severity
@@ -369,7 +369,7 @@ flow (KTD-3), and drives both through each module's CLI (`_cli`/`__main__`):
   first, then the built-in root.
 - `oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)`
   — the terminal verdict. It takes the ratified criteria list **directly**
-  (there is no synthesized unit). The skill resolves every ratified
+  (there is no synthesized step). The skill resolves every ratified
   criterion **inline before** calling it (programmatic in-process;
   `model_judge` from the dispatched agent; `advisor_judge`/`human` by a
   blocking resolution), so there are no `pending_judges` at verdict time —
@@ -402,7 +402,7 @@ across sessions.
 A work-loop wave SHOULD ScheduleWakeup with a LONG (1200-1800s) delay
 when:
 - the predicate is not met,
-- no background units are in flight,
+- no background steps are in flight,
 - AND there is no ready work to dispatch.
 
 That state is rare and indicates a stalled chain; the work resuming the
@@ -415,7 +415,7 @@ ledger), …)` per wave so a pulse can fire while work is in flight and
 NOT the sub-minute verdict poll: it is one long wakeup sized to the
 soonest in-flight stall threshold (clamped to `[60, 3600]s`) and
 superseded by any verdict re-invoke, so it costs nothing on the happy
-path and only ever fires when a unit has genuinely gone past-threshold
+path and only ever fires when a step has genuinely gone past-threshold
 with no verdict.
 
 ---
@@ -431,7 +431,7 @@ The loop exits when the pulse returns `action == "stop"` with a
 The exit report lists the remaining minor findings for operator
 promotion — minors never gate the loop (they ship), but they are
 reported so the operator can promote any that are actually long-term
-work. Format: per remaining minor, the unit id and the finding note.
+work. Format: per remaining minor, the step id and the finding note.
 
 ### Non-clean exit reasons (v0.3.0)
 
@@ -444,7 +444,7 @@ the exit report. Two `kind` values exist (`lib/ledger.py::ExitReason.KINDS`):
   `advance_iteration_loop` (typically malformed iteration block or
   corrupted gate verdict). Surface `error.type` + `error.message`;
   recommend inspecting the ledger's `iteration` block.
-- `workflow-bug` — a `LedgerError` subclass (`UnknownUnit`,
+- `workflow-bug` — a `LedgerError` subclass (`UnknownStep`,
   `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
   Surface `error.type` + `error.message`; recommend inspecting the
   recipe JSON against `docs/contracts/recipe-format.md`.
@@ -608,7 +608,7 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
    reviewed-plan→`w`@work, code-unreviewed→`review`@work):
    a. **Author a phase goal** by performing the `auto-author-goal` procedure
       (skills/auto-author-goal) — draft `.claude/auto/goals/<slug>.md` whose
-      PRIMARY criterion is auto's own exit predicate (all units terminal, only
+      PRIMARY criterion is auto's own exit predicate (all steps terminal, only
       P3 findings remain). The authored doc is also the run's spec file.
    b. **Dispatch** the entry recipe and bind auto's OWN deterministic predicate:
       `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<goal-doc-path> --recipe <recipe_or_entry>"`.
@@ -673,7 +673,7 @@ matches and the gate never fires. Reads are lock-free (the atomic-rename
 invariant gives a consistent snapshot). Fan-out sub-agents have their OWN
 `session_id` and are out of hook scope **by design** — they carry the
 prompt-embedded two-handoff instruction instead (KTD-5; set by the driver when it
-builds the unit prompt).
+builds the step prompt).
 
 > **⛔ Session-id parity — REQUIRED, UNPROVEN pre-release gate (round-1/round-2 P2).
 > CI CANNOT certify the advisor gate fires; only the live parity check below can.
@@ -810,7 +810,7 @@ acknowledged residual (fix-round-5 P2): they do NOT flow through the Bash
 `command` channel the classifier reads (their `tool_input` carries no `command`),
 and the hook is wired to the `Bash`/`Write` tool names only, so an MCP tool name
 never reaches it at all. Gating MCP-write tools would be a tool-name interception
-change beyond v0.6.0's detect-and-escalate scope; fan-out units carry the
+change beyond v0.6.0's detect-and-escalate scope; fan-out steps carry the
 prompt-embedded two-handoff instruction (KTD-5) covering the destructive set instead.
 
 ### Audit (KTD-5)
@@ -846,7 +846,7 @@ current-phase / downstream findings are excluded from the upstream set.
 
 `record_verdict` normalizes findings to `{severity, note}` only, so any
 reviewer-role / target-phase tag is stripped on the canonical write path.
-Role-tagged findings therefore survive on the unit's `dispatch_context` (same
+Role-tagged findings therefore survive on the step's `dispatch_context` (same
 precedent as the iteration `decision`). The **producer** that tags review
 findings with role + attributed-phase is out of scope for v0.6.0 — until a
 producer populates the tags, the classifier returns "no cluster" (degrade-safe).
@@ -1022,10 +1022,10 @@ construction.
 ### Gate attachment: a1/w vs a2/a4/custom (KTD-4 — the load-bearing wiring split)
 
 The v0.7.0 typed `verification` array rides on `iteration.gate_step`, which must
-name a **declared** unit (`recipe-format.md` §6, §11). `a2`/`a4` declare structural
-gate units (`judge` / `compare`); `a1`/`w` do not — their work units are emitted at
+name a **declared** step (`recipe-format.md` §6, §11). `a2`/`a4` declare structural
+gate steps (`judge` / `compare`); `a1`/`w` do not — their work steps are emitted at
 runtime by `plan_output_to_work_steps` with dynamic ids that can't be enumerated.
-Adding an iteration block + gate unit to a1/w would be a new built-in topology,
+Adding an iteration block + gate step to a1/w would be a new built-in topology,
 which is out of scope. So gating attaches differently by shape:
 
 - **`a1` / `w`** — **no iteration gate point.** What the chooser/notice surfaces for
@@ -1034,11 +1034,11 @@ which is out of scope. So gating attaches differently by shape:
   a new `verification` block. R2's "at each gate point" is vacuously satisfied
   (a1/w have no iteration gate point). The notice names that predicate, not a literal
   programmatic check.
-- **`a2` / `a4` / custom** — a declared gate unit exists, so typed `verification`
+- **`a2` / `a4` / custom** — a declared gate step exists, so typed `verification`
   attaches via the existing mechanism. When the operator's confirmed gates differ
   from the built-in default (or it is a custom recipe), the launch agent compiles a
   **run-scoped workspace recipe** through `auto-author-recipe`'s validation gate
-  carrying the `verification` array on the gate unit, then dispatches
+  carrying the `verification` array on the gate step, then dispatches
   `--recipe <run-scoped-name>` (see `recipe-format.md` §5, and KTD-6 below). When the
   gates are the built-in default, it dispatches the built-in directly.
 
@@ -1060,7 +1060,7 @@ the decision stays visible and auditable:
   `-> a1 · gate: review-clean to P3` — **not** a literal programmatic check. (A
   "gate: tests green" phrasing for a1/w would misrepresent what actually gates the
   run; that wording in AE1 is illustrative shorthand for the exit predicate.)
-- For **a2 / a4** with a default gate it names the gate unit's check, e.g.
+- For **a2 / a4** with a default gate it names the gate step's check, e.g.
   `-> a2 · gate: judge picks a winner`.
 
 See `lib/launch-gate.py` (the ladder + `SKIP_BAR` / `CONFIRM_BAR`),
@@ -1074,7 +1074,7 @@ KTD-4 / KTD-5 / KTD-6 in the plan for the full rationale.
 v0.13.0 pushes the loop's context-heavy phase work DOWN into a sub-agent tree
 beneath a light boss session (the goal doc + phase digests are its whole resident
 context). The dispatch path does NOT change to make this happen — it is the same
-`ready_units → dispatch_batch → yield → converge` cycle §7 already describes,
+`ready_steps → dispatch_batch → yield → converge` cycle §7 already describes,
 generalized so every phase's work descends into a disposable sub-agent that
 self-writes its verdict. This section is the theory; the operational steps live in
 `skills/auto/SKILL.md` §4 + §4.8.
@@ -1103,7 +1103,7 @@ untouched by U5.
 ### Convergence reads the LEDGER, never sub-agent return text
 
 Each dispatched sub-agent self-writes its verdict via
-`bash lib/ledger.py record-verdict <run> <unit> '<findings>' <attempt>` — the I-1
+`bash lib/ledger.py record-verdict <run> <step> '<findings>' <attempt>` — the I-1
 atomic write chokepoint — on completion. The verdict is durable the moment that
 (separate) process writes it, independent of whether the boss turn that
 dispatched it is still alive. `dispatcher.converge` is a pure READER (§7): a

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto U4: one ScheduleWakeup-paced advance of the ledger.
 
-A *pulse* is the unit of execution. Each pulse does exactly ONE smallest-useful
+A *pulse* is the step of execution. Each pulse does exactly ONE smallest-useful
 advance of the loop, then re-arms its own successor via `ScheduleWakeup`. The
 pulse reads ALL loop state from the disk ledger (the durable source of truth) —
 it runs in a subprocess and treats conversation context as irrelevant, so it is
@@ -25,7 +25,7 @@ The pulse NEVER dispatches (the dispatcher owns `pending → dispatched`) and
 NEVER writes verdicts (each background agent self-writes its own `findings[]`).
 The pulse only:
   * reads the ledger,
-  * detects stalled units and halts them + their transitive dependents while
+  * detects stalled steps and halts them + their transitive dependents while
     advancing independent siblings (the parallel-fan-out promise),
   * does ONE advance (plan-loop: the backend's next_plan_step; work-loop: apply
     ONE fix from a converged verdict) inside a try/except,
@@ -95,9 +95,9 @@ def watchdog_wakeup_delay(ledger_dict):
     `ScheduleWakeup` at dispatch time so `detect_and_halt_stalled` fires while
     work is in flight (not only "when nothing is in flight"). This helper gives
     that wakeup a deterministic delay: the MINIMUM `stall_threshold_seconds`
-    (falling back to the default) across all `dispatched` units, so the pulse
-    fires no later than the soonest in-flight unit's stall deadline. The result
-    is CLAMPED to `[60, 3600]s` (the ScheduleWakeup bound). When NO unit is
+    (falling back to the default) across all `dispatched` steps, so the pulse
+    fires no later than the soonest in-flight step's stall deadline. The result
+    is CLAMPED to `[60, 3600]s` (the ScheduleWakeup bound). When NO step is
     `dispatched`, returns None — a no-op sentinel the driver reads as "arm
     nothing". Pure: no I/O; `ledger_dict` is the ledger dict, not the module.
     """
@@ -488,7 +488,7 @@ def _try_iteration_check(
 
     v0.3.0 F2 (rel-1): wrap the iteration check in try/except so a raise
     inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
-    malformed gate decision, KeyError on a missing gate unit, RecipeError on
+    malformed gate decision, KeyError on a missing gate step, RecipeError on
     a misshapen emit_template) DOES NOT propagate to _cli — which catches
     only (PulseError, LedgerError) and exits with no JSON intent (the harness
     never sees a rearm and the run wedges). Instead, we mark the loop done +
@@ -503,9 +503,9 @@ def _try_iteration_check(
     """
     try:
         iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)
-    except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
+    except (ledger.UnknownStep, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
         # v0.3.0 G2 / rel-r2-2: workflow-bug LedgerError subclasses signal a
-        # mis-built caller (unknown gate unit id, illegal transition, stale
+        # mis-built caller (unknown gate step id, illegal transition, stale
         # verdict), NOT a torn ledger. Convert to a stop intent — same shape
         # as the generic-Exception branch below — so the operator gets a rearm
         # signal with reason="workflow-bug" rather than _cli swallowing the
@@ -545,10 +545,10 @@ def _try_iteration_check(
             # to accumulate the active-time delta for this pulse.
             return iteration_result, led
         if action == "iterate":
-            # New units emitted + gate reset to pending; the next pulse will
-            # see fresh pending units for the dispatcher to dispatch. Re-
+            # New steps emitted + gate reset to pending; the next pulse will
+            # see fresh pending steps for the dispatcher to dispatch. Re-
             # read the ledger to surface the iteration in the rearm intent
-            # (operator-diagnostics + so /auto-status sees the new units).
+            # (operator-diagnostics + so /auto-status sees the new steps).
             led = ledger.read_ledger(repo_root, run_id)
             ledger.set_loop(repo_root, run_id, driver="self", beat=True)
             led_now = ledger.read_ledger(repo_root, run_id)
@@ -652,13 +652,13 @@ def _dispatch_phase_advance(
             # Spine forward trigger (v0.6.0 / U7): the brainstorm phase has no
             # predicate-met exit (KTD-3); it advances to plan ONLY via the U8
             # producer. advance_brainstorm_loop fires that producer when the
-            # brainstorm unit is complete + has its requirements-doc, else
+            # brainstorm step is complete + has its requirements-doc, else
             # returns {"advanced":"none"} so this pulse re-arms (the model is
             # still working the brainstorm step). Mirrors the plan→work flip.
             advance_result = pulse_advance.advance_brainstorm_loop(
                 repo_root, run_id, led
             )
-            # The producer (re)wrote loop_phase + plan unit; the caller's
+            # The producer (re)wrote loop_phase + plan step; the caller's
             # downstream beat re-stamp + rearm intent re-read by (repo, run),
             # so no led refresh is needed here.
         elif phase == "work":
@@ -682,8 +682,8 @@ def _dispatch_phase_advance(
     except Exception as exc:  # noqa: BLE001 — convert ANY raise into a recorded stall.
         call = phase or "advance"
         message = f"{type(exc).__name__}: {exc}"
-        # Find the unit that was in flight (best-effort: the most recently
-        # dispatched unit). For a plan-step raise with no unit dispatched, we
+        # Find the step that was in flight (best-effort: the most recently
+        # dispatched step). For a plan-step raise with no step dispatched, we
         # still record the error on the run via the handoff/manual path.
         in_flight = pulse_guidance._most_recently_dispatched(led)
         recorded = False
@@ -695,8 +695,8 @@ def _dispatch_phase_advance(
             "call": call,
             "message": message,
             "at": now_iso,
-            "unit": in_flight,
-            "recorded_unit_stall": recorded,
+            "step": in_flight,
+            "recorded_step_stall": recorded,
         }
         advance_result = {"advanced": "error", "error": advance_error}
     return advance_result, None
@@ -752,8 +752,8 @@ def _build_rearm_intent(
     v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
     reading the INTENT can't miss the prepare/execute contract. The plan-loop
     is the most common operator trap (field bug 2026-05-25, second report:
-    agent pulsed 5 times expecting units to materialize; ledger stayed at
-    units=[] because they never ran the prepared /ce-plan invocation). The
+    agent pulsed 5 times expecting steps to materialize; ledger stayed at
+    steps=[] because they never ran the prepared /ce-plan invocation). The
     guidance is phase-aware: plan-loop names the invocation + the gaps_open
     guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
     """

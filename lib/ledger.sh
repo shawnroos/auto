@@ -19,13 +19,13 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # auto::ledger <subcommand> [args...]
 #   read <repo> <run>                   -> ledger JSON on stdout
 #   path <repo> <run>                   -> ledger file path on stdout
-#   transition <repo> <run> <unit> <st> -> grammar-checked state change
+#   transition <repo> <run> <step> <st> -> grammar-checked state change
 #   is-orphaned <repo> <run>            -> "true" | "false"
 #   # Plan-loop FEEDBACK (v0.4.3) — repo auto-resolved from cwd, pass only <run>:
 #   set-gaps-open <run> <N>                       -> after /ce-doc-review
-#   set-enumerated-units <run> <plan-unit> <json> -> after enumerate (plan-done)
+#   set-enumerated-steps <run> <plan-step> <json> -> after enumerate (plan-done)
 #   # Work-loop VERDICT channel (v0.6.8) — repo auto-resolved, pass only <run>:
-#   record-verdict <run> <unit> <json-findings> [attempt] -> write a unit verdict
+#   record-verdict <run> <step> <json-findings> [attempt] -> write a step verdict
 #   set-verdict-decision <run> <gate> <decision> [json]    -> advance|iterate|exit
 auto::ledger() {
   local script_dir

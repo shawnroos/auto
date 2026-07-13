@@ -29,7 +29,7 @@ The design skill should still *coach* these and write them into the goal doc,
 even though the engine does not enforce new bounds for them yet:
 
 - **No-progress detection** — stop after N consecutive iterations that change
-  nothing material. Today auto approximates this with the per-unit stall
+  nothing material. Today auto approximates this with the per-step stall
   threshold and the per-run dead-chain gate; a dedicated no-progress signal is
   deferred.
 - **Budget caps** — usd / tokens / wall-clock the user is willing to spend.

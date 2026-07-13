@@ -3,7 +3,7 @@
 
 Every site that used to branch on the `loop_phase` string literal — the pulse's
 phase switch, the handoff/phase-advance handler, `recompute_predicate`'s phase-aware
-branch, `_ready_fix_unit`'s phase-awareness, and auto-status's reporting — reads
+branch, `_ready_fix_step`'s phase-awareness, and auto-status's reporting — reads
 through THIS module instead of comparing `ledger["loop_phase"]` to a literal.
 
 WHY centralize (memory `feedback_plan_documents_transition_code_doesnt_wire_it`):

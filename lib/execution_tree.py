@@ -10,29 +10,29 @@ wraps it; `lib/dispatcher.py::dispatch_batch` is the executor).
 
 Four steps (mirroring KTD6 / KTD6b):
 
-  1. EXPAND producer-produced units. Recipes like `recipes/a4.json` declare their
+  1. EXPAND producer-produced steps. Recipes like `recipes/a4.json` declare their
      paired builders in `expected_emit_outputs` (materialized at RUN time by a
      phase-boundary producer), NOT in `steps[]`. `dispatcher._is_ready` treats an
      absent dependency as unsatisfied, so a raw frontier walk over a4 yields only
      `{plan}` and `compare` is never ready. We synthesize placeholder nodes for
      those declared ids FIRST so the dependents can become ready.
-     `recipes/a2.json`'s parallel units are STATIC (already in `steps[]`) — no
+     `recipes/a2.json`'s parallel steps are STATIC (already in `steps[]`) — no
      expansion.
 
   2. FRONTIER WALK the (expanded) DAG, reusing the readiness logic in
      `lib/dispatcher.py` (`_is_ready` / `_dependency_satisfied`). We drive that
-     exact predicate over an in-memory unit list: place every ready unit, then
+     exact predicate over an in-memory step list: place every ready step, then
      flip it `pending → verdict-returned` (a satisfied dependency in the
      contract's precise sense) so the next frontier unblocks its dependents. Each
-     frontier is one WAVE — units in a wave are parallel — bounded to `cap`; the
+     frontier is one WAVE — steps in a wave are parallel — bounded to `cap`; the
      over-cap remainder stays pending and spills to the next wave, mirroring
      `dispatch_batch`'s over-cap behavior.
 
-  3. NEST fan-out `do_step` children under their producer parent (the unit whose
+  3. NEST fan-out `do_step` children under their producer parent (the step whose
      completion triggers their emission — the phase-boundary producer's source).
 
   4. SUBSTRATE SELECTION (a routing decision — never execution). A self-contained
-     bounded parallel-fan-in loop (single-phase, no per-unit ce-work/review
+     bounded parallel-fan-in loop (single-phase, no per-step ce-work/review
      backend dispatch, an engine-enforced bound) routes to `"workflow-script"` —
      an INERT routing label plus a topology preview, NOT a runnable compiled
      script (the parked RFC's `pipeline()`/`parallel()` compiler is unbuilt,
@@ -60,16 +60,16 @@ from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sy
 
 dispatcher = load_lib_module("dispatcher")
 
-# The readiness frontier we reuse verbatim (KTD6): a unit is ready iff it is
+# The readiness frontier we reuse verbatim (KTD6): a step is ready iff it is
 # `pending`, every direct dependency is satisfied, and no transitive ancestor is
-# stalled. We drive it over an in-memory unit list, flipping placed units to
+# stalled. We drive it over an in-memory step list, flipping placed steps to
 # `verdict-returned` so the exact same predicate advances wave by wave.
 _is_ready = dispatcher._is_ready
-_units_by_id = dispatcher._units_by_id
-_unit_backend_op = dispatcher._unit_backend_op
+_steps_by_id = dispatcher._steps_by_id
+_step_backend_op = dispatcher._step_backend_op
 
-# The per-unit backend ops that mark a loop as a long-lived ce-work / review
-# dispatch — the shape that MUST run on the native subagent-tree (each unit is a
+# The per-step backend ops that mark a loop as a long-lived ce-work / review
+# dispatch — the shape that MUST run on the native subagent-tree (each step is a
 # background agent that self-writes a verdict). Their presence forces
 # `"subagent-tree"`; their ABSENCE (plus single-phase + bounded) is what lets a
 # self-contained fan-in loop route to the inert `"workflow-script"` label.
@@ -81,7 +81,7 @@ class ExecutionTreeError(Exception):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Step 1 — expand producer-produced units.
+# Step 1 — expand producer-produced steps.
 
 
 def _emit_template_for(emit_id: str, recipe: dict):
@@ -102,13 +102,13 @@ def _emit_template_for(emit_id: str, recipe: dict):
     return best
 
 
-def _phase_boundary_source(to_phase: str, recipe: dict, units: list):
-    """The (from_phase, source_unit_ids) a producer produces its `to_phase` units
+def _phase_boundary_source(to_phase: str, recipe: dict, steps: list):
+    """The (from_phase, source_step_ids) a producer produces its `to_phase` steps
     from — the structural dependency of an emitted node.
 
     A phase-boundary producer (`plan_output_to_paired_builders` etc.) fires when the
-    run ARRIVES at its `to` phase, so its output waits on the `from` phase's units
-    (they must finish before the emission happens). We return those source unit ids
+    run ARRIVES at its `to` phase, so its output waits on the `from` phase's steps
+    (they must finish before the emission happens). We return those source step ids
     so a synthesized node `depends_on` them — which is what orders the paired-
     builder wave AFTER `plan` and `compare` after the builders. Falls back to the
     LAST phase in `phase_order` before `to_phase` when no explicit transition
@@ -123,25 +123,25 @@ def _phase_boundary_source(to_phase: str, recipe: dict, units: list):
         phase_order = recipe.get("phase_order") or []
         if to_phase in phase_order:
             idx = phase_order.index(to_phase)
-            # Nearest declared phase that actually has units, scanning backwards.
+            # Nearest declared phase that actually has steps, scanning backwards.
             for j in range(idx - 1, -1, -1):
-                if any(u.get("phase") == phase_order[j] for u in units):
+                if any(u.get("phase") == phase_order[j] for u in steps):
                     from_phase = phase_order[j]
                     break
-    src_ids = [u["id"] for u in units if u.get("phase") == from_phase]
+    src_ids = [u["id"] for u in steps if u.get("phase") == from_phase]
     return from_phase, src_ids
 
 
-def _expand_producer_units(recipe: dict):
+def _expand_producer_steps(recipe: dict):
     """Synthesize placeholder nodes for `expected_emit_outputs` ids not in `steps[]`.
 
-    Returns ``(units, emitted_meta)`` where ``steps`` is the expanded in-memory
-    unit list (static `steps[]` copied verbatim, each stamped `state=pending`, plus
+    Returns ``(steps, emitted_meta)`` where ``steps`` is the expanded in-memory
+    step list (static `steps[]` copied verbatim, each stamped `state=pending`, plus
     the synthesized producer-produced nodes) and ``emitted_meta`` maps each
     synthesized id → ``{"parent": <producer-source-id>, "fanout": bool}`` for the
     nesting step. a2 (no `expected_emit_outputs`) expands to itself unchanged.
     """
-    units = []
+    steps = []
     for u in recipe.get("steps") or []:
         node = {
             "id": u["id"],
@@ -150,22 +150,22 @@ def _expand_producer_units(recipe: dict):
             "dispatch_context": dict(u.get("invokes") or u.get("dispatch_context") or {}),
             "state": "pending",
         }
-        units.append(node)
+        steps.append(node)
 
-    known = {u["id"] for u in units}
+    known = {u["id"] for u in steps}
     emitted_meta = {}
     for emit_id in recipe.get("expected_emit_outputs") or []:
         if emit_id in known:
-            continue  # already a static unit — nothing to synthesize.
+            continue  # already a static step — nothing to synthesize.
         tmpl = _emit_template_for(emit_id, recipe)
         phase = (tmpl or {}).get("phase") or recipe.get("terminal_phase", "work")
         backend_op = ((tmpl or {}).get("invokes") or {}).get("backend_op")
-        _from_phase, src_ids = _phase_boundary_source(phase, recipe, units)
-        # Producer-produced work units are fan-out children when their template
-        # dispatches `do_step`; the parent is the (single) producer-source unit.
+        _from_phase, src_ids = _phase_boundary_source(phase, recipe, steps)
+        # Producer-produced work steps are fan-out children when their template
+        # dispatches `do_step`; the parent is the (single) producer-source step.
         parent = src_ids[0] if len(src_ids) == 1 else None
         fanout = backend_op == "do_step"
-        units.append({
+        steps.append({
             "id": emit_id,
             "phase": phase,
             "depends_on": list(src_ids),
@@ -175,38 +175,38 @@ def _expand_producer_units(recipe: dict):
         })
         emitted_meta[emit_id] = {"parent": parent, "fanout": fanout}
         known.add(emit_id)
-    return units, emitted_meta
+    return steps, emitted_meta
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 2 — frontier walk (reusing dispatcher's readiness predicate).
 
 
-def _frontier_waves(units: list, cap: int):
+def _frontier_waves(steps: list, cap: int):
     """Ordered parallel waves over the expanded DAG, bounded to ``cap`` per wave.
 
     Drives `dispatcher._is_ready` over the in-memory `steps`: each iteration
-    collects every ready unit (declaration order → deterministic), takes up to
+    collects every ready step (declaration order → deterministic), takes up to
     ``cap`` of them as one wave, and flips those `pending → verdict-returned` so
     the SAME predicate unblocks their dependents next iteration. The over-cap
     remainder stays `pending` and re-qualifies next wave — mirroring
     `dispatch_batch`'s over-cap spill. Raises `ExecutionTreeError` if the frontier
-    empties with units still pending (a dependency cycle / unsatisfiable ref).
+    empties with steps still pending (a dependency cycle / unsatisfiable ref).
     """
-    by_id = _units_by_id({"steps": units})
+    by_id = _steps_by_id({"steps": steps})
     waves = []
     while True:
-        ready = [u for u in units if _is_ready(u, by_id)]
+        ready = [u for u in steps if _is_ready(u, by_id)]
         if not ready:
             break
         wave = ready[:cap]
         for u in wave:
             u["state"] = "verdict-returned"  # satisfied for the next frontier.
         waves.append([u["id"] for u in wave])
-    pending_left = [u["id"] for u in units if u.get("state") == "pending"]
+    pending_left = [u["id"] for u in steps if u.get("state") == "pending"]
     if pending_left:
         raise ExecutionTreeError(
-            f"underivable recipe: units never became ready (cycle or unknown "
+            f"underivable recipe: steps never became ready (cycle or unknown "
             f"dependency): {sorted(pending_left)}"
         )
     return waves
@@ -233,14 +233,14 @@ def _build_nesting(emitted_meta: dict) -> dict:
 # Step 4 — substrate routing decision (KTD6b — a label, not a compile).
 
 
-def _select_substrate(recipe: dict, units: list) -> str:
+def _select_substrate(recipe: dict, steps: list) -> str:
     """`"workflow-script"` (inert routing label) or `"subagent-tree"` (executable).
 
     A CONCRETE predicate (testable, not vague):
 
-      * single-phase — every unit shares one phase (a self-contained fan-in, no
+      * single-phase — every step shares one phase (a self-contained fan-in, no
         plan→handoff→work spine to sequence), AND
-      * no ce-work/review backend op — no unit dispatches `do_step`/`review`
+      * no ce-work/review backend op — no step dispatches `do_step`/`review`
         (those are long-lived background agents that self-write verdicts and MUST
         run on the native subagent-tree), AND
       * bounded — an engine-enforced `iteration.bound` caps the fan-in loop.
@@ -250,10 +250,10 @@ def _select_substrate(recipe: dict, units: list) -> str:
     `"subagent-tree"` (today's `dispatch_batch`, the default + only executable
     target). a2/a4 both carry a `review` (and a4 a `do_step`) op → subagent-tree.
     """
-    phases = {u.get("phase") for u in units}
+    phases = {u.get("phase") for u in steps}
     single_phase = len(phases) <= 1
     has_ce_dispatch = any(
-        _unit_backend_op(u) in _CE_DISPATCH_OPS for u in units
+        _step_backend_op(u) in _CE_DISPATCH_OPS for u in steps
     )
     bounded = bool((recipe.get("iteration") or {}).get("bound"))
     if single_phase and not has_ce_dispatch and bounded:
@@ -303,7 +303,7 @@ def derive_execution_tree(recipe: dict, cap: int) -> dict:
         {
           "recipe":    <recipe name>,
           "cap":       <int cap>,
-          "waves":     [[unit_id, ...], ...],   # ordered; within a wave = parallel
+          "waves":     [[step_id, ...], ...],   # ordered; within a wave = parallel
           "nesting":   {parent_id: [child_id]}, # fan-out do_step children
           "substrate": "subagent-tree" | "workflow-script",
           "emitted":   [synthesized producer-produced ids],
@@ -317,10 +317,10 @@ def derive_execution_tree(recipe: dict, cap: int) -> dict:
         raise ExecutionTreeError(f"cap must be a positive int, got {cap!r}")
     cap = int(cap)
 
-    units, emitted_meta = _expand_producer_units(recipe)
-    waves = _frontier_waves(units, cap)
+    steps, emitted_meta = _expand_producer_steps(recipe)
+    waves = _frontier_waves(steps, cap)
     nesting = _build_nesting(emitted_meta)
-    substrate = _select_substrate(recipe, units)
+    substrate = _select_substrate(recipe, steps)
     preview = _render_preview(recipe, waves, nesting, substrate)
 
     return {

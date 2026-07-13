@@ -94,7 +94,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" validate-criteria '<ratifi
 
 Prints `OK` or `INVALID: <message>`. Nothing is written back to the preset file
 — the ratified criteria are ephemeral (R2/A2) and flow directly into the step-5
-verdict; there is no persisted unit.
+verdict; there is no persisted step.
 
 ### 3. Launch the preset's op ONCE, honoring `prompt_template` (U5 / KTD-5)
 
@@ -143,7 +143,7 @@ Collect the judge results into `judge_verdicts` (`{criterion_id: status}`).
 ### 5. Verdict, report, terminate
 
 Fold the **ratified criteria** plus the resolved results into the terminal
-verdict — the criteria list goes in directly (there is no persisted unit):
+verdict — the criteria list goes in directly (there is no persisted step):
 
 ```
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" verdict \

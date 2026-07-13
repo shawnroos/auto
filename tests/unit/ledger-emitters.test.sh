@@ -16,9 +16,9 @@
 #      proves the test goes RED without locking
 #   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
-#   6. I-2: 3 units, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
+#   6. I-2: 3 steps, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
 #      dispatched -> met==false (all_steps_terminal false)
-#   7. I-2 closure: unit `fixed` with a stale blocker -> all_steps_terminal==false
+#   7. I-2 closure: step `fixed` with a stale blocker -> all_steps_terminal==false
 #   8. I-3: liveness/orphan predicate (manual / stale-beat / healthy-slow)
 #   9. state grammar: every documented transition holds; undocumented rejected
 #  10. fence: no production file enables a TEST_NO_* hatch
@@ -61,15 +61,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the module ─────────────────────────────
-# init <run> <json-units>  — create a ledger with given units list
+# init <run> <json-steps>  — create a ledger with given steps list
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -86,19 +86,19 @@ print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-units> <backend_scale> [phase]  — like ledger_init but
+# init_scale <run> <json-steps> <backend_scale> [phase]  — like ledger_init but
 # threads backend_scale (the ledger_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
 ledger_init_scale() {
-  local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" scale="$3" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, scale, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, scale, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 backend = "native" if scale == "blocker-only" else "ce"
 m.init_ledger(repo, run, backend=backend, backend_scale=scale,
-              units=json.loads(units_json), loop_phase=phase)
+              steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -111,13 +111,13 @@ echo "ledger-emitters.test.sh"
 #
 # Six new write paths support outcomes-gated emission (KTD §A-D / plan U2):
 #   set_verdict_decision     — writes dispatch_context.decision (the gate
-#                              unit's verdict-side decision enum; sibling to
-#                              set_winner_unit_id)
+#                              step's verdict-side decision enum; sibling to
+#                              set_winner_step_id)
 #   set_bound_override       — engine-only audit trail for iterate→exit
 #   accumulate_active_time   — atomic add-write of the wall-time bound
 #                              accumulator
 #   increment_iteration_attempts — atomic ++ of the attempts bound counter
-#   reset_for_iteration      — atomic gate-unit cycle-back combo
+#   reset_for_iteration      — atomic gate-step cycle-back combo
 #   emit_within_phase        — sibling to transition_and_emit, no loop_phase
 #                              write, bumps iteration_emit_count
 #   atomic_iterate_step      — composite of increment + emit + reset in ONE
@@ -134,7 +134,7 @@ echo "ledger-emitters.test.sh"
 #   `NOT iteration_pending`.
 
 # A tiny Python driver that loads ledger.py and applies a sequence of writes
-# against a fresh ledger seeded with an iteration block + gate unit. Each
+# against a fresh ledger seeded with an iteration block + gate step. Each
 # scenario writes JSON to stdout and the bash assertions check exact strings.
 iter_driver() {
   "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'
@@ -147,20 +147,20 @@ op = sys.argv[3]
 
 def fresh(run, *, iteration=True, gate_state="verdict-returned",
           attempts=0, active_wall=0, max_attempts=5, max_wall=None,
-          extra_units=None):
+          extra_steps=None):
     """Create a fresh ledger with an optional iteration block and a 'judge'
-    gate unit. Returns the ledger dict (already on disk via init_ledger then
+    gate step. Returns the ledger dict (already on disk via init_ledger then
     a _with_locked_ledger touch to install the iteration block + gate state).
     """
     p = m.ledger_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    units = [{"id": "judge", "state": "pending", "phase": "work"}]
-    if extra_units:
-        units.extend(extra_units)
+    steps = [{"id": "judge", "state": "pending", "phase": "work"}]
+    if extra_steps:
+        steps.extend(extra_steps)
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
-                  units=units)
+                  steps=steps)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
     # ships in U5/recipes).
@@ -172,7 +172,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
             L["iteration"] = {"gate_step": "judge", "bound": bound}
         L["iteration_attempts"] = attempts
         L["active_wall_seconds"] = active_wall
-        # Walk the gate unit to the requested state via grammar-valid edges.
+        # Walk the gate step to the requested state via grammar-valid edges.
         u = L["steps"][0]
         if gate_state == "verdict-returned":
             u["state"] = "dispatched"  # then record_verdict will edge it.
@@ -190,10 +190,10 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
 
 # ─── op: emit_within_phase-emit ────────────────────────────────────────────
 if op == "emit_within_phase-emit":
-    # The producer returns 2 partial units; emit_within_phase appends them
-    # WITHOUT advancing loop_phase, and bumps iteration_emit_count per unit.
+    # The producer returns 2 partial steps; emit_within_phase appends them
+    # WITHOUT advancing loop_phase, and bumps iteration_emit_count per step.
     led = fresh("u2-ewp-emit",
-                extra_units=[{"id": "plan-1", "state": "verdict-returned",
+                extra_steps=[{"id": "plan-1", "state": "verdict-returned",
                               "phase": "plan"}])
     def emit(L, to_phase):
         return [
@@ -214,7 +214,7 @@ if op == "emit_within_phase-emit":
 elif op == "emit_within_phase-collision":
     led = fresh("u2-ewp-coll")
     def bad(L, to_phase):
-        # Collides with the existing 'judge' unit.
+        # Collides with the existing 'judge' step.
         return [{"id": "judge", "state": "pending", "phase": to_phase}]
     try:
         m.emit_within_phase(repo, "u2-ewp-coll", "work", bad)
@@ -226,7 +226,7 @@ elif op == "emit_within_phase-collision":
 elif op == "atomic_iterate_step-happy":
     # The full composite: increment + emit + reset all land in ONE write.
     led = fresh("u2-ais-happy",
-                extra_units=[{"id": "plan-1", "state": "verdict-returned",
+                extra_steps=[{"id": "plan-1", "state": "verdict-returned",
                               "phase": "plan"}])
     m.record_verdict(repo, "u2-ais-happy", "judge", [])
     m.set_verdict_decision(repo, "u2-ais-happy", "judge", "iterate")
@@ -236,7 +236,7 @@ elif op == "atomic_iterate_step-happy":
             {"id": "plan-3", "state": "pending", "phase": "plan"},
         ]
     # Gate phase = "work" (KTD: emission stays in gate's phase). Force phase
-    # = "plan" by walking depends_on to the new plan units (the production
+    # = "plan" by walking depends_on to the new plan steps (the production
     # path; the gate is the judge, plan-1/2/3 are its deps).
     appended = m.atomic_iterate_step(
         repo, "u2-ais-happy", "judge", emit2, ["plan-1", "plan-2", "plan-3"],
@@ -250,7 +250,7 @@ elif op == "atomic_iterate_step-happy":
         "gate_state": judge["state"],
         "gate_depends_on": judge["depends_on"],
         "decision_cleared": "decision" not in (judge.get("dispatch_context") or {}),
-        "unit_count": len(after["steps"]),
+        "step_count": len(after["steps"]),
     }))
 
 # ─── op: atomic_iterate_step-bad-producer-keeps-counter ─────────────────────
@@ -272,7 +272,7 @@ elif op == "atomic_iterate_step-bad-producer-keeps-counter":
         "raised": raised,
         "iteration_attempts": after["iteration_attempts"],
         "iteration_emit_count": after.get("iteration_emit_count"),
-        "unit_count": len(after["steps"]),
+        "step_count": len(after["steps"]),
     }))
 
 
@@ -286,25 +286,25 @@ echo ""
 echo "── v0.3.0 U2: iteration producers (emit path) ──"
 
 # ─── U2.9: emit_within_phase appends + bumps counter, no loop_phase write ───
-it "U2: emit_within_phase appends 2 units, leaves loop_phase, bumps emit_count"
+it "U2: emit_within_phase appends 2 steps, leaves loop_phase, bumps emit_count"
 assert_eq \
   '{"appended": ["plan-2", "plan-3"], "all_ids": ["judge", "plan-1", "plan-2", "plan-3"], "loop_phase": "work", "iteration_emit_count": 2}' \
   "$(iter_driver emit_within_phase-emit)"
 
 # ─── U2.10: emit_within_phase collision check ───────────────────────────────
-it "U2: emit_within_phase rejects a unit id that collides with an existing one"
+it "U2: emit_within_phase rejects a step id that collides with an existing one"
 assert_eq "rejected" "$(iter_driver emit_within_phase-collision)"
 
 # ─── U2.15: atomic_iterate_step happy path — full composite ─────────────────
 it "U2: atomic_iterate_step lands increment+emit+reset in ONE atomic write"
 assert_eq \
-  '{"appended": ["plan-2", "plan-3"], "iteration_attempts": 1, "iteration_emit_count": 2, "gate_state": "pending", "gate_depends_on": ["plan-1", "plan-2", "plan-3"], "decision_cleared": true, "unit_count": 4}' \
+  '{"appended": ["plan-2", "plan-3"], "iteration_attempts": 1, "iteration_emit_count": 2, "gate_state": "pending", "gate_depends_on": ["plan-1", "plan-2", "plan-3"], "decision_cleared": true, "step_count": 4}' \
   "$(iter_driver atomic_iterate_step-happy)"
 
 # ─── U2.16: atomic_iterate_step is all-or-nothing on failure ────────────────
 it "U2: atomic_iterate_step with a bad producer keeps iteration_attempts at 0 (all-or-nothing)"
 assert_eq \
-  '{"raised": "yes", "iteration_attempts": 0, "iteration_emit_count": 0, "unit_count": 1}' \
+  '{"raised": "yes", "iteration_attempts": 0, "iteration_emit_count": 0, "step_count": 1}' \
   "$(iter_driver atomic_iterate_step-bad-producer-keeps-counter)"
 
 # ── summary ─────────────────────────────────────────────────────────────────

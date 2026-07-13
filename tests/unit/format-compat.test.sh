@@ -523,7 +523,7 @@ expected='{"a1.json": {"backend_ops": ["next_plan_step"], "default_backend": "ce
 assert_eq "$expected" "$r"
 
 # NB: no builtin recipe DECLARES a `do_unit`/`do_step` step — work steps are
-# materialized at runtime by the phase-boundary producers (lib/unit_emitters.py),
+# materialized at runtime by the phase-boundary producers (lib/step_producers.py),
 # which is why the op appears in the run-record fixtures (scenario 2) but in no
 # recipe file. `w`/`pipeline` each declare a single plan/brainstorm step.
 

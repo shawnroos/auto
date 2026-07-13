@@ -4,7 +4,7 @@
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-ce.py`, prefers a module-level ``Backend`` factory if present,
 and calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_step(unit) / review(unit)``.
+deepen(ledger) / review_plan(ledger) / do_step(step) / review(step)``.
 
 The pure, contract-load-bearing logic (severity mapping + the plan-step state
 machine) is implemented HERE in Python so pulse.py can import it directly. The
@@ -73,9 +73,9 @@ def map_findings(ce_findings):
 
 
 def _bound_plan_path(ledger):
-    """The plan doc path bound to the run's plan unit (plan_presatisfied / W).
+    """The plan doc path bound to the run's plan step (plan_presatisfied / W).
 
-    lib/auto.py binds the reviewed plan's path to the single plan-phase unit's
+    lib/auto.py binds the reviewed plan's path to the single plan-phase step's
     dispatch_context.plan_path at init (the schema has no top-level slot for it).
     Returns it, or None for a1-style runs where the plan was produced in-session.
     """
@@ -118,37 +118,37 @@ class Backend:
     def next_plan_step(self, ledger):
         return _next_plan_step(ledger)
 
-    def enumerate_plan_units(self, ledger):
-        """PREPARE the plan→work-units enumeration (v0.2.0 re-lock, KTD-4).
+    def enumerate_plan_steps(self, ledger):
+        """PREPARE the plan→work-steps enumeration (v0.2.0 re-lock, KTD-4).
 
         The producer the producers read. At plan-done the engine calls this to turn
-        the reviewed plan into a work-unit list. Prepare-only: returns an envelope
+        the reviewed plan into a work-step list. Prepare-only: returns an envelope
         the MODEL executes (reads the plan, returns `[{id, invokes, ...}]`); the
-        engine persists it onto the plan unit's `dispatch_context.enumerated_steps`
-        (U6) and the producers (U5b) shape it into ledger units. v0.4.3 (KTD-15):
+        engine persists it onto the plan step's `dispatch_context.enumerated_steps`
+        (U6) and the producers (U5b) shape it into ledger steps. v0.4.3 (KTD-15):
         for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
         is surfaced so the envelope names WHICH plan; omitted for a1.
 
         U14 (KTD-1): each enumerated item must carry a `depends_on` list naming
-        the sibling unit ids it depends on (empty when independent) so the
-        readiness engine (`dispatcher.ready_units`) can order the fan-out. The
+        the sibling step ids it depends on (empty when independent) so the
+        readiness engine (`dispatcher.ready_steps`) can order the fan-out. The
         op is prepare-only, so the invocation string is the ONLY place the model
         is told to originate those edges — without it, passthrough carries []."""
         edge_clause = (
             " — each item is {id, invokes, depends_on}, where depends_on lists "
-            "the sibling unit ids that must complete first (empty [] if the unit "
+            "the sibling step ids that must complete first (empty [] if the step "
             "is independent)"
         )
         envelope = {
             "backend": BACKEND_NAME,
-            "op": "enumerate_plan_units",
-            "invocation": "enumerate the reviewed plan's work units" + edge_clause,
+            "op": "enumerate_plan_steps",
+            "invocation": "enumerate the reviewed plan's work steps" + edge_clause,
         }
         plan_path = _bound_plan_path(ledger)
         if plan_path:
             envelope["plan_path"] = plan_path
             envelope["invocation"] = (
-                f"enumerate the reviewed plan's work units from {plan_path}"
+                f"enumerate the reviewed plan's work steps from {plan_path}"
                 + edge_clause
             )
         return envelope
@@ -168,49 +168,49 @@ class Backend:
         return {"backend": BACKEND_NAME, "op": "review_plan", "invocation": "/ce-doc-review"}
 
     # ── spine entry op (v0.6.0 / U7) ─────────────────────────────────────────
-    def brainstorm(self, unit):
-        """PREPARE /ce-brainstorm for the spine's brainstorm-entry unit
+    def brainstorm(self, step):
+        """PREPARE /ce-brainstorm for the spine's brainstorm-entry step
         (recipes/pipeline.json declares ``invokes.backend_op: "brainstorm"``).
 
         Prepare-only, mirroring ``do_step``: the model runs /ce-brainstorm,
-        records the requirements-doc path on the unit's
+        records the requirements-doc path on the step's
         ``dispatch_context.requirements_doc``, and self-writes verdict-returned;
         the engine then fires the U8 ``brainstorm_output_to_plan_step`` producer
-        on advance to plan. Without this op the spine's brainstorm unit resolved
+        on advance to plan. Without this op the spine's brainstorm step resolved
         to nothing and could never be worked to terminal (round-1 P1)."""
-        unit_id = unit.get("id") if isinstance(unit, dict) else unit
+        step_id = step.get("id") if isinstance(step, dict) else step
         return {
             "backend": BACKEND_NAME,
             "op": "brainstorm",
-            "unit_id": unit_id,
+            "step_id": step_id,
             "invocation": "/ce-brainstorm",
         }
 
     # ── work-loop ops ──────────────────────────────────────────────────────
-    def do_step(self, unit):
-        """PREPARE /ce-work for a unit. Returns an opaque dispatch_handle the
+    def do_step(self, step):
+        """PREPARE /ce-work for a step. Returns an opaque dispatch_handle the
         dispatcher (U10) uses to correlate the in-flight agent; U10 defines
         the correlation contract over this shape."""
-        unit_id = unit.get("id") if isinstance(unit, dict) else unit
+        step_id = step.get("id") if isinstance(step, dict) else step
         return {
             "backend": BACKEND_NAME,
             "op": "do_step",
-            "unit_id": unit_id,
-            "invocation": "/ce-work %s" % unit_id,
+            "step_id": step_id,
+            "invocation": "/ce-work %s" % step_id,
         }
 
-    def review(self, unit):
+    def review(self, step):
         """PARSE half of `review`: translate /ce-code-review's structured output
         (CE findings with level P0..P3) onto the shared severity scale. The
         live /ce-code-review run is the model's; this maps its result.
 
-        Accepts the CE findings either on ``unit["ce_findings"]`` or as a bare
+        Accepts the CE findings either on ``step["ce_findings"]`` or as a bare
         list, and returns the contract findings[] shape. The engine records
         these via record_verdict; this backend does NOT write them (§3.2)."""
-        if isinstance(unit, dict):
-            ce_findings = unit.get("ce_findings", [])
+        if isinstance(step, dict):
+            ce_findings = step.get("ce_findings", [])
         else:
-            ce_findings = unit
+            ce_findings = step
         return map_findings(ce_findings)
 
 

@@ -19,8 +19,8 @@
 > the **Legacy keys (read-compat)** appendix (now complete).
 >
 > **Changelog — v0.14.0 (concept-vocabulary rename, U4):** renamed the contract
-> and its vocabulary (supersedes `adapter-contract.md` → `backend-contract.md`;
-> formerly the "adapter interface", now the "backend interface").
+> and its vocabulary (supersedes `adapter-contract.md` → `backend-contract.md`).
+> It is now the "backend interface" (formerly the "adapter interface").
 > NO op-set / signature / severity / exit-predicate change.
 >
 > **Reading test:** a backend author should be able to implement a complete
@@ -44,7 +44,7 @@ The auto engine is **workflow-blind**. It runs two loops — a
 review, or do work. It delegates every workflow-bearing action to a **backend**:
 a thin shim that maps one concrete workflow (e.g. native Claude editing, or
 Compound Engineering's `/ce-*` commands) onto a fixed set of **seven operations**
-(six in v0.1.x; the seventh, `enumerate_plan_units`, added in the v0.2.0 re-lock).
+(six in v0.1.x; the seventh, `enumerate_plan_steps`, added in the v0.2.0 re-lock).
 
 The engine drives the loops mechanically; the backend supplies the *content* of
 each step. V1 ships exactly two backends — `native` and `ce` — chosen as the
@@ -72,17 +72,17 @@ observable — every advance is one named op the ledger can record.
 | `deepen(plan)` | → `plan` (improved, or unchanged = no-op) | pulse (U4) | one round of plan deepening |
 | `review_plan(plan)` | → `gap_set` | pulse (U4) | one plan-review pass; returns the open gaps |
 | `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | pulse (U4) | **the backend owns plan-step sequencing** — the engine never picks the next plan step |
-| `do_step(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
-| `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
-| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `steps[]`) | pulse (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_steps` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
+| `do_step(step)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop step for execution |
+| `review(step)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one step and translate its workflow's output onto `blocker`\|`major`\|`minor` |
+| `enumerate_plan_steps(ledger)` | → PREPARE envelope (model fills `steps[]`) | pulse (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-step list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan step's `dispatch_context.enumerated_steps` (U6), and the phase-transition producer (U5b) shapes it into ledger steps. |
 
 > **v0.2.0 contract re-lock (KTD-4).** The op set grew from six to **seven** with
-> `enumerate_plan_units`. This was a deliberate re-lock, not a drift: v0.1.x had no
-> in-code work-unit producer (the handoff paused for off-ledger manual creation), so
+> `enumerate_plan_steps`. This was a deliberate re-lock, not a drift: v0.1.x had no
+> in-code work-step producer (the handoff paused for off-ledger manual creation), so
 > the recipe producers had no source data (feasibility F4). Both `ce` and `native`
 > backends implement the new op. `next_plan_step`'s signature is UNCHANGED — N>1
 > parallel plan-loops advance serialized (one per pulse), so the backend still sees
-> one logical advance-stream. A `unit_id` parameter on `next_plan_step` for
+> one logical advance-stream. A `step_id` parameter on `next_plan_step` for
 > concurrent advance is the planned v0.3.0 re-lock, not V1.
 
 ### 2.1 Who calls each op (this is load-bearing for contract coherence)
@@ -96,15 +96,15 @@ ops**. The work-loop ops are invoked by different actors, deliberately:
   order; the backend does (see §4).
 - **`do_step`** — invoked by the **dispatcher** (U10), NOT the pulse. The pulse
   never dispatches work. The dispatcher decides batch size and calls `do_step`
-  for each unit in a wave; `do_step` returns a dispatch handle the dispatcher
+  for each step in a wave; `do_step` returns a dispatch handle the dispatcher
   uses to correlate the in-flight agent.
-- **`review`** — invoked by the **background work agent** on the unit it executed.
+- **`review`** — invoked by the **background work agent** on the step it executed.
   The agent self-writes the resulting findings through the engine's
   `record_verdict` path (the `dispatched → verdict-returned` transition). The
   backend's `review` op produces the findings; the engine records them. **The
   backend does not write findings to disk.**
 
-A consequence: a single dispatched unit's lifecycle touches `do_step` (at
+A consequence: a single dispatched step's lifecycle touches `do_step` (at
 dispatch) and `review` (at completion), but never the pulse. The pulse only ever
 reads the recorded verdict and applies fixes.
 
@@ -171,7 +171,7 @@ implement `review` correctly:
 - `findings[]` is written **ONLY** by a `review` verdict (the
   `dispatched → verdict-returned` transition). **Nothing else writes findings.**
 - A new verdict **OVERWRITES** the findings array — it does not append. The array
-  always reflects exactly the most recent review's view of the unit.
+  always reflects exactly the most recent review's view of the step.
 - A pulse applying a fix does **NOT** clear or modify findings inline. Asserting a
   defect is closed without a fresh review is forbidden. The fix is a state change
   only; stale findings remain until the next `review` overwrites them.
@@ -233,9 +233,9 @@ predicates are fixed constants:
   ```
   All three conjuncts are required. The first two come from counting the
   `findings[]` the backend's `review` ops returned. The third —
-  `all_steps_terminal` — is an engine-computed guard that no unit is still
-  `pending`, `dispatched`, or `stalled`, and no `fixed` unit is carrying a stale
-  blocker/major. (Full terminal definition: a unit is terminal iff it is
+  `all_steps_terminal` — is an engine-computed guard that no step is still
+  `pending`, `dispatched`, or `stalled`, and no `fixed` step is carrying a stale
+  blocker/major. (Full terminal definition: a step is terminal iff it is
   `terminal-skip`, OR it is `verdict-returned`/`fixed` with **no** open
   `blocker`/`major` finding. See `ledger-schema.md` §4.1 for the exact predicate.)
 
@@ -255,8 +255,8 @@ To implement a conforming backend, provide:
 2. `deepen(plan) -> plan` — one deepening round; return the plan unchanged if the workflow has no deepen step.
 3. `review_plan(plan) -> gap_set` — one review pass; return an array whose length is the open-gap count (empty ⇒ done).
 4. `next_plan_step(ledger) -> token` — the plan-loop sequencer; MUST return `"done"` once `gaps_open == 0`.
-5. `do_step(unit) -> dispatch_handle` — dispatch one unit; return an opaque correlation token.
-6. `review(unit) -> findings[]` — review one unit; translate the workflow's output onto `blocker`/`major`/`minor` and return `[{severity, note}, ...]`.
+5. `do_step(step) -> dispatch_handle` — dispatch one step; return an opaque correlation token.
+6. `review(step) -> findings[]` — review one step; translate the workflow's output onto `blocker`/`major`/`minor` and return `[{severity, note}, ...]`.
 7. **A declared severity mapping** from the workflow's native vocabulary onto the three-value scale.
 8. **A declared `backend_scale`** (`"three-tier"` or `"blocker-only"`).
 
@@ -278,7 +278,7 @@ Do NOT write the ledger from any op. Return data; the engine records it.
 ## Appendix — Legacy keys (read-compat)
 
 The format-v2 cutover (v0.15.0, U6 of the concept-vocabulary rename) flipped every
-persisted key and value in one unit. The key names throughout this file are the
+persisted key and value in one step. The key names throughout this file are the
 **current on-disk (v2)** spelling. Records and workflow files written by
 pre-rename code still carry the v1 names and are upgraded **in memory on every
 read** by `lib/format_compat.py`.

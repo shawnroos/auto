@@ -1,10 +1,10 @@
 ---
 name: auto-watch
 description: >
-  Render the live auto agent tree — driver → work unit → do_step fan-out agent —
+  Render the live auto agent tree — driver → work step → do_step fan-out agent —
   with each node's age against its stall threshold and its attempt count, then
   overlay live-agent status from the harness. Use when the driver or operator
-  wants to SEE what a run has dispatched, what is nested under a fan-out unit, and
+  wants to SEE what a run has dispatched, what is nested under a fan-out step, and
   which node is wedged or over-age vs the stall threshold — "watch the tree",
   "show the agent tree", "what's dispatched", "is anything hung". Structure comes
   from the ledger via lib/watch_tree.py; liveness comes from the TaskList/Monitor
@@ -15,7 +15,7 @@ description: >
 # auto-watch (the agent-tree watch view)
 
 A legible, at-a-glance picture of a live auto run's agent tree: the driver, the
-work units it dispatched, and the `do_step` fan-out agents nested under their
+work steps it dispatched, and the `do_step` fan-out agents nested under their
 producer parents — each annotated with how long it has been in flight against its
 stall threshold and which attempt it is on. Its purpose is supervision *legibility*
 (R6, AE5): surface a wedged or dead node — top-level or nested — as a distinct,
@@ -33,7 +33,7 @@ Two halves, deliberately split (KTD5):
 - **Liveness — from the task tools, model-side.** Nested `do_step` agents carry
   their OWN `session_id` and are not reachable by the ledger alone, so overlay
   their live process status from `TaskList` / `Monitor`, mapping each task back
-  to its unit id.
+  to its step id.
 
 ## Render the tree
 
@@ -69,7 +69,7 @@ agent-tree: <run-id>
 `now` is passed IN — never let the renderer read the clock. That keeps the view
 pure so a fixed ledger renders identically for the same instant (the property its
 determinism test pins). A run with nothing dispatched renders the empty-tree
-sentinel (`(no dispatched units)`) — there is no live agent to watch yet.
+sentinel (`(no dispatched steps)`) — there is no live agent to watch yet.
 
 ## Overlay live-agent status
 
@@ -78,8 +78,8 @@ actually alive. Overlay them so a node the ledger still calls `dispatched` but
 whose agent has died (or wedged) is visible:
 
 1. Call **`TaskList`** for the run's dispatched agents. Nested `do_step` agents
-   carry their own `session_id`, so map each task back to its unit id (by the
-   unit id baked into the dispatch, per `skills/auto/SKILL.md` §4 / KTD-5).
+   carry their own `session_id`, so map each task back to its step id (by the
+   step id baked into the dispatch, per `skills/auto/SKILL.md` §4 / KTD-5).
 2. For a node the ledger calls `dispatched` but that has no live task — or one
    `TaskList`/`Monitor` reports finished/dead — call it out next to the ledger
    node: the two disagree, which is exactly the alive-but-wedged / silently-dead
@@ -98,4 +98,4 @@ See `references/live-overlay.md` for the ledger-state ↔ task-liveness mapping.
 - It does not mutate the ledger — no write path, no `now` from the clock inside
   the renderer.
 - It does not re-derive the exit predicate or the stall threshold; it reads the
-  per-unit `stall_threshold_seconds` the ledger already carries (default 600).
+  per-step `stall_threshold_seconds` the ledger already carries (default 600).

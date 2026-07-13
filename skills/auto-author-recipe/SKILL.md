@@ -14,8 +14,8 @@ description: >
 # auto-author-recipe (the recipe compiler)
 
 A **recipe** is a named JSON declaration of a workflow topology — the initial
-ledger `/auto` builds a run from (units, their `depends_on` graph, the phase
-each runs in, and which producer produces work units at a phase boundary). The
+ledger `/auto` builds a run from (steps, their `depends_on` graph, the phase
+each runs in, and which producer produces work steps at a phase boundary). The
 user should NOT write that JSON by hand. This skill is the compiler: the user
 describes the workflow in plain language, and this skill produces a validated
 recipe file.
@@ -29,15 +29,15 @@ writing. Never invent a recipe shape that wouldn't pass `validate`.
 **Entry A — author from prose** ("I want a recipe that does X"):
 1. **Elicit the shape.** Ask, in order, only what you don't already know:
    - What's the goal of the workflow? (one line → the `description`)
-   - What runs in PARALLEL vs SEQUENCE? (parallel units share a phase with empty
-     `depends_on`; sequential units `depends_on` their predecessor)
-   - Is there a JUDGE/COMPARATOR step that gates on several earlier units?
-     (a work-phase unit that `depends_on` them)
+   - What runs in PARALLEL vs SEQUENCE? (parallel steps share a phase with empty
+     `depends_on`; sequential steps `depends_on` their predecessor)
+   - Is there a JUDGE/COMPARATOR step that gates on several earlier steps?
+     (a work-phase step that `depends_on` them)
    - Does the work come from a plan-loop (the engine plans first) or is the plan
-     already written? (plan-loop → a `plan`-phase unit + a `phase_transitions`
+     already written? (plan-loop → a `plan`-phase step + a `phase_transitions`
      producer; already-written → the work-only shape, `phase_order: ["work"]`)
 2. **Compile** the answers into a recipe dict. Choose the producer from the V1
-   registry by intent: one plan → one set of work units = `plan_output_to_work_steps`;
+   registry by intent: one plan → one set of work steps = `plan_output_to_work_steps`;
    N competing plans + judge = `judge_winner_to_work_steps`; two biased builders +
    comparator = `plan_output_to_paired_builders`. (These are the only V1 producer
    names `validate` accepts; non-default `phase_order` other than `["work"]` is
@@ -76,7 +76,7 @@ finished"):
 ## Iteration-aware recipes (v0.3.0)
 
 A recipe may declare an optional `iteration` block to make the loop
-**outcomes-gated** — a designated gate unit's `verdict.decision` drives whether
+**outcomes-gated** — a designated gate step's `verdict.decision` drives whether
 the run advances, iterates (emits another round of siblings), or exits with an
 audit trail. When the user describes a workflow that should "keep going until
 the judge says it's good" / "let the comparator re-spawn the pair if neither
@@ -84,11 +84,11 @@ wins" / "stop after at most N rounds," reach for `iteration`.
 
 **What to elicit:**
 
-1. **Which unit is the gate?** Usually the judge / comparator / reviewer that
+1. **Which step is the gate?** Usually the judge / comparator / reviewer that
    already exists in the topology — name its id under `iteration.gate_step`.
 2. **Does iterating spawn siblings?** If yes, declare an `emit_templates[<name>]`
    entry with `{phase, invokes, id_prefix}` and reference it via
-   `iteration.emit_template = "<name>"`. The new units land in the template's
+   `iteration.emit_template = "<name>"`. The new steps land in the template's
    `phase` at iteration time; the engine generates ids monotonically as
    `id_prefix + N`. If no (just re-engage the gate after a clarifying signal),
    omit `emit_template`.
@@ -97,17 +97,17 @@ wins" / "stop after at most N rounds," reach for `iteration`.
    ACTIVE wall-time. Pick conservatively — the bound is engine-enforced, so a
    misbehaving gate cannot loop forever.
 
-**Validate as usual.** `validate_and_lint` covers the iteration shape: gate_unit
-must reference a real unit (or an `emit_templates` id_prefix); when
+**Validate as usual.** `validate_and_lint` covers the iteration shape: gate_step
+must reference a real step (or an `emit_templates` id_prefix); when
 `emit_template` is set, `emit_templates` must be defined and contain that key;
 `bound.max_attempts` must be a positive int (bool values are rejected, since
 `isinstance(True, int)` is True in Python).
 
-**Typed verification criteria (v0.7.0).** The gate unit may also carry an
+**Typed verification criteria (v0.7.0).** The gate step may also carry an
 optional `verification` array — typed pass/fail criteria the engine resolves to
 drive the gate's `verdict.decision` (programmatic checks and/or judge criteria).
-It belongs on the unit named by `iteration.gate_step`; criteria placed on any
-other unit are never evaluated (`validate_and_lint` surfaces that as a warning —
+It belongs on the step named by `iteration.gate_step`; criteria placed on any
+other step are never evaluated (`validate_and_lint` surfaces that as a warning —
 the same lint layer step 2 above shows). Do not restate the field rules here —
 `skills/auto-design/references/verification-taxonomy.md` and
 `docs/contracts/verification-contract.md` are the authoritative SSOT for the

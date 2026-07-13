@@ -79,7 +79,7 @@ when the second read or the human judgment is worth blocking for — otherwise a
 Once all criteria are resolved, the skill folds them into a single terminal
 verdict via `preset_oneshot.oneshot_verdict(ratified_criteria,
 programmatic_results, judge_verdicts)` — the ratified criteria list goes in
-directly (there is no synthesized unit):
+directly (there is no synthesized step):
 
 - `programmatic_results` — `{criterion_id: status}` from `evaluate_programmatic`.
 - `judge_verdicts` — `{criterion_id: status}` for `model_judge` /

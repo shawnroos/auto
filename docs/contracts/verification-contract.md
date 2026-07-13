@@ -2,8 +2,8 @@
 
 Status: **LOCKED** (v0.7.0, U8). Changes here are breaking — bump and migrate.
 
-Typed verification lets a recipe gate unit carry checkable done-conditions that
-steer the gate's advance/iterate decision. It is **additive**: a unit without a
+Typed verification lets a recipe gate step carry checkable done-conditions that
+steer the gate's advance/iterate decision. It is **additive**: a step without a
 `verification` block behaves exactly as pre-v0.7.0 (a1/a2/a4/w unaffected). It
 never replaces auto's deterministic exit predicate — verification only steers a
 gate; the predicate (`blockers == 0 AND majors == 0 AND all_steps_terminal`,
@@ -11,7 +11,7 @@ i.e. "only P3 findings remain") stays the run's single source of truth.
 
 ## 1. The `verification` block
 
-A unit MAY carry `verification`: an array of **≤ 16** criteria. Each criterion:
+A step MAY carry `verification`: an array of **≤ 16** criteria. Each criterion:
 
 ```
 { "id": "<unique non-empty string>", "type": "<one of four>", ... }
@@ -58,7 +58,7 @@ translation from signal to the committed `dispatch_context.decision`.
 
 ## 4. Resolution + commit (the single write)
 
-`lib/iteration.py::resolve_gate_verification(ledger, gate_unit_id, *, repo_root,
+`lib/iteration.py::resolve_gate_verification(ledger, gate_step_id, *, repo_root,
 judge_verdicts)` runs the programmatic criteria, folds in `judge_verdicts` (the
 arg, plus any persisted on `dispatch_context.judge_verdicts`), and returns
 `{signal, pending_judges, programmatic_results}` — **no ledger write**. The

@@ -67,7 +67,7 @@ freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
   [--intent "<text>"]` — the spawner owns worktrees/ports/sidecar +
   dispatch; the driver never shells out per sub-run.
 - Resume: `bash lib/auto-resume.sh "<continue|abort|retry|skip>
-  [<run-id>] [<unit>]"`
+  [<run-id>] [<step>]"`
 
 Theory + edge cases (`docs/contracts/driver-reference.md`): prepare/execute, goal
 binding, pulse/handoff/fan-out, exit reasons, goal-aware routing (§17) — load on demand.

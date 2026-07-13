@@ -9,7 +9,7 @@ Original © the looper authors.
 # Verification rubric
 
 Use this when turning the goal's definition of done into **typed verification
-criteria** — the `verification` array auto attaches to a gate unit. These
+criteria** — the `verification` array auto attaches to a gate step. These
 criteria steer the gate's iterate / advance / exit decision; they never replace
 auto's deterministic exit predicate (the predicate stays the single source of
 truth for when the *run* is done — see the control rubric).

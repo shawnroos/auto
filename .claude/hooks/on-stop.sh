@@ -29,7 +29,7 @@
 #   `loop_phase != "done" AND exit_predicate_result.met == false`. The reason
 #   names the offending run(s). This matches goal-status.sh's per-run verdict.
 #   The all_steps_terminal gate is honored implicitly: `met` already requires
-#   `all_steps_terminal == true` (schema §5 I-2), so a lurking stalled unit
+#   `all_steps_terminal == true` (schema §5 I-2), so a lurking stalled step
 #   (counters zero) keeps `met == false` and the stop stays blocked.
 #
 # READS THE LEDGER LOCK-FREE: the atomic-rename invariant gives a consistent

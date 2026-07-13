@@ -13,10 +13,10 @@
 # Scenarios (mapped to the U4 plan, tested against pulse.py's ACTUAL surface):
 #   1. predicate NOT met -> pulse advances one step + signals re-arm (action=rearm)
 #   2. predicate met -> emits report, action=stop, does NOT re-arm
-#   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
+#   3. stalled step (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. backend raises mid-pulse -> unit.last_error recorded + unit marked stalled;
+#   4. backend raises mid-pulse -> step.last_error recorded + step marked stalled;
 #      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
@@ -38,7 +38,7 @@
 #      does NOT fire after one un-reviewed pass. Deliberate-fail control replicates
 #      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
 #      outcome (the discriminator).
-#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
+#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a step stuck
 #      `dispatched` past its stall_threshold (the dispatcher rescue-swallow P3
 #      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
 #      stays dispatched.
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
+# init <run> <json-steps> [backend] [phase]  — create a ledger with given steps.
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 

@@ -8,12 +8,12 @@
 #
 # Scenarios (write, see FAIL, implement):
 #   1. derive_execution_tree(a2, cap=16) → wave1 {plan-1,plan-2,plan-3}, wave2 {judge}
-#      (a2's parallel units are STATIC — no emit-template expansion).
+#      (a2's parallel steps are STATIC — no emit-template expansion).
 #   2. derive_execution_tree(a4, cap=16) → {plan} then the paired-builder wave
 #      (build-clarity/build-perf synthesized from expected_emit_outputs) then
 #      {compare}. Asserting the builders appear PROVES expansion happened.
 #   3. cap=1 serializes a2's 3-wide parallel wave into 3 ordered waves.
-#   4. a fan-out unit nests its expanded do_step children under the producer parent.
+#   4. a fan-out step nests its expanded do_step children under the producer parent.
 #   5. substrate heuristic: "workflow-script" for a bounded parallel-fan-in loop;
 #      "subagent-tree" for a ce-work/review dispatch loop (a2/a4).
 

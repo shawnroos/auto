@@ -3,7 +3,7 @@
 # the iteration `decision` field — mirrors tests/unit/phase-grammar-ast-lint.test.sh.
 #
 # Adversarial discipline (matching v0.2.0's KTD-3 lint): it is NOT enough to
-# forbid the `unit["dispatch_context"]["decision"]` SUBSCRIPT shape — every
+# forbid the `step["dispatch_context"]["decision"]` SUBSCRIPT shape — every
 # bypass (`_k="decision"; ctx[_k]`, dict iteration, getattr, __getitem__) still
 # needs the STRING "decision" to exist somewhere. So this lint forbids the
 # string LITERAL "decision" as an ast.Constant anywhere in lib/*.py EXCEPT
@@ -19,7 +19,7 @@
 #                        ledger.py, set_verdict_decision lives here (the facade
 #                        ledger.py only re-exports the NAME, not the literal).
 #   - lib/ledger_emitters.py  — clears the iteration-decision field in the
-#                        gate-unit reset combo (_reset_gate_for_iteration's
+#                        gate-step reset combo (_reset_gate_for_iteration's
 #                        dc.pop("decision", None) — round-3 P0-R3-1). After the
 #                        B5 split this code lives here, so the literal moved here
 #                        with it.

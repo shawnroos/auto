@@ -7,7 +7,7 @@ authoritative spec — if they disagree, the contract wins and this file is the
 bug). Contains the data that everything else depends on: module constants, the
 error hierarchy, slug/path helpers, time helpers, and the atomic-write + flock
 primitives. The PURE predicate logic (``recompute_predicate`` and its helpers,
-``unit_is_terminal``, ``is_orphaned``) was extracted to ``lib/ledger_predicate.py``
+``step_is_terminal``, ``is_orphaned``) was extracted to ``lib/ledger_predicate.py``
 (U16) to keep this file under the size budget; ``_atomic_write`` reaches it via
 the deferred ``_lazy_load`` idiom, so this file still imports NO sibling ledger
 module at top level — it is the bottom of the acyclic DAG (core ← mutators ←
@@ -58,7 +58,7 @@ from typing import Callable
 # Module constants (importable; consumers MUST read these, not hardcode copies).
 
 GRACE_SECONDS = 4200  # I-3: > 3600s ScheduleWakeup clamp ceiling + slack.
-DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-unit stall timeout default.
+DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-step stall timeout default.
 # Bug #9: a `driver=="self"` chain whose last beat is older than THIS is treated
 # as a DEAD chain by the Stop hook (it no longer blocks stop). It sits ABOVE the
 # 3600s ScheduleWakeup max-pulse-delay + slack (so a healthy slow chain is never
@@ -84,7 +84,7 @@ PLAN_STEPS = ("plan", "deepen", "review_plan")
 #
 #   ITERATION_CHECK_FAILED → an unexpected raise from advance_iteration_loop
 #     (typically a malformed iteration block or gate verdict).
-#   RECIPE_BUG → a LedgerError subclass (UnknownUnit, InvalidTransition,
+#   RECIPE_BUG → a LedgerError subclass (UnknownStep, InvalidTransition,
 #     StaleVerdict) escaping the iteration check, which signals the recipe's
 #     steps[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
@@ -106,7 +106,7 @@ from enum import Enum
 class ExitReason(str, Enum):
     ITERATION_CHECK_FAILED = "iteration-check-failed"
     RECIPE_BUG = "workflow-bug"
-UNIT_STATES = (
+STEP_STATES = (
     "pending",
     "dispatched",
     "verdict-returned",
@@ -117,7 +117,7 @@ UNIT_STATES = (
 SEVERITIES = ("blocker", "major", "minor")
 GATING_SEVERITIES = ("blocker", "major")  # severities that block terminality/done.
 
-# State grammar (§3 of the contract). A unit may move ONLY along these edges.
+# State grammar (§3 of the contract). A step may move ONLY along these edges.
 #
 # The agent-driven force-skip edges (`pending -> terminal-skip`,
 # `verdict-returned -> terminal-skip`) are deliberately NOT here — see
@@ -215,7 +215,7 @@ class InvalidTransition(LedgerError):
 
 
 class StaleVerdict(LedgerError):
-    """Raised when ``record_verdict`` carries an ``attempt`` older than the unit's
+    """Raised when ``record_verdict`` carries an ``attempt`` older than the step's
     current ``attempt`` (Bug #6 — a verdict from a SUPERSEDED dispatch attempt).
 
     Distinct from ``InvalidTransition`` so a caller can tell "rejected because the
@@ -224,8 +224,8 @@ class StaleVerdict(LedgerError):
     """
 
 
-class UnknownUnit(LedgerError):
-    """Raised when a unit id is not present in the ledger."""
+class UnknownStep(LedgerError):
+    """Raised when a step id is not present in the ledger."""
 
 
 # Sentinel for "argument not supplied" where ``None`` is itself a valid value
@@ -303,7 +303,7 @@ def parse_iso(value):
 # Pure predicate logic (I-2 / §4) — extracted to lib/ledger_predicate.py (U16).
 #
 # The predicate evaluator (``recompute_predicate`` + its B7 helpers,
-# ``gating_severities``, ``unit_is_terminal``, ``is_orphaned``) moved out of this
+# ``gating_severities``, ``step_is_terminal``, ``is_orphaned``) moved out of this
 # file to keep it under the size budget. This module reaches back to it ONLY via
 # ``_lazy_load("ledger_predicate")`` inside ``_atomic_write`` (the deferred,
 # cycle-safe edge — the same idiom used for ``iteration`` / ``phase-grammar``);
@@ -452,7 +452,7 @@ def init_ledger(
     *,
     backend: str,
     backend_scale: str = "three-tier",
-    units=None,
+    steps=None,
     loop_phase: str = "plan",
     plan_step=None,
     recipe=None,
@@ -466,13 +466,13 @@ def init_ledger(
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
-    ``steps`` is a list of partial unit dicts (at minimum ``id``); missing
+    ``steps`` is a list of partial step dicts (at minimum ``id``); missing
     fields are filled with schema defaults. The predicate is recomputed and the
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
 
     v0.2.0 recipe fields (all additive / backward-compatible — a v0.1.x ledger
-    with none of them reads identically; see _normalize_unit and §2 of the
+    with none of them reads identically; see _normalize_step and §2 of the
     ledger-schema contract):
       ``recipe``         — optional dict {name, source_tier}; the recipe this run
                            was built from. None on a recipe-blind (v0.1.x) ledger.
@@ -557,19 +557,19 @@ def init_ledger(
         if os.path.exists(path):
             raise LedgerExists(f"ledger already exists for run-id {run_id!r}")
 
-        norm_units = []
-        for u in units or []:
+        norm_steps = []
+        for u in steps or []:
             if "id" not in u:
-                raise LedgerError("unit missing 'id'")
-            norm_units.append(_normalize_unit(u, loop_phase=loop_phase))
+                raise LedgerError("step missing 'id'")
+            norm_steps.append(_normalize_step(u, loop_phase=loop_phase))
 
         # v0.3.0 fix-pass F0: seed iteration_emit_count from max numeric
-        # suffix of unit ids that already match any emit_templates[*].id_prefix.
-        # iterate_template (lib/unit_emitters.py) computes the next id as
+        # suffix of step ids that already match any emit_templates[*].id_prefix.
+        # iterate_template (lib/step_producers.py) computes the next id as
         # `f"{id_prefix}{seed + i + 1}"`. If a recipe declares both
-        # `units: [plan-1, plan-2, plan-3]` AND `emit_templates.<x>.id_prefix =
+        # `steps: [plan-1, plan-2, plan-3]` AND `emit_templates.<x>.id_prefix =
         # "plan-"`, seeding to 0 makes the first iterate emit `plan-1` — which
-        # collides with the recipe-declared unit and livelocks the run until
+        # collides with the recipe-declared step and livelocks the run until
         # max_wall_seconds. Pre-seeding to max-existing-suffix produces
         # `plan-4` on the first iterate, matching what the integration test
         # always asserted. Cross-reviewer P0 (ADV-1 + testing + correctness).
@@ -579,8 +579,8 @@ def init_ledger(
                 prefix = (tmpl or {}).get("id_prefix")
                 if not prefix:
                     continue
-                for unit in norm_units:
-                    uid = unit.get("id", "")
+                for step in norm_steps:
+                    uid = step.get("id", "")
                     if not uid.startswith(prefix):
                         continue
                     suffix = uid[len(prefix):]
@@ -612,7 +612,7 @@ def init_ledger(
             # v0.3.0 iteration fields (additive — defaults preserve v0.2.x
             # behavior). A legacy ledger missing any of them reads via
             # `ledger.get(<field>, <default>)` at every consumer site (NEVER raw
-            # subscript). KTD §D: top-level counters/accumulators, not unit-
+            # subscript). KTD §D: top-level counters/accumulators, not step-
             # scoped, so the bound check + predicate composition agree on a
             # single storage location.
             #   active_wall_seconds   — accumulator of monotonic-clock deltas
@@ -628,10 +628,10 @@ def init_ledger(
             #                           bound check fires PRE-increment via the
             #                           value here.
             #   iteration_emit_count  — monotonic emit-id counter (KTD §D / OQ4).
-            #                           Replaces "recount existing units" which
+            #                           Replaces "recount existing steps" which
             #                           would collide after a partial-emit crash.
             #                           Incremented by emit_within_phase per
-            #                           emitted unit.
+            #                           emitted step.
             "active_wall_seconds": 0,
             "last_active_at": None,
             "iteration_attempts": 0,
@@ -668,7 +668,7 @@ def init_ledger(
             # U8 ownership set the hooks gate on (see _bootstrap.AGENT_SESSIONS_KEY).
             "agent_session_ids": [],
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
-            "steps": norm_units,
+            "steps": norm_steps,
             "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
         _atomic_write(path, ledger)
@@ -677,14 +677,14 @@ def init_ledger(
     return _flock_run(lpath, body)
 
 
-def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
+def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
     state = u.get("state", "pending")
-    if state not in UNIT_STATES:
-        raise LedgerError(f"invalid unit state: {state!r}")
-    # v0.2.0 per-unit `phase` (additive). A unit with no explicit phase inherits
+    if state not in STEP_STATES:
+        raise LedgerError(f"invalid step state: {state!r}")
+    # v0.2.0 per-step `phase` (additive). A step with no explicit phase inherits
     # the run's start phase when that is a plan phase, else defaults to "work" —
-    # matching the v0.1.x reality where plan-phase runs have no work units yet and
-    # any pre-declared unit is a work unit. Recipes set `phase` explicitly.
+    # matching the v0.1.x reality where plan-phase runs have no work steps yet and
+    # any pre-declared step is a work step. Recipes set `phase` explicitly.
     default_phase = "plan" if loop_phase == "plan" else "work"
     phase = u.get("phase", default_phase)
     nu = {
@@ -698,7 +698,7 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
             u.get("stall_threshold_seconds", DEFAULT_STALL_THRESHOLD_SECONDS)
         ),
         "last_error": u.get("last_error"),
-        # R20: why this unit was force-skipped. None for every unit that was not
+        # R20: why this step was force-skipped. None for every step that was not
         # skipped by an agent. Additive / backward-compatible: an old ledger
         # without the key normalizes to None.
         "skip_reason": u.get("skip_reason"),
@@ -711,17 +711,17 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
         # when record_verdict is called without an explicit attempt.
         "attempt": int(u.get("attempt", 0) or 0),
         "findings": list(u.get("findings") or []),
-        # v0.2.0 per-unit additive fields (all backward-compatible — an old
+        # v0.2.0 per-step additive fields (all backward-compatible — an old
         # ledger with none of these reads as the documented defaults below and
         # behaves identically; same discipline as `attempt` above):
-        #   plan_step       — per-unit plan-step for N>1 parallel plan-loops (R11);
+        #   plan_step       — per-step plan-step for N>1 parallel plan-loops (R11);
         #                     A1's single plan-loop keeps using the top-level
         #                     scalar, so this stays None there. None = no step yet.
-        #   gaps_open       — per-unit open-gap count for N>1 plan-loops. None until
+        #   gaps_open       — per-step open-gap count for N>1 plan-loops. None until
         #                     a review feeds one back.
         #   dispatch_context— recipe-side metadata merged from `invokes` (e.g.
         #                     prompt_template, bias) + engine-written keys like
-        #                     enumerated_units. {} when absent.
+        #                     enumerated_steps. {} when absent.
         #   last_advanced_at— round-robin tiebreaker for serialized N>1 plan
         #                     advance (null sorts oldest → picked first).
         "plan_step": u.get("plan_step"),
@@ -729,11 +729,11 @@ def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
         "dispatch_context": dict(u.get("dispatch_context") or {}),
         "last_advanced_at": u.get("last_advanced_at"),
     }
-    # v0.7.0 (verification-gate-hardening, KTD-1): preserve a recipe gate unit's
+    # v0.7.0 (verification-gate-hardening, KTD-1): preserve a recipe gate step's
     # `verification` block — CONDITIONALLY, only when the source carries it. NOT
     # defaulted like `dispatch_context`/`attempt`: an unconditional copy would
-    # stamp `[]` onto every legacy unit and change their on-disk shape. This is
-    # the only unit-rebuild point, so preserving here is what lets the runtime
+    # stamp `[]` onto every legacy step and change their on-disk shape. This is
+    # the only step-rebuild point, so preserving here is what lets the runtime
     # gate (resolve_gate_verification) see the criteria on a real run.
     if u.get("verification"):
         nu["verification"] = list(u["verification"])
@@ -756,8 +756,8 @@ def read_ledger(repo_root: str, run_id: str) -> dict:
     return _read_json(path)
 
 
-def _find_unit(ledger: dict, unit_id: str) -> dict:
+def _find_step(ledger: dict, step_id: str) -> dict:
     for u in ledger.get("steps", []):
-        if u.get("id") == unit_id:
+        if u.get("id") == step_id:
             return u
-    raise UnknownUnit(f"no unit {unit_id!r} in ledger")
+    raise UnknownStep(f"no step {step_id!r} in ledger")

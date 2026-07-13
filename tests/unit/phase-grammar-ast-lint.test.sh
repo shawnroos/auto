@@ -12,13 +12,13 @@
 # Exceptions (allowed to contain the literal):
 #   - lib/phase-grammar.py     — the sole reader of the raw field
 #   - lib/ledger_core.py       — WRITES/CONSTRUCTS the field (init_ledger sets
-#                                ledger["loop_phase"]=..., _normalize_unit's
+#                                ledger["loop_phase"]=..., _normalize_step's
 #                                default-phase logic); writing the key is not a
 #                                phase-DECISION. recompute_predicate's phase reads
 #                                use the field via the local helpers, and is_orphaned
 #                                routes its phase-DECISION through phase_grammar.
 #   - lib/ledger_mutators.py   — set_loop WRITES ledger["loop_phase"].
-#   - lib/ledger_emitters.py   — transition_and_emit / _apply_emit / _emit_units_core
+#   - lib/ledger_emitters.py   — transition_and_emit / _apply_emit / _emit_steps_core
 #                                / atomic_iterate_step WRITE/READ-for-default the
 #                                field during emission; not a phase-DECISION.
 #   - lib/format_compat.py     — the format-v1→v2 read shim (U6) names the key in

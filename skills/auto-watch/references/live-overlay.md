@@ -7,7 +7,7 @@ task tools (`TaskList` / `Monitor`) so a dead or wedged agent — including a ne
 
 ## Why an overlay is needed
 
-- The ledger records what the run BELIEVES: a unit is `dispatched` from the
+- The ledger records what the run BELIEVES: a step is `dispatched` from the
   `pending → dispatched` transition until a verdict lands. It does not know the
   agent's OS-process reality.
 - A nested `do_step` fan-out agent carries its OWN `session_id` (`skills/auto/SKILL.md`
@@ -34,8 +34,8 @@ task tools (`TaskList` / `Monitor`) so a dead or wedged agent — including a ne
 ## Resolving nested `do_step` agents
 
 1. `TaskList` returns the run's live agents; each carries the `session_id` and the
-   unit id baked into its dispatch.
-2. Match each task to the rendered node by unit id — that is how a nested
+   step id baked into its dispatch.
+2. Match each task to the rendered node by step id — that is how a nested
    `do_step` agent (own `session_id`) is placed against the tree the ledger
    produced.
 3. `Monitor` a specific agent's `session_id` when you need finer liveness detail

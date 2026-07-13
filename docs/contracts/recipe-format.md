@@ -26,7 +26,7 @@
 > **v0.3.0 additions** (purely additive over v0.2.0 — see §6 for the iteration
 > block, §7 for `emit_templates`): the optional `iteration` and `emit_templates`
 > top-level fields let a recipe declare an **outcomes-gated** workflow where a
-> designated gate unit's `verdict.decision` (advance / iterate / exit) drives
+> designated gate step's `verdict.decision` (advance / iterate / exit) drives
 > whether the loop advances to the terminal phase, emits another round of work
 > within the same phase, or stops with an audit trail. A recipe that declares
 > neither validates exactly as a v0.2.0 recipe (R7 backward compatibility).
@@ -34,7 +34,7 @@
 > **v0.7.0 additions** (purely additive — see §11 for the typed `verification`
 > block): a `steps[]` entry MAY carry an optional `verification` array — typed,
 > checkable done-conditions (programmatic / model_judge / advisor_judge / human)
-> layered onto the existing gate decision. A unit that omits it validates exactly
+> layered onto the existing gate decision. A step that omits it validates exactly
 > as before.
 >
 > **Reading test:** a recipe author (human or the authoring skill) should be able
@@ -46,9 +46,9 @@
 
 ## 1. What a recipe is
 
-A recipe declares the **initial ledger topology** of an `auto` run: the units,
+A recipe declares the **initial ledger topology** of an `auto` run: the steps,
 their `depends_on` graph, the phase each runs in, the phase ordering, and which
-producer produces work units at a phase boundary. The engine reads the recipe at
+producer produces work steps at a phase boundary. The engine reads the recipe at
 `init_ledger` time and builds the run from it; everything downstream (pulse,
 dispatch, predicate, resume) is recipe-blind once the ledger exists.
 
@@ -62,15 +62,15 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 |-------|-----|------|---------|
 | `name` | yes | string | recipe id, non-empty. Matches the filename stem. |
 | `version` | yes | string | format version (currently `"1"`). |
-| `steps` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
+| `steps` | yes | array | the declared steps (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_steps` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
 | `default_backend` | no | `"ce"`\|`"native"` | the backend to use when `--backend` is not passed. |
-| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every unit/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","handoff","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","handoff","work"]` (the `pipeline` recipe) validate. |
+| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every step/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","handoff","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","handoff","work"]` (the `pipeline` recipe) validate. |
 | `terminal_phase` | no | string | the phase whose completion ends the run. Default `"work"`. MUST be a member of `phase_order`. |
 | `phase_transitions` | no | array | producer declarations (§4). |
-| `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate unit, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
+| `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate step, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
 | `emit_templates` | no | object | **(v0.3.0, additive)** map of `<template_name> → {phase, invokes, id_prefix}` consumed by the `iterate_template` producer at iteration time (§7). MUST be present (and contain the named template) when `iteration.emit_template` is set; MAY be absent when `iteration` is absent or when `iteration.emit_template` is omitted (the "re-engage the gate without spawning new siblings" shape, round-3 P2 #21). |
-| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of unit ids the recipe declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `steps[]` and NOT iterate-shape (§8). Default `[]`. |
+| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of step ids the recipe declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `steps[]` and NOT iterate-shape (§8). Default `[]`. |
 | `python_hook` | no | (reserved) | RESERVED — parses but the V1 engine ignores it. The ONLY unknown-ish key tolerated; every OTHER unknown top-level field is rejected. |
 
 ## 3. `steps[]` entries
@@ -79,8 +79,8 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 |-------|-----|------|---------|
 | `id` | yes | string | unique within the recipe, non-empty. |
 | `phase` | yes | string | MUST be a member of `phase_order`. |
-| `depends_on` | no | string[] | unit ids this unit waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `steps[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
-| `invokes` | no | object | what the unit invokes — `backend_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger unit's `dispatch_context` at load (after path-bounding). |
+| `depends_on` | no | string[] | step ids this step waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `steps[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
+| `invokes` | no | object | what the step invokes — `backend_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger step's `dispatch_context` at load (after path-bounding). |
 | `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x recipes — they validate unchanged. |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
@@ -99,7 +99,7 @@ Each entry declares which **producer** fires at a phase boundary:
 - `from` / `to` MUST be members of `phase_order`.
 - `producer` MUST be one of the **V1-registered names** (the validator rejects any
   other — a recipe can't name a non-existent producer):
-  - `plan_output_to_work_steps` — one plan's output → work units (A1).
+  - `plan_output_to_work_steps` — one plan's output → work steps (A1).
   - `judge_winner_to_work_steps` — the winning plan's output, after a judge (A2).
   - `plan_output_to_paired_builders` — two bias-differentiated builders + a
     comparator (A4).
@@ -110,34 +110,34 @@ Each entry declares which **producer** fires at a phase boundary:
 > **Note.** `iterate_template` is also registered in `lib/producers.py::REGISTRY`
 > but is a **within-phase** producer — it never appears in `phase_transitions[]`.
 > The engine calls it directly through `ledger.emit_within_phase` when the gate
-> unit verdicts `iterate` under bound (§6). It is not a recipe-selectable
+> step verdicts `iterate` under bound (§6). It is not a recipe-selectable
 > phase-boundary producer.
 
 ## 5. The built-in recipes (the conformance corpus)
 
-- **a1** — Classic CE Stack. One plan unit; `plan_output_to_work_steps` at
+- **a1** — Classic CE Stack. One plan step; `plan_output_to_work_steps` at
   plan→work. The v0.1.x-equivalent default. Also a Python constant
   (`A1_BUILTIN`) so a corrupt built-in JSON can't break bare `/auto`.
-- **a2** — Parallel Theories + Judge. Three plan units + a judge work unit
+- **a2** — Parallel Theories + Judge. Three plan steps + a judge work step
   (`depends_on` all three); `judge_winner_to_work_steps`.
-- **a4** — Adversarial Pair + Comparator. One plan unit;
+- **a4** — Adversarial Pair + Comparator. One plan step;
   `plan_output_to_paired_builders`.
-- **w** — Work-only. `phase_order: ["work"]`, no producer; units must be
+- **w** — Work-only. `phase_order: ["work"]`, no producer; steps must be
   pre-declared in v0.2.0 (the shipped `recipes/w.json` carries a single stub
-  unit). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
-  adds init-time enumeration so the backend's `enumerate_plan_units` op can
-  load work units from an operator-supplied plan at `init_ledger` time; until
-  then, a work-only recipe with `units: []` is REJECTED by `validate()` (it
-  would create a zero-unit ledger that re-arms forever).
+  step). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
+  adds init-time enumeration so the backend's `enumerate_plan_steps` op can
+  load work steps from an operator-supplied plan at `init_ledger` time; until
+  then, a work-only recipe with `steps: []` is REJECTED by `validate()` (it
+  would create a zero-step ledger that re-arms forever).
 - **pipeline** — **(v0.6.0, U7)** Brainstorm-rooted creative spine.
   `phase_order: ["brainstorm","plan","handoff","work"]`, terminal `work`. One
-  structural `brainstorm` unit; `brainstorm_output_to_plan_step` at
+  structural `brainstorm` step; `brainstorm_output_to_plan_step` at
   brainstorm→plan, then `plan_output_to_work_steps` at plan→work. The
   conversation-entry forward chain — brainstorm-entry runs auto-advance
   brainstorm→plan→work. Spine-only phase (`brainstorm`) is advanced via the
   direct-mutation `transition_and_emit` path, never `set_loop` (KTD-3).
 - **review** — **(v0.6.0, U11)** Off-spine code-review-only entry.
-  `phase_order: ["work"]`, terminal `work`; a single unit invoking the `review`
+  `phase_order: ["work"]`, terminal `work`; a single step invoking the `review`
   backend op (one review/fix loop to P3, then stop). Distinct from `w` (which
   invokes `do_step` to build): same single-phase shape, different op — no
   plan phase, no auto-advance, no rebound.
@@ -161,8 +161,8 @@ Each entry declares which **producer** fires at a phase boundary:
 ## 6. `iteration` — outcomes-gated emission (v0.3.0+)
 
 A recipe MAY declare an `iteration` block to make the loop **outcomes-gated**:
-a designated **gate unit**'s `verdict.decision` drives whether the run advances
-to its terminal phase (`advance`), emits another round of units within the
+a designated **gate step**'s `verdict.decision` drives whether the run advances
+to its terminal phase (`advance`), emits another round of steps within the
 gate's current phase and re-engages the gate (`iterate`), or stops with an
 audit trail (`exit`). An engine-enforced **bound** caps runaway iteration so a
 misbehaving gate agent cannot loop forever (deterministic over probabilistic
@@ -175,10 +175,10 @@ misbehaving gate agent cannot loop forever (deterministic over probabilistic
 
 ```
 iteration:
-  gate_unit: "<unit_id>"        # required — references a unit declared in
+  gate_step: "<step_id>"        # required — references a step declared in
                                 #   steps[]  OR  an emit_templates[].id_prefix
                                 #   (forward-looking carve-out per round-3 P2
-                                #   #21; for V1 the unit-id form is the canonical
+                                #   #21; for V1 the step-id form is the canonical
                                 #   path — see §5's built-in shapes).
   emit_template: "<name>"       # optional — when set, MUST name an entry in the
                                 #   top-level `emit_templates` map (§7). Omit it
@@ -210,14 +210,14 @@ iteration:
   the normal flow. The predicate-met short-circuit fires as it would have without
   iteration.
 - `iterate` (under bound) — engine calls `ledger.atomic_iterate_step` in ONE
-  locked body: increments `iteration_attempts`, emits new units via the
+  locked body: increments `iteration_attempts`, emits new steps via the
   `iterate_template` producer (using `emit_template` when declared) into the
-  gate's current phase, then resets the gate unit (`verdict-returned → pending`,
+  gate's current phase, then resets the gate step (`verdict-returned → pending`,
   `depends_on` extended with the new sibling ids, `dispatch_context.decision`
   cleared so the next pulse reads a fresh verdict).
 - `iterate` (over bound) **or** `exit` — engine writes
   `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
-  on the gate unit (audit trail) and flips the loop directly to `done`
+  on the gate step (audit trail) and flips the loop directly to `done`
   / `driver = "manual"` via `set_loop`. The phase transition is NOT routed
   through the normal handoff-handler — that would re-invoke
   `judge_winner_to_work_steps`, which raises on a missing `winner_step_id` when
@@ -235,8 +235,8 @@ proceeds as if the gate said `exit` and surfaces the override on `/auto-status`
 `iteration_emit_count` ledger fields and the `dispatch_context.decision` /
 `dispatch_context.bound_override` sub-fields the engine writes.
 
-**Decision writes.** The gate unit's verdict-time decision is persisted via
-`ledger.set_verdict_decision(repo, run, gate_unit_id, decision, payload=None)` —
+**Decision writes.** The gate step's verdict-time decision is persisted via
+`ledger.set_verdict_decision(repo, run, gate_step_id, decision, payload=None)` —
 NOT through `findings[]` (which `record_verdict` normalizes to `{severity, note}`
 only and would strip the decision). All reads route through
 `lib/iteration.py::read_decision`; the AST lint in
@@ -248,21 +248,21 @@ class).
 
 ## 7. `emit_templates` — within-phase emit definitions (v0.3.0+)
 
-Each entry in the top-level `emit_templates` map declares the partial unit
+Each entry in the top-level `emit_templates` map declares the partial step
 shape `iterate_template` materializes when the gate verdicts `iterate`:
 
 ```
 emit_templates:
   <template_name>:
-    id_prefix: "<string>"   # required — non-empty. The Nth emitted unit
+    id_prefix: "<string>"   # required — non-empty. The Nth emitted step
                             #   across the WHOLE run gets id
                             #   `id_prefix + (iteration_emit_count + N)`
                             #   (`iteration_emit_count` is the monotonic
                             #   ledger counter; `iterate_template` NEVER
-                            #   recounts existing units — see
+                            #   recounts existing steps — see
                             #   `lib/producers.py::iterate_template`).
     phase: "<loop_phase>"   # required — MUST be a member of `phase_order`.
-                            #   The phase the new sibling units land in.
+                            #   The phase the new sibling steps land in.
     invokes:                # required — object, same depth/shape as
                             #   `steps[].invokes` (§3). `prompt_template`
                             #   is path-bounded identically.
@@ -275,15 +275,15 @@ validator rejects any mismatch. The producer NAME is implicit — `iterate_templ
 is the within-phase producer the engine calls; recipes do not choose it.
 
 `emit_count` (the number of siblings emitted per iterate step) is read from the
-gate unit's `dispatch_context.decision_payload.emit_count` at iteration time,
+gate step's `dispatch_context.decision_payload.emit_count` at iteration time,
 defaulting to `1`. The producer validates `1 ≤ emit_count ≤ 10` (round-3 P1-R3-4
-upper bound prevents a misbehaving gate from DOS-emitting a thousand units in
+upper bound prevents a misbehaving gate from DOS-emitting a thousand steps in
 one pulse).
 
 ## 8. `expected_emit_outputs` — declared phase-boundary emit ids (v0.3.0+)
 
-A recipe MAY declare a top-level `expected_emit_outputs: [<unit-id-str>, ...]`
-list. It names unit ids the recipe asserts will be **materialized at run time
+A recipe MAY declare a top-level `expected_emit_outputs: [<step-id-str>, ...]`
+list. It names step ids the recipe asserts will be **materialized at run time
 by a phase-boundary producer** (one of the `phase_transitions[]` producers listed
 in §4 — `plan_output_to_work_steps`, `judge_winner_to_work_steps`, or
 `plan_output_to_paired_builders`). The validator consults this list when
@@ -292,10 +292,10 @@ in `steps[]` AND NOT iterate-shape (§7's `iterate_template` id math) is
 accepted iff it is listed here.
 
 ```
-expected_emit_outputs: ["<unit_id>", "<unit_id>", ...]    # optional; default []
+expected_emit_outputs: ["<step_id>", "<step_id>", ...]    # optional; default []
 ```
 
-**Why this exists.** Two producer classes produce work units the recipe author
+**Why this exists.** Two producer classes produce work steps the recipe author
 declares structurally:
 
 - **`iterate_template`** (within-phase, §7) emits ids of the form
@@ -309,7 +309,7 @@ declares structurally:
   by accident). The recipe author declares the producer-output contract here.
 
 **When to use.** Declare a member in `expected_emit_outputs` when a `steps[]`
-unit's `depends_on` names an id that:
+step's `depends_on` names an id that:
 
 1. is NOT in `steps[]` (no structural producer), AND
 2. is NOT iterate-shape (i.e., NOT `{id_prefix}{positive_int}` for any
@@ -321,8 +321,8 @@ that uses it (see §5); a v0.2.x recipe never needed it because the prior
 carve-out accepted any prefix-matching string — F4 tightened that to require
 an explicit declaration, and A4 was updated atomically.
 
-**Worked example — A4's `compare` unit.** A4 declares a structural `compare`
-unit in `steps[]` whose `depends_on` names `build-clarity` and `build-perf`:
+**Worked example — A4's `compare` step.** A4 declares a structural `compare`
+step in `steps[]` whose `depends_on` names `build-clarity` and `build-perf`:
 
 ```json
 {
@@ -340,7 +340,7 @@ unit in `steps[]` whose `depends_on` names `build-clarity` and `build-perf`:
 ```
 
 The `plan_output_to_paired_builders` producer (§4) fires at plan→work and
-materializes the two builder units; `compare` waits on both. Because neither
+materializes the two builder steps; `compare` waits on both. Because neither
 id is in `steps[]` and neither is iterate-shape, the recipe declares them in
 `expected_emit_outputs` so `depends_on` integrity passes. (A4 also declares an
 `iteration` block with an `iterate_template` named `bias-builder`; that's the
@@ -357,7 +357,7 @@ emission — see §6 + §7.)
 ## 9. Acceptance boundary
 
 The validator REJECTS: a `phase_order` with a non-string or empty element (the
-v0.6.0/U6 structural rule); a `terminal_phase`, unit `phase`, or
+v0.6.0/U6 structural rule); a `terminal_phase`, step `phase`, or
 `phase_transitions` from/to not a member of `phase_order`; unregistered producer
 names; a loaded `python_hook` (parsed but ignored); AND a work-only recipe
 (`phase_order: ["work"]`) with an empty `steps` list (the init-time enumeration
@@ -369,7 +369,7 @@ path), so no malformed topology can ship.
 ## 10. Cross-references
 
 - `lib/recipes.py` — the validator + registry (`validate`, `validate_and_lint`,
-  `resolve`, `list_available`, `load_and_validate`, `unit_for`).
+  `resolve`, `list_available`, `load_and_validate`, `step_for`).
 - `lib/producers.py` — the producer registry (`V1_PRODUCER_NAMES` mirrors `validate`'s
   phase-boundary producers; `iterate_template` is registered but within-phase only).
 - `lib/iteration.py` — the ONE iteration-decision module (`DECISIONS`,
@@ -377,7 +377,7 @@ path), so no malformed topology can ship.
 - `docs/contracts/ledger-schema.md` — the ledger fields a recipe populates
   (including the v0.3.0 iteration fields + `dispatch_context.decision` /
   `bound_override` sub-keys).
-- `docs/contracts/backend-contract.md` — the ops a unit's `invokes` references.
+- `docs/contracts/backend-contract.md` — the ops a step's `invokes` references.
   **Unchanged for v0.3.0** — the iteration primitive lives entirely on the
   engine side; no new backend ops are introduced.
 - `skills/auto-design/references/verification-taxonomy.md` — the canonical shape
@@ -388,16 +388,16 @@ path), so no malformed topology can ship.
 
 A `steps[]` entry MAY carry an optional `verification` array: typed, checkable
 done-conditions layered onto the existing iterate/advance/exit gate decision
-(KTD-1). It attaches to the gate unit (the `iteration.gate_step` mechanism); it
+(KTD-1). It attaches to the gate step (the `iteration.gate_step` mechanism); it
 is **not** a new producer and does **not** add topology grammar. It is also **not**
 a second exit judge — the deterministic Stop predicate
 (`blockers==0 ∧ majors==0 ∧ all_steps_terminal`) stays the run's exit spine;
-criteria only steer the gate decision (R11). A unit that omits `verification`
+criteria only steer the gate decision (R11). A step that omits `verification`
 validates exactly as a pre-v0.7.0 recipe (additive — R7).
 
 The array is capped at **16 criteria** (bounds gate-evaluation cost). Each entry
 is a criterion object `{ "id": <unique non-empty str>, "type": <one of four>, … }`.
-Criterion `id`s MUST be unique within the unit. `type` MUST be one of exactly
+Criterion `id`s MUST be unique within the step. `type` MUST be one of exactly
 four values; an unknown `type`, an unknown key for the criterion's type, a
 duplicate `id`, or an array longer than 16 is a validation error at recipe
 **load** time (the same `validate()` the skill's write-time `validate_and_lint`
@@ -460,7 +460,7 @@ doc, the schema, and the validator ever disagree, that is a contract bug —
 ## Appendix — Legacy keys (read-compat)
 
 The format-v2 cutover (v0.4.0, U6 of the concept-vocabulary rename) flipped every
-persisted key and value in one unit. The key names throughout this file are the
+persisted key and value in one step. The key names throughout this file are the
 **current on-disk (v2)** spelling.
 
 **A v1-keyed workflow file on disk keeps working, indefinitely.** `resolve()` runs
@@ -477,7 +477,7 @@ flow writes may itself persist v1-keyed and still resolve cleanly forever.
 | `invokes.adapter_op` | `invokes.backend_op` | per step, and in `emit_templates.*.invokes` | <!--legacy--> |
 | `do_unit` (value) | `do_step` | the backend-op VALUE (`brainstorm` / `next_plan_step` / `review` unchanged) | <!--legacy--> |
 | `phase_transitions[].emitter` | `.producer` | mapped PER ITEM | <!--legacy--> |
-| `plan_output_to_work_units` (value) | `plan_output_to_work_steps` | producer name; likewise `judge_winner_to_work_steps`, `brainstorm_output_to_plan_step`. `plan_output_to_paired_builders` is unchanged | <!--legacy--> |
+| `plan_output_to_work_units` (value) | `plan_output_to_work_steps` | producer name; likewise `judge_winner_to_work_units`, `brainstorm_output_to_plan_unit`. `plan_output_to_paired_builders` is unchanged | <!--legacy--> |
 | `iteration.gate_unit` | `iteration.gate_step` | the iteration block | <!--legacy--> |
 | `"seam"` (value) | `"handoff"` | the phase VALUE in `phase_order`, `terminal_phase`, `phase_transitions[].from`/`.to`, and a step's `phase` | <!--legacy--> |
 

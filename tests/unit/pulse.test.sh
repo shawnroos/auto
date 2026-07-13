@@ -13,10 +13,10 @@
 # Scenarios (mapped to the U4 plan, tested against pulse.py's ACTUAL surface):
 #   1. predicate NOT met -> pulse advances one step + signals re-arm (action=rearm)
 #   2. predicate met -> emits report, action=stop, does NOT re-arm
-#   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
+#   3. stalled step (dispatched past stall_threshold, no verdict) -> marked
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
-#   4. backend raises mid-pulse -> unit.last_error recorded + unit marked stalled;
+#   4. backend raises mid-pulse -> step.last_error recorded + step marked stalled;
 #      ledger never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
@@ -38,7 +38,7 @@
 #      does NOT fire after one un-reviewed pass. Deliberate-fail control replicates
 #      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
 #      outcome (the discriminator).
-#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
+#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a step stuck
 #      `dispatched` past its stall_threshold (the dispatcher rescue-swallow P3
 #      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
 #      stays dispatched.
@@ -83,15 +83,15 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-units> [backend] [phase]  — create a ledger with given units.
+# init <run> <json-steps> [backend] [phase]  — create a ledger with given steps.
 ledger_init() {
-  local run="$1" units_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$units_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, units_json, backend, phase, ledger_py = sys.argv[1:7]
+repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, units=json.loads(units_json), loop_phase=phase)
+m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
@@ -122,7 +122,7 @@ PYEOF
 echo "pulse.test.sh"
 
 # ─── Scenario 1: predicate NOT met -> advance one step + signal re-arm ────────
-# A work-loop with one verdict-returned unit carrying an open blocker: the
+# A work-loop with one verdict-returned step carrying an open blocker: the
 # predicate is NOT met (blocker present). The pulse should apply ONE fix
 # (verdict-returned -> fixed) and signal re-arm. The blocker remains (R8: a fix
 # does not close findings), so met stays false and the chain keeps pulsing.
@@ -156,7 +156,7 @@ else
 fi
 
 # ─── Scenario 2: predicate met -> emit report, action=stop, NO re-arm ─────────
-# A terminal, defect-free, single-unit work-loop: init_ledger's atomic write
+# A terminal, defect-free, single-step work-loop: init_ledger's atomic write
 # recomputes the predicate, so met is already true at read time. The pulse must
 # stop (reason=predicate-met) and emit a report; it must NOT re-arm.
 it "predicate met: pulse emits report, action=stop (predicate-met), does NOT re-arm"
@@ -191,7 +191,7 @@ fi
 # stalled. Ub depends on Ua -> transitively halted. Uc is independent and
 # verdict-returned with an open blocker -> the fix-due sibling that should still
 # advance (verdict-returned -> fixed) while Ua/Ub are halted.
-it "stall: dispatched-past-threshold unit -> stalled; it + transitive dependents halted; independent sibling advances"
+it "stall: dispatched-past-threshold step -> stalled; it + transitive dependents halted; independent sibling advances"
 DISP_AT="$(now_minus 3600)"
 ledger_init "stall-run" \
   "$(printf '[{"id":"Ua","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10},{"id":"Ub","state":"pending","depends_on":["Ua"]},{"id":"Uc","state":"verdict-returned","findings":[{"severity":"major","note":"open"}]}]' "$DISP_AT")" \
@@ -207,7 +207,7 @@ print(json.dumps({
     "stalled": sorted(r.get("stalled") or []),
     "halted": sorted(r.get("halted") or []),
     "advanced": (r.get("advance") or {}).get("advanced"),
-    "advanced_unit": (r.get("advance") or {}).get("unit"),
+    "advanced_step": (r.get("advance") or {}).get("step"),
 }))
 PYEOF
 )"
@@ -215,23 +215,23 @@ st_ua="$(ledger_field "stall-run" 'next(u["state"] for u in L["steps"] if u["id"
 st_uc="$(ledger_field "stall-run" 'next(u["state"] for u in L["steps"] if u["id"]=="Uc")')"
 stalled_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['stalled']))" "$res3")"
 halted_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['halted']))" "$res3")"
-adv_unit="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced_unit'])" "$res3")"
+adv_step="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced_step'])" "$res3")"
 adv_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res3")"
-# Ua marked stalled; Ua+Ub in halted set; Uc NOT halted and is the unit that
+# Ua marked stalled; Ua+Ub in halted set; Uc NOT halted and is the step that
 # advanced (fix-applied) — the independent sibling progressing past the stall.
 if [ "$st_ua" = "stalled" ] && [ "$stalled_list" = "Ua" ] && [ "$halted_list" = "Ua,Ub" ] \
-   && [ "$adv_kind" = "fix-applied" ] && [ "$adv_unit" = "Uc" ] && [ "$st_uc" = "fixed" ]; then
+   && [ "$adv_kind" = "fix-applied" ] && [ "$adv_step" = "Uc" ] && [ "$st_uc" = "fixed" ]; then
   pass
 else
-  fail "st_ua=$st_ua stalled=[$stalled_list] halted=[$halted_list] adv=$adv_kind/$adv_unit st_uc=$st_uc (expected stalled / Ua / Ua,Ub / fix-applied/Uc / fixed)"
+  fail "st_ua=$st_ua stalled=[$stalled_list] halted=[$halted_list] adv=$adv_kind/$adv_step st_uc=$st_uc (expected stalled / Ua / Ua,Ub / fix-applied/Uc / fixed)"
 fi
 
 # ─── Scenario 4: backend raises mid-pulse -> last_error recorded + stalled ─────
-# A plan-loop with one dispatched unit. We inject a backend whose next_plan_step
+# A plan-loop with one dispatched step. We inject a backend whose next_plan_step
 # raises. The pulse's try/except must convert the raise into a recorded
-# last_error on the in-flight unit + mark it stalled, WITHOUT crashing and
+# last_error on the in-flight step + mark it stalled, WITHOUT crashing and
 # WITHOUT leaving a half-written ledger.
-it "backend raise: try/except records last_error + marks unit stalled; ledger stays valid (no half-write)"
+it "backend raise: try/except records last_error + marks step stalled; ledger stays valid (no half-write)"
 DISP4="$(now_minus 5)"
 ledger_init "raise-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":600}]' "$DISP4")" \
@@ -288,7 +288,7 @@ assert_eq "raised" "$raised"
 # ─── Scenario 5: pulse NEVER dispatches and NEVER writes verdicts ──────────────
 # A work-loop pulse that sees a self-written verdict (verdict-returned + open
 # major) applies ONE fix (-> fixed) but makes NO dispatch call and writes NO
-# finding. Assert: (a) the fix-due unit becomes fixed; (b) its findings are
+# finding. Assert: (a) the fix-due step becomes fixed; (b) its findings are
 # byte-identical to setup (a fix does not touch findings — R8); (c) no pending
 # sibling was moved to dispatched (the pulse never owns pending -> dispatched).
 it "pulse never dispatches / never writes verdicts: applies a fix, leaves findings + pending siblings untouched"
@@ -349,7 +349,7 @@ fi
 # plan_step=...), three fresh-process pulses walk plan -> deepen -> review_plan.
 #
 # We use the REAL ce backend (its plan/deepen/review_plan ops are pure
-# envelope-returning no-ops). One PENDING unit keeps all_steps_terminal==false
+# envelope-returning no-ops). One PENDING step keeps all_steps_terminal==false
 # so the predicate never short-circuits the plan-loop to done. gaps_open stays
 # NULL (Bug #5 fix: the live envelope carries no gap_set, so the engine never
 # defaults it to 0 — the never-reviewed value is null, not zero), but the
@@ -389,7 +389,7 @@ tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 
 run = "antilivelock-nopersist"
-ledg.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.init_ledger(repo, run, backend="ce", steps=[{"id":"U1","state":"pending"}], loop_phase="plan")
 
 # Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The pulse's
 # beat write (set_loop(driver="self", beat=True)) still works; only the
@@ -595,7 +595,7 @@ aspec = _il.spec_from_file_location("backend_ce", ledger_py.replace("ledger.py",
 ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
 
 run = "gaps-null-buggy"
-ledg.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.init_ledger(repo, run, backend="ce", steps=[{"id":"U1","state":"pending"}], loop_phase="plan")
 ledg.set_loop(repo, run, plan_step="deepen")
 backend = ace.Backend()
 result = backend.review_plan(ledg.read_ledger(repo, run))  # live envelope, NO gap_set
@@ -619,14 +619,14 @@ else
 fi
 
 # ─── Scenario 10: phantom-dispatch self-heal (dispatcher P3 bound) ──────────
-# dispatcher.dispatch_batch's launch guard (Bug #8) marks a unit stalled if
+# dispatcher.dispatch_batch's launch guard (Bug #8) marks a step stalled if
 # launch_fn raises. If the rescue transition (dispatched->stalled) ALSO raises,
-# the broadened `except Exception` swallows it and the unit stays `dispatched`
+# the broadened `except Exception` swallows it and the step stays `dispatched`
 # with no agent — a phantom. The CLAIM bounding that P3 is that the phantom
 # self-heals: detect_and_halt_stalled reclaims ANY dispatched-past-stall_threshold
-# unit on a later pulse. This test proves that bound.
+# step on a later pulse. This test proves that bound.
 #
-# We simulate the phantom directly (a unit stuck `dispatched` with dispatched_at
+# We simulate the phantom directly (a step stuck `dispatched` with dispatched_at
 # older than its stall_threshold, no verdict) and run detect_and_halt_stalled.
 # The reaper must transition it to `stalled` (reclaimed) with last_error null
 # (a plain timeout, not a backend-raise). The deliberate-fail control is the
@@ -665,7 +665,7 @@ else
 fi
 
 it "deliberate-fail control: WITHOUT the reaper, the phantom stays dispatched forever (proves the reclaim is load-bearing)"
-# Same phantom, but we DO NOT call detect_and_halt_stalled. The unit must remain
+# Same phantom, but we DO NOT call detect_and_halt_stalled. The step must remain
 # `dispatched` — the absence of the reaper IS the control. If the phantom self-
 # healed without the reaper, the prior test would prove nothing.
 ledger_init "phantom-noreap-run" \
@@ -675,11 +675,11 @@ noreap_state="$(ledger_field "phantom-noreap-run" 'L["steps"][0]["state"]')"
 assert_eq "dispatched" "$noreap_state"
 
 # ─── U6: plan-done enumerate→persist (the F4 producer wiring) ───────────────
-# At plan-done, advance_plan_loop calls the backend's enumerate_plan_units and
-# persists the result onto the plan unit's dispatch_context.enumerated_steps, so
+# At plan-done, advance_plan_loop calls the backend's enumerate_plan_steps and
+# persists the result onto the plan step's dispatch_context.enumerated_steps, so
 # the U5b producer can read it. Drive it with a fake backend whose next_plan_step
-# returns "done" and enumerate_plan_units returns a bare list.
-it "U6: plan-done persists enumerate_plan_units output to dispatch_context"
+# returns "done" and enumerate_plan_steps returns a bare list.
+it "U6: plan-done persists enumerate_plan_steps output to dispatch_context"
 ledger_init "enum-run" '[{"id":"plan","phase":"plan","state":"dispatched"}]' ce plan >/dev/null 2>&1
 enum_res="$("$PY" - "$REPO" "enum-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
@@ -691,25 +691,25 @@ m = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(m)
 
 class FakeBackend:
     def next_plan_step(self, ledger): return "done"
-    def enumerate_plan_units(self, ledger):
+    def enumerate_plan_steps(self, ledger):
         return [{"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]
 
 led = m.read_ledger(repo, run)
 result = t.pulse_advance.advance_plan_loop(repo, run, led, FakeBackend())
 after = m.read_ledger(repo, run)
-plan_unit = after["steps"][0]
-enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_steps") or []
+plan_step = after["steps"][0]
+enum = (plan_step.get("dispatch_context") or {}).get("enumerated_steps") or []
 print("%s,%s" % (result.get("advanced"),
                  ",".join(u["id"] for u in enum)))
 PYEOF
 )"
 # advanced plan-done (U18: advance_plan_loop returns a bare dict now), and the
-# 2 enumerated units are persisted.
+# 2 enumerated steps are persisted.
 assert_eq "plan-done,w1,w2" "$enum_res"
 
 # ─── Fix-pass H: prepare/execute contract is LOUD in rearm intent ────────────
-# Field bug (2026-05-25, second agent): pulsed 5 times expecting units to
-# materialize; ledger stayed at units=[] because they never executed the
+# Field bug (2026-05-25, second agent): pulsed 5 times expecting steps to
+# materialize; ledger stayed at steps=[] because they never executed the
 # prepared invocation. The rearm intent now carries an operator_guidance
 # field naming the contract phase-by-phase, plus a gaps_open_guard when
 # plan_step==review_plan AND gaps_open is null (Trap 2 from the prepare/
@@ -812,7 +812,7 @@ assert_eq "ok" "$guidance_work"
 # brainstorm). After the fix both flip GREEN. The regression assertions pass on
 # BOTH sides of the fix (the work-terminal path is unchanged).
 
-# u5_guard <run> <units_json> <phase_order_json> <terminal> <loop_phase> <phase> <A|B> <stale_met 0|1>
+# u5_guard <run> <steps_json> <phase_order_json> <terminal> <loop_phase> <phase> <A|B> <stale_met 0|1>
 #   Inits a fresh ledger, invokes ONE guard, prints "<action>,<loop_phase-on-disk>".
 #   stale_met=1 forces exit_predicate_result.met=true on the IN-MEMORY led (Guard A
 #   reads its led param) to model a stale cached predicate at a NON-terminal phase —
@@ -823,12 +823,12 @@ u5_guard() {
   "$PY" - "$REPO" "$PULSE_PY" "$LEDGER_PY" "$@" <<'PYEOF'
 import sys, importlib.util, json
 repo, pulse_py, ledger_py = sys.argv[1:4]
-run, units_json, po_json, terminal, loop_phase, phase, guard, stale = sys.argv[4:12]
+run, steps_json, po_json, terminal, loop_phase, phase, guard, stale = sys.argv[4:12]
 lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-ledg.init_ledger(repo, run, backend="ce", units=json.loads(units_json),
+ledg.init_ledger(repo, run, backend="ce", steps=json.loads(steps_json),
                  loop_phase=loop_phase, phase_order=json.loads(po_json),
                  terminal_phase=terminal)
 led = ledg.read_ledger(repo, run)
@@ -844,18 +844,18 @@ print("%s,%s" % (action, disk_phase))
 PYEOF
 }
 
-BS_UNITS='[{"id":"U1","phase":"brainstorm","state":"verdict-returned","findings":[]}]'
+BS_STEPS='[{"id":"U1","phase":"brainstorm","state":"verdict-returned","findings":[]}]'
 BS_ORDER='["plan","handoff","brainstorm"]'
 
 # Sanity: the brainstorm-terminal fixture genuinely reaches met (so the guard
 # tests below exercise a real met predicate, not a vacuous one).
-it "U5 fixture sanity: brainstorm-terminal ledger with a clean brainstorm unit -> predicate met"
-bs_met="$("$PY" - "$REPO" "$LEDGER_PY" "$BS_UNITS" "$BS_ORDER" <<'PYEOF'
+it "U5 fixture sanity: brainstorm-terminal ledger with a clean brainstorm step -> predicate met"
+bs_met="$("$PY" - "$REPO" "$LEDGER_PY" "$BS_STEPS" "$BS_ORDER" <<'PYEOF'
 import sys, importlib.util, json
-repo, ledger_py, units_json, po_json = sys.argv[1:5]
+repo, ledger_py, steps_json, po_json = sys.argv[1:5]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, "u5-met", backend="ce", units=json.loads(units_json),
+m.init_ledger(repo, "u5-met", backend="ce", steps=json.loads(steps_json),
               loop_phase="brainstorm", phase_order=json.loads(po_json),
               terminal_phase="brainstorm")
 print(m.read_ledger(repo, "u5-met")["exit_predicate_result"]["met"])
@@ -867,14 +867,14 @@ assert_eq "True" "$bs_met"
 # (Guard A's denylist already stopped here pre-fix; the fix keeps it stopping,
 #  now for the RIGHT reason: is_terminal_phase(brainstorm)==True.)
 it "U5 Guard A: predicate-met at the recipe's terminal phase (brainstorm) -> stop, loop_phase=done"
-assert_eq "stop,done" "$(u5_guard u5a-main "$BS_UNITS" "$BS_ORDER" brainstorm brainstorm brainstorm A 0)"
+assert_eq "stop,done" "$(u5_guard u5a-main "$BS_STEPS" "$BS_ORDER" brainstorm brainstorm brainstorm A 0)"
 
 # Main fixture — Guard B at the real terminal (brainstorm) stops -> done.
 # DELIBERATE-FAIL: pre-fix Guard B is `phase == "work"`, so brainstorm != work
 # returns None (no stop) -> "none,brainstorm". Post-fix it routes through
 # is_terminal_phase(brainstorm)==True -> "stop,done".
 it "U5 Guard B: predicate-met-after-advance at the terminal phase (brainstorm) -> stop, loop_phase=done"
-assert_eq "stop,done" "$(u5_guard u5b-main "$BS_UNITS" "$BS_ORDER" brainstorm brainstorm brainstorm B 0)"
+assert_eq "stop,done" "$(u5_guard u5b-main "$BS_STEPS" "$BS_ORDER" brainstorm brainstorm brainstorm B 0)"
 
 # Converse — brainstorm is NOT terminal (terminal=work) and a STALE met is cached
 # at the mid-run brainstorm phase. Guard A must NOT stop.
@@ -905,21 +905,21 @@ assert_eq "stop,done" \
 # ScheduleWakeup bound [60, 3600]. Returns None when nothing is dispatched (the
 # driver arms nothing). Pure over a ledger dict; no I/O, no on-disk ledger.
 
-# wwd <units-json>  — print watchdog_wakeup_delay({"steps": <units-json>}).
+# wwd <steps-json>  — print watchdog_wakeup_delay({"steps": <steps-json>}).
 wwd() {
   "$PY" - "$PULSE_PY" "$1" <<'PYEOF'
 import sys, importlib.util, json
-pulse_py, units_json = sys.argv[1:3]
+pulse_py, steps_json = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-print(t.watchdog_wakeup_delay({"steps": json.loads(units_json)}))
+print(t.watchdog_wakeup_delay({"steps": json.loads(steps_json)}))
 PYEOF
 }
 
-it "U1 watchdog_wakeup_delay: single dispatched unit, no override -> default 600"
+it "U1 watchdog_wakeup_delay: single dispatched step, no override -> default 600"
 assert_eq "600" "$(wwd '[{"id":"U1","state":"dispatched"}]')"
 
-it "U1 watchdog_wakeup_delay: MIN across dispatched units (non-dispatched ignored)"
+it "U1 watchdog_wakeup_delay: MIN across dispatched steps (non-dispatched ignored)"
 # U1=300, U2=120 dispatched -> min 120; U3 pending with a smaller 10 is ignored.
 assert_eq "120" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_seconds":300},{"id":"U2","state":"dispatched","stall_threshold_seconds":120},{"id":"U3","state":"pending","stall_threshold_seconds":10}]')"
 
@@ -932,29 +932,29 @@ assert_eq "3600" "$(wwd '[{"id":"U1","state":"dispatched","stall_threshold_secon
 it "U1 watchdog_wakeup_delay: nothing dispatched -> None (driver arms nothing)"
 assert_eq "None" "$(wwd '[{"id":"U1","state":"pending"},{"id":"U2","state":"verdict-returned","findings":[]}]')"
 
-# ─── U2: reap_unit — attempt-gated idempotent reap primitive ──────────────────
+# ─── U2: reap_step — attempt-gated idempotent reap primitive ──────────────────
 # The death path's counterpart to detect_and_halt_stalled's timeout path. On a
-# native death signal the driver reconciles the dead unit via reap_unit, which
-# idempotently flips dispatched -> stalled ONLY when the unit is `dispatched`
+# native death signal the driver reconciles the dead step via reap_step, which
+# idempotently flips dispatched -> stalled ONLY when the step is `dispatched`
 # AND its current `attempt` equals the passed attempt. The attempt gate is the
 # load-bearing correctness point: without it a late death event from a driver-
 # killed attempt-1 agent would stall a fresh, healthy attempt-2 retry. The two
 # detection paths (timeout watchdog + native death) therefore converge on exactly
 # ONE stall per attempt. Covers R3, AE2, AE3.
 
-# reap <run> <unit> <attempt>  — call reap_unit on the on-disk ledger; print its
+# reap <run> <step> <attempt>  — call reap_step on the on-disk ledger; print its
 # return value (True/False/None). Mirrors scenario 10's t.pulse_advance access.
 reap() {
   "$PY" - "$REPO" "$1" "$2" "$3" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, unit, attempt, pulse_py = sys.argv[1:6]
+repo, run, step, attempt, pulse_py = sys.argv[1:6]
 spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-print(t.pulse_advance.reap_unit(repo, run, unit, int(attempt)))
+print(t.pulse_advance.reap_step(repo, run, step, int(attempt)))
 PYEOF
 }
 
-it "U2 reap_unit: flips a dispatched unit at the matching attempt -> stalled (returns True)"
+it "U2 reap_step: flips a dispatched step at the matching attempt -> stalled (returns True)"
 DISP_R="$(now_minus 5)"
 ledger_init "reap-match-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_R")" \
@@ -969,8 +969,8 @@ else
   fail "attempt=$attempt_match ret=$ret_match state=$st_match (expected 1/True/stalled)"
 fi
 
-it "U2 reap_unit: no-op on an already-stalled unit (returns False, state unchanged)"
-# Second reap of a unit the timeout watchdog already stalled: stalled -> stalled
+it "U2 reap_step: no-op on an already-stalled step (returns False, state unchanged)"
+# Second reap of a step the timeout watchdog already stalled: stalled -> stalled
 # is not a legal edge, so reap is a no-op, not a transition.
 ledger_init "reap-stalled-run" '[{"id":"U1","state":"stalled","attempt":1}]' >/dev/null 2>&1
 ret_stalled="$(reap "reap-stalled-run" "U1" 1)"
@@ -981,7 +981,7 @@ else
   fail "ret=$ret_stalled state=$st_stalled (expected False/stalled)"
 fi
 
-it "U2 reap_unit: no-op on a verdict-returned unit (returns False, state unchanged)"
+it "U2 reap_step: no-op on a verdict-returned step (returns False, state unchanged)"
 ledger_init "reap-vr-run" '[{"id":"U1","state":"verdict-returned","findings":[],"attempt":1}]' >/dev/null 2>&1
 ret_vr="$(reap "reap-vr-run" "U1" 1)"
 st_vr="$(ledger_field "reap-vr-run" 'L["steps"][0]["state"]')"
@@ -991,9 +991,9 @@ else
   fail "ret=$ret_vr state=$st_vr (expected False/verdict-returned)"
 fi
 
-it "U2 reap_unit: no-op when passed attempt is OLDER than current (late death after retry) -> stays dispatched"
+it "U2 reap_step: no-op when passed attempt is OLDER than current (late death after retry) -> stays dispatched"
 # The load-bearing case: a fresh attempt-2 retry is in flight; a late death event
-# from the superseded attempt-1 agent must NOT stall it. Unit dispatched at
+# from the superseded attempt-1 agent must NOT stall it. Step dispatched at
 # attempt 2; reap with attempt 1 is a no-op.
 DISP_S="$(now_minus 5)"
 ledger_init "reap-super-run" \
@@ -1010,8 +1010,8 @@ else
 fi
 
 it "U2 double detection: past-threshold AND reaped yields exactly ONE stalled (second path is a no-op)"
-# The dedup-by-design property (AE3): a unit flagged by BOTH the native death
-# path (reap_unit) and the timeout watchdog (detect_and_halt_stalled) is stalled
+# The dedup-by-design property (AE3): a step flagged by BOTH the native death
+# path (reap_step) and the timeout watchdog (detect_and_halt_stalled) is stalled
 # exactly once. reap flips it first; the timeout path then finds nothing NEW to
 # stall; a re-fire of reap is a no-op.
 DISP_D="$(now_minus 3600)"
@@ -1025,15 +1025,15 @@ lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-# Path 1 (native death): reap_unit flips dispatched -> stalled.
-r1 = t.pulse_advance.reap_unit(repo, run, "U1", 1)
-# Path 2 (timeout watchdog) fires on the SAME unit: it is already stalled, so
+# Path 1 (native death): reap_step flips dispatched -> stalled.
+r1 = t.pulse_advance.reap_step(repo, run, "U1", 1)
+# Path 2 (timeout watchdog) fires on the SAME step: it is already stalled, so
 # detect_and_halt_stalled records NO NEW stall (newly_stalled is empty).
 now = datetime.datetime.now(datetime.timezone.utc)
 led = ledg.read_ledger(repo, run)
 fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 # A re-fire of the death path is also a no-op.
-r2 = t.pulse_advance.reap_unit(repo, run, "U1", 1)
+r2 = t.pulse_advance.reap_step(repo, run, "U1", 1)
 after = ledg.read_ledger(repo, run)
 print("%s,%s,%s,%s" % (r1, (",".join(newly) if newly else "-"), r2, after["steps"][0]["state"]))
 PYEOF
@@ -1048,14 +1048,14 @@ fi
 
 # ─── U3: reap_pending marker — kill-verifiability across the reap paths ────────
 # The `dispatched -> stalled` transition (in BOTH detect_and_halt_stalled and
-# reap_unit) sets `reap_pending=True` to record that a live-agent kill is OWED —
+# reap_step) sets `reap_pending=True` to record that a live-agent kill is OWED —
 # the kill itself (TaskStop + SIGTERM) is model-side (no reaping primitive in
 # lib/, KTD2), so Python cannot observe it. The driver clears the marker via
 # clear_reap_pending right AFTER issuing the kill; anything still in
-# units_awaiting_reap on a later pulse is a forgotten kill ("requested but
+# steps_awaiting_reap on a later pulse is a forgotten kill ("requested but
 # unconfirmed"). Covers U3's reap_pending semantics.
 
-it "U3 reap_pending: reap_unit sets reap_pending; unit is in units_awaiting_reap; clear_reap_pending removes it"
+it "U3 reap_pending: reap_step sets reap_pending; step is in steps_awaiting_reap; clear_reap_pending removes it"
 DISP_RP="$(now_minus 5)"
 ledger_init "reap-pending-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_RP")" \
@@ -1067,16 +1067,16 @@ lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
 ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
 tspec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
-# Reap the dispatched unit at its matching attempt -> stalled + reap_pending set.
-t.pulse_advance.reap_unit(repo, run, "U1", 1)
+# Reap the dispatched step at its matching attempt -> stalled + reap_pending set.
+t.pulse_advance.reap_step(repo, run, "U1", 1)
 led1 = ledg.read_ledger(repo, run)
 marker_after_reap = led1["steps"][0].get("reap_pending")
-awaiting_before = t.pulse_advance.units_awaiting_reap(led1)
+awaiting_before = t.pulse_advance.steps_awaiting_reap(led1)
 # Driver issues the model-side kill, then clears the marker.
 t.pulse_advance.clear_reap_pending(repo, run, "U1")
 led2 = ledg.read_ledger(repo, run)
 marker_after_clear = led2["steps"][0].get("reap_pending")
-awaiting_after = t.pulse_advance.units_awaiting_reap(led2)
+awaiting_after = t.pulse_advance.steps_awaiting_reap(led2)
 print("%s|%s|%s|%s" % (
     marker_after_reap,
     ",".join(awaiting_before) or "-",
@@ -1108,7 +1108,7 @@ now = datetime.datetime.now(datetime.timezone.utc)
 led = ledg.read_ledger(repo, run)
 fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 after = ledg.read_ledger(repo, run)
-awaiting = t.pulse_advance.units_awaiting_reap(after)
+awaiting = t.pulse_advance.steps_awaiting_reap(after)
 print("%s,%s,%s" % (
     after["steps"][0]["state"],
     after["steps"][0].get("reap_pending"),
@@ -1116,17 +1116,17 @@ print("%s,%s,%s" % (
 ))
 PYEOF
 )"
-# The timeout-stalled unit is stalled, carries reap_pending=True, and is awaiting reap.
+# The timeout-stalled step is stalled, carries reap_pending=True, and is awaiting reap.
 if [ "$tp_flow" = "stalled,True,U1" ]; then
   pass
 else
   fail "tp_flow=$tp_flow (expected stalled,True,U1)"
 fi
 
-it "U1 race-regression: heartbeat detect over a STALE snapshot whose unit landed a verdict -> no crash, unit dropped from newly_stalled"
+it "U1 race-regression: heartbeat detect over a STALE snapshot whose step landed a verdict -> no crash, step dropped from newly_stalled"
 # U1's dispatch-time heartbeat runs detect_and_halt_stalled WHILE background agents
 # are live. If a healthy sibling lands its verdict (record_verdict) between the
-# snapshot read and the per-unit stalled flip, `stalled` is no longer a legal edge
+# snapshot read and the per-step stalled flip, `stalled` is no longer a legal edge
 # from verdict-returned. Before the try/except guard this raised InvalidTransition
 # and wedged the run — the exact hang the watchdog exists to prevent.
 RACE_AT="$(now_minus 3600)"
@@ -1155,7 +1155,7 @@ after = ledg.read_ledger(repo, run)
 print("%s,%s,%s" % (crashed, after["steps"][0]["state"], (",".join(newly) if newly else "-")))
 PYEOF
 )"
-# No crash; the raced unit stays verdict-returned and is dropped from newly_stalled.
+# No crash; the raced step stays verdict-returned and is dropped from newly_stalled.
 if [ "$race_out" = "no,verdict-returned,-" ]; then
   pass
 else

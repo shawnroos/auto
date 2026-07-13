@@ -17,7 +17,7 @@ U17 (v0.9.0) split lib/recipes.py (~981 LOC) BY CONCERN: this file holds the
 validation family (the `_validate_*` helpers + `_bad`, `_check_prompt_template`,
 `validate`, `_lint_verification_placement`, `validate_and_lint`), and lib/recipes.py
 keeps the thin three-tier REGISTRY facade (resolve / list_available /
-load_and_validate / unit_for / workspace_recipe_path). This module is a DAG
+load_and_validate / step_for / workspace_recipe_path). This module is a DAG
 ROOT — so `RecipeError` lives HERE and the facade re-exports it, giving
 `RecipeError` importable from both modules with no cycle.
 `_BUILTIN_DIR` / `_builtin_names` live here too because `validate_and_lint`'s
@@ -67,22 +67,22 @@ _RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # The producer NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
 # only reference these — the validator rejects any other name so a recipe can't
 # point at a v0.3.0 producer that doesn't exist yet. Kept here (not imported from
-# unit_emitters.py) so validation has no runtime dependency on the producer module; the
+# step_producers.py) so validation has no runtime dependency on the producer module; the
 # two are cross-checked by a U5b test that asserts this set equals the registry.
 V1_PRODUCER_NAMES = frozenset(
     {
         "plan_output_to_work_steps",
         "judge_winner_to_work_steps",
         "plan_output_to_paired_builders",
-        # v0.3.0 (U3): iterate_template materializes new units from a recipe-
-        # declared emit_templates entry when the gate unit verdicts "iterate".
-        # Added atomically with the REGISTRY entry in lib/unit_emitters.py so the
+        # v0.3.0 (U3): iterate_template materializes new steps from a recipe-
+        # declared emit_templates entry when the gate step verdicts "iterate".
+        # Added atomically with the REGISTRY entry in lib/step_producers.py so the
         # symmetry test stays green; U5 reserved this name but deferred the add.
         "iterate_template",
         # v0.6.0 (U8): brainstorm_output_to_plan_step fires on arrival at `plan`
         # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
-        # the brainstorm unit's requirements-doc output and emitting the single
-        # plan unit. Added atomically with the unit_emitters.REGISTRY entry so the
+        # the brainstorm step's requirements-doc output and emitting the single
+        # plan step. Added atomically with the step_producers.REGISTRY entry so the
         # symmetry test (set(REGISTRY) == V1_PRODUCER_NAMES) stays green.
         "brainstorm_output_to_plan_step",
     }
@@ -94,7 +94,7 @@ V1_PRODUCER_NAMES = frozenset(
 # checked downstream), so arbitrary spines like
 # ["brainstorm","plan","handoff","work"] validate. These two constants survive:
 # `_DEFAULT_PHASE_ORDER` is the recipe-blind default, `_WORK_ONLY_PHASE_ORDER`
-# still anchors the work-only empty-units guard below.
+# still anchors the work-only empty-steps guard below.
 _DEFAULT_PHASE_ORDER = ["plan", "handoff", "work"]
 _WORK_ONLY_PHASE_ORDER = ["work"]
 
@@ -130,13 +130,13 @@ _KNOWN_TOPLEVEL = frozenset(
         "steps",
         # v0.3.0 (U5): outcomes-gated iteration. Both fields are ADDITIVE — a
         # v0.2.x recipe that declares neither still validates (R7). The
-        # validator block below cross-checks shape, gate_unit references, the
+        # validator block below cross-checks shape, gate_step references, the
         # bound block, and the iteration↔emit_templates pairing rule.
         "iteration",
         "emit_templates",
         # v0.3.0 fix-pass F4: ADV-2 + maint-4 (depends_on carve-out is too
         # loose). Recipes that use a non-iterate producer to produce concrete
-        # unit ids consumed by a structural unit's depends_on must DECLARE
+        # step ids consumed by a structural step's depends_on must DECLARE
         # those ids here. The validator then accepts depends_on members that
         # are EITHER in steps[], OR in expected_emit_outputs, OR plausibly
         # produced by iterate_template's id math (`{id_prefix}{N}` shape).
@@ -146,16 +146,16 @@ _KNOWN_TOPLEVEL = frozenset(
         "expected_emit_outputs",
         # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe for
         # "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go straight
-        # to enumerating its work units" sets this true. The engine inits
+        # to enumerating its work steps" sets this true. The engine inits
         # plan_step="review_plan" + gaps_open=0 so the first pulse's next_plan_step
-        # returns "done" → enumerate_plan_units → plan→work, never re-deriving the
+        # returns "done" → enumerate_plan_steps → plan→work, never re-deriving the
         # finished plan. W is the shipped recipe that uses it. ADDITIVE — absent/
         # false validates as before. Coherence checked by _validate_plan_presatisfied.
         "plan_presatisfied",
     }
 )
-_KNOWN_UNIT_KEYS = frozenset({"id", "phase", "depends_on", "invokes", "verification"})
-# v0.7.0 (U2): typed `verification` block on a (gate) unit. A unit MAY carry an
+_KNOWN_STEP_KEYS = frozenset({"id", "phase", "depends_on", "invokes", "verification"})
+# v0.7.0 (U2): typed `verification` block on a (gate) step. A step MAY carry an
 # optional `verification` array of typed, checkable done-conditions layered onto
 # the existing iterate/advance/exit gate decision (KTD-1). The validator is
 # hand-rolled (pure stdlib, no jsonschema — see the module docstring); the same
@@ -174,7 +174,7 @@ _KNOWN_VERIFICATION_KEYS_HUMAN = frozenset({"id", "type", "prompt"})
 # subprocesses per pulse is a footgun, not a feature.
 _MAX_VERIFICATION_CRITERIA = 16
 # v0.3.0 (U5): the field set an emit_templates ENTRY may carry. Same depth as
-# `_KNOWN_UNIT_KEYS` for `steps[]` — mechanical reject of unknown inner keys so
+# `_KNOWN_STEP_KEYS` for `steps[]` — mechanical reject of unknown inner keys so
 # a typo in a template ("invoke" vs "invokes") doesn't silently no-op at emit.
 _KNOWN_EMIT_TEMPLATE_KEYS = frozenset({"phase", "invokes", "id_prefix"})
 _KNOWN_ITERATION_KEYS = frozenset({"gate_step", "emit_template", "bound"})
@@ -210,7 +210,7 @@ def _check_prompt_template(value, where: str):
     malicious recipe set `prompt_template: "../../../etc/passwd"` and the backend
     would forward that file's contents into LLM context. Reject `..` segments,
     absolute paths, and empty strings. Enforced HERE (not only in the schema doc)
-    so it is the load-bearing check, and re-checked in `unit_for` before the value
+    so it is the load-bearing check, and re-checked in `step_for` before the value
     reaches `dispatch_context`.
     """
     if not isinstance(value, str) or not value:
@@ -227,11 +227,11 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
 
     When a recipe declares its plan phase already-satisfied (W), the engine must
     have a coherent path FROM the plan phase TO work — otherwise "skip the
-    plan-loop" would strand the run with no way to enumerate units. So if the
+    plan-loop" would strand the run with no way to enumerate steps. So if the
     flag is true we require:
       (a) a "plan" phase in phase_order (the satisfied state lives there),
-      (b) exactly one plan-phase unit (the enumerate carrier — the producers read
-          enumerated_units off the single plan unit, lib/unit_emitters.py), and
+      (b) exactly one plan-phase step (the enumerate carrier — the producers read
+          enumerated_steps off the single plan step, lib/step_producers.py), and
       (c) a phase_transition {from: plan, to: work} (the enumerate→emit edge).
     Mechanical so a malformed work-only recipe can't ship a dead end. Absent or
     false validates as before (a1, a2, a4).
@@ -248,22 +248,22 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
             "plan_presatisfied requires a 'plan' phase in phase_order "
             f"(the satisfied state lives there); got {phase_order!r}"
         )
-    plan_unit_count = sum(1 for u in recipe["steps"] if u.get("phase") == "plan")
-    if plan_unit_count != 1:
+    plan_step_count = sum(1 for u in recipe["steps"] if u.get("phase") == "plan")
+    if plan_step_count != 1:
         _bad(
-            "plan_presatisfied requires exactly one plan-phase unit (the "
-            f"enumerate carrier the plan→work producer reads); got {plan_unit_count}"
+            "plan_presatisfied requires exactly one plan-phase step (the "
+            f"enumerate carrier the plan→work producer reads); got {plan_step_count}"
         )
     if not any(pt.get("from") == "plan" and pt.get("to") == "work" for pt in pts):
         _bad(
             "plan_presatisfied requires a phase_transition {from: plan, to: "
-            "work} so enumerated units can be emitted into the work phase"
+            "work} so enumerated steps can be emitted into the work phase"
         )
 
 
 def _validate_toplevel(recipe: dict) -> None:
-    """Top-level shape: object, no unknown fields, required name/version/units,
-    a safe filename name, units-is-list. Order-preserving extract — the
+    """Top-level shape: object, no unknown fields, required name/version/steps,
+    a safe filename name, steps-is-list. Order-preserving extract — the
     first-violation message must not change."""
     if not isinstance(recipe, dict):
         _bad("recipe must be a JSON object")
@@ -295,7 +295,7 @@ def _validate_toplevel(recipe: dict) -> None:
             f"(lib/recipes.py::_ALIASES); rename it"
         )
     if not isinstance(recipe["steps"], list):
-        _bad("units must be a list")
+        _bad("steps must be a list")
 
 
 def _validate_phase_order(recipe: dict) -> list:
@@ -327,31 +327,31 @@ def _validate_verification_check(uid: str, cid: str, check) -> None:
     if isinstance(check, str):
         if check != "exit_zero":
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: string check "
+                f"step {uid!r}: verification criterion {cid!r}: string check "
                 f"must be 'exit_zero'; got {check!r}"
             )
         return
     if isinstance(check, dict):
         if len(check) != 1:
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: object check must "
+                f"step {uid!r}: verification criterion {cid!r}: object check must "
                 f"have exactly one key (stdout_contains | stdout_equals); got "
                 f"keys {sorted(check)!r}"
             )
         ck, cv = next(iter(check.items()))
         if ck not in ("stdout_contains", "stdout_equals"):
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: unknown check key "
+                f"step {uid!r}: verification criterion {cid!r}: unknown check key "
                 f"{ck!r}; known: ['stdout_contains', 'stdout_equals']"
             )
         if not isinstance(cv, str):
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: check {ck!r} value "
+                f"step {uid!r}: verification criterion {cid!r}: check {ck!r} value "
                 f"must be a string; got {cv!r}"
             )
         return
     _bad(
-        f"unit {uid!r}: verification criterion {cid!r}: check must be 'exit_zero' "
+        f"step {uid!r}: verification criterion {cid!r}: check must be 'exit_zero' "
         f"or an object {{stdout_contains|stdout_equals: str}}; got {check!r}"
     )
 
@@ -362,18 +362,18 @@ def _validate_verification_programmatic(uid: str, cid: str, c: dict) -> None:
     argv = c.get("argv")
     if not isinstance(argv, list) or not argv:
         _bad(
-            f"unit {uid!r}: verification criterion {cid!r}: programmatic requires "
+            f"step {uid!r}: verification criterion {cid!r}: programmatic requires "
             f"a non-empty 'argv' list; got {argv!r}"
         )
     for a in argv:
         if not isinstance(a, str):
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: argv entries must "
+                f"step {uid!r}: verification criterion {cid!r}: argv entries must "
                 f"be strings; got {a!r}"
             )
     if "check" not in c:
         _bad(
-            f"unit {uid!r}: verification criterion {cid!r}: programmatic requires "
+            f"step {uid!r}: verification criterion {cid!r}: programmatic requires "
             f"a 'check'"
         )
     _validate_verification_check(uid, cid, c["check"])
@@ -383,7 +383,7 @@ def _validate_verification_programmatic(uid: str, cid: str, c: dict) -> None:
         # would accept True/False (the same trap guarded for max_attempts).
         if isinstance(ts, bool) or not isinstance(ts, int) or ts <= 0:
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: timeout_sec must "
+                f"step {uid!r}: verification criterion {cid!r}: timeout_sec must "
                 f"be a positive int; got {ts!r}"
             )
 
@@ -395,7 +395,7 @@ def _validate_verification_judge(uid: str, cid: str, c: dict) -> None:
     rr = c.get("rubric_ref")
     if rr is not None and (not isinstance(rr, str) or not rr):
         _bad(
-            f"unit {uid!r}: verification criterion {cid!r}: rubric_ref "
+            f"step {uid!r}: verification criterion {cid!r}: rubric_ref "
             f"must be a non-empty string when present; got {rr!r}"
         )
 
@@ -406,7 +406,7 @@ def _validate_verification_human(uid: str, cid: str, c: dict) -> None:
     pr = c.get("prompt")
     if pr is not None and (not isinstance(pr, str) or not pr):
         _bad(
-            f"unit {uid!r}: verification criterion {cid!r}: prompt must be "
+            f"step {uid!r}: verification criterion {cid!r}: prompt must be "
             f"a non-empty string when present; got {pr!r}"
         )
 
@@ -431,8 +431,8 @@ _VERIFICATION_DISPATCH = {
 
 
 def _validate_verification(u: dict) -> None:
-    """v0.7.0 (U2): validate the OPTIONAL per-unit `verification` array (KTD-1).
-    A unit that omits it validates exactly as before (additive). Each criterion
+    """v0.7.0 (U2): validate the OPTIONAL per-step `verification` array (KTD-1).
+    A step that omits it validates exactly as before (additive). Each criterion
     is `{id: unique non-empty str, type ∈ {programmatic, model_judge,
     advisor_judge, human}}` plus type-specific fields. Unknown criterion keys are
     rejected against the PER-TYPE allowed-key set, an unknown `type` value is
@@ -449,27 +449,27 @@ def _validate_verification(u: dict) -> None:
         return
     uid = u["id"]
     if not isinstance(crits, list):
-        _bad(f"unit {uid!r}: verification must be a list; got {crits!r}")
+        _bad(f"step {uid!r}: verification must be a list; got {crits!r}")
     if len(crits) > _MAX_VERIFICATION_CRITERIA:
         _bad(
-            f"unit {uid!r}: verification has {len(crits)} criteria; the cap is "
+            f"step {uid!r}: verification has {len(crits)} criteria; the cap is "
             f"{_MAX_VERIFICATION_CRITERIA} (bounds gate-evaluation cost)"
         )
     seen_ids = set()
     for c in crits:
         if not isinstance(c, dict):
-            _bad(f"unit {uid!r}: each verification criterion must be a JSON object")
+            _bad(f"step {uid!r}: each verification criterion must be a JSON object")
         cid = c.get("id")
         if not isinstance(cid, str) or not cid:
-            _bad(f"unit {uid!r}: verification criterion missing non-empty 'id'")
+            _bad(f"step {uid!r}: verification criterion missing non-empty 'id'")
         if cid in seen_ids:
-            _bad(f"unit {uid!r}: duplicate verification criterion id: {cid!r}")
+            _bad(f"step {uid!r}: duplicate verification criterion id: {cid!r}")
         seen_ids.add(cid)
         ctype = c.get("type")
         entry = _VERIFICATION_DISPATCH.get(ctype)
         if entry is None:
             _bad(
-                f"unit {uid!r}: verification criterion {cid!r}: unknown type "
+                f"step {uid!r}: verification criterion {cid!r}: unknown type "
                 f"{ctype!r}; known: {sorted(_KNOWN_VERIFICATION_TYPES)}"
             )
         allowed, validator_fn = entry
@@ -478,49 +478,49 @@ def _validate_verification(u: dict) -> None:
         for ck in c:
             if ck not in allowed:
                 _bad(
-                    f"unit {uid!r}: verification criterion {cid!r} (type "
+                    f"step {uid!r}: verification criterion {cid!r} (type "
                     f"{ctype!r}): unknown field {ck!r}; known: {sorted(allowed)}"
                 )
         # Per-type body validation (the second former ladder — same dispatch).
         validator_fn(uid, cid, c)
 
 
-def _validate_units(recipe: dict, phase_order: list) -> set:
-    """Per-unit shape: known keys, non-empty unique id, phase ∈ phase_order,
+def _validate_steps(recipe: dict, phase_order: list) -> set:
+    """Per-step shape: known keys, non-empty unique id, phase ∈ phase_order,
     depends_on/invokes shape, prompt_template path-bounded. Returns the set of
-    unit ids — the depends_on integrity pass needs ALL ids known first."""
-    # Units: each must have id + phase ∈ phase_order; depends_on references
-    # existing unit ids; invokes well-formed; prompt_template path-bounded.
-    unit_ids = set()
+    step ids — the depends_on integrity pass needs ALL ids known first."""
+    # Steps: each must have id + phase ∈ phase_order; depends_on references
+    # existing step ids; invokes well-formed; prompt_template path-bounded.
+    step_ids = set()
     for u in recipe["steps"]:
         if not isinstance(u, dict):
-            _bad("each unit must be a JSON object")
+            _bad("each step must be a JSON object")
         for uk in u:
-            if uk not in _KNOWN_UNIT_KEYS:
-                _bad(f"unknown unit field: {uk!r}")
+            if uk not in _KNOWN_STEP_KEYS:
+                _bad(f"unknown step field: {uk!r}")
         if "id" not in u or not isinstance(u["id"], str) or not u["id"]:
-            _bad("unit missing non-empty 'id'")
-        if u["id"] in unit_ids:
-            _bad(f"duplicate unit id: {u['id']!r}")
-        unit_ids.add(u["id"])
+            _bad("step missing non-empty 'id'")
+        if u["id"] in step_ids:
+            _bad(f"duplicate step id: {u['id']!r}")
+        step_ids.add(u["id"])
         uphase = u.get("phase")
         if uphase is None or uphase not in phase_order:
-            _bad(f"unit {u['id']!r}: phase {uphase!r} not in phase_order {phase_order!r}")
+            _bad(f"step {u['id']!r}: phase {uphase!r} not in phase_order {phase_order!r}")
         dep = u.get("depends_on", [])
         if not isinstance(dep, list):
-            _bad(f"unit {u['id']!r}: depends_on must be a list")
+            _bad(f"step {u['id']!r}: depends_on must be a list")
         inv = u.get("invokes", {})
         if not isinstance(inv, dict):
-            _bad(f"unit {u['id']!r}: invokes must be an object")
+            _bad(f"step {u['id']!r}: invokes must be an object")
         if "prompt_template" in inv:
-            _check_prompt_template(inv["prompt_template"], f"unit {u['id']!r}")
+            _check_prompt_template(inv["prompt_template"], f"step {u['id']!r}")
         _validate_verification(u)
-    return unit_ids
+    return step_ids
 
 
 def _gather_emit_prefixes(emit_templates) -> set:
     """The id_prefix set declared by emit_templates. Computed ONCE and threaded
-    to BOTH the depends_on integrity pass and the iteration gate_unit check —
+    to BOTH the depends_on integrity pass and the iteration gate_step check —
     these were two byte-identical gathers (recipe-format §6 calls them
     symmetric), so a single shared set is behavior-preserving."""
     prefixes = set()
@@ -547,14 +547,14 @@ def _validate_expected_emit_outputs(recipe: dict) -> set:
     return set(expected_emit_outputs or [])
 
 
-def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
+def _validate_depends_on(recipe: dict, step_ids: set, emit_prefixes: set,
                          expected_emit_outputs_set: set) -> None:
     """depends_on integrity — a second pass once all ids are known. Each dep is
-    a known unit id, an iterate-shaped emit id (`{id_prefix}{positive_int}`), or
+    a known step id, an iterate-shaped emit id (`{id_prefix}{positive_int}`), or
     a declared expected_emit_output.
 
     v0.3.0 (U6): emit_template id_prefixes are forward-reference targets. A
-    structurally-declared unit (e.g., A4's `compare` after U6) may name a
+    structurally-declared step (e.g., A4's `compare` after U6) may name a
     builder id like `build-clarity` in its `depends_on` even though no `steps[]`
     entry has that exact id yet — the matching builder is materialized at run
     time by a producer. Two emit-shapes are legitimate: (a) iterate_template
@@ -567,7 +567,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
         """Is ``dep_id`` plausibly an `iterate_template` output?
 
         iterate_template emits ids of the form ``{id_prefix}{N}`` where N is a
-        positive int (see ``lib/unit_emitters.py``: ``f"{id_prefix}{base + i + 1}"``,
+        positive int (see ``lib/step_producers.py``: ``f"{id_prefix}{base + i + 1}"``,
         with base >= 0 and i >= 0). For depends_on validation we accept any
         prefix-match whose remainder parses as a positive int — string
         ``"build-1"`` matches, ``"build-typo"`` does not.
@@ -588,7 +588,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
 
     for u in recipe["steps"]:
         for d in u.get("depends_on", []):
-            if d in unit_ids:
+            if d in step_ids:
                 continue
             # F4 carve-out (tightened): depends_on may forward-reference EITHER
             # (a) an iterate-shaped id (`{id_prefix}{positive_int}`) OR
@@ -597,7 +597,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
                 continue
             if d in expected_emit_outputs_set:
                 continue
-            _bad(f"unit {u['id']!r}: depends_on references unknown unit {d!r}")
+            _bad(f"step {u['id']!r}: depends_on references unknown step {d!r}")
 
 
 def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
@@ -653,7 +653,7 @@ def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
             tinv = tmpl["invokes"]
             # Mirror existing `steps[].invokes` validation depth: invokes must be
             # a dict; prompt_template path-bounded if present. We don't constrain
-            # inner keys (no whitelist) — `_KNOWN_UNIT_KEYS` doesn't constrain
+            # inner keys (no whitelist) — `_KNOWN_STEP_KEYS` doesn't constrain
             # `invokes`'s inner keys either. The backend contract bounds those.
             if not isinstance(tinv, dict):
                 _bad(f"emit_templates[{tmpl_name!r}]: invokes must be an object")
@@ -664,10 +664,10 @@ def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
                 _bad(f"emit_templates[{tmpl_name!r}]: id_prefix must be a non-empty string")
 
 
-def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
+def _validate_iteration(recipe: dict, phase_order: list, step_ids: set,
                         emit_prefixes: set) -> None:
     """v0.3.0 (U5): iteration block validation (OPTIONAL field). Cross-refs
-    emit_templates (the pairing rule) + emit_prefixes (the gate_unit carve-out —
+    emit_templates (the pairing rule) + emit_prefixes (the gate_step carve-out —
     the shared id_prefix set also used by depends_on integrity)."""
     iteration = recipe.get("iteration")
     if iteration is not None:
@@ -680,7 +680,7 @@ def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
                     f"iteration: unknown field {ik!r}; known: "
                     f"{sorted(_KNOWN_ITERATION_KEYS)}"
                 )
-        # gate_unit is required and must reference a unit_id OR an
+        # gate_step is required and must reference a step_id OR an
         # emit_templates entry's id_prefix. The latter is a defensive carve-out
         # per round-3 P2 #21 — A4's `compare` lands in `steps[]` explicitly per
         # U6, so the carve-out is forward-looking insurance for future recipes.
@@ -689,10 +689,10 @@ def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
         gate = iteration["gate_step"]
         if not isinstance(gate, str) or not gate:
             _bad("iteration.gate_step must be a non-empty string")
-        if gate not in unit_ids and gate not in emit_prefixes:
+        if gate not in step_ids and gate not in emit_prefixes:
             _bad(
                 f"iteration.gate_step {gate!r} not in steps[] (ids: "
-                f"{sorted(unit_ids)!r}) and not declared as an emit_templates "
+                f"{sorted(step_ids)!r}) and not declared as an emit_templates "
                 f"id_prefix (prefixes: {sorted(emit_prefixes)!r})"
             )
 
@@ -753,20 +753,20 @@ def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
 
 def _validate_work_only_gap(recipe: dict, phase_order: list) -> None:
     """Work-only init-time gap (P1 #6, fix-pass D). A recipe with
-    phase_order: ["work"] and units: [] is UNRUNNABLE in v0.2.0 — at
-    init_ledger time the engine creates a ledger with zero units, the
-    work-loop predicate's has_units_in_phase guard is vacuous so met never
+    phase_order: ["work"] and steps: [] is UNRUNNABLE in v0.2.0 — at
+    init_ledger time the engine creates a ledger with zero steps, the
+    work-loop predicate's has_steps_in_phase guard is vacuous so met never
     fires, and the engine re-arms forever while the operator sees nothing.
     The intended runtime path (init-time enumeration via the backend's
-    enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
+    enumerate_plan_steps op) is NOT WIRED in v0.2.0; that ships in v0.2.1
     (KTD-15). Reject mechanically here rather than ship a recipe whose only
     failure mode is silent re-arming."""
     if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["steps"]:
         _bad(
-            "v0.2.0 work-only recipes require pre-declared units; init-time "
+            "v0.2.0 work-only recipes require pre-declared steps; init-time "
             "enumeration ships in v0.2.1 (KTD-15). A recipe with "
-            "phase_order: ['work'] and units: [] would create a ledger with "
-            "zero units and the engine would re-arm forever without dispatching."
+            "phase_order: ['work'] and steps: [] would create a ledger with "
+            "zero steps and the engine would re-arm forever without dispatching."
         )
 
 
@@ -778,23 +778,23 @@ def validate(recipe: dict) -> None:
     An ordered dispatcher over per-concern validators (extracted from the
     former 315-line monolith). ORDER IS LOAD-BEARING: the first violation a
     malformed recipe hits must stay the same, so these run in the original
-    sequence. Shared state (phase_order, unit_ids, the single emit_prefixes set)
+    sequence. Shared state (phase_order, step_ids, the single emit_prefixes set)
     is computed once and threaded explicitly.
     """
     _validate_toplevel(recipe)
     phase_order = _validate_phase_order(recipe)
-    unit_ids = _validate_units(recipe, phase_order)
+    step_ids = _validate_steps(recipe, phase_order)
     # One id_prefix gather, shared by depends_on integrity AND the iteration
-    # gate_unit check (formerly computed twice, ~140 lines apart).
+    # gate_step check (formerly computed twice, ~140 lines apart).
     emit_prefixes = _gather_emit_prefixes(recipe.get("emit_templates") or {})
     expected_emit_outputs_set = _validate_expected_emit_outputs(recipe)
-    _validate_depends_on(recipe, unit_ids, emit_prefixes, expected_emit_outputs_set)
+    _validate_depends_on(recipe, step_ids, emit_prefixes, expected_emit_outputs_set)
     _validate_phase_transitions(recipe, phase_order)
     # v0.4.3 KTD-15: plan_presatisfied coherence (needs phase_order + the
     # phase_transitions list; runs after the transitions are shape-validated).
     _validate_plan_presatisfied(recipe, phase_order, recipe.get("phase_transitions", []))
     _validate_emit_templates(recipe, phase_order)
-    _validate_iteration(recipe, phase_order, unit_ids, emit_prefixes)
+    _validate_iteration(recipe, phase_order, step_ids, emit_prefixes)
     _validate_work_only_gap(recipe, phase_order)
 
 
@@ -817,35 +817,35 @@ def _builtin_names():
     )
 
 
-def _lint_verification_placement(recipe: dict, units: list) -> list:
+def _lint_verification_placement(recipe: dict, steps: list) -> list:
     """v0.7.0 (U2/R3): warn when a `verification` block can never be evaluated.
 
-    validate() accepts the block on ANY unit (additive, shape-checked there), but
+    validate() accepts the block on ANY step (additive, shape-checked there), but
     only the iteration.gate_step's block is ever evaluated (resolve_gate_verification
-    reads the gate unit). So a non-empty block on a non-gate unit — or anywhere when
+    reads the gate step). So a non-empty block on a non-gate step — or anywhere when
     the recipe declares no iteration block at all — is dead config. Warn, don't
     reject (KTD-2): the field loads fine; this is editorial.
     """
     out = []
     iteration = recipe.get("iteration")
     if isinstance(iteration, dict):
-        gate_unit = iteration.get("gate_step")
-        for u in units:
-            if u.get("verification") and u.get("id") != gate_unit:
+        gate_step = iteration.get("gate_step")
+        for u in steps:
+            if u.get("verification") and u.get("id") != gate_step:
                 out.append(
-                    f"unit {u.get('id')!r} carries a verification block but is not "
-                    f"the iteration.gate_step ({gate_unit!r}) — only the gate unit's "
+                    f"step {u.get('id')!r} carries a verification block but is not "
+                    f"the iteration.gate_step ({gate_step!r}) — only the gate step's "
                     f"verification is evaluated, so these criteria never run; move "
-                    f"them onto {gate_unit!r} or make {u.get('id')!r} the gate"
+                    f"them onto {gate_step!r} or make {u.get('id')!r} the gate"
                 )
     else:
-        for u in units:
+        for u in steps:
             if u.get("verification"):
                 out.append(
-                    f"unit {u.get('id')!r} carries a verification block but the "
+                    f"step {u.get('id')!r} carries a verification block but the "
                     f"recipe declares no 'iteration' block — verification is only "
                     f"evaluated at the iteration gate, so these criteria never run; "
-                    f"add an iteration block with gate_unit {u.get('id')!r}"
+                    f"add an iteration block with gate_step {u.get('id')!r}"
                 )
     return out
 
@@ -854,9 +854,9 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
     ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
     strings (empty when clean). Call ``validate`` for the contract; this adds:
-      - a phase in phase_order with no unit assigned (and no producer targeting it)
-      - depends_on creating an unreachable unit (no path from a root)
-      - terminal_phase with no units AND no producer targeting it
+      - a phase in phase_order with no step assigned (and no producer targeting it)
+      - depends_on creating an unreachable step (no path from a root)
+      - terminal_phase with no steps AND no producer targeting it
       - a workspace/global recipe whose description matches a built-in verbatim
         (description-spoofing defense — security observation 1)
       - (P2-15) when ``filename`` is supplied: the recipe's declared ``name``
@@ -904,23 +904,23 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                 f"name is {declared!r}; rename one to match the other"
             )
     phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
-    units = recipe.get("steps", [])
+    steps = recipe.get("steps", [])
     emit_targets = {pt.get("to") for pt in recipe.get("phase_transitions", [])}
-    units_by_phase = {}
-    for u in units:
-        units_by_phase.setdefault(u.get("phase"), []).append(u)
+    steps_by_phase = {}
+    for u in steps:
+        steps_by_phase.setdefault(u.get("phase"), []).append(u)
     for ph in phase_order:
         if ph == "handoff":
-            continue  # handoff is a pass-through; never holds units
-        if not units_by_phase.get(ph) and ph not in emit_targets:
+            continue  # handoff is a pass-through; never holds steps
+        if not steps_by_phase.get(ph) and ph not in emit_targets:
             warnings.append(
-                f"phase {ph!r} has no units and no producer targets it — it will "
+                f"phase {ph!r} has no steps and no producer targets it — it will "
                 f"do nothing"
             )
     terminal = recipe.get("terminal_phase", "work")
-    if not units_by_phase.get(terminal) and terminal not in emit_targets:
+    if not steps_by_phase.get(terminal) and terminal not in emit_targets:
         warnings.append(
-            f"terminal_phase {terminal!r} has no units and no producer — the run "
+            f"terminal_phase {terminal!r} has no steps and no producer — the run "
             f"would exit immediately with nothing done"
         )
     # v0.3.0 (U5) editorial: iteration.bound editorial sanity checks. Neither is
@@ -935,7 +935,7 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                 warnings.append(
                     f"iteration.bound.max_attempts = {ma} — are you sure? "
                     f"iterations are expensive (each spawns a new wave of "
-                    f"units + re-engages the gate); >10 is typically a sign "
+                    f"steps + re-engages the gate); >10 is typically a sign "
                     f"the gate's verdict-criterion is too strict"
                 )
             mw = bound.get("max_wall_seconds")
@@ -946,7 +946,7 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                     f"the bound will fire before any iteration completes"
                 )
 
-    warnings.extend(_lint_verification_placement(recipe, units))
+    warnings.extend(_lint_verification_placement(recipe, steps))
 
     # description-spoofing: a non-built-in recipe copying a built-in's description.
     desc = (recipe.get("description") or "").strip()

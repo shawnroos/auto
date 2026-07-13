@@ -53,7 +53,7 @@ FUNC_BUDGET=120
 ALLOWED_FILES=(
   # (lib/ledger_core.py:1055 waiver retired — U16 extracted the pure predicate
   # evaluator (recompute_predicate + B7 helpers, gating_severities,
-  # unit_is_terminal, is_orphaned) into lib/ledger_predicate.py, dropping core
+  # step_is_terminal, is_orphaned) into lib/ledger_predicate.py, dropping core
   # from 1055 to ~710 LOC — back under the 1000 budget. "Decompose below
   # threshold → remove the waiver": no lib/*.py file is over budget now, so this
   # array is intentionally empty.)
@@ -61,7 +61,7 @@ ALLOWED_FILES=(
 
 ALLOWED_FUNCTIONS=(
   # init_ledger is the construction-time invariant chokepoint (validate the
-  # 6-arg shape, normalize units, seed iteration_emit_count per F0,
+  # 6-arg shape, normalize steps, seed iteration_emit_count per F0,
   # construct the legacy-compatible top-level dict). Decomposing it would
   # mean extracting helpers per concern — viable but bigger than B7 was.
   # Tracked: structural-debt decomposition candidate for v0.3.2 / v0.4.x.
@@ -90,15 +90,15 @@ ALLOWED_FUNCTIONS=(
   # spread the dispatch across helpers without making it smaller.
   "lib/pulse_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
-  # + backend routing + verdict-write. U12 added the per-unit backend_op
+  # + backend routing + verdict-write. U12 added the per-step backend_op
   # validation guard (reject an unknown op before launch), +8 LOC over the
-  # prior 132 waiver. The guard is cohesive with the other per-unit
+  # prior 132 waiver. The guard is cohesive with the other per-step
   # pre-filters (not-pending / over-cap) it sits beside. Decomposition
-  # candidate (extract the per-unit filter chain).
+  # candidate (extract the per-step filter chain).
   "lib/dispatcher.py:dispatch_batch:140"
   # _print_run is the /auto-status rendering surface — F1's iteration
   # section + G2's exit_reason line + G7's defense-in-depth wrap + the
-  # legacy unit/predicate render. Each new visible field adds a few lines;
+  # legacy step/predicate render. Each new visible field adds a few lines;
   # decomposing would extract per-section render helpers. (U12 shrank it 1
   # LOC by routing the bound_override read through iteration.read_bound_override.)
   # v0.13.0 U2 added R20's skip_reason render. The render BODY was extracted to
@@ -107,13 +107,13 @@ ALLOWED_FUNCTIONS=(
   "lib/auto-status.py:_print_run:127"
   # iterate_template is v0.3.0 U3's producer. A single coherent computation:
   # validate inputs (recipe shape + emit_count bounds), read
-  # iteration_emit_count, compute the next N unit ids, build the unit dicts.
+  # iteration_emit_count, compute the next N step ids, build the step dicts.
   # Decomposition would extract 2-3 private helpers (validate-shape,
-  # validate-emit-count, build-units). Tracked as v0.3.2 candidate. (U12
+  # validate-emit-count, build-steps). Tracked as v0.3.2 candidate. (U12
   # shrank it 2 LOC via iteration.read_decision_payload.)
-  "lib/unit_emitters.py:iterate_template:125"
+  "lib/step_producers.py:iterate_template:125"
   # (recipes.py:validate waiver retired: decomposed into per-concern
-  # validators — _validate_toplevel / _validate_phase_order / _validate_units /
+  # validators — _validate_toplevel / _validate_phase_order / _validate_steps /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on
   # / _validate_phase_transitions / _validate_emit_templates / _validate_iteration
   # / _validate_work_only_gap — with validate() now a ~30-line ordered dispatcher.
@@ -128,11 +128,11 @@ ALLOWED_FUNCTIONS=(
   # sibling _bound_plan_path helper). Waived (not decomposed) because the
   # function itself is small; U10 shrank the measured span 139 → 125.
   # U14 (KTD-1) added the enumerate op's per-item `depends_on` edge clause to the
-  # `enumerate_plan_units` method (in the Backend class body the awk attributes
+  # `enumerate_plan_steps` method (in the Backend class body the awk attributes
   # here) so the readiness engine can order the producer fan-out — 125 → 137.
   "lib/backend-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation dispatcher (parse → validate recipe
-  # → build units → init ledger → emit arm intent). Already partially decomposed
+  # → build steps → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,
   # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in
   # _bind_presatisfied_plan, off-budget; the residual is glue). Further splitting

@@ -68,7 +68,7 @@ trap cleanup EXIT
 REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
-# init <run> — a work-loop run record with ONE unit whose verdict is back and
+# init <run> — a work-loop run record with ONE step whose verdict is back and
 # whose finding is still open: the predicate is NOT met, so a pulse applies one
 # fix (verdict-returned -> fixed) and signals re-arm. That state flip is the
 # "did this entry point actually advance the run?" discriminator below.
@@ -80,13 +80,13 @@ spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.init_ledger(
     repo, run, backend="ce", loop_phase="work",
-    units=[{"id": "U1", "state": "verdict-returned",
+    steps=[{"id": "U1", "state": "verdict-returned",
             "findings": [{"severity": "blocker", "note": "open"}]}],
 )
 PYEOF
 }
 
-unit_state() {
+step_state() {
   "$PY" - "$REPO" "$1" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, ledger_py = sys.argv[1:4]
@@ -107,10 +107,10 @@ ledger_init "canonrun"
 canon_out="$(CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "canonrun" 2>/dev/null)"
 if [ "$(jget "$canon_out" action)" = "rearm" ] \
    && [ "$(jget "$canon_out" prompt)" = "/auto:auto-pulse canonrun" ] \
-   && [ "$(unit_state canonrun)" = "fixed" ]; then
+   && [ "$(step_state canonrun)" = "fixed" ]; then
   pass
 else
-  fail "action=$(jget "$canon_out" action) prompt=$(jget "$canon_out" prompt) state=$(unit_state canonrun)"
+  fail "action=$(jget "$canon_out" action) prompt=$(jget "$canon_out" prompt) state=$(step_state canonrun)"
 fi
 
 # ─── Scenario 2: the KEPT ALIAS COMMAND drives an in-flight run ──────────────
@@ -135,7 +135,7 @@ ARGUMENTS="aliasrun --repo ${REPO}"
 export CLAUDE_PLUGIN_ROOT ARGUMENTS
 # shellcheck disable=SC2086 — deliberately eval the .md's own dispatch line.
 alias_out="$(eval "$alias_line" 2>/dev/null)"
-alias_state="$(unit_state aliasrun)"
+alias_state="$(step_state aliasrun)"
 if [ "$(jget "$alias_out" action)" = "rearm" ] && [ "$alias_state" = "fixed" ]; then
   pass
 else
@@ -149,7 +149,7 @@ assert_eq "/auto:auto-pulse aliasrun" "$(jget "$alias_out" prompt)"
 it "the lib/tick.sh forwarding stub ADVANCES an in-flight run"
 ledger_init "stubrun"
 stub_out="$(CLAUDE_AUTO_REPO="$REPO" bash "$STUB_SH" "stubrun" 2>/dev/null)"
-stub_state="$(unit_state stubrun)"
+stub_state="$(step_state stubrun)"
 if [ "$(jget "$stub_out" action)" = "rearm" ] && [ "$stub_state" = "fixed" ]; then
   pass
 else
@@ -185,7 +185,7 @@ esac
 it "deliberate-fail: a broken dispatch path does NOT advance the run"
 ledger_init "dfrun"
 CLAUDE_AUTO_REPO="$REPO" bash "${AUTO_ROOT}/lib/__no_such_entry__.sh" "dfrun" >/dev/null 2>&1 || true
-df_state="$(unit_state dfrun)"
+df_state="$(step_state dfrun)"
 assert_eq "verdict-returned" "$df_state"
 
 # ─── Scenario 6: the canonical command file still dispatches pulse.sh ────────
