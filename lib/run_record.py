@@ -55,6 +55,9 @@ run_record_predicate = load_lib_module("run_record_predicate")
 run_record_mutators = load_lib_module("run_record_mutators")
 run_record_steering = load_lib_module("run_record_steering")
 run_record_producers = load_lib_module("run_record_producers")
+# U10: the operator `downgrade` command needs the INVERSE map. format_compat is a DAG
+# ROOT (imports no sibling), so this edge closes no cycle — same as core's own.
+format_compat = load_lib_module("format_compat")
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from run_record_core: constants + errors + pure logic + primitives.
@@ -457,10 +460,109 @@ def _describe_surface():
     }
 
 
+# ─── the OPERATOR revert command (U10 / KTD-1) ──────────────────────────────
+# `downgrade` is deliberately NOT a `_VERBS` entry. That registry is the AGENT tool
+# surface: `describe` publishes it, docs/contracts/agent-tool-surface.md fences it,
+# and a driving agent is told to orient by it. An offline, data-destructive, revert-
+# only operator action has no business in the set an agent is told it may call — so
+# it is dispatched here, ahead of the registry, and `describe`/`_VERBS` are untouched.
+# (Same division as `workflows.py migrate`: the maintenance command lives beside the
+# format it maintains, not on the agent's surface.)
+#
+# It lives on THIS module — not on lib/format_compat.py, which owns the maps — for one
+# hard reason: format_compat is a DAG ROOT that imports no sibling, so it cannot reach
+# the run-record flock, and KTD-1 requires the downgrade to write UNDER THAT LOCK
+# ("the same lock every mutation holds, so it never races a concurrent in-process
+# write"). This module already loads run_record_core, so the real lock is one call away.
+#
+# It CANNOT go through core's normal read/write helpers, and that is not an oversight:
+#   * `_read_json` UPGRADES on read (chokepoint 1) — it would hand back a v2 dict.
+#   * `_atomic_write` re-stamps `format: 2` and recomputes the predicate — it would
+#     undo the downgrade in the same breath.
+# The whole point of a downgrade is to bypass the shim, so this does a RAW read and a
+# RAW atomic write, and borrows ONLY the lock.
+
+
+def _record_lock_path(path: str) -> str:
+    """The flock file for the run-record at ``path``.
+
+    Derived from the record path because the revert procedure addresses STRANDED
+    records by path, not by (repo, run). This mirrors run_record_core exactly —
+    `run_record_path()` is `<dir>/<slug>.json` and `lock_path()` is `<dir>/<slug>.lock`,
+    same directory, same stem — and tests/unit/format-compat.test.sh PINS that
+    equivalence against the real helpers, so a change to the lock convention in core
+    turns this red instead of silently unlocking the downgrade.
+    """
+    return os.path.splitext(os.path.abspath(path))[0] + ".lock"
+
+
+def downgrade_record_file(path: str) -> bool:
+    """Rewrite the format-v2 run-record at ``path`` back to v1, in place, under the
+    run-record flock (KTD-1). Returns True if the file changed, False if it was
+    already v1 (the inverse map is idempotent, so a second run is a safe no-op).
+
+    Atomic = mkstemp + os.replace in the record's own directory: a crash mid-write
+    leaves the original intact, never a half-written record.
+
+    OFFLINE / QUIESCED ONLY. The flock stops a CONCURRENT writer from being lost; it
+    does NOT stop a LATER one from re-upgrading. A downgraded record lazy-migrates
+    straight back to v2 on its next write by new code, so the state dir must be
+    quiesced (no live sessions, no hooks) between this and the reinstall of pre-rename
+    code. There is no online-downgrade guarantee — see KTD-1.
+    """
+    import tempfile
+
+    def body():
+        with open(path) as fh:
+            before = json.load(fh)          # RAW read: never _read_json (it upgrades)
+        after = format_compat.downgrade_run_record(before)
+        if after == before:
+            return False
+        target_dir = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".downgrade.", suffix=".json", dir=target_dir)
+        try:
+            with os.fdopen(fd, "w") as fh:  # RAW write: never _atomic_write (it re-stamps)
+                json.dump(after, fh, indent=2, sort_keys=True)
+                fh.write("\n")
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+
+    return run_record_core._flock_run(_record_lock_path(path), body)
+
+
+def _h_downgrade(argv):
+    if len(argv) != 2:
+        sys.stderr.write(
+            "usage: run_record.py downgrade <path-to-run-record.json>\n"
+            "  OFFLINE REVERT ONLY: maps a format-v2 record back to v1 and strips the\n"
+            "  format marker, so pre-rename code can read it. Quiesce the state dir first.\n"
+        )
+        return 2
+    path = argv[1]
+    try:
+        changed = downgrade_record_file(path)
+    except (OSError, ValueError) as e:
+        sys.stderr.write(f"run_record.py: downgrade failed for {path!r}: {e}\n")
+        return 1
+    sys.stdout.write(
+        f"{path}: downgraded to format-v1\n" if changed
+        else f"{path}: already format-v1 (no change)\n"
+    )
+    return 0
+
+
 def _cli(argv):
     if not argv:
         sys.stderr.write("usage: run_record.py <subcommand> ...\n")
         return 2
+    if argv[0] == "downgrade":
+        return _h_downgrade(argv)
     verb = _VERBS.get(argv[0])
     if verb is None:
         # U7 (concept-vocabulary rename) HARD-CUT the work-node verbs to their

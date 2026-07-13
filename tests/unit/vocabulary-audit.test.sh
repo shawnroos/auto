@@ -22,6 +22,20 @@
 #
 # This is a DEFENSE, not a migration: it never renames anything. It fails the
 # build the moment a stale old identifier leaks back into a renamed subsystem.
+#
+# ⚠ THE ONE THING THIS AUDIT CANNOT CATCH, BY CONSTRUCTION — read before sweeping.
+# It greps for the OLD identifier. So a sweep that DESTROYS the old identifier where it
+# was supposed to stay leaves nothing to grep for, and this audit goes green ON THE
+# DAMAGE. That is not hypothetical: it has now happened FOUR times on this branch —
+# three legacy TABLE columns (`units → steps` rewritten to `steps → steps`, U7/U8/U9)
+# and once in PROSE (run-record-schema.md: "can never carry both `steps` and `steps`",
+# found in U10 review).
+#   * The TABLE form is policed — Scenario 1b checks every `<!--legacy-->` row for
+#     "names a retired term" + "is not a tautology", and Scenario 1c makes sure nothing
+#     outside such a row can claim the exemption.
+#   * The PROSE form is NOT, and cannot be, without a whitelist that would rot. When
+#     you sweep, EYEBALL any sentence that describes an old→new mapping. This finds the
+#     shape:  grep -rnE '`([a-z_]+)`[^`]{1,20}`\1`' docs/ lib/ README.md CONCEPTS.md
 
 set -uo pipefail
 
@@ -65,10 +79,28 @@ recipe=done
 ledger=done"
 
 # ─── SCAN SCOPE ─────────────────────────────────────────────────────────────
-# The shipped trees that must speak only the new vocabulary once a term is
-# done. Historical docs (docs/plans, docs/brainstorms, docs/research) and the
-# top-level CONCEPTS.md are deliberately OUT of scope (never scanned).
-SCAN_ROOTS=(lib skills commands docs/contracts tests workflows presets .claude/hooks)
+# Every tree a USER or an AGENT reads. Once a term is `done`, none of them may
+# spell the retired identifier outside the whitelist.
+#
+# U10 WIDENED THIS, AND THAT WAS THE POINT. U1–U9 scanned
+# `(lib skills commands docs/contracts tests workflows presets .claude/hooks)` — which
+# left the entire FRONT DOOR unpoliced: `README.md`, `CONCEPTS.md`,
+# `.claude-plugin/` (the SHIPPED plugin manifest), and all of `docs/` outside
+# `contracts/`. Every one of them still carried retired identifiers for terms the
+# table already called `done` — the manifest a user installs still advertised
+# "Ships named recipes" and "plan-loop -> seam -> work-loop" while the audit reported
+# 8/8 green. A guard that is green because it isn't looking is worse than no guard:
+# it launders drift as compliance. The audit now polices the whole read surface.
+#
+# Files (not just dirs) are legal roots — `grep -r` takes both, and README.md /
+# CONCEPTS.md are top-level files.
+SCAN_ROOTS=(
+  lib skills commands tests workflows presets .claude/hooks
+  docs                # ALL of docs/, not just contracts/ (see the prefix whitelist)
+  README.md           # the front door
+  CONCEPTS.md         # the canonical vocabulary statement itself
+  .claude-plugin      # the shipped manifest: description + keywords a user installs
+)
 
 # ─── PERMANENT GLOBAL PATH WHITELIST ────────────────────────────────────────
 # Files that legitimately keep an old identifier for EVERY term. Anchored on
@@ -130,29 +162,58 @@ GLOBAL_PATH_WHITELIST=(
 )
 
 # ─── PERMANENT GLOBAL PATH-PREFIX WHITELIST ─────────────────────────────────
-# The ONE directory whose whole contents legitimately speak the OLD vocabulary:
-# the format-v1 fixture corpus (U6). These files ARE v1 by definition — captured
-# from real pre-rename runs / recipe files — and exist precisely so the shim can
-# be proven to upgrade them. Whitelisting the directory (not each file) keeps the
-# audit from rotting when a fixture is added. This is the only prefix entry; the
-# "explicit paths, no wildcard-by-default" doctrine otherwise stands.
+# The directories whose whole contents legitimately speak the OLD vocabulary.
+# Whitelisting the directory (not each file) keeps the audit from rotting when a
+# file is added to one of them. These are the only prefix entries; the "explicit
+# paths, no wildcard-by-default" doctrine otherwise stands.
+#
+#   * tests/fixtures/format-v1/ — the format-v1 fixture corpus (U6). These files
+#     ARE v1 by definition (captured from real pre-rename runs / workflow files)
+#     and exist precisely so the shim can be proven to upgrade them.
+#
+#   * docs/plans/, docs/brainstorms/, docs/research/ — HISTORICAL DOCS. This is a
+#     DELIBERATE U10 DECISION, not an oversight, and it is the one judgment call
+#     the widening forces:
+#       They are DATED ARTIFACTS, not live surface. A plan dated 2026-05-23
+#       records what was decided and what the code was called ON THAT DAY. Sweeping
+#       them would (a) falsify the record — the v0.2.0 plan really did ship a thing
+#       called a `recipe`, and a reader tracing that decision needs the word it was
+#       decided under; (b) make the rename plan itself (which names all 8 retired
+#       terms hundreds of times, as its subject matter) unwritable; and (c) buy
+#       nothing — nobody orients off a closed plan, and every one of them is
+#       superseded by the contracts, which ARE scanned.
+#       The line is LIVE-vs-DATED, not docs-vs-code: `docs/contracts/`,
+#       `docs/handoff.md`, `docs/planning-readiness.md`, `docs/deprecations.md` are
+#       all things an agent reads TO ACT, so they are all IN scope (and U10 swept
+#       them). Only the three write-once archives are out.
+#       This matches the plan's Key Decisions ("Historical docs are not rewritten")
+#       and the canonical permanent whitelist in U1/U10/Verification-Contract-item-2.
+#     If a FOURTH archive dir is ever added under docs/, it is IN scope until
+#     someone adds it here on purpose — which is the correct default.
 GLOBAL_PATH_PREFIX_WHITELIST=(
   'tests/fixtures/format-v1/'
+  'docs/plans/'
+  'docs/brainstorms/'
+  'docs/research/'
 )
 
-# ─── PERMANENT GLOBAL CONTENT WHITELIST ─────────────────────────────────────
-# Line CONTENT that legitimately references an old term for any term:
-#   * CHANGELOG-style "supersedes <old> <version>" re-lock banner lines (KTD-5).
-#   * The renamed skills' "(formerly auto-adapter)" / "(formerly
-#     auto-author-recipe)" description breadcrumbs that keep model-side
-#     triggering matching old phrasing (KTD-4).
-#   * `<!--legacy-->` — the explicit marker on the "Legacy keys (read-compat)"
-#     appendix rows of the three schema-bearing contracts (KTD-5 step 3). Such a
-#     row MUST name the old key — that is the entire point of a read-compat
-#     table. The marker is an HTML comment (invisible when rendered) and is
-#     tagged PER LINE, so it exempts exactly the legacy rows and never a
-#     normative key table elsewhere in the same file.
-GLOBAL_CONTENT_WHITELIST_RE='(supersedes|[Ff]ormerly |<!--legacy-->)'
+# ─── PERMANENT GLOBAL CONTENT EXEMPTIONS ────────────────────────────────────
+# Line CONTENT that legitimately references an old term, for any term. There are
+# exactly three, and each is applied INSIDE audit_term_hits (see the scrubs there) —
+# there is deliberately no `GLOBAL_CONTENT_WHITELIST_RE` variable any more. U10 removed
+# it: it had been dead code since the token-scrub rewrite (defined, never referenced),
+# while its comment still described it as the live mechanism. A stale name for a
+# defense, sitting next to the real defense, is how the next reader mis-models what is
+# actually enforced.
+#
+#   * "supersedes <name> <version>" — the KTD-5 re-lock banner. Scrubbed as a bounded
+#     TOKEN (name + optional version), not to end-of-line.
+#   * "(formerly <name>)" — the KTD-4 skill breadcrumbs that keep model-side triggering
+#     matching the old phrasing. Scrubbed as ONE parenthesised name, not `[^)]*`.
+#   * `<!--legacy-->` on a markdown TABLE ROW — the read-compat appendix rows (KTD-5
+#     step 3), whose entire purpose is to name the retired key. Exempt by SHAPE, and
+#     Scenario 1b then polices every such row's content; Scenario 1c proves nothing
+#     outside that shape can claim it.
 
 # regex_for_term <term> → the OLD-identifier grep pattern (ERE, used with -i).
 # Leading word boundary OR a leading underscore, case-insensitive at call site:
@@ -232,7 +293,43 @@ audit_term_hits() {
   # `(^|[^a-z0-9])<term>` on a lower-cased copy is exactly `regex_for_term`'s
   # `(\b|_)<term>` -i: `_` is not alphanumeric, so the one class covers both the
   # word-boundary and the leading-underscore alternative.
-  raw="$(printf '%s\n' "$raw" | grep -vF -- '<!--legacy-->' || true)"
+  #
+  # U10 — THE `<!--legacy-->` EXEMPTION IS NOW SHAPE-BOUND (this was a P0 hole).
+  # The old form was a bare `grep -vF -- '<!--legacy-->'`: a WHOLE-LINE drop, in ANY
+  # file, of ANY shape. That made the marker a silent, invisible opt-out from the
+  # permanent guard — append it to any line, anywhere, and the audit looks away:
+  #
+  #     README.md:  Run `ledger.py add-unit` on the recipe adapter. <!--legacy-->   → GREEN
+  #     lib/auto.py: _recipe = load_lib_module("recipes")  # <!--legacy-->          → GREEN
+  #
+  # The file's own comment claimed this was safe because "Scenario 1b independently
+  # proves every such row still names a retired term". 1b does no such thing for those
+  # lines: it inspects ONLY lines whose content starts with `|` (table rows) in .md
+  # files, and skips everything else. So the drop exempted a strictly LARGER set than
+  # 1b polices — and widening SCAN_ROOTS handed that hole four more trees.
+  #
+  # Fix: exempt EXACTLY what 1b polices, and nothing else — a markdown TABLE ROW. The
+  # exemption is earned by SHAPE (a `|`-row in a `.md` file, which 1b then checks row by
+  # row for "names a retired term" + "not a tautology"), never by the marker alone. A
+  # `<!--legacy-->` on a prose line, a comment, or anything in a .py/.sh/.json file no
+  # longer exempts anything. Scenario 1c is the control.
+  raw="$(printf '%s\n' "$raw" | awk '
+    {
+      if (index($0, "<!--legacy-->") > 0) {
+        colon = index($0, ":")
+        if (colon > 0) {
+          path = substr($0, 1, colon - 1)
+          rest = substr($0, colon + 1)          # "<lineno>:<content>"
+          c2 = index(rest, ":")
+          content = (c2 > 0) ? substr(rest, c2 + 1) : ""
+          sub(/^[ \t]+/, "", content)
+          # A read-compat TABLE ROW in a markdown file: the one shape whose job is to
+          # name retired identifiers across its full width, and the one shape 1b polices.
+          if (path ~ /\.md$/ && substr(content, 1, 1) == "|") next
+        }
+      }
+      print
+    }' || true)"
   [ -z "$raw" ] && return 0
   #
   # Both scrubs are BOUNDED to the real breadcrumb shape. An unbounded
@@ -243,12 +340,21 @@ audit_term_hits() {
   # parenthesised skill breadcrumb (`(formerly auto-adapter)`, KTD-4), so:
   #   * `supersedes` exempts only the NEXT one or two tokens (a name, then an
   #     optional version) — not the rest of the line;
-  #   * `formerly` exempts only the PARENTHESISED form.
+  #   * `formerly` exempts only ONE NAME inside the parens.
+  #
+  # U10 — the `formerly` scrub was NOT actually bounded (P1). It read
+  # `\([Ff]ormerly [^)]*\)`, and `[^)]*` is exactly the unbounded form the comment
+  # above says it fixed: it runs to the next `)`, which on a prose line is arbitrarily
+  # far. `(formerly auto-adapter, and the ledger.py add-unit verb)` scrubbed the stale
+  # identifiers along with the breadcrumb and rode through GREEN. The real breadcrumbs
+  # in the tree are a single name — `(formerly auto-adapter)`,
+  # `(formerly auto-author-recipe)` — so the pattern now matches exactly that: ONE
+  # name-shaped token. Anything else on the line is still audited.
   raw="$(printf '%s\n' "$raw" | awk -v term="$term" '
     {
       p = $0
       gsub(/supersedes[:,]?[ ]+`?[A-Za-z0-9_.\/-]+`?([ ]+\(?v?[0-9][A-Za-z0-9_.-]*\)?)?/, "@SUPERSEDES@", p)
-      gsub(/\([Ff]ormerly [^)]*\)/, "@FORMERLY@", p)
+      gsub(/\([Ff]ormerly `?[A-Za-z0-9_.\/-]+`?\)/, "@FORMERLY@", p)
       if (tolower(p) ~ "(^|[^a-z0-9])" tolower(term)) print $0
     }' || true)"
   [ -z "$raw" ] && return 0
@@ -514,8 +620,33 @@ fi
 #       precise signature of a rename sweep having eaten the old spelling.
 # `lib/format_compat.py` is the runtime authority for these names; this check keeps
 # the DOCS honest against the same retired vocabulary the shim maps.
+#
+# U10 WIDENED WHAT THIS POLICES, IN LOCKSTEP WITH THE SCAN. Hardcoding `docs/contracts`
+# here was correct only while `docs/contracts` was the only scanned tree that could
+# HOLD such a row. The moment SCAN_ROOTS grew to README.md / CONCEPTS.md / all of
+# docs/, those files could claim the `<!--legacy-->` exemption too — and an exemption
+# no one polices is exactly the hole that ate the contracts' v1 column THREE separate
+# times (U7, U8, U9 each flattened a historical column into `run-record → run_record`
+# via a blind sweep). So 1b now scans every markdown file the AUDIT scans, minus the
+# archives (a dated plan's tables are not live exemptions and are prefix-whitelisted
+# out of the audit anyway). Derived from SCAN_ROOTS + GLOBAL_PATH_PREFIX_WHITELIST —
+# never a second hand-maintained list that can drift from the first.
+legacy_rows() {
+  local raw wl
+  raw="$(cd "$AUTO_ROOT" && grep -rn -- '<!--legacy-->' "${SCAN_ROOTS[@]}" \
+          --include='*.md' --exclude-dir='__pycache__' 2>/dev/null || true)"
+  for wl in "${GLOBAL_PATH_PREFIX_WHITELIST[@]}"; do
+    raw="$(printf '%s\n' "$raw" | grep -v "^${wl}" || true)"
+  done
+  # This test file names the marker in prose; it is not a table row (and is .sh, so
+  # --include already excludes it). Belt and braces for a future .md rename.
+  printf '%s\n' "$raw" | grep -v '^tests/unit/vocabulary-audit' || true
+}
 it "every <!--legacy--> read-compat row still names the RETIRED key (not a tautology)"
 legacy_bad=""
+# (Scenario 1c, below, proves the other half: that nothing OUTSIDE a table row can
+# claim the exemption in the first place. 1b polices what is exempt; 1c polices what
+# is exemptible. Neither is sufficient alone.)
 while IFS= read -r hit; do
   [ -z "$hit" ] && continue
   file="${hit%%:*}"
@@ -545,12 +676,26 @@ while IFS= read -r hit; do
   # heads the U8 tier-dir map; `identifier` heads the U9 code map (the run-record
   # rename touched no persisted key, so its legacy table maps SYMBOLS, not keys —
   # but it claims the same `<!--legacy-->` exemption, so it gets the same policing).
+  # U10 adds the two tables the WIDENED scan brought in scope: `retired identifier`
+  # heads the historical-mapping tables in CONCEPTS.md + README.md, and
+  # `deprecated surface` heads the removal ledger in docs/deprecations.md.
   case "$n1" in
     "legacy (v1) key"|"legacy (v1) location"|"legacy (v1) identifier") continue ;;
+    "retired identifier"|"deprecated surface") continue ;;
   esac
-  # (a) the v1 cell must name one of the 8 retired terms
+  # (a) the v1 cell must name a retired identifier.
+  #
+  # NB the set here is the 8 AUDITED terms PLUS `content` — and the difference is the
+  # point. `content` → `preset` is a genuine retired identifier (it shipped, and a
+  # historical-mapping table owes the reader the row), but it is deliberately NOT an
+  # audited TERM: "content" is ordinary English (`content-type`, "the content of the
+  # plan"), so policing it word-boundary-wide across lib/ + docs/ would false-positive
+  # everywhere and the whitelist needed to silence that would swallow the tree. So it
+  # is documented but not swept — and a row naming it is legitimately legacy.
+  # This list is about which rows may CLAIM the exemption; it can never weaken the
+  # main audit, which is driven by TERM_STATUS alone.
   if ! printf '%s' "$n1" \
-       | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger)'; then
+       | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger|content)'; then
     legacy_bad="${legacy_bad}
     ${file}:${lineno}: legacy row's v1 cell names NO retired term: '${n1}'"
   fi
@@ -559,12 +704,67 @@ while IFS= read -r hit; do
     legacy_bad="${legacy_bad}
     ${file}:${lineno}: legacy row is a TAUTOLOGY ('${n1}' → '${n2}') — the v1 column was overwritten with the v2 name"
   fi
-done <<< "$(cd "$AUTO_ROOT" && grep -rn -- '<!--legacy-->' docs/contracts --include='*.md' 2>/dev/null || true)"
+done <<< "$(legacy_rows)"
 if [ -z "$legacy_bad" ]; then
   pass
 else
   fail "the <!--legacy--> exemption is being claimed by rows that are not legacy:${legacy_bad}"
 fi
+
+# ─── Scenario 1c: `<!--legacy-->` cannot be smuggled onto a NON-ROW line ────
+# The exemption is the audit's ONLY invisible opt-out — the marker renders as nothing,
+# so a line carrying it looks clean to a human reviewer. Before U10 it was a whole-line
+# drop in any file of any shape, which made it a silent kill switch: append it to a
+# stale line and the permanent guard looks away. That is the single most dangerous thing
+# in this file, and it must be pinned by a control, not by a comment.
+#
+# Four plants, each a REAL smuggling attempt with a genuinely stale identifier:
+#   1. prose (not a table row) in a scanned .md          → must FAIL the audit
+#   2. a Python comment in lib/                          → must FAIL
+#   3. a table-shaped row in a .py file (shape alone is not enough) → must FAIL
+#   4. a real markdown table row                         → must be EXEMPT (the one
+#      legitimate shape — and Scenario 1b then polices its content, row by row)
+sm_tmp="$(mktemp -d)"
+trap 'rm -rf "$sm_tmp"' EXIT
+mkdir -p "$sm_tmp/lib" "$sm_tmp/docs"
+
+printf 'Run `ledger.py add-unit` on the recipe adapter at the seam. <!--legacy-->\n' \
+  > "$sm_tmp/docs/smuggle-prose.md"
+printf '_recipe = load_lib_module("recipes")  # <!--legacy-->\n' \
+  > "$sm_tmp/lib/smuggle_comment.py"
+printf '# | `units` | `steps` | <!--legacy--> |\n' \
+  > "$sm_tmp/lib/smuggle_fakerow.py"
+printf '| `units` | `steps` | run-record top-level | <!--legacy--> |\n' \
+  > "$sm_tmp/docs/legit-table.md"
+
+it "a <!--legacy--> marker on a NON-ROW line does NOT exempt it (prose, code comment, fake row)"
+smuggle_bad=""
+for _probe in docs/smuggle-prose.md lib/smuggle_comment.py lib/smuggle_fakerow.py; do
+  _caught=""
+  for _t in recipe unit ledger adapter seam; do
+    if printf '%s\n' "$(audit_term_hits "$_t" "$sm_tmp")" | grep -F "${_probe}:" >/dev/null; then
+      _caught="yes"
+      break
+    fi
+  done
+  [ -n "$_caught" ] || smuggle_bad="${smuggle_bad}
+    ${_probe}: SMUGGLED THROUGH — a stale identifier hid behind <!--legacy-->"
+done
+# …while the legitimate markdown table row IS still exempt (or every contract's
+# read-compat appendix fails the audit for doing its job).
+for _t in unit; do
+  if printf '%s\n' "$(audit_term_hits "$_t" "$sm_tmp")" | grep -F 'docs/legit-table.md:' >/dev/null; then
+    smuggle_bad="${smuggle_bad}
+    docs/legit-table.md: a REAL read-compat table row lost its exemption"
+  fi
+done
+if [ -z "$smuggle_bad" ]; then
+  pass
+else
+  fail "the <!--legacy--> exemption is a smuggling channel:${smuggle_bad}"
+fi
+
+rm -rf "$sm_tmp"; trap - EXIT
 
 # ─── Scenario 2: deliberate-fail control — a PLANTED stale identifier trips the audit ──
 # U9 RE-GROUNDED THIS CONTROL. Every term is now `done` (`ledger` was the last), so the
@@ -652,6 +852,73 @@ if [ -z "$wl_bad" ]; then
   pass
 else
   fail "$wl_bad (hits: ${wl_hits:-<none>})"
+fi
+
+# ─── Scenario 2c: the WIDENED scan actually BITES (U10) ─────────────────────
+# Scenarios 2a/2b prove the audit still catches a stale identifier IN lib/ — the tree
+# it has policed since U1. They say NOTHING about the trees U10 added, and a one-token
+# typo in SCAN_ROOTS (`README.MD`, a dropped `.claude-plugin`, `doc` for `docs`) would
+# silently un-police exactly the surface the widening exists to cover — reporting
+# 8/8 green, indistinguishable from success. That is the failure mode that let the
+# SHIPPED PLUGIN MANIFEST advertise "Ships named recipes" through nine green units.
+#
+# So: plant a stale identifier in EACH newly-in-scope surface and require the real
+# audit pipeline (same audit_term_hits, same whitelists) to name the planted file.
+#
+# And the INVERSE, which is the other half of a deliberate decision: a plant in
+# `docs/plans/` must NOT be reported. The archive exclusion is a CHOICE (see the
+# prefix whitelist), so it gets a test — otherwise "we meant to exclude it" and "we
+# forgot to include it" look identical from the outside.
+mkdir -p "$df_tmp/docs" "$df_tmp/docs/plans" "$df_tmp/.claude-plugin"
+
+# term:relpath:content — one per newly-in-scope root.
+DF_WIDE=(
+  'adapter:README.md:The engine is workflow-blind: it drives any workflow through a thin adapter.'
+  'tick:CONCEPTS.md:| one advance of the loop | **pulse** | each tick advances the run one beat. |'
+  'recipe:.claude-plugin/plugin.json:  "description": "Ships named recipes (A1, A2, A4, W)",'
+  'seam:docs/handoff.md:The plan-loop pauses at the seam before the work-loop starts.'
+  'emitter:docs/planning-readiness.md:Register a new emitter in `lib/emitters.py` (`V1_EMITTER_NAMES`).'
+)
+for _p in "${DF_WIDE[@]}"; do
+  _t="${_p%%:*}"; _rest="${_p#*:}"
+  _rel="${_rest%%:*}"; _body="${_rest#*:}"
+  printf '%s\n' "$_body" > "$df_tmp/$_rel"
+done
+
+wide_bad=""
+for _p in "${DF_WIDE[@]}"; do
+  _t="${_p%%:*}"; _rest="${_p#*:}"; _rel="${_rest%%:*}"
+  _h="$(audit_term_hits "$_t" "$df_tmp")"
+  # NB fgrep on the literal path prefix: `.claude-plugin/plugin.json` and `README.md`
+  # carry regex metacharacters.
+  if ! printf '%s\n' "$_h" | grep -F "${_rel}:" >/dev/null; then
+    wide_bad="${wide_bad}
+    [${_t}] SCAN_ROOTS does not reach ${_rel} — a stale identifier there is invisible"
+  fi
+done
+
+it "the WIDENED scan bites: a stale identifier in README/CONCEPTS/.claude-plugin/docs is caught"
+if [ -z "$wide_bad" ]; then
+  pass
+else
+  fail "the audit is BLIND to a surface it claims to police:${wide_bad}"
+fi
+
+# The archive exclusion, asserted as a decision rather than assumed as a side effect.
+printf 'The a1 recipe emits work units at the seam; the ledger is the source of truth.\n' \
+  > "$df_tmp/docs/plans/2026-01-01-001-historical-plan.md"
+it "historical docs/plans/ are DELIBERATELY exempt (dated artifacts, not live surface)"
+plans_bad=""
+for _t in recipe unit seam ledger; do
+  if printf '%s\n' "$(audit_term_hits "$_t" "$df_tmp")" \
+     | grep -F 'docs/plans/2026-01-01-001-historical-plan.md:' >/dev/null; then
+    plans_bad="${plans_bad} ${_t}"
+  fi
+done
+if [ -z "$plans_bad" ]; then
+  pass
+else
+  fail "docs/plans/ is being audited — the historical-archive exemption broke (terms:${plans_bad})"
 fi
 
 rm -rf "$df_tmp"; trap - EXIT

@@ -527,6 +527,117 @@ assert_eq "$expected" "$r"
 # which is why the op appears in the run-record fixtures (scenario 2) but in no
 # workflow file. `w`/`pipeline` each declare a single plan/brainstorm step.
 
+# ─── Scenario 15: the REVERT COMMAND (U10) ──────────────────────────────────
+# The plan's revert story — "run the downgrade over stranded format:2 records BEFORE
+# reinstalling pre-rename code" — is what makes the format cutover a REVERSIBLE door
+# rather than a one-way one. Until U10 it was reachable only as a Python function:
+# `downgrade_run_record` existed, but no CLI called it, so the documented procedure
+# had no command an operator could actually run. A revert path you cannot execute
+# under pressure is not a revert path.
+#
+# `python3 lib/run_record.py downgrade <path>` is that command (KTD-1). Two design
+# points it must honour, both pinned below:
+#   * it writes UNDER THE RUN-RECORD FLOCK (KTD-1: "the same lock every mutation
+#     holds"). That is WHY it lives on run_record.py and not on format_compat.py,
+#     which is a DAG root and cannot reach core's lock;
+#   * it is NOT in `_VERBS` — that registry is the AGENT tool surface that `describe`
+#     publishes and the doc-fence checks, and an offline destructive operator action
+#     does not belong in the set a driving agent is told it may call.
+#
+# The property that matters: a REAL v1 fixture, upgraded and written to disk as v2,
+# must come back as the original v1 when the command downgrades it.
+RR_PY="${AUTO_ROOT}/lib/run_record.py"
+cli_tmp="$(mktemp -d)"
+trap 'rm -rf "$cli_tmp"' EXIT
+
+stage_v2() {
+  "$PY" - "$AUTO_ROOT" "$FIX" "$1" <<'PYEOF'
+import sys, os, json
+auto_root, fixdir, out = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+fcm = load_lib_module("format_compat")
+v1 = json.load(open(os.path.join(fixdir, "run-record-seam-paused.json")))
+json.dump(fcm.upgrade_run_record(v1), open(out, "w"), indent=2, sort_keys=True)
+PYEOF
+}
+same_as_fixture() {
+  "$PY" - "$FIX/run-record-seam-paused.json" "$1" <<'PYEOF'
+import json, sys
+a = json.load(open(sys.argv[1])); b = json.load(open(sys.argv[2]))
+print("yes" if a == b else "no")
+PYEOF
+}
+
+stage_v2 "$cli_tmp/rec.json"
+
+it "downgrade: a staged v2 record reverts to the EXACT committed v1 fixture"
+out1="$("$PY" "$RR_PY" downgrade "$cli_tmp/rec.json" 2>&1)"; rc1=$?
+same="$(same_as_fixture "$cli_tmp/rec.json")"
+if [ "$rc1" -eq 0 ] && [ "$same" = "yes" ]; then
+  pass
+else
+  fail "rc=$rc1 identical=$same out=$out1"
+fi
+
+it "downgrade: idempotent — a second run is a no-op, not a corruption"
+out2="$("$PY" "$RR_PY" downgrade "$cli_tmp/rec.json" 2>&1)"; rc2=$?
+same2="$(same_as_fixture "$cli_tmp/rec.json")"
+case "$out2" in
+  *"no change"*) noop="yes" ;;
+  *) noop="no" ;;
+esac
+if [ "$rc2" -eq 0 ] && [ "$noop" = "yes" ] && [ "$same2" = "yes" ]; then
+  pass
+else
+  fail "rc=$rc2 noop=$noop identical=$same2 out=$out2"
+fi
+
+it "downgrade: strips the format marker (pre-rename code must not see an unknown field)"
+stage_v2 "$cli_tmp/rec2.json"
+"$PY" "$RR_PY" downgrade "$cli_tmp/rec2.json" >/dev/null 2>&1
+marker="$("$PY" -c "import json,sys; print('present' if 'format' in json.load(open(sys.argv[1])) else 'stripped')" "$cli_tmp/rec2.json")"
+assert_eq "stripped" "$marker"
+
+it "downgrade: takes the RUN-RECORD FLOCK — its lock path IS run_record_core.lock_path (KTD-1)"
+# The command addresses STRANDED records by path, so it derives the lock file from the
+# record path. That derivation must be the SAME FILE core's mutators flock, or the lock
+# is decorative. Pin it against the real helpers: if core ever moves the lock, this goes
+# red instead of silently unlocking every downgrade.
+lockcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+core = load_lib_module("run_record_core")
+rr = load_lib_module("run_record")
+repo, run = "/tmp/some-repo", "feature/my-run"
+core_lock = core.lock_path(repo, run)
+rec_path = core.run_record_path(repo, run)
+derived = rr._record_lock_path(rec_path)
+print("match" if os.path.abspath(core_lock) == derived else f"DRIFT {core_lock} != {derived}")
+PYEOF
+)"
+assert_eq "match" "$lockcheck"
+
+it "downgrade: bad usage exits 2 and prints the usage line"
+usage="$("$PY" "$RR_PY" downgrade 2>&1)"; rc4=$?
+case "$usage" in
+  *"usage: run_record.py downgrade"*) u="yes" ;;
+  *) u="no" ;;
+esac
+if [ "$rc4" -eq 2 ] && [ "$u" = "yes" ]; then
+  pass
+else
+  fail "rc=$rc4 usage-line=$u out=$usage"
+fi
+
+it "downgrade: is NOT on the agent tool surface (absent from _VERBS / describe)"
+in_describe="$("$PY" "$RR_PY" describe 2>/dev/null | "$PY" -c "import json,sys; print('yes' if 'downgrade' in json.load(sys.stdin).get('verbs', {}) else 'no')")"
+assert_eq "no" "$in_describe"
+
+rm -rf "$cli_tmp"; trap - EXIT
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "format-compat.test.sh: ${PASS} passed, ${FAIL} failed"

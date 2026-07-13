@@ -58,6 +58,12 @@ whose ``.claude/auto/`` state dir is SHARED with an installed older (pre-rename)
 plugin, update the installed plugin to >= this rename, or run against an isolated
 state dir. Otherwise the old plugin's hooks keep writing v1 keys into records the
 new code owns. The shim makes that survivable, not correct.
+
+THE REVERT COMMAND LIVES ON ``run_record.py``, NOT HERE (U10). This module is a DAG
+ROOT — it imports no sibling — so it cannot reach the run-record **flock**, and KTD-1
+requires the downgrade to write under that lock. ``python3 lib/run_record.py downgrade
+<path>`` is the operator command; it borrows core's real lock and calls the pure maps
+below. See ``run_record.py::downgrade_record_file``.
 """
 
 FORMAT_VERSION = 2

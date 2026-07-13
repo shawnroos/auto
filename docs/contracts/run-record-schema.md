@@ -589,16 +589,26 @@ construction.
 
 Where BOTH twins are present on one record (a partial hand-edit, or the mixed-fleet
 case above), the **new key's value wins and the stale old twin is dropped** — a
-mapped record can never carry both `steps` and `steps`. Genuinely-unknown keys pass
-through untouched, at any depth.
+mapped record can never carry both a v1 key and its v2 twin. (Every such pair is in the
+legacy table below; this sentence deliberately does not re-spell one, because the last
+three sweeps flattened exactly these mentions into `steps` → `steps` tautologies.)
+Genuinely-unknown keys pass through untouched, at any depth.
 
 **Revert safety.** `format_compat.downgrade_run_record` is the exact inverse map
 (it also strips the `format` marker):
-`downgrade_run_record(upgrade_run_record(v1)) == v1`. Run it over stranded
-`format: 2` records BEFORE reinstalling pre-rename code. It is an **offline /
-quiesced** operation — a downgraded record lazy-migrates straight back to v2 on its
-first read-through-mutation by new code, so no session or hook may fire against the
-state dir between the downgrade and the reinstall.
+`downgrade_run_record(upgrade_run_record(v1)) == v1`. The command that runs it is:
+
+```
+python3 lib/run_record.py downgrade <path-to-run-record.json>
+```
+
+Run it over stranded `format: 2` records BEFORE reinstalling pre-rename code. It
+writes under the run-record flock (the same lock every mutation holds), and it is an
+**offline / quiesced** operation — a downgraded record lazy-migrates straight back to
+v2 on its first read-through-mutation by new code, so no session or hook may fire
+against the state dir between the downgrade and the reinstall. It is deliberately NOT
+an agent verb: it is absent from `_VERBS` and from the `describe` payload, so nothing
+in this contract's tool surface exposes it to a driving agent.
 
 **Mixed-fleet cutover (required):** before any smoke run or `/auto-resume` on a
 repo whose `.claude/auto/` state dir is SHARED with an installed pre-rename plugin,

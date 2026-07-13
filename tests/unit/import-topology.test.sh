@@ -36,6 +36,11 @@
 #   workflow_validate → format_compat          (the validate_and_lint WRITE gate)
 #   workflows        → workflow_validate, format_compat   (resolve() read shim)
 #   presets        → workflow_validate, backend_ops, format_compat  (load_preset shim)
+#   run_record       → format_compat            (U10: the `downgrade` operator command —
+#                                                the facade owns the CLI, so the INVERSE
+#                                                map is loaded here; format_compat itself
+#                                                cannot host it, being unable to reach
+#                                                core's flock as a DAG root)
 #
 # U6 (concept-vocabulary rename / KTD-1) added the five `→ format_compat` edges.
 # format_compat is itself a DAG ROOT (pure stdlib, no sibling import), so every

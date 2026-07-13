@@ -44,7 +44,7 @@ that narrows intent. It should be "goal-pilled": goal first, disk clutter second
   plumbing goal-awareness into `_discover_plans` / `_rank_plans_safe` /
   `_emit_multi_plan`, not inventing a new goal source.
 - **Adjacent machinery to reuse, not rebuild:** `lib/goal-status.py` /
-  `goal-status.sh` (goal state), `lib/plan-rank.py` (already the ranking seam —
+  `goal-status.sh` (goal state), `lib/plan-rank.py` (already the ranking hook —
   natural place to add goal-conditioned scoring), `lib/recommender.py`. The native
   `/goal` is **model-judged, not an externally-settable predicate** — so "is there a
   goal" likely means: a bound native goal, a run-record `goal_intent`, and/or the intent

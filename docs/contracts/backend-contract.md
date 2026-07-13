@@ -20,8 +20,8 @@
 >
 > **Changelog — v0.14.0 (concept-vocabulary rename, U4):** renamed the contract
 > and its vocabulary (supersedes `adapter-contract.md` → `backend-contract.md`).
-> It is now the "backend interface" (formerly the "adapter interface").
-> NO op-set / signature / severity / exit-predicate change.
+> It is now the "backend interface" — the legacy appendix below names what it was
+> called before. NO op-set / signature / severity / exit-predicate change.
 >
 > **Reading test:** a backend author should be able to implement a complete
 > backend by reading *only* this file plus its companion `SKILL.md` — never the
