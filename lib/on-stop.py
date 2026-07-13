@@ -2,7 +2,7 @@
 """auto U7: decision logic behind .claude/hooks/on-stop.sh.
 
 The engine's OWN deliberate-stop guard (U9 spike: native `/goal` has no external
-predicate handoff — auto ships this). Reads every ledger under
+predicate handoff — auto ships this). Reads every run-record under
 <repo>/.claude/auto/ LOCK-FREE (atomic-rename => consistent snapshot) and
 decides whether to BLOCK the stop.
 
@@ -44,7 +44,7 @@ hook can never read a stale met:true and allow a premature stop.
 STALE-CHAIN CARVE-OUT (Bug #9):
     The `driver == "self"` block above assumes a LIVE pulse chain. But a pulse can
     be killed AFTER it writes the beat and BEFORE it re-arms its successor. That
-    leaves a ledger with driver=="self", met==false, and a fresh-ISH last_beat_at
+    leaves a run-record with driver=="self", met==false, and a fresh-ISH last_beat_at
     — a DEAD chain that, without a freshness check, would block EVERY session's
     stop in the repo until last_beat_at finally ages past GRACE (≈70 min, when
     is_orphaned surfaces it for resume). So we add a freshness gate: a
@@ -76,9 +76,9 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
-    iter_worktree_ledgers,
-    load_ledger,
-    load_ledger_safe,
+    iter_worktree_run_records,
+    load_run_record,
+    load_run_record_safe,
     load_lib_module,
     resolve_shared_dir,
     test_hatch_enabled,
@@ -99,11 +99,11 @@ def _read_stop_hook_active(raw: str) -> bool:
     return bool(isinstance(data, dict) and data.get("stop_hook_active"))
 
 
-def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
-    """Single source of truth for 'does this ledger block stop?'
+def _is_blocking(led, *, run_record, skip_staleness, stale_threshold, now):
+    """Single source of truth for 'does this run-record block stop?'
 
-    Applies the four carve-outs uniformly across per-worktree ledgers and
-    batch-discovered sub-run ledgers (the v0.4.0 U4 batch path originally
+    Applies the four carve-outs uniformly across per-worktree run-records and
+    batch-discovered sub-run run-records (the v0.4.0 U4 batch path originally
     duplicated this predicate and dropped two carve-outs; code-review round
     1 finding C-1 surfaced both gaps — manual-driver runs at the handoff, and
     stale-chain `driver == "self"` runs — would block stop indefinitely
@@ -123,7 +123,7 @@ def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
     # last_beat_at is older than DRIVER_SELF_STALE_SECONDS is a DEAD
     # chain — does NOT block (surfaced for resume by SessionStart hook).
     if not skip_staleness and loop.get("driver") == "self":
-        last_beat = ledger.parse_iso(loop.get("last_beat_at"))
+        last_beat = run_record.parse_iso(loop.get("last_beat_at"))
         if last_beat is None:
             return None
         if (now - last_beat).total_seconds() > stale_threshold:
@@ -165,18 +165,18 @@ def _is_worktree_or_host(git_path: str) -> bool:
 def _blocking_runs(repo_root: str, now=None):
     """Return [(run_id, predicate_dict)] for every ACTIVE run that is NOT met.
 
-    Lock-free: each ledger file is read as a whole via the atomic-rename
+    Lock-free: each run-record file is read as a whole via the atomic-rename
     invariant. A malformed/partial file is skipped silently (rel-001 — never let
-    a bad ledger break the stop machinery).
+    a bad run-record break the stop machinery).
 
     v0.4.0 U4: also walks committed multi-plan batch sidecars at
     `<shared-dir>/batches/*.json` and applies the SAME `_is_blocking`
-    predicate to each sub-run ledger (sub-runs live in worktree-local
-    ledger dirs the per-worktree glob can't reach).
+    predicate to each sub-run run-record (sub-runs live in worktree-local
+    run-record dirs the per-worktree glob can't reach).
     """
-    ledger = load_ledger()
+    run_record = load_run_record()
     skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
-    stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
+    stale_threshold = run_record.DRIVER_SELF_STALE_SECONDS
     import datetime
 
     if now is None:
@@ -184,10 +184,10 @@ def _blocking_runs(repo_root: str, now=None):
 
     blocking = []
 
-    # Per-worktree ledgers (the main scan) — iter_worktree_ledgers owns the glob.
-    for run_id, led in iter_worktree_ledgers(repo_root):
+    # Per-worktree run-records (the main scan) — iter_worktree_run_records owns the glob.
+    for run_id, led in iter_worktree_run_records(repo_root):
         predicate = _is_blocking(
-            led, ledger=ledger, skip_staleness=skip_staleness,
+            led, run_record=run_record, skip_staleness=skip_staleness,
             stale_threshold=stale_threshold, now=now,
         )
         if predicate is not None:
@@ -212,8 +212,8 @@ def _blocking_runs(repo_root: str, now=None):
     if not os.path.isdir(batches_dir):
         return blocking
     for sidecar_path in sorted(glob.glob(os.path.join(batches_dir, "*.json"))):
-        sidecar = load_ledger_safe(sidecar_path)
-        if sidecar is None:  # load_ledger_safe returns None for non-dict too.
+        sidecar = load_run_record_safe(sidecar_path)
+        if sidecar is None:  # load_run_record_safe returns None for non-dict too.
             continue
         if sidecar.get("status") != "committed":
             continue
@@ -224,15 +224,15 @@ def _blocking_runs(repo_root: str, now=None):
             if not worktree or not run_id_hint:
                 continue
             # Prefix glob — sub-run may stamp a collision suffix.
-            wt_ledger_dir = os.path.join(worktree, ".claude", "auto")
+            wt_run_record_dir = os.path.join(worktree, ".claude", "auto")
             for sub_path in sorted(glob.glob(
-                os.path.join(wt_ledger_dir, f"{run_id_hint}*.json")
+                os.path.join(wt_run_record_dir, f"{run_id_hint}*.json")
             )):
-                sub = load_ledger_safe(sub_path)
+                sub = load_run_record_safe(sub_path)
                 if sub is None:
                     continue
                 predicate = _is_blocking(
-                    sub, ledger=ledger, skip_staleness=skip_staleness,
+                    sub, run_record=run_record, skip_staleness=skip_staleness,
                     stale_threshold=stale_threshold, now=now,
                 )
                 if predicate is not None:

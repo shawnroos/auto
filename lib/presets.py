@@ -25,7 +25,7 @@ DAG DISCIPLINE (KTD-2): this module reuses `workflow_validate`'s primitives
 (`_check_prompt_template` for path-bounding, `_validate_workflow_name` for the
 filename-safe name check) and imports `VALID_BACKEND_OPS` from the pure-stdlib
 leaf `backend_ops`. It MUST NOT import `dispatcher.py` — that module pulls in
-the ledger and the whole dispatch surface; the validator stays a light leaf.
+the run-record and the whole dispatch surface; the validator stays a light leaf.
 `workflow_validate` and `backend_ops` are themselves DAG roots (no sibling
 imports), so this stays a shallow, cycle-free layer.
 

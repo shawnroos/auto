@@ -58,12 +58,12 @@ translation from signal to the committed `dispatch_context.decision`.
 
 ## 4. Resolution + commit (the single write)
 
-`lib/iteration.py::resolve_gate_verification(ledger, gate_step_id, *, repo_root,
+`lib/iteration.py::resolve_gate_verification(run_record, gate_step_id, *, repo_root,
 judge_verdicts)` runs the programmatic criteria, folds in `judge_verdicts` (the
 arg, plus any persisted on `dispatch_context.judge_verdicts`), and returns
-`{signal, pending_judges, programmatic_results}` — **no ledger write**. The
+`{signal, pending_judges, programmatic_results}` — **no run-record write**. The
 caller commits a non-None signal as the gate decision via **exactly one**
-`ledger_mutators.set_verdict_decision` call. Driver-side advisor-judging is
+`run_record_mutators.set_verdict_decision` call. Driver-side advisor-judging is
 `skills/auto/SKILL.md` §4.7.
 
 The driver writes an `append_advisor_audit` record **only when a judge-type

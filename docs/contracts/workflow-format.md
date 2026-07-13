@@ -57,11 +57,11 @@
 
 ## 1. What a workflow is
 
-A workflow declares the **initial ledger topology** of an `auto` run: the steps,
+A workflow declares the **initial run-record topology** of an `auto` run: the steps,
 their `depends_on` graph, the phase each runs in, the phase ordering, and which
 producer produces work steps at a phase boundary. The engine reads the workflow at
-`init_ledger` time and builds the run from it; everything downstream (pulse,
-dispatch, predicate, resume) is workflow-blind once the ledger exists.
+`init_run_record` time and builds the run from it; everything downstream (pulse,
+dispatch, predicate, resume) is workflow-blind once the run-record exists.
 
 Workflows resolve from a three-tier registry (first-wins): **workspace**
 (`<repo>/.claude/auto/workflows/<name>.json`) → **global**
@@ -116,7 +116,7 @@ removed only with a breaking release.
 | `id` | yes | string | unique within the workflow, non-empty. |
 | `phase` | yes | string | MUST be a member of `phase_order`. |
 | `depends_on` | no | string[] | step ids this step waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `steps[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
-| `invokes` | no | object | what the step invokes — `backend_op` (one of the locked ops) plus optional workflow-side metadata like `prompt_template`. Merged into the ledger step's `dispatch_context` at load (after path-bounding). |
+| `invokes` | no | object | what the step invokes — `backend_op` (one of the locked ops) plus optional workflow-side metadata like `prompt_template`. Merged into the run-record step's `dispatch_context` at load (after path-bounding). |
 | `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x workflows — they validate unchanged. |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
@@ -145,7 +145,7 @@ Each entry declares which **producer** fires at a phase boundary:
 
 > **Note.** `iterate_template` is also registered in `lib/step_producers.py::REGISTRY`
 > but is a **within-phase** producer — it never appears in `phase_transitions[]`.
-> The engine calls it directly through `ledger.emit_within_phase` when the gate
+> The engine calls it directly through `run_record.emit_within_phase` when the gate
 > step verdicts `iterate` under bound (§6). It is not a workflow-selectable
 > phase-boundary producer.
 
@@ -162,9 +162,9 @@ Each entry declares which **producer** fires at a phase boundary:
   pre-declared in v0.2.0 (the shipped `workflows/w.json` carries a single stub
   step). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
   adds init-time enumeration so the backend's `enumerate_plan_steps` op can
-  load work steps from an operator-supplied plan at `init_ledger` time; until
+  load work steps from an operator-supplied plan at `init_run_record` time; until
   then, a work-only workflow with `steps: []` is REJECTED by `validate()` (it
-  would create a zero-step ledger that re-arms forever).
+  would create a zero-step run-record that re-arms forever).
 - **pipeline** — **(v0.6.0, U7)** Brainstorm-rooted creative spine.
   `phase_order: ["brainstorm","plan","handoff","work"]`, terminal `work`. One
   structural `brainstorm` step; `brainstorm_output_to_plan_step` at
@@ -189,8 +189,8 @@ Each entry declares which **producer** fires at a phase boundary:
 > `a2-fix-checkout`), which is the anti-shadow guard: a distinct name (not a
 > description check) keeps `resolve("a2", repo)` returning the built-in unshadowed
 > while the variant resolves at the workspace tier. Because the engine reads the
-> workflow only at `init_ledger` time and is workflow-blind thereafter (§1), the
-> variant is **torn down once the run's ledger is initialized** — nothing
+> workflow only at `init_run_record` time and is workflow-blind thereafter (§1), the
+> variant is **torn down once the run's run-record is initialized** — nothing
 > accumulates in the workspace tier across runs (the "inline compile-and-run"
 > scope boundary; persistent saves stay with `auto-author-workflow`).
 
@@ -234,7 +234,7 @@ iteration:
                                       #   bool values are rejected.
     max_wall_seconds: <positive int>  # optional — cap on cumulative active
                                       #   wall-time (`active_wall_seconds`,
-                                      #   §2 of ledger-schema.md). Pauses
+                                      #   §2 of run-record-schema.md). Pauses
                                       #   between pulses don't burn budget; the
                                       #   accumulator only grows during a pulse's
                                       #   `_pulse_body`. Omit for unbounded.
@@ -245,7 +245,7 @@ iteration:
 - `advance` — gate is satisfied; the engine advances to the terminal phase via
   the normal flow. The predicate-met short-circuit fires as it would have without
   iteration.
-- `iterate` (under bound) — engine calls `ledger.atomic_iterate_step` in ONE
+- `iterate` (under bound) — engine calls `run_record.atomic_iterate_step` in ONE
   locked body: increments `iteration_attempts`, emits new steps via the
   `iterate_template` producer (using `emit_template` when declared) into the
   gate's current phase, then resets the gate step (`verdict-returned → pending`,
@@ -260,24 +260,24 @@ iteration:
   the gate said iterate rather than advance.
 
 **Bound semantics.** Both bounds are checked against `iteration.evaluate_decision`'s
-view of the ledger BEFORE honoring an iterate. `max_attempts` is checked against
+view of the run-record BEFORE honoring an iterate. `max_attempts` is checked against
 `iteration_attempts` pre-increment; `max_wall_seconds` is checked against
 `active_wall_seconds` (cumulative pulse-active time accumulated from
 `_pulse_body`'s `finally` clause so a crashed pulse still contributes its delta).
 A bound breach is recorded as a decision override, NOT an error — the engine
 proceeds as if the gate said `exit` and surfaces the override on `/auto-status`
-(R9 surface). See `docs/contracts/ledger-schema.md` §2.1 + §2.3 for the
+(R9 surface). See `docs/contracts/run-record-schema.md` §2.1 + §2.3 for the
 `active_wall_seconds`, `last_active_at`, `iteration_attempts`,
-`iteration_emit_count` ledger fields and the `dispatch_context.decision` /
+`iteration_emit_count` run-record fields and the `dispatch_context.decision` /
 `dispatch_context.bound_override` sub-fields the engine writes.
 
 **Decision writes.** The gate step's verdict-time decision is persisted via
-`ledger.set_verdict_decision(repo, run, gate_step_id, decision, payload=None)` —
+`run_record.set_verdict_decision(repo, run, gate_step_id, decision, payload=None)` —
 NOT through `findings[]` (which `record_verdict` normalizes to `{severity, note}`
 only and would strip the decision). All reads route through
 `lib/iteration.py::read_decision`; the AST lint in
 `tests/unit/iteration-ast-lint.test.sh` forbids the literal `"decision"` as an
-`ast.Constant` outside `lib/iteration.py` + `lib/ledger.py`. A new consumer cannot
+`ast.Constant` outside `lib/iteration.py` + `lib/run_record.py`. A new consumer cannot
 re-introduce a divergent literal access without tripping the lint (the institutional
 mitigation for the "plan documents a behavior the code never wires" build-bug
 class).
@@ -294,7 +294,7 @@ emit_templates:
                             #   across the WHOLE run gets id
                             #   `id_prefix + (iteration_emit_count + N)`
                             #   (`iteration_emit_count` is the monotonic
-                            #   ledger counter; `iterate_template` NEVER
+                            #   run_record counter; `iterate_template` NEVER
                             #   recounts existing steps — see
                             #   `lib/step_producers.py::iterate_template`).
     phase: "<loop_phase>"   # required — MUST be a member of `phase_order`.
@@ -410,7 +410,7 @@ path), so no malformed topology can ship.
   phase-boundary producers; `iterate_template` is registered but within-phase only).
 - `lib/iteration.py` — the ONE iteration-decision module (`DECISIONS`,
   `read_decision`, `evaluate_decision`); AST-lint-enforced single source of truth.
-- `docs/contracts/ledger-schema.md` — the ledger fields a workflow populates
+- `docs/contracts/run-record-schema.md` — the run-record fields a workflow populates
   (including the v0.3.0 iteration fields + `dispatch_context.decision` /
   `bound_override` sub-keys).
 - `docs/contracts/backend-contract.md` — the ops a step's `invokes` references.

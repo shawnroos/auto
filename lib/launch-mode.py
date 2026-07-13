@@ -12,12 +12,12 @@ guard has an executable handoff a test can pin (agent-native hardening).
 `headless` (→ silent-apply) IFF either:
   - `CLAUDE_CODE_SESSION_ID` is unset/empty — a truly headless / env-less context
     with no interactive operator present; or
-  - this session already owns a LIVE self-driven run in the repo: some ledger has
+  - this session already owns a LIVE self-driven run in the repo: some run-record has
     `loop.driver == "self"`, is not in the terminal `done` phase, and its
     `driving_session_id` equals this session id (an autonomous run reached the
     launch path).
 Otherwise `interactive`: a human-typed `/auto` with no live self-driven run of
-its own (the common case — at a fresh launch there is no ledger yet) → the
+its own (the common case — at a fresh launch there is no run-record yet) → the
 chooser may show.
 
 **Uncertainty degrades to `headless`, never crashes.** Absence of a session id,
@@ -29,8 +29,8 @@ wrongly-`interactive` self-driven run is itself FAIL-OPEN on the SAME infra this
 module reads (`lib/on-pretooluse-askuser.py`: phase-grammar, the `.claude/auto`
 scan, `driving_session_id`). So `interactive`-on-uncertainty risks wedging a
 headless run on an unanswerable question, whereas `headless` proceeds with the R9
-one-line notice — degraded, not stuck. Individual malformed ledgers are skipped
-(via `iter_worktree_ledgers` / `load_ledger_safe`), never fatal.
+one-line notice — degraded, not stuck. Individual malformed run-records are skipped
+(via `iter_worktree_run_records` / `load_run_record_safe`), never fatal.
 """
 
 import os
@@ -39,15 +39,15 @@ import sys
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
 from _bootstrap import (  # noqa: E402
-    iter_worktree_ledgers,
+    iter_worktree_run_records,
     load_lib_module,
     resolve_repo,
 )
 
 # Canonical readers — never re-implement these (they carry guards that have
 # drifted before, e.g. the v0.6.4 CHILD_SESSION removal): the session id comes
-# from `driver_session` (the ONE `CLAUDE_CODE_SESSION_ID` reader) and the ledger
-# scan from `iter_worktree_ledgers` (the shared per-worktree glob + safe-load).
+# from `driver_session` (the ONE `CLAUDE_CODE_SESSION_ID` reader) and the run-record
+# scan from `iter_worktree_run_records` (the shared per-worktree glob + safe-load).
 driver_session = load_lib_module("driver_session")
 
 HEADLESS = "headless"
@@ -57,12 +57,12 @@ INTERACTIVE = "interactive"
 def _owns_live_self_run(repo_root, session_id, phase_grammar):
     """True iff `session_id` owns a LIVE self-driven run under `repo_root`.
 
-    A live self-run is a ledger with `loop.driver == "self"`, `driving_session_id
+    A live self-run is a run-record with `loop.driver == "self"`, `driving_session_id
     == session_id`, and a current phase that is not the terminal `done`. A
-    non-dict `loop` field (a corrupt ledger) is treated as not-an-owner and
+    non-dict `loop` field (a corrupt run-record) is treated as not-an-owner and
     skipped, never a crash.
     """
-    for _run_id, led in iter_worktree_ledgers(repo_root):
+    for _run_id, led in iter_worktree_run_records(repo_root):
         loop = led.get("loop")
         if not isinstance(loop, dict) or loop.get("driver") != "self":
             continue  # manual / unset driver, or a non-dict loop field.

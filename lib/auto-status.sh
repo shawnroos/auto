@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # auto: the /auto-status read-only reporter.
 #
-# /auto-status [<run>] reads the durable ledger(s) at
+# /auto-status [<run>] reads the durable run_record(s) at
 # <repo>/.claude/auto/<run-slug>.json and prints a human-readable status:
 # loop_phase (+ plan_step), the CACHED exit_predicate_result (blockers / majors
 # / minors / gaps_open / met), per-step states, the driver, last_beat_at +
 # liveness vs the orphan GRACE, and any stalled steps with their last_error
 # cause. With no run-id and >1 active run, it lists them.
 #
-# READ-ONLY: it never mutates the ledger, never arms a pulse, never takes a write
+# READ-ONLY: it never mutates the run-record, never arms a pulse, never takes a write
 # lock. It reads the cached exit_predicate_result field directly and NEVER
 # re-derives it (memory `feedback_loop_monitor_terminal_state_field`).
 #
@@ -20,7 +20,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/auto-resume.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/run_record.sh / lib/auto-resume.sh).
 #
 # $ARGUMENTS-safe: the command .md body's only $-bearing line is
 #   bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "$ARGUMENTS"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # auto U8 integration test: cmux-socket auto-resume.
 #
-# Exercises lib/cmux-socket.sh against the REAL ledger.py (every fixture write
-# goes through ledger.py's I-1 atomic chokepoint). The cmux binary is the ONLY
+# Exercises lib/cmux-socket.sh against the REAL run_record.py (every fixture write
+# goes through run_record.py's I-1 atomic chokepoint). The cmux binary is the ONLY
 # mock: a shim on PATH that RECORDS its argv to a log file — we assert the
 # spawn-command STRING is well-formed (with the mandatory `sleep 1;` lead-in,
 # `/auto:auto-resume <run>`, and `--focus false`) WITHOUT spawning a real cmux
@@ -27,7 +27,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 CMUX_SOCKET_SH="${AUTO_ROOT}/lib/cmux-socket.sh"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -86,10 +86,10 @@ mkrepo() {
   printf '%s' "$repo"
 }
 
-# Run a quoted-heredoc Python snippet against ledger.py (no bash $-leak).
-pyledger() {
+# Run a quoted-heredoc Python snippet against run_record.py (no bash $-leak).
+py_run_record() {
   local repo="$1"
-  "$PY" - "$repo" "$LEDGER_PY"
+  "$PY" - "$repo" "$RUN_RECORD_PY"
 }
 
 reset_log() { : > "$CMUX_LOG"; }
@@ -101,11 +101,11 @@ echo "cmux-resume.test.sh"
 # ─── orphaned run -> issues the correct cmux new-workspace command ────────────
 it "orphaned run: scan spawns a /auto:auto-resume workspace via cmux new-workspace"
 REPO="$(mkrepo orphan)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"orphanrun",driver="manual")  # -> is_orphaned() true.
 PYEOF
 reset_log
@@ -133,11 +133,11 @@ assert_contains "$cmd" "--focus false"
 # ─── DOUBLE-DRIVE: pulse lock held by a live pulse -> NO spawn ──────────────────
 it "double-drive: a live pulse holding the lock makes auto-resume NO-OP (no spawn)"
 REPO="$(mkrepo doubledrive)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"liverun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"liverun",driver="manual")  # orphaned by predicate...
 PYEOF
 # Resolve the pulse-lock path and HOLD it from a backgrounded Python "live pulse".
@@ -184,12 +184,12 @@ assert_contains "$out" "/auto:auto-resume liverun"
 # ─── non-orphaned run (driver==self, fresh beat) -> no spawn ──────────────────
 it "non-orphaned run (driver==self, fresh last_beat_at): no spawn"
 REPO="$(mkrepo fresh)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# init_ledger sets driver=self + last_beat_at=now -> NOT orphaned.
-L.init_ledger(repo,"freshrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+# init_run_record sets driver=self + last_beat_at=now -> NOT orphaned.
+L.init_run_record(repo,"freshrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
 reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
@@ -198,11 +198,11 @@ assert_empty "$(log_text)"
 # ─── done run -> no spawn ─────────────────────────────────────────────────────
 it "done run: no spawn (is_orphaned()==false for loop_phase==done)"
 REPO="$(mkrepo done)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done",driver="manual")
 PYEOF
 reset_log
@@ -212,13 +212,13 @@ assert_empty "$(log_text)"
 # ─── handoff-paused run -> no spawn (intentional orphan; awaiting confirmation) ──
 it "handoff-paused run: no spawn (intentional orphan; never arm work uninvited)"
 REPO="$(mkrepo handoff)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # handoff phase + driver=manual -> is_orphaned() would be TRUE, but handoff_paused
 # excludes it from auto-resume.
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
+L.init_run_record(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 reset_log
@@ -228,11 +228,11 @@ assert_empty "$(log_text)"
 # ─── OPT-IN: scan is a no-op unless CLAUDE_AUTO_RESUME_ENABLE=1 ──────────────
 it "opt-in: an orphaned run does NOT spawn when CLAUDE_AUTO_RESUME_ENABLE unset"
 REPO="$(mkrepo optin)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"optinrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"optinrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"optinrun",driver="manual")
 PYEOF
 reset_log
@@ -246,11 +246,11 @@ assert_contains "$(log_text)" "/auto:auto-resume optinrun"
 # ─── runaway guard: a fresh in-flight sentinel -> no second spawn ─────────────
 it "runaway guard: a fresh spawn-in-flight sentinel suppresses a second spawn"
 REPO="$(mkrepo runaway)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"runawayrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"runawayrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"runawayrun",driver="manual")
 PYEOF
 reset_log

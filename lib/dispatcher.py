@@ -8,40 +8,40 @@ machine pressure), dispatches, then reconciles landed verdicts. The engine here
 only exposes ready-and-independent steps and reconciles durable state; it never
 hardcodes a concurrency constant (R12) and never decides how to parallelize.
 
-Three operations (against the ledger schema contract,
-docs/contracts/ledger-schema.md — read THAT, not lib/ledger.py, for the spec):
+Three operations (against the run-record schema contract,
+docs/contracts/run-record-schema.md — read THAT, not lib/run_record.py, for the spec):
 
   * ``ready_steps(repo, run)``  -> the step ids dispatchable RIGHT NOW.
   * ``dispatch_batch(repo, run, step_ids, cap, *, launch_fn=None)``
         -> marks each chosen step pending->dispatched (records dispatched_at),
            launches its background agent; REJECTS any step not in `pending`
            (idempotency guard — pending->dispatched is the only entry).
-  * ``converge(repo, run)``  -> a RECONCILE/READ step over durable ledger state.
+  * ``converge(repo, run)``  -> a RECONCILE/READ step over durable run-record state.
            It is NOT the verdict-writer.
 
 THE LOAD-BEARING CORRECTNESS PROPERTY (verdict survives session death)
 ─────────────────────────────────────────────────────────────────────
-Each dispatched background agent SELF-WRITES its own verdict into the ledger
-atomically, via ``ledger.record_verdict`` (the I-1 write chokepoint). The
+Each dispatched background agent SELF-WRITES its own verdict into the run-record
+atomically, via ``run_record.record_verdict`` (the I-1 write chokepoint). The
 verdict is durable the moment the agent finishes — independent of whether the
 driving session is still alive. So ``converge`` never loses a verdict to a
 session death: a resumed session reads completed verdicts straight off the
-ledger and does NOT re-dispatch them. The dispatcher's in-flight batch state
+run-record and does NOT re-dispatch them. The dispatcher's in-flight batch state
 (which cap it chose, which handles it holds) is DISPOSABLE; only the durable
-per-step ledger state matters across a resume.
+per-step run-record state matters across a resume.
 
 ``converge`` is therefore a READER by construction: this module's converge code
-path imports ONLY ``read_ledger`` from the ledger — never ``transition`` /
+path imports ONLY ``read_run_record`` from the run-record — never ``transition`` /
 ``record_verdict`` / ``set_loop``. A future reviewer cannot add a write to
 converge without adding a new write-import, which would be immediately visible.
-This mirrors ledger.py's "single chokepoint" discipline for I-1.
+This mirrors run_record.py's "single chokepoint" discipline for I-1.
 
 THE AGENT-LAUNCH BOUNDARY (documented interface for U5 to wire)
 ────────────────────────────────────────────────────────────────
-For U10 we implement the orchestration + ledger interactions. The actual
+For U10 we implement the orchestration + run-record interactions. The actual
 background-agent launch is an INJECTED callable ``launch_fn(step_id, attempt)``;
 U5's driver passes the real wrapper around an ``Agent`` ``run_in_background``
-dispatch whose prompt instructs the agent to call ``ledger.record_verdict`` on
+dispatch whose prompt instructs the agent to call ``run_record.record_verdict`` on
 completion — passing ``attempt`` so the verdict carries the dispatch generation it
 was launched for (Bug #6 attempt-identity). For tests (and a documented default)
 ``launch_fn`` defaults to a no-op recorder.
@@ -67,7 +67,7 @@ ATTEMPT-IDENTITY (Bug #6)
 Each ``pending -> dispatched`` transition INCREMENTS the step's ``attempt`` counter
 (in the SAME atomic snapshot as the state change, via the transition's ``**fields``
 — never a separate write, which would reopen a race). The launched agent carries
-this attempt; ``ledger.record_verdict`` rejects a verdict whose attempt is older
+this attempt; ``run_record.record_verdict`` rejects a verdict whose attempt is older
 than the step's current attempt (a stale verdict from a superseded retry).
 """
 
@@ -77,35 +77,35 @@ import os
 import sys
 
 # ──────────────────────────────────────────────────────────────────────────
-# Load the canonical ledger module via the ONE shared loader (lib/_bootstrap),
+# Load the canonical run-record module via the ONE shared loader (lib/_bootstrap),
 # then bind the public names we use explicitly so the import surface of this
 # module is legible. We still EXTRACT individual names (rather than touching
-# `ledger.<x>` everywhere) so the deliberate reader/writer split below stays
+# `run_record.<x>` everywhere) so the deliberate reader/writer split below stays
 # visible — that split is the load-bearing discipline, not the binding name.
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_run_record, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
-ledger = load_ledger()
+run_record = load_run_record()
 
-# The ledger names this module is permitted to use. NOTE the deliberate split:
-# the READER path (ready_steps / converge) uses only read_ledger; the WRITER
+# The run-record names this module is permitted to use. NOTE the deliberate split:
+# the READER path (ready_steps / converge) uses only read_run_record; the WRITER
 # path (dispatch_batch) additionally uses transition + InvalidTransition. There
 # is no path through converge that reaches a write function.
-read_ledger = ledger.read_ledger
-_transition = ledger.transition
-_step_is_terminal = ledger.step_is_terminal
-_gating_severities = ledger.gating_severities
-InvalidTransition = ledger.InvalidTransition
-LedgerError = ledger.LedgerError
+read_run_record = run_record.read_run_record
+_transition = run_record.transition
+_step_is_terminal = run_record.step_is_terminal
+_gating_severities = run_record.gating_severities
+InvalidTransition = run_record.InvalidTransition
+RunRecordError = run_record.RunRecordError
 
 # Re-export now_iso so dispatch_batch can stamp dispatched_at consistently with
-# every other ledger timestamp (same format ledger.py emits).
-_now_iso = ledger.now_iso
+# every other run-record timestamp (same format run_record.py emits).
+_now_iso = run_record.now_iso
 
 # NOTE: we deliberately do NOT re-export GATING_SEVERITIES here. The gating
-# decision is scale-aware and lives in ONE place — ledger.gating_severities(scale)
+# decision is scale-aware and lives in ONE place — run_record.gating_severities(scale)
 # (Bug #3). Re-exporting the raw constant would let a future caller shortcut around
 # the helper and reintroduce the hardcoded-major-gating livelock; there is nothing
 # to copy if the constant is not in reach.
@@ -120,11 +120,11 @@ class DispatcherError(Exception):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Pure dependency / readiness logic (operates on an in-memory ledger dict).
+# Pure dependency / readiness logic (operates on an in-memory run-record dict).
 
 
-def _steps_by_id(ledger: dict) -> dict:
-    return {u["id"]: u for u in ledger.get("steps", [])}
+def _steps_by_id(run_record: dict) -> dict:
+    return {u["id"]: u for u in run_record.get("steps", [])}
 
 
 def _dependency_satisfied(dep_step: dict, scale: str = "three-tier") -> bool:
@@ -137,7 +137,7 @@ def _dependency_satisfied(dep_step: dict, scale: str = "three-tier") -> bool:
     ``verdict-returned -> pending`` for re-dispatch and its output will change.
 
     SCALE-AWARE (Bug #3): which severities count as gating is decided by the
-    SINGLE helper ``ledger.gating_severities(scale)`` — never a hardcoded
+    SINGLE helper ``run_record.gating_severities(scale)`` — never a hardcoded
     ``("blocker","major")``. Under ``"blocker-only"`` a dependency carrying only a
     major finding IS satisfied (its dependents may dispatch), exactly as
     ``step_is_terminal`` treats it as terminal — the two agree because they share
@@ -192,7 +192,7 @@ def _is_ready(step: dict, by_id: dict, scale: str = "three-tier") -> bool:
       * every DIRECT dependency is *satisfied* (see _dependency_satisfied), AND
       * NO transitive ancestor is in state "stalled".
 
-    A dependency id that is absent from the ledger is treated as unsatisfied
+    A dependency id that is absent from the run-record is treated as unsatisfied
     (we never dispatch against an unknown predecessor). ``scale`` is threaded into
     the satisfaction check so blocker-only runs treat a major-only predecessor as
     satisfied (Bug #3 — same gating decision as terminality / met).
@@ -218,14 +218,14 @@ def _is_ready(step: dict, by_id: dict, scale: str = "three-tier") -> bool:
 def ready_steps(repo_root: str, run_id: str):
     """Return the list of step ids dispatchable RIGHT NOW (a READER op).
 
-    Reads the ledger off disk (durable truth) and applies the readiness
-    predicate. Ordering is the ledger's step declaration order (deterministic),
+    Reads the run-record off disk (durable truth) and applies the readiness
+    predicate. Ordering is the run-record's step declaration order (deterministic),
     so ``dispatch_batch``'s ``cap`` truncation is reproducible.
     """
-    ledger = read_ledger(repo_root, run_id)
-    by_id = _steps_by_id(ledger)
-    scale = ledger.get("backend_scale", "three-tier")
-    return [u["id"] for u in ledger.get("steps", []) if _is_ready(u, by_id, scale)]
+    run_record = read_run_record(repo_root, run_id)
+    by_id = _steps_by_id(run_record)
+    scale = run_record.get("backend_scale", "three-tier")
+    return [u["id"] for u in run_record.get("steps", []) if _is_ready(u, by_id, scale)]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -249,15 +249,15 @@ def should_escalate(step: dict, max_attempts: int = 2) -> bool:
     return int(step.get("attempt", 0) or 0) >= int(max_attempts)
 
 
-def pick_next_plan_step_to_advance(ledger: dict):
+def pick_next_plan_step_to_advance(run_record: dict):
     """Round-robin selector for serialized N>1 plan-loop advance (U6 / KTD-4).
 
     With multiple plan-phase steps (A2's competing plans), exactly ONE advances
-    per pulse so the backend's ``next_plan_step(ledger)`` sees a single logical
+    per pulse so the backend's ``next_plan_step(run-record)`` sees a single logical
     advance-stream and the contract stays unchanged. This picks which one: the
     eligible plan step with the OLDEST ``last_advanced_at`` (``null`` sorts oldest
     → a never-advanced step goes first), ties broken by ``steps[]`` declaration
-    order. State lives in the ledger (``last_advanced_at`` per step), so resume
+    order. State lives in the run-record (``last_advanced_at`` per step), so resume
     continues the rotation correctly across pulses.
 
     Eligible = phase ``plan`` AND state ``dispatched`` (NOT ``stalled`` — a
@@ -266,7 +266,7 @@ def pick_next_plan_step_to_advance(ledger: dict):
     this — it uses the scalar fast path). A READER: no mutation.
     """
     candidates = [
-        u for u in ledger.get("steps", [])
+        u for u in run_record.get("steps", [])
         if u.get("phase") == "plan" and u.get("state") == "dispatched"
     ]
     if not candidates:
@@ -304,7 +304,7 @@ def _step_backend_op(step: dict):
     """Resolve a step's declared ``backend_op``, or None if it declares none.
 
     Reads ``dispatch_context.backend_op`` FIRST (the durable home on a
-    workflow-compiled ledger step — ``_normalize_step`` preserves dispatch_context
+    workflow-compiled run-record step — ``_normalize_step`` preserves dispatch_context
     but drops the raw ``invokes`` bag), falling back to ``invokes.backend_op``
     for any pre-normalize/raw step shape. Returns None when neither is present;
     a None op is NOT rejected (steps may legitimately carry no op).
@@ -319,7 +319,7 @@ def _default_launch_fn(step_id: str, attempt: int = 0) -> None:
 
     The real launch is injected by U5's driver — a wrapper around an ``Agent``
     ``run_in_background`` dispatch whose prompt instructs the spawned agent to
-    call ``ledger.record_verdict(... attempt=attempt)`` on completion (the durable
+    call ``run_record.record_verdict(... attempt=attempt)`` on completion (the durable
     self-write, tagged with the dispatch generation — Bug #6). For U10 (and tests)
     this default does nothing observable; the dispatch_batch return value is what
     tests assert against.
@@ -348,7 +348,7 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
         double-launched), and truncate the eligible set to ``cap``.
       * For each selected step: ``transition(... "dispatched", dispatched_at=now,
         attempt=current+1)`` FIRST (which inherits I-1 atomicity + flock from
-        ledger.py, and bumps the Bug #6 attempt counter in the SAME atomic
+        run_record.py, and bumps the Bug #6 attempt counter in the SAME atomic
         snapshot), THEN call ``launch_fn(step_id, attempt)``. Transition-before-
         launch ordering is deliberate: a launch with no recorded dispatch would
         orphan the eventual verdict.
@@ -368,7 +368,7 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
     and one step's launch failure does not abandon the rest of the wave.
 
     Idempotency note: an already-``dispatched`` step fails the
-    ``pending -> dispatched`` grammar edge in ledger.py (``transition`` raises
+    ``pending -> dispatched`` grammar edge in run_record.py (``transition`` raises
     ``InvalidTransition``), so even a race that slips past the pre-filter cannot
     produce a second ``dispatched_at`` — the transition is the authoritative
     guard, the pre-filter is just to avoid a pointless write attempt.
@@ -379,8 +379,8 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
     if launch_fn is None:
         launch_fn = _default_launch_fn
 
-    ledger = read_ledger(repo_root, run_id)
-    by_id = _steps_by_id(ledger)
+    run_record = read_run_record(repo_root, run_id)
+    by_id = _steps_by_id(run_record)
 
     results = []
     dispatched_count = 0
@@ -449,9 +449,9 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
             try:
                 _transition(repo_root, run_id, uid, "stalled", last_error=err)
             except Exception:  # noqa: BLE001 — P3: broadened from (InvalidTransition,
-                # LedgerError). The rescue transition does real I/O (flock + atomic
+                # RunRecordError). The rescue transition does real I/O (flock + atomic
                 # write); a raw OSError from the rescue's own flock (e.g. the lock
-                # file vanished, a disk error) is NOT an InvalidTransition/LedgerError
+                # file vanished, a disk error) is NOT an InvalidTransition/RunRecordError
                 # and would otherwise propagate, re-abandoning the entire wave —
                 # precisely the failure Bug #8's guard exists to prevent. The rescue
                 # is best-effort: even if it cannot mark the step stalled, we record
@@ -469,18 +469,18 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Converge — the RECONCILE/READ step. This path uses ONLY read_ledger.
-# It NEVER writes the ledger (the durability property: agents self-write
+# Converge — the RECONCILE/READ step. This path uses ONLY read_run_record.
+# It NEVER writes the run-record (the durability property: agents self-write
 # verdicts; converge merely reads what is already durable on disk).
 
 
 def converge(repo_root, run_id):
-    """Reconcile durable ledger state into a cheap summary for the driver.
+    """Reconcile durable run-record state into a cheap summary for the driver.
 
     A RECONCILE/READ step over durable per-step state — NOT the verdict-writer.
     Each dispatched background agent has already self-written its own verdict via
-    ``ledger.record_verdict`` (atomic, I-1) the moment it finished. converge just
-    READS the ledger fresh off disk and classifies steps, so a resumed session
+    ``run_record.record_verdict`` (atomic, I-1) the moment it finished. converge just
+    READS the run-record fresh off disk and classifies steps, so a resumed session
     (one whose driving process died after agents completed) sees completed
     verdicts straight from disk and does NOT re-dispatch them.
 
@@ -501,19 +501,19 @@ def converge(repo_root, run_id):
     state written by ANOTHER process (an agent self-writing a verdict) is picked
     up — converge holds no in-memory batch state across calls.
     """
-    ledger = read_ledger(repo_root, run_id)
+    run_record = read_run_record(repo_root, run_id)
     # Read the run's scale ONCE; the per-step terminality classification below
     # must use the SAME scale-aware gating decision as the cached predicate (Bug
     # #3 — a scale-blind _step_is_terminal(step) here would mark a blocker-only
     # run's major-only step non-terminal, contradicting the met=True the predicate
     # reports and confusing the driver about done-ness).
-    scale = ledger.get("backend_scale", "three-tier")
+    scale = run_record.get("backend_scale", "three-tier")
 
     in_flight = []
     completed = []
     stalled = []
     terminal = []
-    for step in ledger.get("steps", []):
+    for step in run_record.get("steps", []):
         state = step.get("state")
         if state == "dispatched":
             in_flight.append(step["id"])
@@ -524,7 +524,7 @@ def converge(repo_root, run_id):
         if _step_is_terminal(step, scale):
             terminal.append(step["id"])
 
-    pred = ledger.get("exit_predicate_result") or {}
+    pred = run_record.get("exit_predicate_result") or {}
     return {
         "in_flight": in_flight,
         "completed": completed,
@@ -568,7 +568,7 @@ def _cli(argv):
             return 0
         sys.stderr.write(f"dispatcher.py: unknown subcommand {cmd!r}\n")
         return 2
-    except (DispatcherError, LedgerError) as e:
+    except (DispatcherError, RunRecordError) as e:
         sys.stderr.write(f"dispatcher.py: {e}\n")
         return 1
     except (IndexError, ValueError) as e:

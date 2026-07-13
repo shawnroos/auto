@@ -109,20 +109,20 @@ result="$(unset CLAUDE_AUTO_TEST_NO_PULSE_LOCK; CLAUDE_AUTO_TEST_HARNESS=1 \
   probe test_hatch CLAUDE_AUTO_TEST_NO_PULSE_LOCK)"
 assert_eq "False" "$result"
 
-# ─── load_ledger_safe / iter_worktree_ledgers (the shared ledger-scan home) ──
-# These two helpers replaced 3 byte-identical _load_ledger_safe copies + ~5
+# ─── load_run_record_safe / iter_worktree_run_records (the shared run-record-scan home) ──
+# These two helpers replaced 3 byte-identical _load_run_record_safe copies + ~5
 # inline glob-scan scaffolds across the hooks. Two contracts are LOAD-BEARING
 # and were previously only exercised indirectly:
-#   1. load_ledger_safe folds in a dict-guard — a valid-JSON NON-dict value
+#   1. load_run_record_safe folds in a dict-guard — a valid-JSON NON-dict value
 #      (array/scalar) returns None, NOT the raw value. The 3 former copies
 #      returned the raw value and let each caller isinstance-check it. This
-#      guard is what keeps a non-dict ledger from disarming the fail-closed
+#      guard is what keeps a non-dict run-record from disarming the fail-closed
 #      destructive backstop (it reaches `_owns_session`/`_is_blocking` as a
 #      skip, never as an AttributeError-or-truthy-match). rel-001.
-#   2. iter_worktree_ledgers never raises (missing dispatch dir → empty),
+#   2. iter_worktree_run_records never raises (missing dispatch dir → empty),
 #      yields (run_id, led) SORTED by path, skips unparseable/non-dict files,
 #      and derives run_id as led["run_id"] or the filename stem.
-# Self-contained driver: creates a fresh tempdir, writes ledger files, calls
+# Self-contained driver: creates a fresh tempdir, writes run-record files, calls
 # the helper, prints a comparable token, cleans up.
 probe_scan() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
@@ -142,16 +142,16 @@ def shape(r):
 tmp = tempfile.mkdtemp(prefix="bootstrap-scan-")
 try:
     if scenario == "safe_missing":
-        print(shape(b.load_ledger_safe(os.path.join(tmp, "nope.json"))))
+        print(shape(b.load_run_record_safe(os.path.join(tmp, "nope.json"))))
     elif scenario in ("safe_dict", "safe_array", "safe_scalar", "safe_badjson"):
         raw = {"safe_dict": '{"a": 1}', "safe_array": "[]",
                "safe_scalar": "42", "safe_badjson": "{bad"}[scenario]
         p = os.path.join(tmp, "l.json")
         write(p, raw)
-        print(shape(b.load_ledger_safe(p)))
+        print(shape(b.load_run_record_safe(p)))
     elif scenario == "iter_missing_dir":
         # No .claude/auto dir exists at all — must yield nothing, never raise.
-        got = list(b.iter_worktree_ledgers(tmp))
+        got = list(b.iter_worktree_run_records(tmp))
         print("NORAISE:%d" % len(got))
     else:
         adir = os.path.join(tmp, ".claude", "auto")
@@ -161,18 +161,18 @@ try:
             write(os.path.join(adir, "c.json"), '{"run_id": "c-run"}')
             write(os.path.join(adir, "a.json"), '{"run_id": "a-run"}')
             write(os.path.join(adir, "b.json"), '{"run_id": "b-run"}')
-            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+            print(" ".join(rid for rid, _ in b.iter_worktree_run_records(tmp)))
         elif scenario == "iter_skip":
             # One valid dict + one non-dict array + one unparseable → only the
             # valid dict is yielded (the others are skipped, scan continues).
             write(os.path.join(adir, "good.json"), '{"run_id": "good-run"}')
             write(os.path.join(adir, "arr.json"), "[]")
             write(os.path.join(adir, "bad.json"), "{bad")
-            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+            print(" ".join(rid for rid, _ in b.iter_worktree_run_records(tmp)))
         elif scenario == "iter_runid_fallback":
-            # A dict ledger with no run_id key → run_id falls back to the stem.
+            # A dict run-record with no run_id key → run_id falls back to the stem.
             write(os.path.join(adir, "stemname.json"), '{"loop_phase": "work"}')
-            print(" ".join(rid for rid, _ in b.iter_worktree_ledgers(tmp)))
+            print(" ".join(rid for rid, _ in b.iter_worktree_run_records(tmp)))
         else:
             sys.exit("unknown scan scenario: %s" % scenario)
 finally:
@@ -180,31 +180,31 @@ finally:
 PYEOF
 }
 
-it "load_ledger_safe: valid JSON object → returns the dict"
+it "load_run_record_safe: valid JSON object → returns the dict"
 assert_eq "dict" "$(probe_scan safe_dict)"
 
-it "load_ledger_safe: valid JSON array (non-dict) → None (folded dict-guard, the deliberate behavior change)"
+it "load_run_record_safe: valid JSON array (non-dict) → None (folded dict-guard, the deliberate behavior change)"
 assert_eq "None" "$(probe_scan safe_array)"
 
-it "load_ledger_safe: valid JSON scalar (non-dict) → None (folded dict-guard)"
+it "load_run_record_safe: valid JSON scalar (non-dict) → None (folded dict-guard)"
 assert_eq "None" "$(probe_scan safe_scalar)"
 
-it "load_ledger_safe: unparseable JSON → None (rel-001 never raises)"
+it "load_run_record_safe: unparseable JSON → None (rel-001 never raises)"
 assert_eq "None" "$(probe_scan safe_badjson)"
 
-it "load_ledger_safe: missing file → None (rel-001 never raises)"
+it "load_run_record_safe: missing file → None (rel-001 never raises)"
 assert_eq "None" "$(probe_scan safe_missing)"
 
-it "iter_worktree_ledgers: missing dispatch dir → yields nothing, never raises"
+it "iter_worktree_run_records: missing dispatch dir → yields nothing, never raises"
 assert_eq "NORAISE:0" "$(probe_scan iter_missing_dir)"
 
-it "iter_worktree_ledgers: yields (run_id, led) SORTED by path"
+it "iter_worktree_run_records: yields (run_id, led) SORTED by path"
 assert_eq "a-run b-run c-run" "$(probe_scan iter_order)"
 
-it "iter_worktree_ledgers: skips unparseable + non-dict files, keeps scanning siblings"
+it "iter_worktree_run_records: skips unparseable + non-dict files, keeps scanning siblings"
 assert_eq "good-run" "$(probe_scan iter_skip)"
 
-it "iter_worktree_ledgers: run_id falls back to the filename stem when ledger has no run_id"
+it "iter_worktree_run_records: run_id falls back to the filename stem when run_record has no run_id"
 assert_eq "stemname" "$(probe_scan iter_runid_fallback)"
 
 # ── coerce_confidence (U6: the shared confidence clamp) ─────────────────────
@@ -249,11 +249,11 @@ assert_eq "0.5" "$(probe_coerce pass)"
 # ── iter_active_runs (U7: the shared active-run scan) ───────────────────────
 # One generator consolidated from two divergent _active_runs copies — auto-status
 # yielded (run_id, led) tuples; auto-resume yielded bare run_id strings and dragged
-# a dead `ledger` param. Both filtered `current_phase(led) != "done"` over
-# iter_worktree_ledgers. Load-bearing contract: yields the RICHER (run_id, led)
-# tuple shape, drops done runs, and preserves iter_worktree_ledgers' PATH sort so
+# a dead `run_record` param. Both filtered `current_phase(led) != "done"` over
+# iter_worktree_run_records. Load-bearing contract: yields the RICHER (run_id, led)
+# tuple shape, drops done runs, and preserves iter_worktree_run_records' PATH sort so
 # a mixed done/active dir proves filtering AND ordering in one assertion.
-# Driver mirrors probe_scan: fresh tempdir, ledger files with a loop_phase field
+# Driver mirrors probe_scan: fresh tempdir, run-record files with a loop_phase field
 # (current_phase reads loop_phase; "done" is filtered, anything else is active).
 probe_active() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
@@ -270,12 +270,12 @@ def write(path, raw):
 tmp = tempfile.mkdtemp(prefix="bootstrap-active-")
 try:
     if scenario == "empty_dir":
-        # .claude/auto exists but holds NO ledgers → yields nothing, never raises.
+        # .claude/auto exists but holds NO run-records → yields nothing, never raises.
         os.makedirs(os.path.join(tmp, ".claude", "auto"))
         got = list(b.iter_active_runs(tmp))
         print("NORAISE:%d" % len(got))
     elif scenario == "missing_dir":
-        # No dispatch dir at all → also empty (delegates to iter_worktree_ledgers).
+        # No dispatch dir at all → also empty (delegates to iter_worktree_run_records).
         got = list(b.iter_active_runs(tmp))
         print("NORAISE:%d" % len(got))
     else:
@@ -321,10 +321,10 @@ assert_eq "NORAISE:0" "$(probe_active empty_dir)"
 it "iter_active_runs: missing dispatch dir → yields nothing, never raises"
 assert_eq "NORAISE:0" "$(probe_active missing_dir)"
 
-# ── DRIVING_SESSION_KEY (U8: the shared advisor-gate ledger key) ────────────
-# One definition consumed by the arm-time WRITER (ledger_mutators.set_driving_
+# ── DRIVING_SESSION_KEY (U8: the shared advisor-gate run-record key) ────────────
+# One definition consumed by the arm-time WRITER (run_record_mutators.set_driving_
 # session_id) and BOTH PreToolUse hook READERS, which used to each inline the
-# literal. The value is load-bearing: it IS the ledger field the destructive
+# literal. The value is load-bearing: it IS the run-record field the destructive
 # backstop matches session-id equality on, so a drift silently darkens the gate.
 it "DRIVING_SESSION_KEY: is exactly 'driving_session_id' (writer/reader share one source)"
 assert_eq "driving_session_id" "$(probe driving_session_key)"
@@ -335,7 +335,7 @@ assert_eq "driving_session_id" "$(probe driving_session_key)"
 # coherence guard + None-tolerance, ONLY the sequence differs. These probe the
 # shared function DIRECTLY (backend-severity.test.sh is the end-to-end guard).
 #
-# Driver: call plan_step_sequencer with a per-backend sequence + a ledger built
+# Driver: call plan_step_sequencer with a per-backend sequence + a run-record built
 # from (plan_step, gaps_open). Prints the returned step.
 seq_step() {
   # args: <backend: ce|native> <plan_step|null> <gaps_open>
@@ -346,16 +346,16 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 import _bootstrap as b
 backend, plan_step, gaps_open = sys.argv[2], sys.argv[3], int(sys.argv[4])
 sequence = ("plan", "deepen", "review_plan") if backend == "ce" else ("plan", "review_plan")
-ledger = {
+run_record = {
     "plan_step": None if plan_step == "null" else plan_step,
     "exit_predicate_result": {"gaps_open": gaps_open},
 }
-print(b.plan_step_sequencer(ledger, sequence=sequence))
+print(b.plan_step_sequencer(run_record, sequence=sequence))
 PYEOF
 }
 
 # CE full walk: plan -> deepen -> review_plan, loop-back to deepen.
-it "plan_step_sequencer CE: fresh ledger (plan_step None) -> plan"
+it "plan_step_sequencer CE: fresh run_record (plan_step None) -> plan"
 assert_eq "plan" "$(seq_step ce null 0)"
 it "plan_step_sequencer CE: after plan -> deepen"
 assert_eq "deepen" "$(seq_step ce plan 0)"
@@ -365,7 +365,7 @@ it "plan_step_sequencer CE: review_plan with gaps open -> deepen (loop-back)"
 assert_eq "deepen" "$(seq_step ce review_plan 3)"
 
 # native full walk: plan -> review_plan, loop-back to review_plan (NEVER deepen).
-it "plan_step_sequencer native: fresh ledger (plan_step None) -> plan"
+it "plan_step_sequencer native: fresh run_record (plan_step None) -> plan"
 assert_eq "plan" "$(seq_step native null 0)"
 it "plan_step_sequencer native: after plan -> review_plan (never deepen)"
 assert_eq "review_plan" "$(seq_step native plan 0)"

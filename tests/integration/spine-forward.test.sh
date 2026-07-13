@@ -2,7 +2,7 @@
 # auto U9 (v0.6.0) integration test: the brainstorm-rooted spine
 # (workflows/pipeline.json) advances brainstorm → plan → work FORWARD, and an
 # injected upstream cluster PAUSES + escalates to the operator with NO
-# loop_phase change and NO new persisted ledger field.
+# loop_phase change and NO new persisted run-record field.
 #
 # WHY THIS TEST EXISTS (KTD-6 / feedback_a1_recipe_cant_rebound_to_brainstorm):
 # v0.6.0 ships the DETECTION half of the upstream-flaw problem. When review
@@ -14,10 +14,10 @@
 #   * forward advance works (the spine workflow's producers fire on arrival), AND
 #   * on a detected cluster the run PAUSES (driver=manual, blocked_on names the
 #     upstream phase), loop_phase is UNCHANGED (no backward move), and NO new
-#     top-level ledger field is written.
+#     top-level run-record field is written.
 #
 # DELIBERATE-FAIL CONTROL (feedback_new_tests_need_deliberate_fail_smoke_check):
-# the LAST scenario primes the identical work-phase ledger but withOUT the
+# the LAST scenario primes the identical work-phase run-record but withOUT the
 # role-tagged cluster_findings. The work-loop MUST then take its normal fix
 # advance (no pause), proving the pause in scenario 2 is caused by the cluster,
 # not an artifact of the priming.
@@ -41,7 +41,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Staleness check off so the freshly-written ledger isn't read as a dead chain;
+# Staleness check off so the freshly-written run-record isn't read as a dead chain;
 # pulse-lock hatch fence requires the harness sentinel too.
 export CLAUDE_AUTO_TEST_HARNESS=1
 export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
@@ -64,7 +64,7 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
@@ -114,11 +114,11 @@ forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_steps) 
 # gaps_open=0 + plan_step=review_plan) and auto-flip; the plan→work producer
 # materializes the work step.
 plan_uid = plan_steps[0]
-ledger.set_enumerated_steps(
+run_record.set_enumerated_steps(
     repo, run_id, plan_uid,
     [{"id": "w-alpha", "invokes": {"backend_op": "do_step"}}])
-ledger.set_gaps_open(repo, run_id, 0)
-ledger.set_loop(repo, run_id, plan_step="review_plan")
+run_record.set_gaps_open(repo, run_id, 0)
+run_record.set_loop(repo, run_id, plan_step="review_plan")
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
@@ -128,8 +128,8 @@ forward_ok = forward_ok and led.get("loop_phase") == "work" and "w-alpha" in wor
 # Step 4: bring the work step to verdict-returned with a GATING finding (so the
 # work-loop has a fix to apply absent any cluster — the negative-control path).
 w_uid = "w-alpha"
-ledger.transition(repo, run_id, w_uid, "dispatched")
-ledger.record_verdict(repo, run_id, w_uid, [{"severity": "blocker", "note": "flaw"}])
+run_record.transition(repo, run_id, w_uid, "dispatched")
+run_record.record_verdict(repo, run_id, w_uid, [{"severity": "blocker", "note": "flaw"}])
 
 # Inject (or not) the role-tagged upstream cluster on dispatch_context —
 # the `decision`/`winner_step_id` channel, since findings[] is normalized to
@@ -254,7 +254,7 @@ assert_eq "yes" "$phase_unchanged"
 it "blocked_on names the upstream phase + the cluster (operator message)"
 assert_eq "yes" "$blocked_named"
 
-it "NO new persisted top-level ledger field (driver/blocked_on already exist)"
+it "NO new persisted top-level run_record field (driver/blocked_on already exist)"
 assert_eq "unchanged" "$keys"
 
 # ─── Scenario 2 (DELIBERATE-FAIL CONTROL): no cluster → normal fix, no pause ──

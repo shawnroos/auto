@@ -3,7 +3,7 @@
 # otherwise lacks).
 #
 # /auto initializes a NEW run from a plan/spec: it creates the durable
-# ledger at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
+# run-record at <repo>/.claude/auto/<run-slug>.json (loop_phase="plan", empty
 # steps — the plan-loop populates work steps later via the backend), and emits
 # an arm-first-pulse INTENT (JSON) that the MODEL acts on by setting the
 # deliberate-stop /goal and firing the first ScheduleWakeup /auto:auto-pulse.
@@ -17,9 +17,9 @@
 #   ... --goal "<text>"       compound deliberate-stop goal (default: the loop's
 #                             own exit predicate).
 #
-# DOUBLE-DRIVE GUARD: run creation routes through ledger.py::init_ledger, which
+# DOUBLE-DRIVE GUARD: run creation routes through run_record.py::init_run_record, which
 # holds the per-run init flock across the existence-check + atomic write (two
-# concurrent inits cannot both win — one raises LedgerExists). The "arm first
+# concurrent inits cannot both win — one raises RunRecordExists). The "arm first
 # pulse" path emits a re-arm INTENT (JSON) that the MODEL acts on by firing
 # /auto:auto-pulse; the pulse then acquires its OWN non-blocking process-held
 # _pulse_lock (lib/pulse.py::_pulse_lock) which is the actual double-drive guard.
@@ -29,7 +29,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh / lib/auto-resume.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/run_record.sh / lib/auto-resume.sh).
 #
 # $ARGUMENTS-safe: the command .md body's only $-bearing line is
 #   bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "$ARGUMENTS"

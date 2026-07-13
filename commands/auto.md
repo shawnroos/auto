@@ -91,7 +91,7 @@ the run on an irreversible/destructive Bash/Write (the CLAUDE.md-anchored set).
 Both gates fire ONLY for the driving session (matched by `driving_session_id`,
 recorded at arm time) — a concurrent standalone ce-skill in the same worktree
 is never intercepted. Every advisor resolution and every backstop denial is
-appended to the ledger's `advisor_audit` record and surfaced in the exit
+appended to the run-record's `advisor_audit` record and surfaced in the exit
 report. `advisor` is in `allowed-tools` for this reason. Full behavior:
 `skills/auto/SKILL.md` §4.6.
 

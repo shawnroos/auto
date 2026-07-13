@@ -2,9 +2,9 @@
 # auto U4 integration test: R13 — bare `/auto <plan>` (default workflow a1) produces
 # a run that BEHAVES identically to v0.1.x.
 #
-# HONEST framing (build-surfaced 2026-05-25): a1's ledger is NOT literally
-# byte-identical to a v0.1.x ledger. v0.1.1 init'd with steps=[] (the plan-loop
-# produced steps later, off-ledger at the handoff); a1 declares an explicit `plan`
+# HONEST framing (build-surfaced 2026-05-25): a1's run-record is NOT literally
+# byte-identical to a v0.1.x run-record. v0.1.1 init'd with steps=[] (the plan-loop
+# produced steps later, off-run-record at the handoff); a1 declares an explicit `plan`
 # step (the representational change that makes the topology a workflow). So R13
 # asserts the BEHAVIORAL invariants that actually matter — the things a v0.1.x
 # operator would observe identically:
@@ -36,7 +36,7 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Run /auto with the given arg string in a fresh temp repo; print a CSV of the
-# resulting ledger's behavioral signals.
+# resulting run-record's behavioral signals.
 run_auto() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, importlib.util, tempfile, glob, json, io, contextlib
@@ -80,7 +80,7 @@ res="$(run_auto PLAN)"
 # rc 0 | plan | ce | a1 | legacy grammar | work | not-met | gaps null
 assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res"
 
-it "R13: explicit --workflow a1 produces the same ledger as the default"
+it "R13: explicit --workflow a1 produces the same run_record as the default"
 res_explicit="$(run_auto PLAN --workflow a1)"
 assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res_explicit"
 

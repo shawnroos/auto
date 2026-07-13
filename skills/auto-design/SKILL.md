@@ -118,7 +118,7 @@ auto's existing, engine-enforced bounds on the workflow's `iteration` block:
   before the engine forces `iterate → exit`.
 - `iteration.bound.max_wall_seconds` (optional) — caps cumulative *active*
   wall-time for open-ended work.
-- Plus the ledger's existing per-step stall and per-run dead-chain gates.
+- Plus the run-record's existing per-step stall and per-run dead-chain gates.
 
 A gate whose only verdict source is a judge (`revise_until_clean`-style) needs
 an `advisor_judge` or `human` criterion or it can never resolve — flag that.

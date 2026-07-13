@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto U1+U2 unit test: agent steering surface — grammar edges + force_skip.
 #
-# SELF-CONTAINED (same convention as tests/unit/ledger-mutators.test.sh): inline
+# SELF-CONTAINED (same convention as tests/unit/run-record-mutators.test.sh): inline
 # it/pass/fail helpers, HOME isolation, python driver ops. Does NOT source shared
 # helpers.
 #
@@ -15,8 +15,8 @@
 #      met == false — a skip cannot bury a finding (R16)
 #   7. force_skip of the last pending step CAN clear the predicate (BLOCKER-1
 #      resolution: dropping obsolete work is the capability being bought)
-#   8. lock discipline: force_skip routes through _with_locked_ledger exactly once
-#      and touches the ledger nowhere outside that closure (KTD-2)
+#   8. lock discipline: force_skip routes through _with_locked_run_record exactly once
+#      and touches the run-record nowhere outside that closure (KTD-2)
 
 set -uo pipefail
 
@@ -51,25 +51,25 @@ mkdir -p "$REPO/.claude/auto"
 driver() {
   AUTO_ROOT="$AUTO_ROOT" REPO="$REPO" "$PY" - "$1" <<'PYEOF'
 import json, os, sys, importlib.util
-ledger_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "ledger.py")
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+run_record_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "run_record.py")
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-core = m.ledger_core
-pred = m.ledger_predicate
-mut = m.ledger_steering  # the steering verbs moved out of ledger_mutators
+core = m.run_record_core
+pred = m.run_record_predicate
+mut = m.run_record_steering  # the steering verbs moved out of run_record_mutators
 
 repo = os.environ["REPO"]
 op = sys.argv[1]
 
 
 def fresh(run, steps):
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   steps=steps)
-    return m.read_ledger(repo, run)
+    return m.read_run_record(repo, run)
 
 
 U = lambda i: {"id": i, "state": "pending", "phase": "work"}
@@ -77,18 +77,18 @@ U = lambda i: {"id": i, "state": "pending", "phase": "work"}
 
 def lock_report(fn):
     # KTD-2 / I-1 structural check, shared by the add_step + reshape_deps
-    # lock-discipline ops: a mutator must enter _with_locked_ledger exactly once
-    # and touch the ledger NOWHERE outside that closure (no raw read_ledger /
-    # _atomic_write / _read_ledger call leaks the RMW out from under the flock).
+    # lock-discipline ops: a mutator must enter _with_locked_run_record exactly once
+    # and touch the run-record NOWHERE outside that closure (no raw read_run_record /
+    # _atomic_write / _read_run_record call leaks the RMW out from under the flock).
     import ast, inspect
     tree = ast.parse(inspect.getsource(fn).lstrip())
     names = [n.func.attr if isinstance(n.func, ast.Attribute) else
              getattr(n.func, "id", "")
              for n in ast.walk(tree) if isinstance(n, ast.Call)]
     return json.dumps({
-        "locked": names.count("_with_locked_ledger"),
+        "locked": names.count("_with_locked_run_record"),
         "leaks": [n for n in names
-                  if n in ("read_ledger", "_atomic_write", "_read_ledger")],
+                  if n in ("read_run_record", "_atomic_write", "_read_run_record")],
     })
 
 
@@ -96,7 +96,7 @@ if op == "edge-pending-to-skip":
     fresh("s1", [U("a")])
     try:
         m.force_skip(repo, "s1", "a", reason="obsolete")
-        led = m.read_ledger(repo, "s1")
+        led = m.read_run_record(repo, "s1")
         print(led["steps"][0]["state"])
     except core.InvalidTransition as e:
         print(f"rejected:{e}")
@@ -106,7 +106,7 @@ elif op == "edge-verdict-to-skip":
     m.transition(repo, "s2", "a", "dispatched")
     m.record_verdict(repo, "s2", "a", [])
     m.force_skip(repo, "s2", "a", reason="superseded")
-    print(m.read_ledger(repo, "s2")["steps"][0]["state"])
+    print(m.read_run_record(repo, "s2")["steps"][0]["state"])
 
 elif op == "sink-holds":
     fresh("s3", [U("a")])
@@ -124,7 +124,7 @@ elif op == "skip-needs-reason":
             m.force_skip(repo, "s4", "a", reason=bad)
             print("ACCEPTED-BUG")
             break
-        except (ValueError, core.LedgerError):
+        except (ValueError, core.RunRecordError):
             continue
     else:
         print("rejected")
@@ -132,7 +132,7 @@ elif op == "skip-needs-reason":
 elif op == "skip-reason-persists":
     fresh("s5", [U("a")])
     m.force_skip(repo, "s5", "a", reason="upstream dropped this")
-    u = m.read_ledger(repo, "s5")["steps"][0]
+    u = m.read_run_record(repo, "s5")["steps"][0]
     print(json.dumps({"state": u["state"], "reason": u.get("skip_reason")}))
 
 elif op == "skip-cannot-bury-finding":
@@ -144,7 +144,7 @@ elif op == "skip-cannot-bury-finding":
                      [{"severity": "blocker", "summary": "boom"}])
     m.force_skip(repo, "s6", "a", reason="ignore the blocker")
     m.force_skip(repo, "s6", "b", reason="obsolete")
-    led = m.read_ledger(repo, "s6")
+    led = m.read_run_record(repo, "s6")
     print(json.dumps({
         "a_terminal": pred.step_is_terminal(led["steps"][0]),
         "met": led["exit_predicate_result"]["met"],
@@ -156,7 +156,7 @@ elif op == "skip-can-clear-predicate":
     m.transition(repo, "s7", "a", "dispatched")
     m.record_verdict(repo, "s7", "a", [])
     m.force_skip(repo, "s7", "b", reason="obsolete")
-    led = m.read_ledger(repo, "s7")
+    led = m.read_run_record(repo, "s7")
     print(json.dumps({"met": led["exit_predicate_result"]["met"]}))
 
 elif op == "no-reasonless-bypass":
@@ -170,17 +170,17 @@ elif op == "no-reasonless-bypass":
         print("rejected")
 
 elif op == "lock-discipline":
-    # KTD-2 / I-1: force_skip must enter _with_locked_ledger exactly once and
-    # perform no ledger read/write outside that closure.
+    # KTD-2 / I-1: force_skip must enter _with_locked_run_record exactly once and
+    # perform no run-record read/write outside that closure.
     import ast, inspect
     src = inspect.getsource(mut.force_skip)
     tree = ast.parse(src.lstrip())
     names = [n.func.attr if isinstance(n.func, ast.Attribute) else
              getattr(n.func, "id", "")
              for n in ast.walk(tree) if isinstance(n, ast.Call)]
-    locked = names.count("_with_locked_ledger")
+    locked = names.count("_with_locked_run_record")
     leaks = [n for n in names
-             if n in ("read_ledger", "_atomic_write", "_read_ledger")]
+             if n in ("read_run_record", "_atomic_write", "_read_run_record")]
     print(json.dumps({"locked": locked, "leaks": leaks}))
 
 # ── U2 (rest): add_step / reshape_deps steering mutators ──────────────────────
@@ -189,7 +189,7 @@ elif op == "add-happy":
     # full step shape — findings/depends_on keys present via _normalize_step).
     fresh("s9", [U("a"), U("b")])
     m.add_step(repo, "s9", "c")
-    led = m.read_ledger(repo, "s9")
+    led = m.read_run_record(repo, "s9")
     c = next((u for u in led["steps"] if u["id"] == "c"), None)
     print(json.dumps({
         "count": len(led["steps"]),
@@ -203,29 +203,29 @@ elif op == "add-with-dep":
     # A valid edge to an existing step is preserved verbatim.
     fresh("s9d", [U("a")])
     m.add_step(repo, "s9d", "c", depends_on=["a"])
-    c = next(u for u in m.read_ledger(repo, "s9d")["steps"] if u["id"] == "c")
+    c = next(u for u in m.read_run_record(repo, "s9d")["steps"] if u["id"] == "c")
     print(json.dumps(c["depends_on"]))
 
 elif op == "add-unknown-dep":
-    # Reject a dependency on an unknown step; ledger unchanged (no partial add).
+    # Reject a dependency on an unknown step; run-record unchanged (no partial add).
     fresh("s10", [U("a")])
-    before = len(m.read_ledger(repo, "s10")["steps"])
+    before = len(m.read_run_record(repo, "s10")["steps"])
     try:
         m.add_step(repo, "s10", "c", depends_on=["ghost"])
         print("ACCEPTED-BUG")
-    except core.LedgerError:
-        after = len(m.read_ledger(repo, "s10")["steps"])
+    except core.RunRecordError:
+        after = len(m.read_run_record(repo, "s10")["steps"])
         print("rejected" if after == before else f"MUTATED:{after}")
 
 elif op == "add-duplicate":
-    # Reject a duplicate step id; ledger unchanged.
+    # Reject a duplicate step id; run-record unchanged.
     fresh("s11", [U("a")])
-    before = len(m.read_ledger(repo, "s11")["steps"])
+    before = len(m.read_run_record(repo, "s11")["steps"])
     try:
         m.add_step(repo, "s11", "a")
         print("ACCEPTED-BUG")
-    except core.LedgerError:
-        after = len(m.read_ledger(repo, "s11")["steps"])
+    except core.RunRecordError:
+        after = len(m.read_run_record(repo, "s11")["steps"])
         print("rejected" if after == before else f"MUTATED:{after}")
 
 elif op == "reshape-happy":
@@ -233,7 +233,7 @@ elif op == "reshape-happy":
     fresh("s12", [{"id": "a", "state": "pending", "phase": "work",
                    "depends_on": ["b"]}, U("b"), U("c")])
     m.reshape_deps(repo, "s12", "a", ["c"])
-    a = next(u for u in m.read_ledger(repo, "s12")["steps"] if u["id"] == "a")
+    a = next(u for u in m.read_run_record(repo, "s12")["steps"] if u["id"] == "a")
     print(json.dumps(a["depends_on"]))
 
 elif op == "reshape-cycle":
@@ -243,8 +243,8 @@ elif op == "reshape-cycle":
     try:
         m.reshape_deps(repo, "s13", "b", ["a"])
         print("ACCEPTED-BUG")
-    except core.LedgerError:
-        b = next(u for u in m.read_ledger(repo, "s13")["steps"] if u["id"] == "b")
+    except core.RunRecordError:
+        b = next(u for u in m.read_run_record(repo, "s13")["steps"] if u["id"] == "b")
         print("rejected" if b["depends_on"] == [] else f"MUTATED:{b['depends_on']}")
 
 elif op == "reshape-unknown-dep":
@@ -253,8 +253,8 @@ elif op == "reshape-unknown-dep":
     try:
         m.reshape_deps(repo, "s14", "a", ["ghost"])
         print("ACCEPTED-BUG")
-    except core.LedgerError:
-        a = next(u for u in m.read_ledger(repo, "s14")["steps"] if u["id"] == "a")
+    except core.RunRecordError:
+        a = next(u for u in m.read_run_record(repo, "s14")["steps"] if u["id"] == "a")
         print("rejected" if a["depends_on"] == [] else f"MUTATED:{a['depends_on']}")
 
 elif op == "reshape-self-cycle":
@@ -263,8 +263,8 @@ elif op == "reshape-self-cycle":
     try:
         m.reshape_deps(repo, "s15", "a", ["a"])
         print("ACCEPTED-BUG")
-    except core.LedgerError:
-        a = next(u for u in m.read_ledger(repo, "s15")["steps"] if u["id"] == "a")
+    except core.RunRecordError:
+        a = next(u for u in m.read_run_record(repo, "s15")["steps"] if u["id"] == "a")
         print("rejected" if a["depends_on"] == [] else f"MUTATED:{a['depends_on']}")
 
 elif op == "lock-discipline-add":
@@ -278,7 +278,7 @@ elif op == "cli-init":
     print("ok")
 
 elif op == "cli-state":
-    print(m.read_ledger(repo, "cli1")["steps"][0]["state"])
+    print(m.read_run_record(repo, "cli1")["steps"][0]["state"])
 
 elif op == "status-setup":
     fresh("st1", [U("a"), U("b")])
@@ -317,7 +317,7 @@ assert_eq '{"met": true}' "$(driver skip-can-clear-predicate)"
 it "R20 cannot be bypassed: plain transition() cannot reach terminal-skip"
 assert_eq "rejected" "$(driver no-reasonless-bypass)"
 
-it "KTD-2: force_skip enters _with_locked_ledger once, leaks no I/O"
+it "KTD-2: force_skip enters _with_locked_run_record once, leaks no I/O"
 assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline)"
 
 # ── U2 (rest): add_step ───────────────────────────────────────────────────────
@@ -328,13 +328,13 @@ assert_eq '{"count": 3, "state": "pending", "phase": "work", "normalized": true}
 it "R3: add_step preserves a valid depends_on edge to an existing step"
 assert_eq '["a"]' "$(driver add-with-dep)"
 
-it "R3: add_step rejects a dependency on an unknown step (ledger unchanged)"
+it "R3: add_step rejects a dependency on an unknown step (run_record unchanged)"
 assert_eq "rejected" "$(driver add-unknown-dep)"
 
-it "R3: add_step rejects a duplicate step id (ledger unchanged)"
+it "R3: add_step rejects a duplicate step id (run_record unchanged)"
 assert_eq "rejected" "$(driver add-duplicate)"
 
-it "KTD-2: add_step enters _with_locked_ledger once, leaks no I/O"
+it "KTD-2: add_step enters _with_locked_run_record once, leaks no I/O"
 assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline-add)"
 
 # ── U2 (rest): reshape_deps ───────────────────────────────────────────────────
@@ -350,15 +350,15 @@ assert_eq "rejected" "$(driver reshape-self-cycle)"
 it "R3: reshape_deps rejects an edge to an unknown step (unchanged)"
 assert_eq "rejected" "$(driver reshape-unknown-dep)"
 
-it "KTD-2: reshape_deps enters _with_locked_ledger once, leaks no I/O"
+it "KTD-2: reshape_deps enters _with_locked_run_record once, leaks no I/O"
 assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline-reshape)"
 
 # ── U2 (rest): concurrency — add_step serializes under the shared flock ────────
-# Mirrors ledger.test.sh scenario 4: N concurrent writers each add a DISTINCT
+# Mirrors run-record.test.sh scenario 4: N concurrent writers each add a DISTINCT
 # step; under the lock every add lands (no lost update). The NO_LOCK deliberate-
 # fail proves the race is real — without the flock the read-modify-append of the
 # steps array clobbers, so at least one add is lost across the iterations. Both
-# add_step and reshape_deps route through the SAME _with_locked_ledger primitive
+# add_step and reshape_deps route through the SAME _with_locked_run_record primitive
 # (the lock-discipline AST assertions above prove that), so serialization proven
 # for add_step holds for reshape_deps too.
 race_add() {
@@ -367,8 +367,8 @@ race_add() {
   for i in $(seq 1 "$n"); do
     AUTO_ROOT="$AUTO_ROOT" REPO="$REPO" "$PY" - "$run" "$i" <<'PYEOF' &
 import os, sys, importlib.util
-ledger_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "ledger.py")
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+run_record_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "run_record.py")
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.add_step(os.environ["REPO"], sys.argv[1], "w%s" % sys.argv[2])
 PYEOF
@@ -382,10 +382,10 @@ mkbase() {
   rm -f "$REPO/.claude/auto/$1.json" "$REPO/.claude/auto/$1.lock"
   AUTO_ROOT="$AUTO_ROOT" REPO="$REPO" "$PY" - "$1" <<'PYEOF' >/dev/null 2>&1
 import os, sys, importlib.util
-ledger_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "ledger.py")
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+run_record_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "run_record.py")
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(os.environ["REPO"], sys.argv[1], backend="ce", loop_phase="work",
+m.init_run_record(os.environ["REPO"], sys.argv[1], backend="ce", loop_phase="work",
               phase_order=["plan", "handoff", "work"], terminal_phase="work",
               steps=[{"id": "base", "state": "pending", "phase": "work"}])
 PYEOF
@@ -394,10 +394,10 @@ PYEOF
 count_steps() {
   AUTO_ROOT="$AUTO_ROOT" REPO="$REPO" "$PY" - "$1" <<'PYEOF'
 import os, sys, importlib.util
-ledger_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "ledger.py")
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+run_record_py = os.path.join(os.environ["AUTO_ROOT"], "lib", "run_record.py")
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(len(m.read_ledger(os.environ["REPO"], sys.argv[1])["steps"]))
+print(len(m.read_run_record(os.environ["REPO"], sys.argv[1])["steps"]))
 PYEOF
 }
 
@@ -421,17 +421,17 @@ else
 fi
 
 # ── U2 (rest): CLI verbs (force-skip round-trip + blank-reason reject) ─────────
-LEDGER_CLI="$AUTO_ROOT/lib/ledger.py"
+RUN_RECORD_CLI="$AUTO_ROOT/lib/run_record.py"
 
 it "CLI: force-skip verb round-trips a step to terminal-skip"
 driver cli-init >/dev/null
-CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" force-skip cli1 a "retired via cli" \
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_CLI" force-skip cli1 a "retired via cli" \
   >/dev/null 2>&1
 assert_eq "terminal-skip" "$(driver cli-state)"
 
 it "CLI: force-skip rejects a blank reason (exit != 0, step unchanged)"
 driver cli-init >/dev/null
-if CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" force-skip cli1 a "   " \
+if CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_CLI" force-skip cli1 a "   " \
      >/dev/null 2>&1; then
   fail "blank reason accepted at the CLI"
 else

@@ -11,7 +11,7 @@ This command is fired by a `ScheduleWakeup`-armed prompt (`prompt:
 (`lib/pulse.py`), by `/auto` at arm time (`lib/auto.py`), and by
 `/auto-resume continue` (`lib/auto-resume.py`). It is the durable
 heartbeat of the loop: one pulse = one smallest-useful advance of the
-state machine + one atomic ledger write.
+state machine + one atomic run-record write.
 
 ## Dispatch
 

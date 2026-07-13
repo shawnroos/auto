@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""auto U4: one ScheduleWakeup-paced advance of the ledger.
+"""auto U4: one ScheduleWakeup-paced advance of the run-record.
 
 A *pulse* is the step of execution. Each pulse does exactly ONE smallest-useful
 advance of the loop, then re-arms its own successor via `ScheduleWakeup`. The
-pulse reads ALL loop state from the disk ledger (the durable source of truth) —
+pulse reads ALL loop state from the disk run-record (the durable source of truth) —
 it runs in a subprocess and treats conversation context as irrelevant, so it is
 safe under the non-stateless re-injection of a `ScheduleWakeup`-fired pulse.
 
@@ -24,18 +24,18 @@ THE RE-ARM BOUNDARY (read this — it is the load-bearing handoff):
 The pulse NEVER dispatches (the dispatcher owns `pending → dispatched`) and
 NEVER writes verdicts (each background agent self-writes its own `findings[]`).
 The pulse only:
-  * reads the ledger,
+  * reads the run-record,
   * detects stalled steps and halts them + their transitive dependents while
     advancing independent siblings (the parallel-fan-out promise),
   * does ONE advance (plan-loop: the backend's next_plan_step; work-loop: apply
     ONE fix from a converged verdict) inside a try/except,
-  * writes the ledger atomically via ledger.py (I-1 recompute happens inside
-    ledger.py's single write chokepoint) and stamps loop.last_beat_at,
+  * writes the run-record atomically via run_record.py (I-1 recompute happens inside
+    run_record.py's single write chokepoint) and stamps loop.last_beat_at,
   * computes the re-arm intent.
 
-Crash-safety: the atomic ledger write (ledger.py) and the re-arm output are
+Crash-safety: the atomic run-record write (run_record.py) and the re-arm output are
 ordered so that a crash after the write but before the re-arm leaves a
-*consistent* ledger whose missing successor is exactly what U7's orphan check
+*consistent* run-record whose missing successor is exactly what U7's orphan check
 catches (→ manual /auto-resume). We persist BEFORE we signal re-arm (R10).
 """
 
@@ -51,20 +51,20 @@ import sys
 import time
 
 # ──────────────────────────────────────────────────────────────────────────
-# Import the canonical ledger module by file path (no package install). We do
-# NOT reimplement any ledger logic — every mutation routes through ledger.py so
+# Import the canonical run-record module by file path (no package install). We do
+# NOT reimplement any run-record logic — every mutation routes through run_record.py so
 # I-1 (atomic predicate freshness) is inherited for free.
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     build_pulse_prompt,
-    load_ledger,
+    load_run_record,
     load_lib_module,
     test_hatch_enabled,
 )
 
-ledger = load_ledger()
+run_record = load_run_record()
 # The ONE phase-decision module (U5). All phase routing reads through it; the
 # AST lint forbids the raw "loop_phase" literal here so a divergent comparison
 # can't sneak back in.
@@ -88,7 +88,7 @@ WATCHDOG_WAKEUP_MIN_SECONDS = 60
 WATCHDOG_WAKEUP_MAX_SECONDS = 3600
 
 
-def watchdog_wakeup_delay(ledger_dict):
+def watchdog_wakeup_delay(run_record_dict):
     """Fallback-heartbeat delay to arm at dispatch, or None if nothing is dispatched.
 
     Closes the inverted work-phase carve-out: the driver arms ONE long fallback
@@ -99,11 +99,11 @@ def watchdog_wakeup_delay(ledger_dict):
     fires no later than the soonest in-flight step's stall deadline. The result
     is CLAMPED to `[60, 3600]s` (the ScheduleWakeup bound). When NO step is
     `dispatched`, returns None — a no-op sentinel the driver reads as "arm
-    nothing". Pure: no I/O; `ledger_dict` is the ledger dict, not the module.
+    nothing". Pure: no I/O; `run_record_dict` is the run-record dict, not the module.
     """
     delays = [
-        int(u.get("stall_threshold_seconds") or ledger.DEFAULT_STALL_THRESHOLD_SECONDS)
-        for u in ledger_dict.get("steps", [])
+        int(u.get("stall_threshold_seconds") or run_record.DEFAULT_STALL_THRESHOLD_SECONDS)
+        for u in run_record_dict.get("steps", [])
         if u.get("state") == "dispatched"
     ]
     if not delays:
@@ -137,9 +137,9 @@ _iteration_guidance_prefix = pulse_guidance._iteration_guidance_prefix
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Pulse-level double-drive lock (DISTINCT from ledger.py's internal RMW lock).
+# Pulse-level double-drive lock (DISTINCT from run_record.py's internal RMW lock).
 #
-# ledger.py's flock guards individual read-modify-write operations (the
+# run_record.py's flock guards individual read-modify-write operations (the
 # lost-update guard). THIS lock is the engine's "another live pulse is already
 # driving this run" guard: held for the WHOLE pulse, acquired NON-BLOCKING, so a
 # second concurrent pulse returns a no-op instead of queueing behind the first.
@@ -148,8 +148,8 @@ _iteration_guidance_prefix = pulse_guidance._iteration_guidance_prefix
 
 
 def _pulse_lock_path(repo_root: str, run_id: str) -> str:
-    # Sibling of the ledger / RMW-lock files; keyed by the same slug.
-    lpath = ledger.lock_path(repo_root, run_id)
+    # Sibling of the run-record / RMW-lock files; keyed by the same slug.
+    lpath = run_record.lock_path(repo_root, run_id)
     return lpath[: -len(".lock")] + ".pulse.lock"
 
 
@@ -214,9 +214,9 @@ def run_id_of(pulse_lock_path: str) -> str:
 #
 # For U4 the backend call boundary is STUBBABLE: a backend is any object
 # exposing the ops the pulse needs. The pulse only ever calls:
-#   * next_plan_step(ledger) -> "plan" | "deepen" | "review_plan" | "done"
+#   * next_plan_step(run-record) -> "plan" | "deepen" | "review_plan" | "done"
 #   * plan(scope) / deepen(plan) / review_plan(plan)   (the chosen step)
-# Work-loop pulses apply a fix as a pure ledger state transition and do NOT need
+# Work-loop pulses apply a fix as a pure run-record state transition and do NOT need
 # a backend op (the fix's *content* is produced out-of-band; the pulse records
 # only the state change — verdict-returned → fixed).
 #
@@ -315,7 +315,7 @@ def dispatch_pulse(
 
     The returned dict's `action` is one of:
       * "noop"  — another live pulse holds the lock (double-drive guard); no
-                  ledger mutation happened this pulse.
+                  run-record mutation happened this pulse.
       * "stop"  — the chain ends (predicate met, or a handoff pause). The driver
                   does NOT issue a ScheduleWakeup.
       * "rearm" — the driver SHOULD issue ScheduleWakeup(delay, prompt) for the
@@ -339,11 +339,11 @@ def _pulse_body(repo_root, run_id, *, backend, auto, delay):
     # "must be `/auto:auto-pulse`, not bare `/auto-pulse`" hazard).
     rearm_prompt = build_pulse_prompt(run_id)
     now = _now_dt()
-    now_iso = ledger.now_iso()
+    now_iso = run_record.now_iso()
     # v0.3.0 / KTD §D (R5 finally): start the active-time clock at the top of
     # _pulse_body so the `finally` clause below can accumulate the delta on
     # EVERY return path INCLUDING the except path (crashed-pulse deltas land in
-    # the ledger). The finally wraps the whole body; release happens inside
+    # the run-record). The finally wraps the whole body; release happens inside
     # the pulse lock (dispatch_pulse owns the lock, _pulse_body runs inside).
     t_start = time.monotonic()
     try:
@@ -353,10 +353,10 @@ def _pulse_body(repo_root, run_id, *, backend, auto, delay):
         )
     finally:
         # accumulate_active_time is best-effort: an exception inside it must
-        # never bury the real exception/return value. (E.g. a torn ledger
+        # never bury the real exception/return value. (E.g. a torn run-record
         # during a stalled-write recovery would otherwise mask the original.)
         try:
-            ledger.accumulate_active_time(
+            run_record.accumulate_active_time(
                 repo_root, run_id, time.monotonic() - t_start
             )
         except Exception:  # noqa: BLE001
@@ -384,7 +384,7 @@ def _pulse_body_inner(
     changed. Locals each branch needs (now_iso, pred, phase, …) are passed
     explicitly — no state smuggled via mutation.
     """
-    led = ledger.read_ledger(repo_root, run_id)
+    led = run_record.read_run_record(repo_root, run_id)
     phase = phase_grammar.current_phase(led)
 
     intent, led = _try_iteration_check(
@@ -413,9 +413,9 @@ def _pulse_body_inner(
         return intent
 
     # Persist the beat (liveness) BEFORE signalling re-arm (R10). The advance
-    # itself already wrote the ledger atomically (predicate recomputed inside
-    # ledger.py per I-1); here we only stamp last_beat_at + reaffirm driver.
-    ledger.set_loop(repo_root, run_id, driver="self", beat=True)
+    # itself already wrote the run-record atomically (predicate recomputed inside
+    # run_record.py per I-1); here we only stamp last_beat_at + reaffirm driver.
+    run_record.set_loop(repo_root, run_id, driver="self", beat=True)
 
     if (intent := _try_post_advance_predicate_met(
             repo_root, run_id, advance_result, phase=phase)) is not None:
@@ -436,13 +436,13 @@ def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
     can tell a wedge-marked-done from a clean exit), then flip
     ``loop_phase=done`` + ``driver=manual`` (so liveness checks don't treat the
     wedged run as orphaned), then return a stop intent carrying the diagnostic.
-    Both ledger writes are individually guarded — never bury the original crash.
+    Both run-record writes are individually guarded — never bury the original crash.
     The caller keeps the except-clause ORDER (the subclass branches before the
-    bare ``LedgerError`` re-raise); this helper holds NO catch logic, only the
+    bare ``RunRecordError`` re-raise); this helper holds NO catch logic, only the
     wedge-and-report body the two branches share verbatim modulo two values.
     """
     try:
-        ledger.set_exit_reason(
+        run_record.set_exit_reason(
             repo_root, run_id, exit_reason,
             {"type": exc.__class__.__name__, "message": str(exc),
              "call": "advance_iteration_loop"},
@@ -450,7 +450,7 @@ def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
     except Exception:  # noqa: BLE001 — never bury the original.
         pass
     try:
-        ledger.set_loop(
+        run_record.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True,
         )
     except Exception:  # noqa: BLE001 — never bury the original.
@@ -472,7 +472,7 @@ def _try_iteration_check(
     """Step 0 — the iteration check (KTD §A). Returns (intent_or_None, led).
 
     The `led` return is load-bearing: on the "iterate" and "advance" branches
-    the body re-reads the ledger so the downstream predicate-met short-circuit
+    the body re-reads the run-record so the downstream predicate-met short-circuit
     sees the recomputed exit_predicate_result. Returning the refreshed `led`
     keeps that re-read honest instead of letting a stale snapshot leak through.
 
@@ -481,8 +481,8 @@ def _try_iteration_check(
     makes the work-loop's all_steps_terminal=True (with iteration_pending
     not yet composed), and the short-circuit would exit as "done" before
     any iteration logic runs. The check is side-effect-free on a1/W
-    ledgers (early-return at step 1). When iteration drives the run, this
-    helper writes its own ledger mutations (atomic_iterate_step on
+    run-records (early-return at step 1). When iteration drives the run, this
+    helper writes its own run-record mutations (atomic_iterate_step on
     iterate; set_bound_override + set_loop on bound-exit) which the next
     block's `pred` re-reads via the recomputed exit_predicate_result.
 
@@ -490,12 +490,12 @@ def _try_iteration_check(
     inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
     malformed gate decision, KeyError on a missing gate step, WorkflowError on
     a misshapen emit_template) DOES NOT propagate to _cli — which catches
-    only (PulseError, LedgerError) and exits with no JSON intent (the harness
+    only (PulseError, RunRecordError) and exits with no JSON intent (the harness
     never sees a rearm and the run wedges). Instead, we mark the loop done +
     manual (so an orphan check never mistakes a wedged run for a live one)
-    AND emit a stop intent carrying the diagnostic. LedgerError is re-raised
-    so the existing handler still catches it (LedgerError indicates the
-    ledger itself is in an inconsistent state — we should NOT mark such a
+    AND emit a stop intent carrying the diagnostic. RunRecordError is re-raised
+    so the existing handler still catches it (RunRecordError indicates the
+    run-record itself is in an inconsistent state — we should NOT mark such a
     run done with a clean signal). Per memory
     feedback_polling_inside_vs_outside_agentic_loop: the natural harness
     signal is the rearm/stop intent; the iteration-check crash path must
@@ -503,28 +503,28 @@ def _try_iteration_check(
     """
     try:
         iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)
-    except (ledger.UnknownStep, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
-        # v0.3.0 G2 / rel-r2-2: workflow-bug LedgerError subclasses signal a
+    except (run_record.UnknownStep, run_record.InvalidTransition, run_record.StaleVerdict) as exc:
+        # v0.3.0 G2 / rel-r2-2: workflow-bug RunRecordError subclasses signal a
         # mis-built caller (unknown gate step id, illegal transition, stale
-        # verdict), NOT a torn ledger. Convert to a stop intent — same shape
+        # verdict), NOT a torn run-record. Convert to a stop intent — same shape
         # as the generic-Exception branch below — so the operator gets a rearm
         # signal with reason="workflow-bug" rather than _cli swallowing the
         # raise with no JSON. ORDER MATTERS: this branch MUST precede the
-        # bare LedgerError catch below (these classes are subclasses of
-        # LedgerError; Python matches the first parent in source order).
+        # bare RunRecordError catch below (these classes are subclasses of
+        # RunRecordError; Python matches the first parent in source order).
         return _wedge_done_stop(
             repo_root, run_id, exc,
-            exit_reason=ledger.ExitReason.WORKFLOW_BUG,
-            reason_value=ledger.ExitReason.WORKFLOW_BUG.value,
+            exit_reason=run_record.ExitReason.WORKFLOW_BUG,
+            reason_value=run_record.ExitReason.WORKFLOW_BUG.value,
             message=f"workflow-bug: {type(exc).__name__}: {exc}",
             now_iso=now_iso,
         ), led
-    except ledger.LedgerError:
-        # Ledger-level failures are NOT recoverable here — the inconsistent-
-        # ledger signal must propagate to _cli (which records the error and
+    except run_record.RunRecordError:
+        # Run-record-level failures are NOT recoverable here — the inconsistent-
+        # run-record signal must propagate to _cli (which records the error and
         # exits 1, leaving the run for /auto-resume).
         raise
-    except Exception as exc:  # noqa: BLE001 — convert ANY non-Ledger raise.
+    except Exception as exc:  # noqa: BLE001 — convert ANY non-RunRecord raise.
         # Mark the loop finished + manual so liveness checks don't treat the
         # wedged run as orphaned, then surface the crash in a stop intent so
         # the harness gets the natural signal (rather than _cli exiting with
@@ -533,8 +533,8 @@ def _try_iteration_check(
         # wedge-marked-done from a clean exit.
         return _wedge_done_stop(
             repo_root, run_id, exc,
-            exit_reason=ledger.ExitReason.ITERATION_CHECK_FAILED,
-            reason_value=ledger.ExitReason.ITERATION_CHECK_FAILED.value,
+            exit_reason=run_record.ExitReason.ITERATION_CHECK_FAILED,
+            reason_value=run_record.ExitReason.ITERATION_CHECK_FAILED.value,
             message=f"iteration check failed: {type(exc).__name__}: {exc}",
             now_iso=now_iso,
         ), led
@@ -547,11 +547,11 @@ def _try_iteration_check(
         if action == "iterate":
             # New steps emitted + gate reset to pending; the next pulse will
             # see fresh pending steps for the dispatcher to dispatch. Re-
-            # read the ledger to surface the iteration in the rearm intent
+            # read the run-record to surface the iteration in the rearm intent
             # (operator-diagnostics + so /auto-status sees the new steps).
-            led = ledger.read_ledger(repo_root, run_id)
-            ledger.set_loop(repo_root, run_id, driver="self", beat=True)
-            led_now = ledger.read_ledger(repo_root, run_id)
+            led = run_record.read_run_record(repo_root, run_id)
+            run_record.set_loop(repo_root, run_id, driver="self", beat=True)
+            led_now = run_record.read_run_record(repo_root, run_id)
             return _rearm_intent(
                 run_id,
                 delay=delay,
@@ -569,7 +569,7 @@ def _try_iteration_check(
         # suppressed only by iteration_pending=True) will fire normally
         # because iteration_pending is False (decision != iterate).
         # Re-read so subsequent code sees any predicate recompute.
-        led = ledger.read_ledger(repo_root, run_id)
+        led = run_record.read_run_record(repo_root, run_id)
 
     return None, led
 
@@ -588,7 +588,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
 
     v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
     layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
-    ledger.py:441-442) AND defensively re-checked here. The redundant guard
+    run_record.py:441-442) AND defensively re-checked here. The redundant guard
     is belt-and-braces: if U2's composition ever drifts (or a future caller
     bypasses recompute_predicate), this guard still protects the iteration
     loop from being short-circuited as "predicate-met" before
@@ -610,7 +610,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
         # non-work-terminal workflow stops at ITS terminal phase — the old denylist
         # (`phase != "plan" and phase != "handoff"`) over-fired at any non-plan/handoff
         # phase, which only matched the terminal for work-terminal workflows.
-        ledger.set_loop(
+        run_record.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
         report = pulse_guidance._build_report(led)
@@ -627,12 +627,12 @@ def _dispatch_phase_advance(
     short-circuits with a terminal intent; every other phase returns an
     advance_result for the dispatcher to carry forward. No refreshed `led` is
     returned: the caller's downstream steps (beat re-stamp, post-advance
-    predicate, rearm intent) all re-read the ledger by (repo_root, run_id)
+    predicate, rearm intent) all re-read the run-record by (repo_root, run_id)
     themselves, so a passed-out snapshot was never consumed. The plan branch
     still re-reads `led` for its OWN `_maybe_handoff` call below.
 
-    On a raise: atomically record last_error + mark stalled; the ledger is
-    never half-written (each ledger.py mutation is its own atomic RMW).
+    On a raise: atomically record last_error + mark stalled; the run-record is
+    never half-written (each run_record.py mutation is its own atomic RMW).
     """
     advance_result = None
     try:
@@ -644,7 +644,7 @@ def _dispatch_phase_advance(
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
             # whether the plan step closed the gaps.
-            led = ledger.read_ledger(repo_root, run_id)
+            led = run_record.read_run_record(repo_root, run_id)
             advance_result = pulse_advance._maybe_handoff(
                 repo_root, run_id, led, auto=auto, advance_result=advance_result
             )
@@ -668,7 +668,7 @@ def _dispatch_phase_advance(
         elif phase == "handoff":
             # A handoff pulse should not normally fire (the handoff does not re-arm),
             # but if one does, re-affirm the pause and stop.
-            ledger.set_loop(
+            run_record.set_loop(
                 repo_root,
                 run_id,
                 loop_phase="handoff",
@@ -705,7 +705,7 @@ def _dispatch_phase_advance(
 def _try_handoff_pause(advance_result, run_id):
     """Step 3b — handoff-pause short-circuit. Returns intent or None.
 
-    If a handoff pause was decided, _maybe_handoff already wrote the ledger and
+    If a handoff pause was decided, _maybe_handoff already wrote the run-record and
     signalled it; surface as a stop (no re-arm).
     """
     if isinstance(advance_result, dict) and advance_result.get("handoff_pause"):
@@ -724,14 +724,14 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
     `phase == "work"` allowlist never stopped a non-work terminal). A plan pulse
     already routed through `_maybe_handoff` (handoff/auto-flip); never let the
     post-advance met-check turn a met PLAN predicate into `done` (that would
-    skip the handoff). After an auto-flip the ledger phase is now "work", but this
+    skip the handoff). After an auto-flip the run-record phase is now "work", but this
     pulse STARTED in plan, so we gate on the start-of-pulse `phase` to leave the
     just-flipped work loop to its own first work pulse.
     """
-    led = ledger.read_ledger(repo_root, run_id)
+    led = run_record.read_run_record(repo_root, run_id)
     pred = led.get("exit_predicate_result") or {}
     if pred.get("met") and phase_grammar.is_terminal_phase(led, phase):
-        ledger.set_loop(
+        run_record.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
         return _stop_intent(
@@ -752,12 +752,12 @@ def _build_rearm_intent(
     v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
     reading the INTENT can't miss the prepare/execute contract. The plan-loop
     is the most common operator trap (field bug 2026-05-25, second report:
-    agent pulsed 5 times expecting steps to materialize; ledger stayed at
+    agent pulsed 5 times expecting steps to materialize; run-record stayed at
     steps=[] because they never ran the prepared /ce-plan invocation). The
     guidance is phase-aware: plan-loop names the invocation + the gaps_open
     guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
     """
-    led_now = ledger.read_ledger(repo_root, run_id)
+    led_now = run_record.read_run_record(repo_root, run_id)
     intent = _rearm_intent(
         run_id,
         delay=delay,
@@ -811,10 +811,10 @@ def _cli(argv):
             auto=args.auto,
             delay=args.delay,
         )
-    except ledger.LedgerNotFound as exc:
+    except run_record.RunRecordNotFound as exc:
         sys.stderr.write(f"pulse.py: {exc}\n")
         return 1
-    except (PulseError, ledger.LedgerError) as exc:
+    except (PulseError, run_record.RunRecordError) as exc:
         sys.stderr.write(f"pulse.py: {exc}\n")
         return 1
 

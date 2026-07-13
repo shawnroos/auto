@@ -1,6 +1,6 @@
 <!--
 Adapted from ksimback/looper (references/verification-rubric.md), MIT License.
-Rewritten in auto's vocabulary (workflow / ledger / gate / exit-predicate);
+Rewritten in auto's vocabulary (workflow / run-record / gate / exit-predicate);
 looper's "judge" type split into model_judge / advisor_judge, and its
 structured-judge runner contract dropped (advisor returns prose, not a verdict).
 Original © the looper authors.

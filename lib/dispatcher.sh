@@ -4,7 +4,7 @@
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3`, which on macOS may resolve
 # to a Homebrew Python lacking modules (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, and sibling lib/ledger.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, and sibling lib/run_record.sh).
 #
 # All argument handling is positional and quoted: the only $-bearing surface a
 # command `.md` body should expose is `bash lib/dispatcher.sh "$ARGUMENTS"`-
@@ -23,7 +23,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 #
 # NOTE: the agent-launch boundary (launch_fn) is a Python-level injected
 # callable wired by U5's driver; the CLI `dispatch` path uses the default
-# no-op launcher (it only performs the pending->dispatched ledger transition).
+# no-op launcher (it only performs the pending->dispatched run-record transition).
 auto::dispatcher() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

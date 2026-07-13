@@ -54,7 +54,7 @@ op = sys.argv[2]
 
 def make_led(decision, attempts=0, active_wall_seconds=0,
              max_attempts=5, max_wall_seconds=None):
-    """A minimal ledger shape with one gate step named 'judge' carrying the
+    """A minimal run_record shape with one gate step named 'judge' carrying the
     given decision payload, plus the iteration block + bound."""
     judge = {"id": "judge", "phase": "work", "state": "verdict-returned",
              "dispatch_context": {}}
@@ -71,7 +71,7 @@ def make_led(decision, attempts=0, active_wall_seconds=0,
     }
 
 def make_verif_led(crits, dispatch_context=None):
-    """A minimal ledger with one gate step 'g' carrying a verification block."""
+    """A minimal run_record with one gate step 'g' carrying a verification block."""
     return {"steps": [{"id": "g", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": dispatch_context or {},
                        "verification": crits}]}
@@ -159,7 +159,7 @@ elif op == "decisions-constant":
 
 # ─── compute_pending_state ops (F3 / kieran-7) ──────────────────────────────
 # compute_pending_state is the centralized bound-check that
-# recompute_predicate calls (replacing the prior duplicate copy in ledger.py).
+# recompute_predicate calls (replacing the prior duplicate copy in run_record.py).
 # These ops exercise the same scenarios as evaluate_decision but on the
 # pending-bool surface compute_pending_state exposes.
 
@@ -192,9 +192,9 @@ elif op == "pending-wall-breached":
     print(iteration.compute_pending_state(led))
 
 # ─── rel-2: brittleness — coercion failure on a bound counter ───────────────
-# A corrupted numeric ledger field MUST NOT raise from compute_pending_state
+# A corrupted numeric run-record field MUST NOT raise from compute_pending_state
 # — it is called from the _atomic_write chokepoint, so a raise here locks
-# out every subsequent ledger mutation including writes needed to recover.
+# out every subsequent run-record mutation including writes needed to recover.
 
 elif op == "pending-corrupt-iteration-attempts":
     led = make_led("iterate", attempts=2, max_attempts=5)
@@ -226,7 +226,7 @@ elif op == "pending-corrupt-max-wall":
 # run still computes iteration_pending=True from the gate's stale "iterate"
 # verdict and blocks the predicate's `met` branch via the AND-NOT clause.
 #
-# This test constructs a ledger that WOULD return True (iterate under bound)
+# This test constructs a run-record that WOULD return True (iterate under bound)
 # and asserts the kill-switch flips it to False. The deliberate-fail control
 # (Edit-revert of iteration.py) proves the test isn't vacuous: without the
 # top-of-function `if is_iteration_disabled(): return False` it returns True
@@ -243,7 +243,7 @@ elif op == "pending-kill-switch-on":
 # ``iteration`` key is corrupted to a non-dict scalar (e.g. partial write,
 # torn recovery), the subsequent ``.get(...)`` calls would raise AttributeError
 # and that raise would propagate through _atomic_write → recompute_predicate,
-# BLOCKING the very ledger writes F2 needs to mark the loop done.
+# BLOCKING the very run-record writes F2 needs to mark the loop done.
 #
 # The fix at iteration.py adds an isinstance check that fences the function to
 # return False on non-dict iteration shapes (None stays the legitimate "no
@@ -274,8 +274,8 @@ elif op == "pending-bound-non-dict":
     # the bound key would survive `iteration.get('bound') or {}` (truthy
     # non-dict), then `bound.get('max_attempts')` would raise AttributeError
     # — which propagates through _atomic_write → recompute_predicate and
-    # blocks the very ledger writes F2 needs to mark the loop done. The
-    # isinstance guard degrades to False, keeping the ledger writable.
+    # blocks the very run-record writes F2 needs to mark the loop done. The
+    # isinstance guard degrades to False, keeping the run-record writable.
     led = {
         "steps": [{"id": "judge", "phase": "work",
                    "dispatch_context": {"decision": "iterate"}}],
@@ -357,7 +357,7 @@ assert_eq "False" "$(run_iter pending-wall-breached)"
 # ─── F3 / rel-2: graceful degradation on corrupt numeric fields ─────────────
 # A single corrupt numeric field MUST NOT raise from compute_pending_state;
 # every call site (notably _atomic_write -> recompute_predicate) requires the
-# function to return a bool no matter what shape the ledger has.
+# function to return a bool no matter what shape the run-record has.
 
 it "compute_pending_state: corrupt iteration_attempts → False (no raise)"
 assert_eq "False" "$(run_iter pending-corrupt-iteration-attempts)"
@@ -373,8 +373,8 @@ assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 
 # ─── G1 / rel-r2-1: kill-switch read-side parity ──────────────────────────
 # Operator sets CLAUDE_AUTO_DISABLE_ITERATION=1; compute_pending_state must
-# return False even on a ledger that would otherwise be iterate-under-bound.
-# This mirrors the write-side check at lib/pulse.py:624. The same ledger
+# return False even on a run-record that would otherwise be iterate-under-bound.
+# This mirrors the write-side check at lib/pulse.py:624. The same run-record
 # shape WITHOUT the env var returns True (covered by pending-iterate-under
 # above) — the only difference is the kill-switch, isolating the behavior
 # the test is asserting.
@@ -382,17 +382,17 @@ assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 it "compute_pending_state: kill-switch (CLAUDE_AUTO_DISABLE_ITERATION=1) → False even on iterate-under-bound"
 assert_eq "False" "$(CLAUDE_AUTO_DISABLE_ITERATION=1 run_iter pending-kill-switch-on)"
 
-# Sanity: kill-switch UNSET on the SAME ledger shape returns True. Without
+# Sanity: kill-switch UNSET on the SAME run-record shape returns True. Without
 # this paired check, a regression that flips both sides (e.g. accidentally
 # returns False unconditionally) would still see this section "pass."
-it "compute_pending_state: same ledger WITHOUT kill-switch → True (sanity for the pair above)"
+it "compute_pending_state: same run_record WITHOUT kill-switch → True (sanity for the pair above)"
 assert_eq "True" "$(run_iter pending-kill-switch-on)"
 
 # ─── G2 / ADV-R2-1: shape-corruption shield ────────────────────────────────
 # If ``iteration`` is a non-dict scalar (string, list — torn-write shapes),
 # compute_pending_state MUST return False, NOT raise. A raise here would
 # propagate through _atomic_write → recompute_predicate and block the very
-# ledger writes F2 (lib/pulse.py) needs to force-mark the loop done.
+# run-record writes F2 (lib/pulse.py) needs to force-mark the loop done.
 #
 # The DF cycle: comment out the isinstance check in iteration.py → these tests
 # go RED with "raised:AttributeError" (the iteration_block.get('gate_step')
@@ -406,7 +406,7 @@ assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-list)"
 
 # ─── v0.3.0 H / corr-r3-1: bound shape guard symmetry ──────────────────────
 # G2 added isinstance(iter_block, dict) at the top of compute_pending_state
-# but did NOT add the parallel guard for iteration.bound. A torn ledger
+# but did NOT add the parallel guard for iteration.bound. A torn run-record
 # writing iteration.bound="corrupted" survives `iteration.get('bound') or {}`
 # (truthy non-dict string), then bound.get('max_attempts') raises
 # AttributeError — propagating through _atomic_write → recompute_predicate

@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """auto U4: the deterministic agent-tree renderer (the watch-the-tree view).
 
-`render_agent_tree(ledger, now)` turns a live ledger into a compact ASCII tree
+`render_agent_tree(run-record, now)` turns a live run-record into a compact ASCII tree
 of the driver → work step → `do_step` fan-out agent, annotating each dispatched
 node with its age against the stall threshold + its attempt count, and nesting
 `do_step` fan-out children under their producer parent. It mirrors
 lib/topology-render.py's deterministic-string idioms — declaration-order
 traversal, stable formatting, pure stdlib — so tests can pin exact output.
 
-STRUCTURE comes from the ledger (the `depends_on` DAG + the `do_step` backend-op
+STRUCTURE comes from the run-record (the `depends_on` DAG + the `do_step` backend-op
 marker); LIVE-agent status is overlaid model-side by the skill (skills/auto-watch)
 from the harness TaskList/Monitor tools. This module owns only the structural,
 deterministic half (KTD5).
 
 PURE + deterministic: `now` is passed in as an ISO-8601 string (NEVER
-datetime.now()), so a fixed ledger + a fixed `now` render byte-identically —
+datetime.now()), so a fixed run-record + a fixed `now` render byte-identically —
 the property the watch view's determinism test pins.
 
 Loaded via `_bootstrap.load_lib_module("watch_tree")`. Imports NO sibling lib
 module: the ISO parse is replicated locally (two lines) rather than reaching into
-lib/ledger_core's private surface.
+lib/run_record_core's private surface.
 """
 
 from __future__ import annotations
 
 import datetime
 
-# Mirror ledger_core.DEFAULT_STALL_THRESHOLD_SECONDS (600). Replicated, not
+# Mirror run_record_core.DEFAULT_STALL_THRESHOLD_SECONDS (600). Replicated, not
 # imported, to keep this renderer dependency-free — the same discipline the
 # module docstring names for the ISO parse.
 _DEFAULT_STALL_THRESHOLD_SECONDS = 600
@@ -37,9 +37,9 @@ _INDENT = "  "
 
 
 def _parse_iso(value):
-    """Parse the trailing-'Z' UTC ISO-8601 stamp the ledger always emits.
+    """Parse the trailing-'Z' UTC ISO-8601 stamp the run-record always emits.
 
-    Replicates lib/ledger_core.parse_iso's tiny parse (deliberately NOT imported
+    Replicates lib/run_record_core.parse_iso's tiny parse (deliberately NOT imported
     — U4 keeps no private cross-module dependency). Returns a tz-aware datetime,
     or None on any missing/malformed value.
     """
@@ -79,7 +79,7 @@ def _backend_op(step) -> str:
 def _is_fanout_child(step) -> bool:
     """True for a `do_step` fan-out agent — the node that nests under the producer
     parent it depends on. The `do_step` marker on the CHILD is the reliable,
-    ledger-visible signal that its parent is the fan-out step (KTD5)."""
+    run-record-visible signal that its parent is the fan-out step (KTD5)."""
     return _backend_op(step) == "do_step"
 
 
@@ -104,11 +104,11 @@ def _annotation(step, now_dt) -> str:
     return "[" + " ".join(parts) + "]"
 
 
-def render_agent_tree(ledger: dict, now: str) -> str:
-    """Return a deterministic multi-line agent-tree string for `ledger`.
+def render_agent_tree(run_record: dict, now: str) -> str:
+    """Return a deterministic multi-line agent-tree string for `run_record`.
 
     `now` is an ISO-8601 string (passed in — the function never reads the clock,
-    so it stays pure and byte-deterministic for a fixed ledger + `now`).
+    so it stays pure and byte-deterministic for a fixed run-record + `now`).
 
     Layout: an `agent-tree: <run_id>` header, a blank line, then each root step as
     a `• <id>  [<status>]` bullet in DECLARATION order, with `do_step` fan-out
@@ -120,8 +120,8 @@ def render_agent_tree(ledger: dict, now: str) -> str:
     When NOTHING is dispatched there is no live agent to watch, so the whole tree
     collapses to the header + an empty-tree sentinel (`(no dispatched steps)`).
     """
-    steps = ledger.get("steps") or []
-    run_id = ledger.get("run_id") or "?"
+    steps = run_record.get("steps") or []
+    run_id = run_record.get("run_id") or "?"
     header = f"{_HEADER_PREFIX}: {run_id}"
 
     # Empty-tree sentinel: no dispatched step ⇒ nothing live to watch.
@@ -154,7 +154,7 @@ def render_agent_tree(ledger: dict, now: str) -> str:
 
     def render_node(step, depth):
         uid = step.get("id")
-        if uid in seen:  # cycle guard (ledgers are DAGs; cheap insurance).
+        if uid in seen:  # cycle guard (run-records are DAGs; cheap insurance).
             return
         seen.add(uid)
         indent = _INDENT * (depth + 1)

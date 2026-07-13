@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # auto U4 unit test: lib/watch_tree.py — the deterministic agent-tree renderer.
 #
-# render_agent_tree(ledger, now) turns a live ledger into a compact ASCII tree
+# render_agent_tree(run-record, now) turns a live run-record into a compact ASCII tree
 # of driver -> work step -> do_step fan-out agent, annotating each dispatched
 # node with age-vs-threshold + attempt, and nesting do_step children under their
 # producer parent. It is PURE (now is passed in as an ISO-8601 string, never
-# datetime.now()) so a fixed ledger + fixed now yields byte-identical output.
+# datetime.now()) so a fixed run-record + fixed now yields byte-identical output.
 #
 # SELF-CONTAINED inline harness (same style as workflows.test.sh): fixtures are
-# built as minimal ledger dicts with a PINNED `now`, so age/over-age/determinism
+# built as minimal run-record dicts with a PINNED `now`, so age/over-age/determinism
 # are fully controlled (no wall-clock).
 #
 # Scenarios (mapped to the U4 plan):
 #   1. nests a do_step child under its parent fan-out step
 #   2. flags a past-threshold dispatched node as over-age (age > threshold)
 #   3. shows the attempt count for a dispatched node
-#   4. BYTE-IDENTICAL output for a fixed ledger + fixed now (determinism)
-#   5. empty/no-dispatched ledger renders the empty-tree sentinel
+#   4. BYTE-IDENTICAL output for a fixed run-record + fixed now (determinism)
+#   5. empty/no-dispatched run-record renders the empty-tree sentinel
 
 set -uo pipefail
 
@@ -37,7 +37,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Driver: load watch_tree via _bootstrap, build a fixture ledger, run a scenario
+# Driver: load watch_tree via _bootstrap, build a fixture run-record, run a scenario
 # op, print a stable signal for assertion. Pinned `now` keeps every age exact.
 wt() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
@@ -61,11 +61,11 @@ def step(uid, **kw):
         # Materialized do_step steps carry backend_op on dispatch_context (the
         # invokes->dispatch_context merge in workflows.step_for). The renderer also
         # honors a raw `invokes.backend_op`, but dispatch_context is the on-disk
-        # shape (init_ledger's _normalize_step drops a bare `invokes`).
+        # shape (init_run_record's _normalize_step drops a bare `invokes`).
         u["dispatch_context"] = {"backend_op": "do_step"}
     return u
 
-def ledger(steps, run_id="run-x"):
+def run_record(steps, run_id="run-x"):
     return {"run_id": run_id, "steps": steps}
 
 def indent_of(line):
@@ -80,7 +80,7 @@ def node_line(out, uid):
 if op == "nest":
     # A fan-out parent (dispatched) with one do_step child depending on it, plus
     # an independent root sibling. The child must render INDENTED under the parent.
-    led = ledger([
+    led = run_record([
         step("parent", state="dispatched", dispatched_at="2026-07-08T11:59:00Z", attempt=1),
         step("child", state="dispatched", dispatched_at="2026-07-08T11:59:00Z",
              attempt=1, depends_on=["parent"], do_step=True),
@@ -99,7 +99,7 @@ if op == "nest":
 elif op == "over-age":
     # One dispatched step dispatched 3600s before `now` with a 600s threshold
     # (age > threshold -> OVER-AGE) and one dispatched only 60s ago (under).
-    led = ledger([
+    led = run_record([
         step("stale", state="dispatched", dispatched_at="2026-07-08T11:00:00Z",
              attempt=2, stall_threshold_seconds=600),
         step("fresh", state="dispatched", dispatched_at="2026-07-08T11:59:00Z",
@@ -111,15 +111,15 @@ elif op == "over-age":
 
 elif op == "attempt":
     # A dispatched node on its 3rd attempt surfaces attempt=3 in its annotation.
-    led = ledger([
+    led = run_record([
         step("u", state="dispatched", dispatched_at="2026-07-08T11:59:00Z", attempt=3),
     ])
     out = watch_tree.render_agent_tree(led, NOW)
     print("present" if "attempt=3" in node_line(out, "u") else "absent")
 
 elif op == "determinism":
-    # Byte-identical output for a fixed ledger + fixed now across two renders.
-    led = ledger([
+    # Byte-identical output for a fixed run-record + fixed now across two renders.
+    led = run_record([
         step("parent", state="dispatched", dispatched_at="2026-07-08T11:00:00Z", attempt=1),
         step("child", state="dispatched", dispatched_at="2026-07-08T11:59:00Z",
              attempt=2, depends_on=["parent"], do_step=True),
@@ -132,7 +132,7 @@ elif op == "determinism":
 elif op == "empty":
     # No dispatched steps anywhere -> the empty-tree sentinel, and the pending
     # step id does NOT appear (the sentinel short-circuits the node walk).
-    led = ledger([
+    led = run_record([
         step("p1", state="pending"),
         step("v1", state="verdict-returned"),
     ])
@@ -152,10 +152,10 @@ assert_eq "True,False" "$(wt over-age)"
 it "shows the attempt count for a dispatched node"
 assert_eq "present" "$(wt attempt)"
 
-it "byte-identical output for a fixed ledger + fixed now (determinism)"
+it "byte-identical output for a fixed run_record + fixed now (determinism)"
 assert_eq "same" "$(wt determinism)"
 
-it "empty/no-dispatched ledger renders the empty-tree sentinel (node walk short-circuited)"
+it "empty/no-dispatched run_record renders the empty-tree sentinel (node walk short-circuited)"
 assert_eq "True,False" "$(wt empty)"
 
 echo ""

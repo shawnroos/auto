@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""auto ledger core: constants, errors, paths, pure predicate logic, primitives.
+"""auto run-record core: constants, errors, paths, pure predicate logic, primitives.
 
-The foundation layer of the ledger surface (see lib/ledger.py for the facade
-that re-exports the whole surface, and docs/contracts/ledger-schema.md for the
+The foundation layer of the run-record surface (see lib/run_record.py for the facade
+that re-exports the whole surface, and docs/contracts/run-record-schema.md for the
 authoritative spec — if they disagree, the contract wins and this file is the
 bug). Contains the data that everything else depends on: module constants, the
 error hierarchy, slug/path helpers, time helpers, and the atomic-write + flock
 primitives. The PURE predicate logic (``recompute_predicate`` and its helpers,
-``step_is_terminal``, ``is_orphaned``) was extracted to ``lib/ledger_predicate.py``
+``step_is_terminal``, ``is_orphaned``) was extracted to ``lib/run_record_predicate.py``
 (U16) to keep this file under the size budget; ``_atomic_write`` reaches it via
-the deferred ``_lazy_load`` idiom, so this file still imports NO sibling ledger
+the deferred ``_lazy_load`` idiom, so this file still imports NO sibling run-record
 module at top level — it is the bottom of the acyclic DAG (core ← mutators ←
 producers ← facade).
 
@@ -22,11 +22,11 @@ Design notes (the load-bearing correctness rules):
     routes a mutation through this module inherits freshness for free.
 
   * The flock spans the WHOLE read-modify-write, not just the rename. Holding
-    only across the rename would permit a lost update. ``_with_locked_ledger``
+    only across the rename would permit a lost update. ``_with_locked_run_record``
     is the only RMW primitive; every mutator goes through it. Lock ACQUISITION
-    itself lives in one place — ``_flock_run`` — which both ``_with_locked_ledger``
-    and ``init_ledger`` route through. (``init_ledger`` is a create, not an RMW:
-    it must succeed only when the ledger is ABSENT, the inverse of the RMW
+    itself lives in one place — ``_flock_run`` — which both ``_with_locked_run_record``
+    and ``init_run_record`` route through. (``init_run_record`` is a create, not an RMW:
+    it must succeed only when the run-record is ABSENT, the inverse of the RMW
     primitive's read-existing-first shape, so it shares the lock but not the body.)
 
   * Atomic write = mkstemp + os.fchmod(0o600) + os.rename, mirroring
@@ -74,8 +74,8 @@ LOOP_PHASES = ("plan", "handoff", "work", "done")
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
 PLAN_STEPS = ("plan", "deepen", "review_plan")
 # v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
-# set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; pulse.py
-# spells intent as `ledger.ExitReason.WORKFLOW_BUG` rather than a string literal
+# set_exit_reason writes run_record["exit_reason"]["kind"] from one of these; pulse.py
+# spells intent as `run_record.ExitReason.WORKFLOW_BUG` rather than a string literal
 # (which would create a divergent-literal class the prose claims is a fixed enum
 # but the code only enforces by convention). StrEnum: members ARE strings, so
 # `ExitReason.WORKFLOW_BUG == "workflow-bug"` is True and JSON-serialization round-
@@ -84,7 +84,7 @@ PLAN_STEPS = ("plan", "deepen", "review_plan")
 #
 #   ITERATION_CHECK_FAILED → an unexpected raise from advance_iteration_loop
 #     (typically a malformed iteration block or gate verdict).
-#   WORKFLOW_BUG → a LedgerError subclass (UnknownStep, InvalidTransition,
+#   WORKFLOW_BUG → a RunRecordError subclass (UnknownStep, InvalidTransition,
 #     StaleVerdict) escaping the iteration check, which signals the workflow's
 #     steps[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
@@ -121,7 +121,7 @@ GATING_SEVERITIES = ("blocker", "major")  # severities that block terminality/do
 #
 # The agent-driven force-skip edges (`pending -> terminal-skip`,
 # `verdict-returned -> terminal-skip`) are deliberately NOT here — see
-# `ledger_steering._FORCE_SKIP_SOURCE_STATES`. Adding THOSE TWO edges here would
+# `run_record_steering._FORCE_SKIP_SOURCE_STATES`. Adding THOSE TWO edges here would
 # let the findings-free, reason-free `transition()` reach `terminal-skip` from
 # pending/verdict-returned, silently bypassing the mandatory skip-reason (R20).
 # (The `stalled -> terminal-skip` edge below is intentionally reason-free — the
@@ -147,8 +147,8 @@ ALLOWED_TRANSITIONS = {
 # export CLAUDE_AUTO_TEST_HARNESS=1 (sentinel set by tests/run.sh) — a
 # production user who exports a specific hatch by accident won't have the
 # sentinel too, so the hatch stays inert. Local helper (not imported from
-# _bootstrap) to avoid a circular import: _bootstrap.load_ledger() loads
-# THIS module, so ledger_core.py importing _bootstrap would be a cycle. Same
+# _bootstrap) to avoid a circular import: _bootstrap.load_run_record() loads
+# THIS module, so run_record_core.py importing _bootstrap would be a cycle. Same
 # semantic as _bootstrap.test_hatch_enabled; the duplication is one-line and
 # deliberate — composes with feedback_deterministic_over_probabilistic_v1
 # (mechanism is grep-checkable across both files).
@@ -165,7 +165,7 @@ def _test_hatch_enabled(hatch_var: str) -> bool:
 # Lazy-load helper (F3 / kieran-1 — dedup of 4 copy-paste sites).
 #
 # This module defers loading sibling lib/ modules (iteration, phase-grammar) into
-# function bodies because the ledger surface is imported from many sites, some
+# function bodies because the run-record surface is imported from many sites, some
 # before sys.path is set up for sibling lib modules. The dedup is one local helper
 # that does the deferred load — still no top-level import, but ONE function body
 # instead of four.
@@ -178,12 +178,12 @@ def _lazy_load(name: str):
     prior call sites each open-coded (RIP `_compute_iteration_pending`,
     `is_orphaned`, `set_verdict_decision`, `set_bound_override`). Keeping the
     load deferred — rather than promoting to a module-top import — preserves
-    the load-order discipline the ledger surface needs (it is imported from many
+    the load-order discipline the run-record surface needs (it is imported from many
     sites, some before sys.path is set up for sibling lib modules). The dedup is
     purely about killing the per-site boilerplate.
 
-    Cannot live in ``_bootstrap`` itself because ``_bootstrap.load_ledger()``
-    loads the ledger facade — importing ``_bootstrap`` at module top would
+    Cannot live in ``_bootstrap`` itself because ``_bootstrap.load_run_record()``
+    loads the run-record facade — importing ``_bootstrap`` at module top would
     be a cycle. The local-helper shape mirrors ``_test_hatch_enabled``'s same
     cycle-avoidance pattern.
     """
@@ -198,34 +198,34 @@ def _lazy_load(name: str):
 # Errors.
 
 
-class LedgerError(Exception):
-    """Base class for ledger errors."""
+class RunRecordError(Exception):
+    """Base class for run-record errors."""
 
 
-class LedgerNotFound(LedgerError):
-    """Raised when a ledger for the given run-id does not exist."""
+class RunRecordNotFound(RunRecordError):
+    """Raised when a run-record for the given run-id does not exist."""
 
 
-class LedgerExists(LedgerError):
-    """Raised when init would clobber an existing ledger."""
+class RunRecordExists(RunRecordError):
+    """Raised when init would clobber an existing run_record."""
 
 
-class InvalidTransition(LedgerError):
+class InvalidTransition(RunRecordError):
     """Raised when a state transition is not in the grammar."""
 
 
-class StaleVerdict(LedgerError):
+class StaleVerdict(RunRecordError):
     """Raised when ``record_verdict`` carries an ``attempt`` older than the step's
     current ``attempt`` (Bug #6 — a verdict from a SUPERSEDED dispatch attempt).
 
     Distinct from ``InvalidTransition`` so a caller can tell "rejected because the
     verdict is stale" (a slow agent from a retried-past attempt) apart from
-    "rejected because the grammar forbids it". The ledger is NOT written.
+    "rejected because the grammar forbids it". The run-record is NOT written.
     """
 
 
-class UnknownStep(LedgerError):
-    """Raised when a step id is not present in the ledger."""
+class UnknownStep(RunRecordError):
+    """Raised when a step id is not present in the run_record."""
 
 
 # Sentinel for "argument not supplied" where ``None`` is itself a valid value
@@ -265,8 +265,8 @@ def _dispatch_dir(repo_root: str) -> str:
     return os.path.join(repo_root, ".claude", "auto")
 
 
-def ledger_path(repo_root: str, run_id: str) -> str:
-    """Absolute path to the ledger JSON for ``run_id`` (slugified)."""
+def run_record_path(repo_root: str, run_id: str) -> str:
+    """Absolute path to the run-record JSON for ``run_id`` (slugified)."""
     return os.path.join(_dispatch_dir(repo_root), f"{_slugify_branch(run_id)}.json")
 
 
@@ -300,23 +300,23 @@ def parse_iso(value):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Pure predicate logic (I-2 / §4) — extracted to lib/ledger_predicate.py (U16).
+# Pure predicate logic (I-2 / §4) — extracted to lib/run_record_predicate.py (U16).
 #
 # The predicate evaluator (``recompute_predicate`` + its B7 helpers,
 # ``gating_severities``, ``step_is_terminal``, ``is_orphaned``) moved out of this
 # file to keep it under the size budget. This module reaches back to it ONLY via
-# ``_lazy_load("ledger_predicate")`` inside ``_atomic_write`` (the deferred,
+# ``_lazy_load("run_record_predicate")`` inside ``_atomic_write`` (the deferred,
 # cycle-safe edge — the same idiom used for ``iteration`` / ``phase-grammar``);
-# there is NO top-level import of ledger_predicate here, so the core stays the
-# acyclic DAG root. The facade ``lib/ledger.py`` re-exports the predicate names.
+# there is NO top-level import of run_record_predicate here, so the core stays the
+# acyclic DAG root. The facade ``lib/run_record.py`` re-exports the predicate names.
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Atomic write — the I-1 chokepoint. EVERY write goes through here.
 
 
-def _atomic_write(path: str, ledger: dict) -> None:
-    """Recompute the predicate, then atomically persist the ledger.
+def _atomic_write(path: str, run_record: dict) -> None:
+    """Recompute the predicate, then atomically persist the run-record.
 
     This is the ONLY serialization path. It ALWAYS recomputes
     ``exit_predicate_result`` immediately before writing (I-1), unless the
@@ -324,30 +324,30 @@ def _atomic_write(path: str, ledger: dict) -> None:
     purely to prove the I-1 test goes RED without the recompute).
 
     Atomic = mkstemp + fchmod(0o600) + os.rename. A crash mid-write leaves the
-    prior file intact and a stray tmp (no half-written ledger).
+    prior file intact and a stray tmp (no half-written run-record).
     """
     if not _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_RECOMPUTE"):
-        # Predicate evaluator lives in lib/ledger_predicate.py (U16). Reach it via
+        # Predicate evaluator lives in lib/run_record_predicate.py (U16). Reach it via
         # the deferred, cycle-safe lazy-load (same idiom as iteration /
-        # phase-grammar) so this file keeps NO top-level ledger sibling import and
+        # phase-grammar) so this file keeps NO top-level run-record sibling import and
         # stays the acyclic DAG root.
-        ledger_predicate = _lazy_load("ledger_predicate")
-        ledger["exit_predicate_result"] = ledger_predicate.recompute_predicate(ledger)
+        run_record_predicate = _lazy_load("run_record_predicate")
+        run_record["exit_predicate_result"] = run_record_predicate.recompute_predicate(run_record)
 
     # U6: stamp the persisted-format version. Every write goes through here, so
     # this is what LAZILY MIGRATES a v1 record — it was upgraded in memory at
     # _read_json, and now persists in v2. Stamping order is not a hazard: the
     # read-side map is unconditional and idempotent, so a writer may safely lag a
     # reader (see format_compat's docstring).
-    ledger["format"] = _lazy_load("format_compat").FORMAT_VERSION
+    run_record["format"] = _lazy_load("format_compat").FORMAT_VERSION
 
     target_dir = os.path.dirname(path) or "."
     os.makedirs(target_dir, mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".ledger.", suffix=".json", dir=target_dir)
+    fd, tmp = tempfile.mkstemp(prefix=".run_record.", suffix=".json", dir=target_dir)
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as fh:
-            json.dump(ledger, fh, indent=2, sort_keys=True)
+            json.dump(run_record, fh, indent=2, sort_keys=True)
             fh.write("\n")
         os.rename(tmp, path)
     except BaseException:
@@ -361,10 +361,10 @@ def _atomic_write(path: str, ledger: dict) -> None:
 def _read_json(path: str) -> dict:
     """Read a run-record and upgrade it to the current on-disk format.
 
-    READ CHOKEPOINT 1 of 2 (U6 / KTD-1). Feeds ``read_ledger`` AND
-    ``_with_locked_ledger`` (the locked read-modify-write path), so every record
+    READ CHOKEPOINT 1 of 2 (U6 / KTD-1). Feeds ``read_run_record`` AND
+    ``_with_locked_run_record`` (the locked read-modify-write path), so every record
     this module hands out — and every record a mutation is computed against — is
-    format v2. The SECOND chokepoint is ``_bootstrap.load_ledger_safe``, which
+    format v2. The SECOND chokepoint is ``_bootstrap.load_run_record_safe``, which
     every hook and scan consumer uses; both must be wired or a v1 record reaches
     a consumer that speaks only new keys and reads nothing.
 
@@ -384,7 +384,7 @@ def _read_json(path: str) -> dict:
 def _flock_run(lpath: str, body):
     """Hold the per-run exclusive flock for the duration of ``body()`` and return
     its result. The SINGLE lock-acquisition primitive — both the RMW path
-    (``_with_locked_ledger``) and the create path (``init_ledger``) route their
+    (``_with_locked_run_record``) and the create path (``init_run_record``) route their
     flock through here so the flock boilerplate (ensure-lockfile-exists, acquire,
     release-in-finally) lives in exactly one place.
 
@@ -417,36 +417,36 @@ def _flock_run(lpath: str, body):
         lock_file.close()
 
 
-def _with_locked_ledger(repo_root: str, run_id: str, mutate):
-    """Acquire flock, read the ledger, run ``mutate(ledger)``, atomic-write, release.
+def _with_locked_run_record(repo_root: str, run_id: str, mutate):
+    """Acquire flock, read the run-record, run ``mutate(run-record)``, atomic-write, release.
 
     The lock spans the WHOLE read-modify-write (the lost-update guard). The
     test-only ``CLAUDE_AUTO_TEST_NO_LOCK`` hatch skips ONLY the flock
     acquisition (the read/mutate/write still run) so the concurrency test can
     prove a lost update without serialization.
 
-    ``mutate`` receives the freshly-read ledger dict, mutates it in place, and
+    ``mutate`` receives the freshly-read run-record dict, mutates it in place, and
     may return a value, which this function returns.
     """
-    path = ledger_path(repo_root, run_id)
+    path = run_record_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
 
     def body():
         if not os.path.exists(path):
-            raise LedgerNotFound(f"no ledger for run-id {run_id!r} at {path}")
-        ledger = _read_json(path)
-        result = mutate(ledger)
-        _atomic_write(path, ledger)
+            raise RunRecordNotFound(f"no run_record for run-id {run_id!r} at {path}")
+        run_record = _read_json(path)
+        result = mutate(run_record)
+        _atomic_write(path, run_record)
         return result
 
     return _flock_run(lpath, body)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Public API (ledger create / read).
+# Public API (run-record create / read).
 
 
-def init_ledger(
+def init_run_record(
     repo_root: str,
     run_id: str,
     *,
@@ -464,24 +464,24 @@ def init_ledger(
     goal_intent=None,
     driving_session_id=None,
 ):
-    """Create a new ledger. Rejects if one already exists (LedgerExists).
+    """Create a new run-record. Rejects if one already exists (RunRecordExists).
 
     ``steps`` is a list of partial step dicts (at minimum ``id``); missing
     fields are filled with schema defaults. The predicate is recomputed and the
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
 
-    v0.2.0 workflow fields (all additive / backward-compatible — a v0.1.x ledger
+    v0.2.0 workflow fields (all additive / backward-compatible — a v0.1.x run-record
     with none of them reads identically; see _normalize_step and §2 of the
-    ledger-schema contract):
+    run-record-schema contract):
       ``workflow``         — optional dict {name, source_tier}; the workflow this run
-                           was built from. None on a workflow-blind (v0.1.x) ledger.
+                           was built from. None on a workflow-blind (v0.1.x) run-record.
       ``phase_order``    — optional list; the run's phase sequence. Defaults to
                            ["plan", "handoff", "work"] (the v0.1.x grammar).
       ``terminal_phase`` — optional str; the phase whose completion ends the run.
                            Defaults to "work". MUST be a member of phase_order.
       ``phase_transitions`` — optional list of {from, to, producer} dicts; the
-                           workflow's producer declarations. Persisted on the ledger
+                           workflow's producer declarations. Persisted on the run-record
                            so handoff-handlers can resolve the producer for a given
                            arrival phase without re-loading the workflow file
                            (which could drift mid-run). Defaults to [] (no
@@ -489,31 +489,31 @@ def init_ledger(
                            emits nothing at phase boundaries).
     """
     if backend not in ("ce", "native"):
-        raise LedgerError(f"invalid backend: {backend!r}")
+        raise RunRecordError(f"invalid backend: {backend!r}")
     if backend_scale not in ("three-tier", "blocker-only"):
-        raise LedgerError(f"invalid backend_scale: {backend_scale!r}")
+        raise RunRecordError(f"invalid backend_scale: {backend_scale!r}")
 
     # phase_order / terminal_phase default to the v0.1.x grammar so a call with
-    # neither produces a ledger that behaves exactly as before.
+    # neither produces a run-record that behaves exactly as before.
     if phase_order is None:
         phase_order = ["plan", "handoff", "work"]
     elif not isinstance(phase_order, list) or not phase_order:
-        raise LedgerError(f"phase_order must be a non-empty list: {phase_order!r}")
+        raise RunRecordError(f"phase_order must be a non-empty list: {phase_order!r}")
     if terminal_phase is None:
         terminal_phase = "work"
     if terminal_phase not in phase_order:
-        raise LedgerError(
+        raise RunRecordError(
             f"terminal_phase {terminal_phase!r} not in phase_order {phase_order!r}"
         )
     # loop_phase must be a member of the run's phase_order (which, for the
     # default grammar, is exactly the legacy LOOP_PHASES minus the terminal
     # "done" sentinel — "done" is a post-terminal marker, never a start phase).
     if loop_phase != "done" and loop_phase not in phase_order:
-        raise LedgerError(
+        raise RunRecordError(
             f"invalid loop_phase {loop_phase!r} for phase_order {phase_order!r}"
         )
     if plan_step is not None and plan_step not in PLAN_STEPS:
-        raise LedgerError(f"invalid plan_step: {plan_step!r}")
+        raise RunRecordError(f"invalid plan_step: {plan_step!r}")
 
     # v0.4.0 goal_intent (KTD-2): one-line user-facing intent sentence, frozen
     # at init time. Acceptable shapes: None (legacy / unknown), or a string
@@ -522,13 +522,13 @@ def init_ledger(
     # caller owns the wording — but we reject non-string non-None to keep the
     # on-disk shape clean.
     if goal_intent is not None and not isinstance(goal_intent, str):
-        raise LedgerError(f"goal_intent must be a string or None: {goal_intent!r}")
+        raise RunRecordError(f"goal_intent must be a string or None: {goal_intent!r}")
 
     # v0.6.0 U5 (KTD-5, additive): the DRIVING session_id, recorded at arm time so
     # the advisor-gate hooks match a question/action to this run by session-id
     # equality. None on legacy/non-conversation init (gate reads absent → fail-open).
     if driving_session_id is not None and not isinstance(driving_session_id, str):
-        raise LedgerError(
+        raise RunRecordError(
             f"driving_session_id must be a string or None: {driving_session_id!r}"
         )
 
@@ -537,30 +537,30 @@ def init_ledger(
     if phase_transitions is None:
         phase_transitions = []
     elif not isinstance(phase_transitions, list):
-        raise LedgerError(
+        raise RunRecordError(
             f"phase_transitions must be a list: {phase_transitions!r}"
         )
 
-    path = ledger_path(repo_root, run_id)
+    path = run_record_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
     os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
 
     # Hold the per-run flock across the existence-check + write (via the shared
     # _flock_run primitive) so two concurrent inits cannot both win. NOTE: init
-    # cannot route through _with_locked_ledger — that primitive's RMW shape
-    # REQUIRES the ledger to already exist (it reads it before calling mutate and
-    # raises LedgerNotFound otherwise). init is the inverse: it must succeed only
+    # cannot route through _with_locked_run_record — that primitive's RMW shape
+    # REQUIRES the run-record to already exist (it reads it before calling mutate and
+    # raises RunRecordNotFound otherwise). init is the inverse: it must succeed only
     # when the file is ABSENT and create it. Both share the lock primitive
     # (_flock_run); only the body inside the lock differs (check-absent-then-write
     # here vs read-mutate-write there).
     def body():
         if os.path.exists(path):
-            raise LedgerExists(f"ledger already exists for run-id {run_id!r}")
+            raise RunRecordExists(f"run_record already exists for run-id {run_id!r}")
 
         norm_steps = []
         for u in steps or []:
             if "id" not in u:
-                raise LedgerError("step missing 'id'")
+                raise RunRecordError("step missing 'id'")
             norm_steps.append(_normalize_step(u, loop_phase=loop_phase))
 
         # v0.3.0 fix-pass F0: seed iteration_emit_count from max numeric
@@ -595,7 +595,7 @@ def init_ledger(
                     if suffix.isdecimal():
                         seed_count = max(seed_count, int(suffix))
 
-        ledger = {
+        run_record = {
             "run_id": run_id,
             "loop_phase": loop_phase,
             "plan_step": plan_step,
@@ -603,15 +603,15 @@ def init_ledger(
             "backend": backend,
             "backend_scale": backend_scale,
             # v0.2.0 workflow fields (additive). workflow is None on a workflow-blind
-            # v0.1.x ledger; phase_order/terminal_phase default to the legacy
+            # v0.1.x run-record; phase_order/terminal_phase default to the legacy
             # grammar so the predicate + phase routing behave identically.
             "workflow": workflow,
             "phase_order": phase_order,
             "terminal_phase": terminal_phase,
             "phase_transitions": phase_transitions,
             # v0.3.0 iteration fields (additive — defaults preserve v0.2.x
-            # behavior). A legacy ledger missing any of them reads via
-            # `ledger.get(<field>, <default>)` at every consumer site (NEVER raw
+            # behavior). A legacy run-record missing any of them reads via
+            # `run_record.get(<field>, <default>)` at every consumer site (NEVER raw
             # subscript). KTD §D: top-level counters/accumulators, not step-
             # scoped, so the bound check + predicate composition agree on a
             # single storage location.
@@ -639,16 +639,16 @@ def init_ledger(
             # v0.3.0 G2 / AN-W1: persisted record of a non-clean run exit. None
             # on a healthy run; populated by ``set_exit_reason`` when F2's
             # try/except (lib/pulse.py) catches an iteration-check raise or a
-            # workflow-bug LedgerError subclass. ``/auto-status`` renders it
+            # workflow-bug RunRecordError subclass. ``/auto-status`` renders it
             # alongside loop_phase=done so the operator can distinguish a clean
             # finish from a wedge that was force-marked done.
             "exit_reason": None,
             # v0.3.0 U6: workflow-declared iteration + emit_templates land on the
-            # ledger at init so the engine's iteration check (advance_iteration_loop)
+            # run-record at init so the engine's iteration check (advance_iteration_loop)
             # and the iterate_template producer find them at every pulse. None on a
             # legacy or non-iteration workflow (a1, W, v0.2.x a2/a4); the validators
             # at U5 ensure shape is OK if non-None. Routed through here (not seeded
-            # post-init) so the workflow→ledger flow is the production path — the
+            # post-init) so the workflow→run-record flow is the production path — the
             # plumbing gap U1-U5 left for U6 to close.
             "iteration": iteration,
             "emit_templates": emit_templates,
@@ -671,8 +671,8 @@ def init_ledger(
             "steps": norm_steps,
             "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
-        _atomic_write(path, ledger)
-        return ledger
+        _atomic_write(path, run_record)
+        return run_record
 
     return _flock_run(lpath, body)
 
@@ -680,7 +680,7 @@ def init_ledger(
 def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
     state = u.get("state", "pending")
     if state not in STEP_STATES:
-        raise LedgerError(f"invalid step state: {state!r}")
+        raise RunRecordError(f"invalid step state: {state!r}")
     # v0.2.0 per-step `phase` (additive). A step with no explicit phase inherits
     # the run's start phase when that is a plan phase, else defaults to "work" —
     # matching the v0.1.x reality where plan-phase runs have no work steps yet and
@@ -699,7 +699,7 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
         ),
         "last_error": u.get("last_error"),
         # R20: why this step was force-skipped. None for every step that was not
-        # skipped by an agent. Additive / backward-compatible: an old ledger
+        # skipped by an agent. Additive / backward-compatible: an old run-record
         # without the key normalizes to None.
         "skip_reason": u.get("skip_reason"),
         # Bug #6 (attempt-identity): the dispatch generation counter. Each
@@ -707,12 +707,12 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
         # attempt it is writing for and a verdict whose attempt is OLDER than this
         # is rejected (a stale verdict from a superseded attempt — e.g. a slow
         # agent that was retried). Defaults to 0 — additive / backward-compatible:
-        # an old ledger with no `attempt` field reads as 0 and behaves identically
+        # an old run-record with no `attempt` field reads as 0 and behaves identically
         # when record_verdict is called without an explicit attempt.
         "attempt": int(u.get("attempt", 0) or 0),
         "findings": list(u.get("findings") or []),
         # v0.2.0 per-step additive fields (all backward-compatible — an old
-        # ledger with none of these reads as the documented defaults below and
+        # run-record with none of these reads as the documented defaults below and
         # behaves identically; same discipline as `attempt` above):
         #   plan_step       — per-step plan-step for N>1 parallel plan-loops (R11);
         #                     A1's single plan-loop keeps using the top-level
@@ -740,8 +740,8 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
     return nu
 
 
-def read_ledger(repo_root: str, run_id: str) -> dict:
-    """Return the ledger dict. Raises LedgerNotFound on unknown run-id.
+def read_run_record(repo_root: str, run_id: str) -> dict:
+    """Return the run-record dict. Raises RunRecordNotFound on unknown run-id.
 
     A read-only operation; takes NO lock. The atomic-write chokepoint
     (``_atomic_write`` = mkstemp + os.rename) makes a torn read impossible — a
@@ -750,14 +750,14 @@ def read_ledger(repo_root: str, run_id: str) -> dict:
     is why the engine's hot read paths (the Stop hook, status, converge) read
     lock-free: they cannot contend with a slow writer.
     """
-    path = ledger_path(repo_root, run_id)
+    path = run_record_path(repo_root, run_id)
     if not os.path.exists(path):
-        raise LedgerNotFound(f"no ledger for run-id {run_id!r} at {path}")
+        raise RunRecordNotFound(f"no run_record for run-id {run_id!r} at {path}")
     return _read_json(path)
 
 
-def _find_step(ledger: dict, step_id: str) -> dict:
-    for u in ledger.get("steps", []):
+def _find_step(run_record: dict, step_id: str) -> dict:
+    for u in run_record.get("steps", []):
         if u.get("id") == step_id:
             return u
-    raise UnknownStep(f"no step {step_id!r} in ledger")
+    raise UnknownStep(f"no step {step_id!r} in run_record")

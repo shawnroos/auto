@@ -1,6 +1,6 @@
 <!--
 Adapted from ksimback/looper (references/goal-rubric.md), MIT License.
-Rewritten in auto's vocabulary (workflow / ledger / driver / exit-predicate);
+Rewritten in auto's vocabulary (workflow / run-record / driver / exit-predicate);
 looper's execution + council framing stripped. Original © the looper authors.
 -->
 
@@ -8,7 +8,7 @@ looper's execution + council framing stripped. Original © the looper authors.
 
 Use this when shaping the loop's goal — the thing auto's exit predicate and an
 optionally-bound `/goal` doc are measured against. A sharp goal is what lets the
-ledger's deterministic Stop hook actually mean "done" instead of "ran out of
+run-record's deterministic Stop hook actually mean "done" instead of "ran out of
 attempts."
 
 ## Good goal shape

@@ -4,7 +4,7 @@
 # A pure ALIAS layer — a legible name resolves to the SAME workflow as its
 # shorthand stem; the stems and the A1_BUILTIN fallback constant are NEVER
 # renamed (KTD-6). SELF-CONTAINED inline harness (same style as
-# workflows.test.sh / ledger.test.sh).
+# workflows.test.sh / run-record.test.sh).
 #
 # Legible name → stem aliases under test:
 #   plan-build-review → a1      parallel-theories → a2

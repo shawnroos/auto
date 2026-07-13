@@ -6,15 +6,15 @@
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # Round-1 review's P0 #1: the v0.1.x handoff handler did raw set_loop(loop_phase="work")
 # and never called the new transition_and_emit primitive — the workflow topology
-# was built INTO the initial ledger but the runtime ignored it. A unit test on
+# was built INTO the initial run-record but the runtime ignored it. A unit test on
 # transition_and_emit in isolation passes; a unit test on producers.resolve()
 # passes; but neither proves that the engine ACTUALLY CALLS THEM on a real
 # plan→work transition. This test does: it drives a1 from plan-done to a met
 # work-loop state and asserts the producer populated the work-phase steps.
 #
-# STRUCTURE: prime the ledger to look like "plan step is done, enumerated_steps
+# STRUCTURE: prime the run-record to look like "plan step is done, enumerated_steps
 # stashed, gaps_open=0" (the post-backend-handoff state), call dispatch_pulse once
-# in auto mode, then read the ledger:
+# in auto mode, then read the run-record:
 #   - loop_phase must have advanced past "plan" (to "work" via auto-flip)
 #   - new steps must appear with phase="work" (the producer ran)
 #   - the emitted step ids must match the enumerated_steps we stashed (the
@@ -69,14 +69,14 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: /auto plan.md (default workflow a1). This creates the ledger with one
+# Step 1: /auto plan.md (default workflow a1). This creates the run-record with one
 # plan step `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan])
@@ -97,13 +97,13 @@ enumerated = [
 # handshake must then KEEP the run in the plan phase (enumerate-pending) instead
 # of flipping to a work phase with zero steps.
 if not no_stash:
-    ledger.set_enumerated_steps(repo, run_id, "plan", enumerated)
-ledger.set_gaps_open(repo, run_id, 0)
+    run_record.set_enumerated_steps(repo, run_id, "plan", enumerated)
+run_record.set_gaps_open(repo, run_id, 0)
 # Force plan_step=review_plan so plan-met fires (the predicate requires it).
-ledger.set_loop(repo, run_id, plan_step="review_plan")
+run_record.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 2b (legacy branch): strip the workflow field on disk to simulate a v0.1.x
-# ledger resumed under v0.2.0. The advance_to_phase helper MUST take the
+# run-record resumed under v0.2.0. The advance_to_phase helper MUST take the
 # raw-set_loop fallback (no producer, no new steps), so the test asserts the
 # legacy contract is honored.
 if legacy_no_workflow:
@@ -121,8 +121,8 @@ if legacy_no_workflow:
 # workflow declares one.
 if producer_off:
     def _noop(*a, **kw): pass
-    ledger.transition_and_emit = _noop
-    pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
+    run_record.transition_and_emit = _noop
+    pulse.run_record.transition_and_emit = _noop  # pulse imports run_record as a module
 
 # Step 4: pulse. auto=True so _maybe_handoff takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
@@ -157,9 +157,9 @@ case "$res_off" in
   *) pass ;;
 esac
 
-it "fix-pass A.2 LEGACY: a v0.1.x ledger (no workflow) falls back to set_loop, no emission"
+it "fix-pass A.2 LEGACY: a v0.1.x run_record (no workflow) falls back to set_loop, no emission"
 res_legacy="$(drive_plan_to_work 0 1)"
-# Legacy ledger: no workflow → advance_to_phase uses raw set_loop, no work steps
+# Legacy run-record: no workflow → advance_to_phase uses raw set_loop, no work steps
 # emitted. The plan-loop's `plan` step stays but no new steps appear at work.
 case "$res_legacy" in
   "work|") pass ;;

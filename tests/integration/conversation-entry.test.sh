@@ -246,7 +246,7 @@ assert_eq "present" "$ERR_BLOCK"
 it "U1: recommendation key present on a degraded-repo envelope at runtime"
 REPO_ERR="${SANDBOX}/errrepo"
 mkdir -p "$REPO_ERR"
-# A repo whose .claude is a regular file: the ledger scan finds nothing and the
+# A repo whose .claude is a regular file: the run-record scan finds nothing and the
 # detector degrades safely; the emitted envelope must still carry the key.
 printf 'not a dir' > "${REPO_ERR}/.claude"
 RAW_ERR="$(CLAUDE_AUTO_REPO="$REPO_ERR" bash "$DET" 2>/dev/null)"

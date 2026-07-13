@@ -13,11 +13,11 @@ FAILS CLOSED (KTD-4 — the opposite asymmetry from the question gate):
     on a CONFIRMED destructive command for a CONFIRMED live run, this hook PAUSES
     the run (set_loop driver="manual" + blocked_on) UNCONDITIONALLY — even when
     the PreToolUse `deny` contract is unavailable. It never degrades to
-    silent-allow on a destructive match. The halt is observable on the LEDGER
+    silent-allow on a destructive match. The halt is observable on the RUN_RECORD
     (driver=manual / blocked_on), not the process exit code (which stays 0).
 
     Scope of fail-closed is PRECISE: a confirmed-destructive command on a
-    confirmed-live owned run. A malformed ledger, an unidentifiable run, a
+    confirmed-live owned run. A malformed run-record, an unidentifiable run, a
     non-owned session, or a BENIGN command all fall through to allow (matching
     the question hook's malformed->allow scenario). We do NOT blanket-deny on any
     exception — that would brick the tool flow on an unrelated read.
@@ -70,8 +70,8 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
-    iter_worktree_ledgers,
-    load_ledger,
+    iter_worktree_run_records,
+    load_run_record,
     load_lib_module,
     session_membership,
     test_hatch_enabled,
@@ -387,7 +387,7 @@ def _owns_session(led, *, session_id):
     EVERY pause would gate the operator's own post-hand-back cleanup — a real UX
     regression. Left as a documented residual rather than a half-fix; the backstop
     is defense-in-depth against a MISBEHAVING agent (an agent with Bash edits the
-    ledger directly regardless), not a sandbox against a MALICIOUS one.
+    run-record directly regardless), not a sandbox against a MALICIOUS one.
 
     Dimension #2 (a concurrent STANDALONE ce-skill is not gated) is preserved by
     the ``session_id`` MEMBERSHIP conjunct alone — a standalone skill is neither
@@ -434,7 +434,7 @@ def _owns_session(led, *, session_id):
 def _owning_run_id(repo_root: str, session_id):
     """Return the run_id of the live auto run owning ``session_id``, or None.
 
-    Scans the per-worktree ledgers (``iter_worktree_ledgers`` — fan-out sub-runs
+    Scans the per-worktree run-records (``iter_worktree_run_records`` — fan-out sub-runs
     are out of hook scope by design, KTD-5). Unlike the question hook we need the
     RUN ID, not just a bool, so we can pause it. No staleness/driver coupling —
     see ``_owns_session`` (round-2 P2: a stale or driver=manual conjunct would
@@ -442,7 +442,7 @@ def _owning_run_id(repo_root: str, session_id):
     """
     if not session_id:
         return None
-    for run_id, led in iter_worktree_ledgers(repo_root):
+    for run_id, led in iter_worktree_run_records(repo_root):
         if _owns_session(led, session_id=session_id):
             return run_id
     return None
@@ -451,7 +451,7 @@ def _owning_run_id(repo_root: str, session_id):
 def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
     """Halt the owned run via the pause handoff (the fail-closed mechanism).
 
-    Routes through the shared ledger.apply_pause core (import-topology facade
+    Routes through the shared run_record.apply_pause core (import-topology facade
     discipline): set_loop driver="manual" + blocked_on, WITHOUT marking the loop
     done — the run stays resumable. The backstop passes ``backstop_latched=True``
     so the gate keeps firing on a second destructive command in the same
@@ -461,12 +461,12 @@ def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
     deny/systemMessage is still emitted, so the action is not silently allowed.
     """
     try:
-        ledger = load_ledger()
+        run_record = load_run_record()
         # backstop_latched=True rides the SAME atomic write as driver="manual"
         # (P3-b) => the latch exists iff the pause does. NOT a separate
         # best-effort write (the audit record below is separate; a latch derived
         # from it could split-brain).
-        ledger.apply_pause(repo_root, run_id, reason, backstop_latched=True)
+        run_record.apply_pause(repo_root, run_id, reason, backstop_latched=True)
     except Exception:
         pass
 
@@ -474,8 +474,8 @@ def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
 def _audit_action(repo_root: str, run_id: str, *, command: str, label: str) -> None:
     """Append the kind="action" audit record for this fired backstop (KTD-5).
 
-    Every fired action backstop is appended to the ledger's advisor_audit list
-    (driver-reference.md §Audit, ledger-schema §2.1, SKILL.md §4.5) so a fired
+    Every fired action backstop is appended to the run-record's advisor_audit list
+    (driver-reference.md §Audit, run-record-schema §2.1, SKILL.md §4.5) so a fired
     backstop is diagnosable in the exit report next to the P3 findings — without
     this the deny/pause is invisible to the driver (the hook denies out-of-band;
     no other code path runs at action-deny time). The ``subject`` is the
@@ -485,8 +485,8 @@ def _audit_action(repo_root: str, run_id: str, *, command: str, label: str) -> N
     (rel-001) and never suppresses the deny/systemMessage payload.
     """
     try:
-        ledger = load_ledger()
-        ledger.append_advisor_audit(
+        run_record = load_run_record()
+        run_record.append_advisor_audit(
             repo_root, run_id,
             kind="action", subject=command, classification=label,
             resolution="blocked-and-paused",
@@ -537,8 +537,8 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         # surfaced in the transcript ALONGSIDE the deny (confirmed against the CC
         # hooks contract: systemMessage is a universal field, not suppressed by a
         # permissionDecision). Without it the production deny only surfaced the
-        # agent-facing permissionDecisionReason + a ledger pause — silent to an
-        # operator not watching the ledger. The deny-unsupported path already
+        # agent-facing permissionDecisionReason + a run-record pause — silent to an
+        # operator not watching the run-record. The deny-unsupported path already
         # emitted a systemMessage; this gives the normal path parity.
         "systemMessage": (
             f"auto: RUN PAUSED — destructive-action backstop blocked `{label}` "

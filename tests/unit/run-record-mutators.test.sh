@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto U3 unit test: lib/ledger.py persistence, transitions,
+# auto U3 unit test: lib/run_record.py persistence, transitions,
 # concurrency, and the three hard invariants (I-1 / I-2 / I-3).
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
@@ -14,7 +14,7 @@
 #   3. write-interruption -> atomic rename holds (no half file)
 #   4. concurrent writers serialize via flock; NO_LOCK deliberate-fail hatch
 #      proves the test goes RED without locking
-#   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
+#   5. I-1: met==true run-record + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
 #   6. I-2: 3 steps, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
 #      dispatched -> met==false (all_steps_terminal false)
@@ -27,7 +27,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
@@ -61,49 +61,49 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the module ─────────────────────────────
-# init <run> <json-steps>  — create a ledger with given steps list
-ledger_init() {
+# init <run> <json-steps>  — create a run-record with given steps list
+run_record_init() {
   local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, steps_json, backend, phase, run_record_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
+m.init_run_record(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
-# field <run> <python-expr-on-ledger-named-L>  — print a value from the ledger
-ledger_field() {
+# field <run> <python-expr-on-run-record-named-L>  — print a value from the run-record
+run_record_field() {
   local run="$1" expr="$2"
-  "$PY" - "$REPO" "$run" "$expr" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$expr" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, expr, ledger_py = sys.argv[1:5]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, expr, run_record_py = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-L = m.read_ledger(repo, run)
+L = m.read_run_record(repo, run)
 print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-steps> <backend_scale> [phase]  — like ledger_init but
-# threads backend_scale (the ledger_init helper above is fixed at the default
+# init_scale <run> <json-steps> <backend_scale> [phase]  — like run_record_init but
+# threads backend_scale (the run_record_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
-ledger_init_scale() {
+run_record_init_scale() {
   local run="$1" steps_json="$2" scale="$3" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$steps_json" "$scale" "$phase" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$steps_json" "$scale" "$phase" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, steps_json, scale, phase, ledger_py = sys.argv[1:7]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, steps_json, scale, phase, run_record_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 backend = "native" if scale == "blocker-only" else "ce"
-m.init_ledger(repo, run, backend=backend, backend_scale=scale,
+m.init_run_record(repo, run, backend=backend, backend_scale=scale,
               steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-echo "ledger-mutators.test.sh"
+echo "run-record-mutators.test.sh"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -123,7 +123,7 @@ echo "ledger-mutators.test.sh"
 #   atomic_iterate_step      — composite of increment + emit + reset in ONE
 #                              locked body (round-3 P1-R3-1 / KTD §C+D)
 #
-# Plus four new top-level ledger fields:
+# Plus four new top-level run-record fields:
 #   active_wall_seconds      — accumulator
 #   last_active_at           — diagnostic ISO timestamp
 #   iteration_attempts       — KTD §D bound counter
@@ -133,14 +133,14 @@ echo "ledger-mutators.test.sh"
 #   recompute_predicate adds `iteration_pending: bool` and ANDs `met` against
 #   `NOT iteration_pending`.
 
-# A tiny Python driver that loads ledger.py and applies a sequence of writes
-# against a fresh ledger seeded with an iteration block + gate step. Each
+# A tiny Python driver that loads run_record.py and applies a sequence of writes
+# against a fresh run-record seeded with an iteration block + gate step. Each
 # scenario writes JSON to stdout and the bash assertions check exact strings.
 iter_driver() {
-  "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'
+  "$PY" - "$REPO" "$RUN_RECORD_PY" "$@" <<'PYEOF'
 import json, sys, importlib.util, os
-repo, ledger_py = sys.argv[1:3]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run_record_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 op = sys.argv[3]
 
@@ -148,20 +148,20 @@ op = sys.argv[3]
 def fresh(run, *, iteration=True, gate_state="verdict-returned",
           attempts=0, active_wall=0, max_attempts=5, max_wall=None,
           extra_steps=None):
-    """Create a fresh ledger with an optional iteration block and a 'judge'
-    gate step. Returns the ledger dict (already on disk via init_ledger then
-    a _with_locked_ledger touch to install the iteration block + gate state).
+    """Create a fresh run_record with an optional iteration block and a 'judge'
+    gate step. Returns the run_record dict (already on disk via init_run_record then
+    a _with_locked_run_record touch to install the iteration block + gate state).
     """
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
     steps = [{"id": "judge", "state": "pending", "phase": "work"}]
     if extra_steps:
         steps.extend(extra_steps)
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   steps=steps)
-    # Use _with_locked_ledger to seed iteration block + bump gate to the
+    # Use _with_locked_run_record to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
     # ships in U5/workflows).
     def seed(L):
@@ -176,7 +176,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
         u = L["steps"][0]
         if gate_state == "verdict-returned":
             u["state"] = "dispatched"  # then record_verdict will edge it.
-    m._with_locked_ledger(repo, run, seed)
+    m._with_locked_run_record(repo, run, seed)
     if gate_state == "verdict-returned":
         # Use record_verdict to legitimately reach verdict-returned (the
         # mutator path the production engine uses).
@@ -185,12 +185,12 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
         m.transition(repo, run, "judge", "dispatched")
     elif gate_state == "pending":
         pass  # init seeded as pending
-    return m.read_ledger(repo, run)
+    return m.read_run_record(repo, run)
 
 
 # ─── op: top-level-fields-init ─────────────────────────────────────────────
 if op == "top-level-fields-init":
-    # New init_ledger creates a ledger with the four new top-level fields
+    # New init_run_record creates a run-record with the four new top-level fields
     # at their additive defaults.
     led = fresh("u2-init")
     print(json.dumps({
@@ -202,7 +202,7 @@ if op == "top-level-fields-init":
 
 # ─── op: backward-compat-defaults ──────────────────────────────────────────
 elif op == "backward-compat-defaults":
-    # A hand-written v0.2.x-shaped ledger (no new iteration fields) must
+    # A hand-written v0.2.x-shaped run-record (no new iteration fields) must
     # read via .get() defaults — no migration. Reads of the four new fields
     # via .get(<field>, <default>) return the documented defaults.
     import tempfile
@@ -217,11 +217,11 @@ elif op == "backward-compat-defaults":
                    "stall_threshold_seconds": 600, "last_error": None,
                    "attempt": 0, "findings": []}],
     }
-    path = m.ledger_path(sandbox, run)
+    path = m.run_record_path(sandbox, run)
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     with open(path, "w") as f:
         json.dump(legacy, f)
-    L = m.read_ledger(sandbox, run)
+    L = m.read_run_record(sandbox, run)
     print(json.dumps({
         "active_wall_seconds": L.get("active_wall_seconds", 0),
         "last_active_at": L.get("last_active_at", None),
@@ -234,7 +234,7 @@ elif op == "set_verdict_decision-happy":
     led = fresh("u2-svd-happy")
     m.set_verdict_decision(repo, "u2-svd-happy", "judge", "iterate",
                             payload={"emit_count": 2})
-    after = m.read_ledger(repo, "u2-svd-happy")
+    after = m.read_run_record(repo, "u2-svd-happy")
     judge = after["steps"][0]
     print(json.dumps({
         "decision": judge["dispatch_context"].get("decision"),
@@ -249,7 +249,7 @@ elif op == "set_verdict_decision-rejects-garbage":
     try:
         m.set_verdict_decision(repo, "u2-svd-garbage", "judge", "garbage")
         print("ACCEPTED")
-    except m.LedgerError:
+    except m.RunRecordError:
         print("rejected")
 
 # ─── op: set_verdict_decision-unknown-step ─────────────────────────────────
@@ -260,14 +260,14 @@ elif op == "set_verdict_decision-unknown-step":
         print("ACCEPTED")
     except m.UnknownStep:
         print("rejected-unknown")
-    except m.LedgerError:
-        print("rejected-ledger")
+    except m.RunRecordError:
+        print("rejected-run-record")
 
 # ─── op: set_bound_override-happy ──────────────────────────────────────────
 elif op == "set_bound_override-happy":
     led = fresh("u2-sbo-happy")
     m.set_bound_override(repo, "u2-sbo-happy", "judge", "max_attempts", "iterate")
-    after = m.read_ledger(repo, "u2-sbo-happy")
+    after = m.read_run_record(repo, "u2-sbo-happy")
     bo = after["steps"][0]["dispatch_context"].get("bound_override") or {}
     print(json.dumps({
         "bound": bo.get("bound"),
@@ -282,7 +282,7 @@ elif op == "accumulate_active_time-two-calls":
     led = fresh("u2-aat-two")
     m.accumulate_active_time(repo, "u2-aat-two", 5.0)
     m.accumulate_active_time(repo, "u2-aat-two", 7.5)
-    after = m.read_ledger(repo, "u2-aat-two")
+    after = m.read_run_record(repo, "u2-aat-two")
     print(json.dumps({
         "active_wall_seconds": after.get("active_wall_seconds"),
         "has_last_active_at": bool(after.get("last_active_at")),
@@ -294,7 +294,7 @@ elif op == "increment_iteration_attempts-two":
     led = fresh("u2-iia-two")
     m.increment_iteration_attempts(repo, "u2-iia-two", "judge")
     m.increment_iteration_attempts(repo, "u2-iia-two", "judge")
-    after = m.read_ledger(repo, "u2-iia-two")
+    after = m.read_run_record(repo, "u2-iia-two")
     print(str(after.get("iteration_attempts")))
 
 # ─── op: reset_for_iteration-happy ─────────────────────────────────────────
@@ -310,7 +310,7 @@ elif op == "reset_for_iteration-happy":
                             payload={"emit_count": 2})
     m.reset_for_iteration(repo, "u2-r4i-happy", "judge",
                           ["plan-1", "plan-2", "plan-3"])
-    after = m.read_ledger(repo, "u2-r4i-happy")
+    after = m.read_run_record(repo, "u2-r4i-happy")
     judge = after["steps"][0]
     dc = judge.get("dispatch_context") or {}
     print(json.dumps({
@@ -343,12 +343,12 @@ elif op == "predicate-composition":
     led = fresh("u2-pred", max_attempts=2)
     m.record_verdict(repo, "u2-pred", "judge", [])  # clean verdict
     m.set_verdict_decision(repo, "u2-pred", "judge", "iterate")
-    after_a = m.read_ledger(repo, "u2-pred")
+    after_a = m.read_run_record(repo, "u2-pred")
     pa = after_a["exit_predicate_result"]
     # Bump iteration_attempts to bound max via two increments.
     m.increment_iteration_attempts(repo, "u2-pred", "judge")
     m.increment_iteration_attempts(repo, "u2-pred", "judge")
-    after_b = m.read_ledger(repo, "u2-pred")
+    after_b = m.read_run_record(repo, "u2-pred")
     pb = after_b["exit_predicate_result"]
     print(json.dumps({
         "a_iteration_pending": pa.get("iteration_pending"),
@@ -359,11 +359,11 @@ elif op == "predicate-composition":
 
 # ─── op: legacy-predicate-no-iteration-key ─────────────────────────────────
 elif op == "legacy-predicate-no-iteration-key":
-    # A ledger with NO iteration block returns iteration_pending=False, and
+    # A run-record with NO iteration block returns iteration_pending=False, and
     # the existing met logic is unchanged.
     led = fresh("u2-noiter", iteration=False)
     m.record_verdict(repo, "u2-noiter", "judge", [])  # clean → met=True
-    after = m.read_ledger(repo, "u2-noiter")
+    after = m.read_run_record(repo, "u2-noiter")
     pr = after["exit_predicate_result"]
     print(json.dumps({
         "iteration_pending": pr.get("iteration_pending"),
@@ -372,28 +372,28 @@ elif op == "legacy-predicate-no-iteration-key":
 
 elif op == "predicate-survives-corrupt-iteration-attempts":
     # F3 / rel-2: _compute_iteration_pending is called from _atomic_write on
-    # EVERY write. A corrupt numeric ledger field (here: iteration_attempts
+    # EVERY write. A corrupt numeric run-record field (here: iteration_attempts
     # forced to a non-numeric string by direct disk patch) MUST NOT raise
     # from recompute — that would lock out every subsequent write, including
     # the ones needed to overwrite the corruption itself.
     led = fresh("u3-corrupt-attempts", max_attempts=5)
     m.record_verdict(repo, "u3-corrupt-attempts", "judge", [])
     m.set_verdict_decision(repo, "u3-corrupt-attempts", "judge", "iterate")
-    # Corrupt the on-disk ledger directly. The next _with_locked_ledger write
+    # Corrupt the on-disk run-record directly. The next _with_locked_run_record write
     # will hit _atomic_write -> recompute_predicate -> _compute_iteration_pending
     # which must degrade gracefully on the bad input.
-    p = m.ledger_path(repo, "u3-corrupt-attempts")
+    p = m.run_record_path(repo, "u3-corrupt-attempts")
     raw = json.load(open(p))
     raw["iteration_attempts"] = "garbage-not-a-number"
     open(p, "w").write(json.dumps(raw))
     # Now drive ANY write. If recompute raises, this call propagates the raise
-    # and the ledger is unrecoverable. The brittleness fix makes it succeed.
+    # and the run-record is unrecoverable. The brittleness fix makes it succeed.
     raised = "no"
     try:
         m.accumulate_active_time(repo, "u3-corrupt-attempts", 1.0)
     except Exception as e:
         raised = f"raised:{type(e).__name__}"
-    after = m.read_ledger(repo, "u3-corrupt-attempts")
+    after = m.read_run_record(repo, "u3-corrupt-attempts")
     print(json.dumps({
         "raised": raised,
         "iteration_pending": after["exit_predicate_result"].get("iteration_pending"),
@@ -410,13 +410,13 @@ echo ""
 echo "── v0.3.0 U2: iteration mutators (mutator path) ──"
 
 # ─── U2.1: init defaults ────────────────────────────────────────────────────
-it "U2: init_ledger seeds the four new top-level fields at their defaults"
+it "U2: init_run_record seeds the four new top-level fields at their defaults"
 assert_eq \
   '{"active_wall_seconds": 0, "last_active_at": null, "iteration_attempts": 0, "iteration_emit_count": 0}' \
   "$(iter_driver top-level-fields-init)"
 
 # ─── U2.2: backward compat ──────────────────────────────────────────────────
-it "U2: legacy v0.2.x ledger (no new keys) reads new fields via .get() defaults"
+it "U2: legacy v0.2.x run_record (no new keys) reads new fields via .get() defaults"
 assert_eq \
   '{"active_wall_seconds": 0, "last_active_at": null, "iteration_attempts": 0, "iteration_emit_count": 0}' \
   "$(iter_driver backward-compat-defaults)"
@@ -471,14 +471,14 @@ assert_eq \
   '{"a_iteration_pending": true, "a_met": false, "b_iteration_pending": false, "b_met": true}' \
   "$(iter_driver predicate-composition)"
 
-# ─── U2.14: legacy ledger (no iteration block) — iteration_pending=false ────
-it "U2: a ledger with no iteration block → iteration_pending=false, met unaffected"
+# ─── U2.14: legacy run-record (no iteration block) — iteration_pending=false ────
+it "U2: a run_record with no iteration block → iteration_pending=false, met unaffected"
 assert_eq \
   '{"iteration_pending": false, "met": true}' \
   "$(iter_driver legacy-predicate-no-iteration-key)"
 
 # ─── F3 / rel-2: predicate recompute survives corrupt iteration_attempts ────
-# A corrupt numeric ledger field MUST NOT lock out every subsequent write at
+# A corrupt numeric run-record field MUST NOT lock out every subsequent write at
 # the _atomic_write chokepoint. The recompute degrades gracefully: the bad
 # input collapses iteration_pending to false, and the write completes so the
 # next caller can overwrite the corruption.
@@ -494,7 +494,7 @@ assert_eq \
 # would leave the materialized work step permanently un-_is_ready → a SILENT
 # full-run livelock (never ready, never dispatched, dispatch-timeout never
 # fires, all_steps_terminal false forever). set_enumerated_steps is the single
-# chokepoint where runtime model output enters the ledger; it DROPS invalid
+# chokepoint where runtime model output enters the run-record; it DROPS invalid
 # edges (recording dispatch_context.dropped_depends_on_edges) rather than
 # raising (a raise would materialize zero work steps — also a stall). Valid
 # edges, including forward-refs to sibling enumerated steps, are preserved.
@@ -502,19 +502,19 @@ assert_eq \
 # These assert the CLEANED edges + marker; dispatcher.test.sh asserts the
 # sanitized shape actually becomes ready (the real anti-hang claim).
 enum_driver() {
-  "$PY" - "$REPO" "$LEDGER_PY" "$@" <<'PYEOF'
+  "$PY" - "$REPO" "$RUN_RECORD_PY" "$@" <<'PYEOF'
 import json, sys, importlib.util, os
-repo, ledger_py = sys.argv[1:3]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run_record_py = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 op = sys.argv[3]
 
 
 def setup(run):
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p):
         os.unlink(p)
-    m.init_ledger(repo, run, backend="ce", loop_phase="plan",
+    m.init_run_record(repo, run, backend="ce", loop_phase="plan",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   steps=[{"id": "plan", "state": "pending", "phase": "plan"}])
 
@@ -522,7 +522,7 @@ def setup(run):
 def report(run, enumerated):
     setup(run)
     m.set_enumerated_steps(repo, run, "plan", enumerated)
-    L = m.read_ledger(repo, run)
+    L = m.read_run_record(repo, run)
     plan = next(u for u in L["steps"] if u["id"] == "plan")
     dc = plan["dispatch_context"]
     deps = {it["id"]: it.get("depends_on", []) for it in dc["enumerated_steps"]}
@@ -558,7 +558,7 @@ elif op == "mixed":
             {"id": "w2", "invokes": {}, "depends_on": ["w1"]},
             {"id": "w3", "invokes": {}, "depends_on": ["w1"]}])
 elif op == "existing-ref":
-    # depending on an EXISTING ledger step ("plan") is valid — preserved.
+    # depending on an EXISTING run-record step ("plan") is valid — preserved.
     report("g-exist",
            [{"id": "w1", "invokes": {}, "depends_on": ["plan"]}])
 elif op == "leaf-dep":
@@ -611,7 +611,7 @@ assert_eq \
   '{"deps": {"w1": ["w2"], "w2": [], "w3": ["w1"]}, "dropped": [["w2", "w1", "cycle"]]}' \
   "$(enum_driver mixed)"
 
-it "U14 guard: dep on an existing ledger step is valid → preserved"
+it "U14 guard: dep on an existing run_record step is valid → preserved"
 assert_eq \
   '{"deps": {"w1": ["plan"]}, "dropped": []}' \
   "$(enum_driver existing-ref)"
@@ -623,5 +623,5 @@ assert_eq \
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "ledger-mutators.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "run-record-mutators.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

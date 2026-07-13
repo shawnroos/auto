@@ -2,7 +2,7 @@
 # auto unit test: doc-fence for the agent-tool-surface contract (rename plan, U7/F12).
 #
 # WHY THIS TEST EXISTS:
-# `tests/unit/ledger.test.sh` asserts set-equality between the CLI's `_VERBS`
+# `tests/unit/run-record.test.sh` asserts set-equality between the CLI's `_VERBS`
 # registry and what `describe` emits — so DISPATCH and the MACHINE-READABLE mirror
 # can never drift. But nothing bound the third copy: the human-facing verb table in
 # `docs/contracts/agent-tool-surface.md`. Grepping `agent-tool-surface` across
@@ -20,10 +20,10 @@
 # It also immediately caught a REAL pre-existing drift: `transition` has always been
 # in `_VERBS` but was never named in agent-tool-surface.md.
 #
-# HOW IT WORKS: the required set is DERIVED from `python3 lib/ledger.py describe`
+# HOW IT WORKS: the required set is DERIVED from `python3 lib/run_record.py describe`
 # (hence from `_VERBS`), never hand-maintained here — so adding a verb wires its doc
 # requirement automatically. Same deterministic-defense shape as
-# tests/unit/doc-fence-ledger-schema.test.sh and tests/unit/wikilink-check.test.sh.
+# tests/unit/doc-fence-run-record-schema.test.sh and tests/unit/wikilink-check.test.sh.
 
 set -uo pipefail
 
@@ -60,7 +60,7 @@ VERBS="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import json, subprocess, sys
 root = sys.argv[1]
 out = subprocess.run(
-    [sys.executable, f"{root}/lib/ledger.py", "describe"],
+    [sys.executable, f"{root}/lib/run_record.py", "describe"],
     capture_output=True, text=True, check=True,
 ).stdout
 print("\n".join(sorted(json.loads(out)["verbs"])))

@@ -20,14 +20,14 @@ author through building a conforming backend.
 **Source of truth:** `auto/docs/contracts/backend-contract.md` is the
 locked interface spec. This skill explains *how* to satisfy it; that file is
 *what* must be satisfied. If they disagree, the contract wins, and the underlying
-`ledger-schema.md` wins over both on shared persistence facts.
+`run-record-schema.md` wins over both on shared persistence facts.
 
 ## The mental model
 
 The engine is a mechanical loop driver. It never plans, deepens, reviews, or does
 work — it delegates each of those to your backend, one named step at a time, and
-records what you return in a disk ledger. Your backend is a **pure provider of
-operations**: it returns data, it never writes the ledger. That single rule is
+records what you return in a disk run-record. Your backend is a **pure provider of
+operations**: it returns data, it never writes the run-record. That single rule is
 what keeps the loop's done-detection correct, so honor it strictly.
 
 You implement six ops. Four drive the plan-loop; two drive the work-loop.
@@ -48,8 +48,8 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
    to `gaps_open`. Empty array means plan gaps are closed. Element shape is yours;
    the engine never inspects elements.
 
-4. **`next_plan_step(ledger) -> token`** — **you own plan-step sequencing.** The
-   engine never decides the plan order. Inspect the ledger and return the single
+4. **`next_plan_step(run_record) -> token`** — **you own plan-step sequencing.** The
+   engine never decides the plan order. Inspect the run-record and return the single
    next step: `"plan"`, `"deepen"`, `"review_plan"`, or `"done"`. Typical
    sequencers:
    - CE-style: `"plan"` → `"deepen"` → `"review_plan"` → loop deepen/review while
@@ -94,7 +94,7 @@ per-call decisions:
 
 - **A severity mapping table** — your native vocabulary → `blocker`/`major`/`minor`.
   Example shape (CE): `P0 → blocker`, `P1/P2 → major`, `P3 → minor`.
-- **An `backend_scale`** — recorded in the ledger so the predicate evaluator knows
+- **An `backend_scale`** — recorded in the run-record so the predicate evaluator knows
   which logic applies:
   - `"three-tier"` — you reliably produce all three severities.
   - `"blocker-only"` — you reliably produce `blocker` but your major/minor
@@ -141,16 +141,16 @@ verdicts.
 - [ ] `plan(scope) -> plan` (opaque return)
 - [ ] `deepen(plan) -> plan` (no-op allowed)
 - [ ] `review_plan(plan) -> gap_set` (length is the open-gap count)
-- [ ] `next_plan_step(ledger) -> token` (returns `"done"` once `gaps_open == 0`)
+- [ ] `next_plan_step(run_record) -> token` (returns `"done"` once `gaps_open == 0`)
 - [ ] `do_step(step) -> dispatch_handle` (opaque token; called by dispatcher)
 - [ ] `review(step) -> findings[]` (severities translated to the shared scale)
 - [ ] A declared severity mapping table
 - [ ] A declared `backend_scale` (`"three-tier"` or `"blocker-only"`; native runs a rubric probe first)
-- [ ] No ledger writes from any op — return data only
+- [ ] No run-record writes from any op — return data only
 
 ## References
 
 - Locked interface: `auto/docs/contracts/backend-contract.md`
-- Ledger contract (authoritative on shared facts): `auto/docs/contracts/ledger-schema.md`
+- RunRecord contract (authoritative on shared facts): `auto/docs/contracts/run-record-schema.md`
 - The two V1 backends this skill helps build (U6b): `lib/backend-native.*`, `lib/backend-ce.*`
 - Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md` (U6a / U6b)

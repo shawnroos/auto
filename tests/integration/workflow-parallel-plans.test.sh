@@ -7,13 +7,13 @@
 # the producer in isolation; the a1 integration test covers the engine wire for
 # the SIMPLE (one plan step) case. Neither proves the engine actually routes a2
 # — three parallel plan steps + a judge with a winner_step_id finding — through
-# the same auto-flip path. This test does: it primes the ledger to the
+# the same auto-flip path. This test does: it primes the run-record to the
 # post-judge state and asserts the producer emitted the WINNER's enumerated set,
 # not some other plan's.
 #
 # CONTRACT (round-2 P0 fix — fix-pass I, post-reconcile):
 #   The judge declares its winner via judge.dispatch_context.winner_step_id,
-#   written by the new ledger.set_winner_step_id mutator. The producer reads
+#   written by the new run_record.set_winner_step_id mutator. The producer reads
 #   from there. dispatch_context is the right home: same channel as
 #   enumerated_steps, preserved by transition() and the verdict-write path
 #   with no normalize step. record_verdict's findings normalize ({severity,
@@ -33,13 +33,13 @@
 #      enumerated steps (production path proof).
 #   2. deliberate-fail (no winner): judge records a verdict WITHOUT calling
 #      set_winner_step_id → dispatch_context.winner_step_id is absent →
-#      producer raises WorkflowError; pulse catches it, ledger stays at loop_phase=plan
+#      producer raises WorkflowError; pulse catches it, run-record stays at loop_phase=plan
 #      with NO new work steps.
 #   3. malformed message: a judge dict with no winner_step_id on dispatch_context
 #      raises a clear message naming dispatch_context AND set_winner_step_id so
 #      the operator knows exactly what to call.
 #   4. production-path proof: full record_verdict + set_winner_step_id flow on
-#      a freshly-init ledger; the producer sees the winner's enumerated set.
+#      a freshly-init run-record; the producer sees the winner's enumerated set.
 #   5. write-boundary guard: set_winner_step_id rejects an unknown winner id
 #      BEFORE writing, with the bad id in the message.
 
@@ -84,14 +84,14 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --workflow a2. Creates a ledger with 3 plan steps
+# Step 1: init via /auto plan.md --workflow a2. Creates a run-record with 3 plan steps
 # (plan-1, plan-2, plan-3) + a judge work step depending on all three +
 # phase_transitions=[{from:plan,to:work,producer:judge_winner_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
@@ -104,34 +104,34 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 
 # Step 2: prime each plan step's enumerated_steps. Each plan emitted a distinct
 # set so the winner's emission is identifiable (not just "any plan").
-ledger.set_enumerated_steps(repo, run_id, "plan-1",
+run_record.set_enumerated_steps(repo, run_id, "plan-1",
     [{"id": "wA-1", "invokes": {"backend_op": "do_step"}},
      {"id": "wA-2", "invokes": {"backend_op": "do_step"}}])
-ledger.set_enumerated_steps(repo, run_id, "plan-2",
+run_record.set_enumerated_steps(repo, run_id, "plan-2",
     [{"id": "wB-1", "invokes": {"backend_op": "do_step"}},
      {"id": "wB-2", "invokes": {"backend_op": "do_step"}}])
-ledger.set_enumerated_steps(repo, run_id, "plan-3",
+run_record.set_enumerated_steps(repo, run_id, "plan-3",
     [{"id": "wC-1", "invokes": {"backend_op": "do_step"}}])
 
 # Set gaps_open=0 + plan_step=review_plan so the predicate sees plan-met.
-ledger.set_gaps_open(repo, run_id, 0)
-ledger.set_loop(repo, run_id, plan_step="review_plan")
+run_record.set_gaps_open(repo, run_id, 0)
+run_record.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 3: drive the judge through the PRODUCTION write path — fix-pass I
 # (round-2 P0). v0.2.0 round-1 contract had judge.findings[].winner_step_id;
 # record_verdict normalize stripped it, so production A2 was unrunnable.
 # Round-2 fix moves the winner onto judge.dispatch_context.winner_step_id
-# via ledger.set_winner_step_id, called alongside record_verdict. This test
+# via run_record.set_winner_step_id, called alongside record_verdict. This test
 # now exercises that path end-to-end (no on-disk sidestep).
-ledger.transition(repo, run_id, "judge", "dispatched")
+run_record.transition(repo, run_id, "judge", "dispatched")
 if scenario == "green":
-    ledger.record_verdict(repo, run_id, "judge",
+    run_record.record_verdict(repo, run_id, "judge",
         [{"severity": "minor", "note": "winner=plan-2"}])
-    ledger.set_winner_step_id(repo, run_id, "judge", "plan-2")
+    run_record.set_winner_step_id(repo, run_id, "judge", "plan-2")
 elif scenario == "no-winner":
     # deliberate-fail: judge verdicted WITHOUT calling set_winner_step_id.
     # dispatch_context.winner_step_id is absent → producer raises.
-    ledger.record_verdict(repo, run_id, "judge",
+    run_record.record_verdict(repo, run_id, "judge",
         [{"severity": "minor", "note": "undecided"}])
 elif scenario == "bad-winner":
     # Defense-in-depth: set_winner_step_id rejects an unknown id BEFORE
@@ -139,19 +139,19 @@ elif scenario == "bad-winner":
     # message-check scenario below; here we still want the loop_phase=plan
     # end-state assertion, so we record the verdict and skip the set —
     # behaviorally equivalent to no-winner from the producer's viewpoint.
-    ledger.record_verdict(repo, run_id, "judge",
+    run_record.record_verdict(repo, run_id, "judge",
         [{"severity": "minor", "note": "winner=ghost (write rejected)"}])
 
 # Step 4: pulse. auto=True so _maybe_handoff takes the auto-flip branch and routes
 # advance_to_phase → transition_and_emit → judge_winner_to_work_steps.
 # dispatch_pulse catches producer exceptions (lib/pulse.py:614) and converts them
 # to a recorded stall, so the no-winner / bad-winner scenarios still complete
-# the call — the ledger just stays at loop_phase=plan with no new work steps.
+# the call — the run-record just stays at loop_phase=plan with no new work steps.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
-led = ledger.read_ledger(repo, run_id)
+led = run_record.read_run_record(repo, run_id)
 work_steps = sorted(u["id"] for u in led["steps"] if u.get("phase") == "work")
 # Filter out the pre-existing judge step so the test asserts on the EMITTED set.
 emitted = sorted(uid for uid in work_steps if uid != "judge")
@@ -174,9 +174,9 @@ esac
 it "fix-pass C T2 DELIBERATE-FAIL: judge findings have no winner_step_id → producer raises, no work steps"
 res_nowin="$(drive_a2 no-winner)"
 # producers.py raises ValueError. pulse.py:614 catches it and records a stall,
-# but the atomic transition_and_emit body raised BEFORE writing — so the ledger
+# but the atomic transition_and_emit body raised BEFORE writing — so the run-record
 # stays at loop_phase=plan with no new work steps. (Workflow-declared judge work
-# step stays in the ledger but we exclude it from the emitted set above.)
+# step stays in the run-record but we exclude it from the emitted set above.)
 case "$res_nowin" in
   "plan|") pass ;;
   *) fail "expected 'plan|' (raise → no emission, phase unchanged), got '$res_nowin'" ;;
@@ -186,7 +186,7 @@ esac
 it "fix-pass C T2 MALFORMED: judge winner names non-existent step → producer raises with right message"
 res_bad="$(drive_a2 bad-winner)"
 # Same behavior as scenario 2: producer raises (different message — "winner
-# 'plan-999' not in ledger"), pulse catches, ledger stays at loop_phase=plan,
+# 'plan-999' not in run_record"), pulse catches, run-record stays at loop_phase=plan,
 # no new work steps appear. We assert the visible end-state; the raise message
 # is asserted in the dedicated message-check scenario below.
 case "$res_bad" in
@@ -238,30 +238,30 @@ import sys, os, importlib.util, tempfile, contextlib, io
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-ledger = load_lib_module("ledger")
+run_record = load_lib_module("run_record")
 producers = load_lib_module("step_producers")
 
 repo = tempfile.mkdtemp(); run = "prod-path"
-ledger.init_ledger(repo, run, backend="ce", steps=[
+run_record.init_run_record(repo, run, backend="ce", steps=[
     {"id": "plan-1", "phase": "plan"},
     {"id": "plan-2", "phase": "plan"},
     {"id": "judge", "phase": "work", "state": "pending"},
 ])
 # plan-2 is the winner; stash its enumerated_steps (would normally come from
 # the plan backend's enumerate_plan_steps output).
-ledger.set_enumerated_steps(repo, run, "plan-2",
+run_record.set_enumerated_steps(repo, run, "plan-2",
     [{"id": "wB-1", "invokes": {"backend_op": "do_step"}},
      {"id": "wB-2", "invokes": {"backend_op": "do_step"}}])
 
 # THE PRODUCTION WRITE PATH (no on-disk sidestep):
-ledger.transition(repo, run, "judge", "dispatched")
-ledger.record_verdict(repo, run, "judge",
+run_record.transition(repo, run, "judge", "dispatched")
+run_record.record_verdict(repo, run, "judge",
     [{"severity": "minor", "note": "winner=plan-2"}])
-ledger.set_winner_step_id(repo, run, "judge", "plan-2")
+run_record.set_winner_step_id(repo, run, "judge", "plan-2")
 
-# Now read the ledger fresh and run the producer — proving the winner
+# Now read the run-record fresh and run the producer — proving the winner
 # survives the canonical write path AND the producer consumes it.
-led = ledger.read_ledger(repo, run)
+led = run_record.read_run_record(repo, run)
 emitted = producers.judge_winner_to_work_steps(led, "work")
 print(",".join(sorted(u["id"] for u in emitted)))
 PYEOF
@@ -280,15 +280,15 @@ import sys, os, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-ledger = load_lib_module("ledger")
+run_record = load_lib_module("run_record")
 repo = tempfile.mkdtemp(); run = "winner-guard"
-ledger.init_ledger(repo, run, backend="ce", steps=[
+run_record.init_run_record(repo, run, backend="ce", steps=[
     {"id": "judge", "phase": "work", "state": "pending"},
 ])
 try:
-    ledger.set_winner_step_id(repo, run, "judge", "plan-999")
+    run_record.set_winner_step_id(repo, run, "judge", "plan-999")
     print("NO-RAISE")
-except ledger.LedgerError as e:
+except run_record.RunRecordError as e:
     print("plan-999" in str(e))
 PYEOF
 )"
@@ -306,18 +306,18 @@ import sys, os, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-ledger = load_lib_module("ledger")
+run_record = load_lib_module("run_record")
 repo = tempfile.mkdtemp(); run = "self-winner"
 # Realistic A2 shape: plan steps + judge. The malformed verdict names the
 # judge itself, which used to slip past the guard.
-ledger.init_ledger(repo, run, backend="ce", steps=[
+run_record.init_run_record(repo, run, backend="ce", steps=[
     {"id": "plan-1", "phase": "plan"},
     {"id": "judge",  "phase": "work", "state": "pending"},
 ])
 try:
-    ledger.set_winner_step_id(repo, run, "judge", "judge")
+    run_record.set_winner_step_id(repo, run, "judge", "judge")
     print("NO-RAISE")
-except ledger.LedgerError as e:
+except run_record.RunRecordError as e:
     s = str(e)
     # Reject AND name both the bad id and the constraint (judge must differ).
     print("judge" in s and ("must differ" in s or "eligible" in s))

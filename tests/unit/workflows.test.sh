@@ -2,7 +2,7 @@
 # auto U2/U3/U7 unit test: lib/workflows.py (validator + registry + A1_BUILTIN)
 # and lib/topology-render.py.
 #
-# SELF-CONTAINED inline harness (same style as ledger.test.sh).
+# SELF-CONTAINED inline harness (same style as run-record.test.sh).
 #
 # Scenarios (U2 validate + U7 built-ins/constant/renderer; U3 resolver scenarios
 # are added when U3 lands):
@@ -186,7 +186,7 @@ assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_or
 # Fix-pass D (P1 #6): a work-only workflow with NO pre-declared steps is
 # unrunnable in v0.2.0 — init-time enumeration ships in v0.2.1 (KTD-15).
 # validate() must hard-reject this shape so the engine never creates a
-# zero-step ledger that re-arms forever without dispatching.
+# zero-step run-record that re-arms forever without dispatching.
 it "fix-pass D: work-only phase_order [work] with empty steps REJECTED (v0.2.1 reservation)"
 assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[]}')"
 

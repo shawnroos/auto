@@ -6,9 +6,9 @@
 # `driving_session_id`, so neither fired inside the tree — the `fix` phase writes
 # code and runs Bash, and it would have run with only prompt-carried (advisory)
 # constraints. U8 turns ownership into a SET: a dispatched sub-agent registers its
-# session id on the ledger, and the hooks test membership.
+# session id on the run-record, and the hooks test membership.
 #
-# Exercises the REAL hooks + REAL ledger, exactly as advisor-gate.test.sh does.
+# Exercises the REAL hooks + REAL run-record, exactly as advisor-gate.test.sh does.
 # Nothing is mocked; the only injection points are the sandbox repo and the
 # PreToolUse event JSON on stdin.
 #
@@ -23,7 +23,7 @@
 #
 # Scenarios:
 #   1. AE7  registered sub-agent + destructive -> deny + run PAUSED (fail-CLOSED)
-#   2.      unregistered session + destructive -> allow, ledger untouched
+#   2.      unregistered session + destructive -> allow, run-record untouched
 #           (no cross-session capture of an unrelated Claude session)
 #   3.      registered sub-agent + benign command -> allow
 #   4.      driving session still gated (no regression of the scalar behaviour)
@@ -31,7 +31,7 @@
 #           - driving session + destructive during operator pause -> allow
 #           - registered SUB-AGENT + destructive during operator pause -> DENY
 #   6.      question gate widens to the tree (registered sub-agent -> deny+redirect)
-#   7.      question gate still fails OPEN (malformed ledger -> allow, exit 0)
+#   7.      question gate still fails OPEN (malformed run-record -> allow, exit 0)
 #   8.      action gate still fails CLOSED (deny-unsupported hatch -> pause anyway)
 #   9.      register_session is idempotent and does not clobber driving_session_id
 
@@ -39,7 +39,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 ASKUSER_PY="${AUTO_ROOT}/lib/on-pretooluse-askuser.py"
 ACTION_PY="${AUTO_ROOT}/lib/on-pretooluse-action.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
@@ -83,15 +83,15 @@ except Exception:
 }
 
 rd_loop() {  # rd_loop <repo> <run> <field>
-  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$1','$2');print(l['loop'].get('$3'))"
+  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_run_record('$1','$2');print(l['loop'].get('$3'))"
 }
 
 set_driving_session() {  # <repo> <run> <sid>
-  "$PY" - "$1" "$2" "$3" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$1" "$2" "$3" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, sid, ledger_py = sys.argv[1:5]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-p = L.ledger_path(repo, run)
+repo, run, sid, run_record_py = sys.argv[1:5]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+p = L.run_record_path(repo, run)
 with open(p) as f: led = json.load(f)
 led["driving_session_id"] = sid
 with open(p,"w") as f: json.dump(led,f)
@@ -100,42 +100,42 @@ PYEOF
 
 # The U8 verb under test. A dispatched sub-agent calls this to join the owner set.
 register_session() {  # <repo> <run> <sid>
-  "$PY" - "$1" "$2" "$3" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$1" "$2" "$3" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, sid, ledger_py = sys.argv[1:5]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run, sid, run_record_py = sys.argv[1:5]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.register_session(repo, run, sid)
 PYEOF
 }
 
 read_owners() {  # <repo> <run>
-  "$PY" - "$1" "$2" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$1" "$2" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, ledger_py = sys.argv[1:4]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-led = L.read_ledger(repo, run)
+repo, run, run_record_py = sys.argv[1:4]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+led = L.read_run_record(repo, run)
 print(json.dumps(led.get("agent_session_ids") or []))
 PYEOF
 }
 
 mk_live_owned() {  # <name> <run> <driving-sid>
   local repo; repo="$(mkrepo "$1")"
-  "$PY" - "$repo" "$2" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$repo" "$2" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, ledger_py = sys.argv[1:4]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run, run_record_py = sys.argv[1:4]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
   set_driving_session "$repo" "$2" "$3"
   printf '%s' "$repo"
 }
 
 operator_pause() {  # <repo> <run> — a HUMAN pause: driver=manual, no backstop latch
-  "$PY" - "$1" "$2" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$1" "$2" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, ledger_py = sys.argv[1:4]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-p = L.ledger_path(repo, run)
+repo, run, run_record_py = sys.argv[1:4]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+p = L.run_record_path(repo, run)
 with open(p) as f: led = json.load(f)
 led["loop"]["driver"] = "manual"
 led["loop"].pop("backstop_latched", None)
@@ -163,7 +163,7 @@ REPO="$(mk_live_owned unreg r2 sess-BOSS)"
 ev="$(EVENT sess-STRANGER Bash 'rm -rf build/')"
 out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
 assert_empty "$out"
-it "unregistered session leaves the ledger untouched (driver still self)"
+it "unregistered session leaves the run_record untouched (driver still self)"
 assert_eq "self" "$(rd_loop "$REPO" r2 driver)"
 
 # ─── 3. registered sub-agent + benign -> allow ────────────────────────────────
@@ -206,13 +206,13 @@ out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_eq "deny" "$(perm_decision "$out")"
 
 # ─── 7. question gate still fails OPEN ───────────────────────────────────────
-it "askuser still fails OPEN: malformed ledger -> allow"
+it "askuser still fails OPEN: malformed run_record -> allow"
 REPO="$(mkrepo q-malformed)"
 printf '{ not valid json' > "${REPO}/.claude/auto/broken.json"
 ev="$(EVENT sess-KID AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
-it "askuser still exits 0 on a malformed ledger (rel-001)"
+it "askuser still exits 0 on a malformed run_record (rel-001)"
 printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO" >/dev/null 2>&1
 assert_eq "0" "$?"
 

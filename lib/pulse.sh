@@ -4,7 +4,7 @@
 #
 # THE RE-ARM BOUNDARY (read before wiring this into a command):
 #   pulse.py CANNOT call ScheduleWakeup — that is a MODEL tool, not a CLI. This
-#   shim runs the pulse (one advance + atomic ledger write) and prints the
+#   shim runs the pulse (one advance + atomic run-record write) and prints the
 #   re-arm INTENT as JSON on stdout:
 #       {"action":"rearm","delay":60,"prompt":"/auto:auto-pulse <run>", ...}
 #       {"action":"stop", ...}    {"action":"noop", ...}
@@ -14,7 +14,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (rationale parity:
-# claude-modes/lib/mode-yaml.sh:24-32, matches lib/ledger.sh).
+# claude-modes/lib/mode-yaml.sh:24-32, matches lib/run_record.sh).
 #
 # $ARGUMENTS-safe: a command `.md` body's only $-bearing line is
 # `bash lib/pulse.sh "$ARGUMENTS"`; ALL $-logic lives HERE, never in the .md

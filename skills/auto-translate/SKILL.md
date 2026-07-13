@@ -126,7 +126,7 @@ executes on the native subagent-tree — the label is a forward-looking annotati
 
 - It does not build a `pipeline()`/`parallel()` compiler or any runnable
   workflow-script — that target is inert this run (KTD6b).
-- It does not dispatch, mutate the ledger, or touch a run. Derivation is pure; the
+- It does not dispatch, mutate the run-record, or touch a run. Derivation is pure; the
   real run goes through `/auto` and `dispatch_batch`.
 - It does not replace `auto-design` / `auto-author-workflow` (it consumes their
   output) or the dependency engine (it reuses `ready_steps` / `_is_ready`). (R11.)

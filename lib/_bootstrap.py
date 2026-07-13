@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""auto: the ONE ledger-module loader.
+"""auto: the ONE run-record-module loader.
 
 Every consumer module (pulse.py, dispatcher.py, on-stop.py, on-session-start.py,
-goal-status.py, auto-resume.py, auto.py, auto-status.py) loads the canonical ledger
-module by FILE PATH rather than `import ledger` — the plugin is not pip-installed
+goal-status.py, auto-resume.py, auto.py, auto-status.py) loads the canonical run-record
+module by FILE PATH rather than `import run_record` — the plugin is not pip-installed
 and lib/ is not guaranteed on sys.path. That importlib bootstrap used to be
 copy-pasted into all eight modules; it lives here ONCE so a change to the load
 strategy (or the Python pin contract) has a single edit site.
@@ -12,8 +12,8 @@ Usage from a sibling module in lib/::
 
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from _bootstrap import load_ledger
-    ledger = load_ledger()
+    from _bootstrap import load_run_record
+    run_record = load_run_record()
 
 We do NOT load _bootstrap itself via importlib — that would just move the
 duplication. The two-line sys.path prepend + plain import is the dedup.
@@ -52,7 +52,7 @@ def load_lib_module(name: str):
     underscores (``phase_grammar``). Callers bind the returned module once.
 
     Added in v0.2.0 (U5) to load the hyphenated ``phase-grammar.py`` (and reusable
-    for ``topology-render.py``). Generalizes the former ``load_ledger`` idiom that
+    for ``topology-render.py``). Generalizes the former ``load_run_record`` idiom that
     was previously the only loader here.
 
     Caches the loaded module in ``sys.modules`` under ``spec_name`` so repeat
@@ -90,7 +90,7 @@ def _git_worktree_root(start):
 
     ``git rev-parse --show-toplevel`` reports the WORKTREE's own root (a
     worktree reports itself, not the host repo) — the upper bound for the
-    per-worktree ledger home. Distinct from ``resolve_host_repo_root()``
+    per-worktree run-record home. Distinct from ``resolve_host_repo_root()``
     (``--git-common-dir``), which deliberately resolves the MAIN repo for
     cross-worktree shared state.
 
@@ -118,7 +118,7 @@ def _git_worktree_root(start):
 
 
 def resolve_repo() -> str:
-    """Repo root: $CLAUDE_AUTO_REPO, else the git-worktree-bounded ledger home.
+    """Repo root: $CLAUDE_AUTO_REPO, else the git-worktree-bounded run-record home.
 
     Used by every CLI module that needs to find the repo's ``.claude/auto``
     directory (``auto.py``, ``auto-resume.py``, ``auto-status.py``). Consolidated
@@ -126,7 +126,7 @@ def resolve_repo() -> str:
     place. ``$CLAUDE_AUTO_REPO`` is the explicit override; otherwise we walk up
     from cwd looking for ``.claude/auto`` — but NEVER above the git worktree
     root, and never walking up at all outside a git tree. The fallback is the
-    worktree root (or cwd, no git), where ``init_ledger`` will create the dir.
+    worktree root (or cwd, no git), where ``init_run_record`` will create the dir.
 
     The bound fixes the 2026-06 mis-root field bug: a fresh worktree has no
     ``.claude/auto`` yet, so the unbounded walk-up escaped to
@@ -223,7 +223,7 @@ def resolve_shared_dir(*, cwd=None):
     to per-worktree state (the legacy ``resolve_repo`` shape) or erroring out
     for features that genuinely require shared state (fanout).
 
-    Distinct from ``resolve_repo()``: that returns the per-worktree ledger
+    Distinct from ``resolve_repo()``: that returns the per-worktree run-record
     home (env-pinned via ``CLAUDE_AUTO_REPO`` for sub-runs); this returns the
     main repo's shared state directory. Both are needed: the per-worktree
     helper for "what does THIS worktree own", this helper for "what does the
@@ -247,15 +247,15 @@ def resolve_shared_dir(*, cwd=None):
 CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
 
 
-# The ledger key holding the DRIVING interactive session's id (v0.6.0 U5 / KTD-5).
+# The run-record key holding the DRIVING interactive session's id (v0.6.0 U5 / KTD-5).
 # ONE definition shared by the advisor-gate WRITER and the READERS so they can
-# never drift: the arm-time setter (lib/ledger_mutators.py::set_driving_session_id)
+# never drift: the arm-time setter (lib/run_record_mutators.py::set_driving_session_id)
 # writes it, and BOTH PreToolUse hooks (lib/on-pretooluse-action.py,
 # lib/on-pretooluse-askuser.py) match a live run to a session by reading it and
-# comparing session-id EQUALITY. lib/ledger_core.py::init_ledger also emits this
+# comparing session-id EQUALITY. lib/run_record_core.py::init_run_record also emits this
 # key as its schema default, but it CANNOT import _bootstrap (that would be a
-# circular import — _bootstrap.load_ledger loads ledger_core; see the note at
-# ledger_core.py's deferred-loader) so it inlines the literal on purpose — keep
+# circular import — _bootstrap.load_run_record loads run_record_core; see the note at
+# run_record_core.py's deferred-loader) so it inlines the literal on purpose — keep
 # that one string in sync with this constant.
 DRIVING_SESSION_KEY = "driving_session_id"
 
@@ -263,18 +263,18 @@ DRIVING_SESSION_KEY = "driving_session_id"
 # sub-agents, which carry their own CLAUDE_CODE_SESSION_ID; a scalar
 # `driving_session_id` therefore matched none of them and BOTH PreToolUse hooks
 # went dark inside the tree. A dispatched sub-agent registers its session id here
-# (via `ledger.register_session`) and the hooks test MEMBERSHIP of
+# (via `run_record.register_session`) and the hooks test MEMBERSHIP of
 # {driving_session_id} ∪ agent_session_ids.
 #
 # Membership is opt-IN by registration, never by mere co-location: an unrelated
 # Claude session in the same worktree is not in the set and is never gated. The
 # same "keep the literal in sync" caveat as DRIVING_SESSION_KEY applies to
-# ledger_core.py.
+# run_record_core.py.
 AGENT_SESSIONS_KEY = "agent_session_ids"
 
 
 def session_membership(led, session_id):
-    """Return ``(is_driving, is_agent)`` for ``session_id`` against ONE ledger.
+    """Return ``(is_driving, is_agent)`` for ``session_id`` against ONE run-record.
 
     The single source of truth for the ownership-set membership computation both
     PreToolUse gates key on (U8/R21). Extracted here — next to the two key
@@ -297,9 +297,9 @@ def session_membership(led, session_id):
     constraints — but it never weakens the DRIVING-session backstop, which comes
     from the ``driving_session_id`` scalar and is unaffected. So the worst case is
     a revert to pre-U8 tree coverage, never below it. This helper stays PURE (it
-    is called per-ledger in the hot-path worktree scan on every tool call); it
+    is called per-run-record in the hot-path worktree scan on every tool call); it
     does not warn on corruption, because per-call stderr from a benign
-    legacy-shaped ledger would be worse than the quiet fail-safe.
+    legacy-shaped run-record would be worse than the quiet fail-safe.
     """
     driving = led.get(DRIVING_SESSION_KEY)
     is_driving = bool(driving) and driving == session_id
@@ -363,29 +363,29 @@ def cmux_available() -> bool:
     return shutil.which(name) is not None
 
 
-def load_ledger():
-    """Load and return the canonical ledger module (lib/ledger.py).
+def load_run_record():
+    """Load and return the canonical run-record module (lib/run_record.py).
 
-    Thin wrapper over ``load_lib_module("ledger")`` — kept as a named entry point
+    Thin wrapper over ``load_lib_module("run_record")`` — kept as a named entry point
     because eight consumers already call it; the load strategy lives in one place.
     """
-    return load_lib_module("ledger")
+    return load_lib_module("run_record")
 
 
-def load_ledger_safe(path: str):
-    """Read a ledger JSON file; return its dict, or None on ANY read/parse
+def load_run_record_safe(path: str):
+    """Read a run-record JSON file; return its dict, or None on ANY read/parse
     failure OR a non-dict top-level value (rel-001). Never raises, so a caller
     scanning siblings keeps going and a fail-closed hook stays fail-closed.
 
     The dict guard is folded in here: returning None on a non-dict value means a
-    list/scalar ledger skips instead of raising AttributeError at the caller's
+    list/scalar run-record skips instead of raising AttributeError at the caller's
     ``led.get(...)`` — strictly safer than the bare ``json.load`` it replaced.
 
     READ CHOKEPOINT 2 of 2 (U6 / KTD-1). This is the path every HOOK and SCAN
     consumer takes — on-stop (including its batch-sidecar sub-run reads),
     on-session-start, on-pretooluse-action / -askuser, auto-detect, auto-resume's
-    run scan, auto-status's list-all, launch-mode, and ``iter_worktree_ledgers``
-    which wraps it. It does NOT go through ``ledger_core._read_json``, so wiring
+    run scan, auto-status's list-all, launch-mode, and ``iter_worktree_run_records``
+    which wraps it. It does NOT go through ``run_record_core._read_json``, so wiring
     only that first chokepoint would leave exactly the in-flight population the
     shim exists to protect reading v1 keys as absent — e.g. the Stop hook's
     handoff-paused carve-out comparing a new ``"handoff"`` against the RETIRED v1
@@ -404,19 +404,19 @@ def load_ledger_safe(path: str):
         return None
 
 
-def iter_worktree_ledgers(repo_root: str):
-    """Yield ``(run_id, ledger_dict)`` for each parseable ledger under
+def iter_worktree_run_records(repo_root: str):
+    """Yield ``(run_id, run_record_dict)`` for each parseable run-record under
     ``<repo_root>/.claude/auto/*.json``, sorted by path. ``run_id`` is
     ``led["run_id"]`` when present, else the filename stem.
 
     Per-worktree glob ONLY — fan-out sub-runs carry their own session_id/shared
     dir and are out of scope by design (KTD-5); this does NOT walk batch
     sidecars. A consumer needing the sidecar walk (on-stop.py) keeps its own loop
-    over ``load_ledger_safe``. Never raises: a missing dir yields nothing.
+    over ``load_run_record_safe``. Never raises: a missing dir yields nothing.
     """
     dispatch_dir = os.path.join(repo_root, ".claude", "auto")
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
-        led = load_ledger_safe(path)
+        led = load_run_record_safe(path)
         if led is None:
             continue
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
@@ -424,14 +424,14 @@ def iter_worktree_ledgers(repo_root: str):
 
 
 def iter_active_runs(repo_root: str):
-    """Yield ``(run_id, ledger_dict)`` for each NON-``done`` run under
-    ``<repo_root>/.claude/auto/*.json``, in ``iter_worktree_ledgers``' sorted order.
+    """Yield ``(run_id, run_record_dict)`` for each NON-``done`` run under
+    ``<repo_root>/.claude/auto/*.json``, in ``iter_worktree_run_records``' sorted order.
 
     The shared active-run scan (U7): consolidates two divergent ``_active_runs``
-    copies that both wrapped ``iter_worktree_ledgers`` + ``phase_grammar.current_phase``
+    copies that both wrapped ``iter_worktree_run_records`` + ``phase_grammar.current_phase``
     to drop ``"done"`` runs — ``auto-status.py`` yielded the richer ``(run_id, led)``
     tuples, while ``auto-resume.py`` yielded bare run_id strings AND carried a dead
-    ``ledger`` param. The two filter polarities (``== "done"`` skip vs
+    ``run_record`` param. The two filter polarities (``== "done"`` skip vs
     ``!= "done"`` keep) were equivalent; this yields the richer tuple shape and
     ``auto-resume`` adapts via ``run_id for run_id, _ in iter_active_runs(...)``.
 
@@ -441,7 +441,7 @@ def iter_active_runs(repo_root: str):
     import-time surface. Never raises: a missing dispatch dir yields nothing.
     """
     phase_grammar = load_lib_module("phase-grammar")
-    for run_id, led in iter_worktree_ledgers(repo_root):
+    for run_id, led in iter_worktree_run_records(repo_root):
         if phase_grammar.current_phase(led) != "done":
             yield run_id, led
 
@@ -472,7 +472,7 @@ def is_iteration_disabled() -> bool:
     The iteration kill-switch — a REAL operator escape hatch, not a test-only
     hatch. When set, ``pulse.advance_iteration_loop`` short-circuits and the
     standard predicate-met flow takes over (the run exits as if no iteration
-    block existed on the ledger). Useful for emergency rollback of an
+    block existed on the run-record). Useful for emergency rollback of an
     outcomes-gated workflow without redeploying.
 
     Originally (v0.3.0 U4) this routed through ``test_hatch_enabled`` and
@@ -511,7 +511,7 @@ def coerce_confidence(confidence):
     return float(confidence)
 
 
-def plan_step_sequencer(ledger, *, sequence):
+def plan_step_sequencer(run_record, *, sequence):
     """Pure plan-loop sequencer shared by both backends (U10).
 
     Collapses the byte-identical ``_next_plan_step`` skeleton that lived in
@@ -522,10 +522,10 @@ def plan_step_sequencer(ledger, *, sequence):
     ``sequence`` is the per-backend ordered plan steps EXCLUDING the terminal
     ``done`` — CE passes ``("plan", "deepen", "review_plan")`` and native passes
     ``("plan", "review_plan")`` (native has no deepen step). ``plan_step`` is a
-    real validated ledger field (``ledger_core.PLAN_STEPS``) that the pulse persists
+    real validated run-record field (``run_record_core.PLAN_STEPS``) that the pulse persists
     via ``set_loop(plan_step=step)``; both backends read it identically and this
     sequencer keeps the ``None``-tolerance native already relied on. No IO — the
-    engine persists the returned step; the backend never writes the ledger (§1).
+    engine persists the returned step; the backend never writes the run-record (§1).
 
     §4.1 coherence guard runs FIRST (livelock hazard): once a ``review_plan``
     round has closed the gaps (``gaps_open == 0``) the next call MUST return
@@ -533,8 +533,8 @@ def plan_step_sequencer(ledger, *, sequence):
     because ``gaps_open`` is 0 by default before any review has run — the guard
     must only fire AFTER a real review pass, else the loop would never start.
     """
-    epr = ledger.get("exit_predicate_result") or {}
-    plan_step = ledger.get("plan_step")
+    epr = run_record.get("exit_predicate_result") or {}
+    plan_step = run_record.get("plan_step")
     if plan_step in ("review_plan", "done") and epr.get("gaps_open", 0) == 0:
         return "done"
     if plan_step is None:

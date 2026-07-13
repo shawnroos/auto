@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # auto U4 unit test: lib/pulse.py — one ScheduleWakeup-paced advance
-# of the ledger. The pulse reads ALL loop state from the disk ledger, does ONE
+# of the run-record. The pulse reads ALL loop state from the disk run-record, does ONE
 # smallest-useful advance inside a try/except, persists atomically via
-# ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
+# run_record.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
 # ScheduleWakeup — that is a model tool, not a CLI).
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
-# and HOME isolation inline, mirroring tests/unit/ledger.test.sh. It does NOT
+# and HOME isolation inline, mirroring tests/unit/run-record.test.sh. It does NOT
 # source claude-modes' test-helpers nor auto shared helpers (those
 # are U2's, not yet present). When U2 lands, this file may migrate to them.
 #
@@ -17,13 +17,13 @@
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
 #   4. backend raises mid-pulse -> step.last_error recorded + step marked stalled;
-#      ledger never half-written; + deliberate-fail control proving the backend
+#      run-record never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
 #      fixed) but makes NO dispatch call and writes NO finding
 #   6. non-stateless safety: invoke the pulse twice from FRESH processes against
-#      the same ledger -> it advances purely from ledger state
+#      the same run-record -> it advances purely from run-record state
 #   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
 #      ACROSS fresh-process pulses WITHOUT re-planning. The pulse persists the
 #      executed plan_step (schema §3.1) so the next pulse reads it instead of
@@ -49,7 +49,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
 PULSE_SH="${AUTO_ROOT}/lib/pulse.sh"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
@@ -83,27 +83,27 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-steps> [backend] [phase]  — create a ledger with given steps.
-ledger_init() {
+# init <run> <json-steps> [backend] [phase]  — create a run-record with given steps.
+run_record_init() {
   local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, steps_json, backend, phase, run_record_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
+m.init_run_record(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
-# field <run> <python-expr-on-ledger-named-L>  — print a value from the ledger.
-ledger_field() {
+# field <run> <python-expr-on-run-record-named-L>  — print a value from the run-record.
+run_record_field() {
   local run="$1" expr="$2"
-  "$PY" - "$REPO" "$run" "$expr" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$expr" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, expr, ledger_py = sys.argv[1:5]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, expr, run_record_py = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-L = m.read_ledger(repo, run)
+L = m.read_run_record(repo, run)
 print(eval(expr))
 PYEOF
 }
@@ -125,12 +125,12 @@ echo "pulse-iteration.test.sh"
 # v0.3.0 U4 — advance_iteration_loop + finally + kill-switch fence + R9
 # ════════════════════════════════════════════════════════════════════════════
 #
-# Each scenario primes a ledger that emulates the post-U6 iteration shape
+# Each scenario primes a run-record that emulates the post-U6 iteration shape
 # (workflows ship iteration + emit_templates blocks; U6 has not landed yet so
-# we install them directly via _with_locked_ledger). U4 reads those fields
-# through `iteration.evaluate_decision` and the ledger mutators U2 ships.
+# we install them directly via _with_locked_run_record). U4 reads those fields
+# through `iteration.evaluate_decision` and the run-record mutators U2 ships.
 
-# Test driver: a python helper that seeds a ledger with an iteration block,
+# Test driver: a python helper that seeds a run-record with an iteration block,
 # optionally walks the gate step to a desired state + decision, then runs
 # dispatch_pulse and prints a JSON blob with the post-pulse state.
 u4_driver() {
@@ -139,7 +139,7 @@ import json, sys, os, importlib.util
 auto_root, repo = sys.argv[1:3]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-m = load_lib_module("ledger")
+m = load_lib_module("run_record")
 t_spec = importlib.util.spec_from_file_location(
     "pulse_under_test", os.path.join(auto_root, "lib", "pulse.py"))
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
@@ -149,11 +149,11 @@ op = sys.argv[3]
 def init_a2(run, *, decision=None, attempts=0, active_wall=0,
             max_attempts=5, max_wall=None, plan_steps=("plan-1","plan-2","plan-3"),
             gate_state="verdict-returned", emit_count=None):
-    """Build an A2-shaped ledger: 3 plan steps (all 'fixed' so terminal) +
+    """Build an A2-shaped run_record: 3 plan steps (all 'fixed' so terminal) +
     a 'judge' gate step. The gate is walked to ``gate_state`` (default
     verdict-returned via record_verdict) and optionally tagged with the
     given ``decision`` via set_verdict_decision."""
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     steps = [
         {"id": pid, "state": "fixed", "phase": "plan",
@@ -162,7 +162,7 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
     ]
     steps.append({"id": "judge", "state": "pending", "phase": "work",
                   "depends_on": list(plan_steps)})
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   steps=steps)
     # Seed iteration + emit_templates block.
@@ -186,7 +186,7 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
             if u["id"] == "judge":
                 if gate_state == "verdict-returned":
                     u["state"] = "dispatched"
-    m._with_locked_ledger(repo, run, seed)
+    m._with_locked_run_record(repo, run, seed)
     if gate_state == "verdict-returned":
         m.record_verdict(repo, run, "judge", [])
     if decision is not None:
@@ -201,12 +201,12 @@ def init_a2(run, *, decision=None, attempts=0, active_wall=0,
 
 def init_a1(run, steps=None):
     """a1-shape: no iteration block, no gate_step, no emit_templates. U4
-    must early-return at step 1 with zero ledger writes."""
-    p = m.ledger_path(repo, run)
+    must early-return at step 1 with zero run_record writes."""
+    p = m.run_record_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     u = steps or [{"id": "U1", "state": "verdict-returned",
                    "findings": [{"severity": "blocker", "note": "open"}]}]
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   steps=u)
 
@@ -219,7 +219,7 @@ if op == "advance":
     # composed against not-iteration_pending which is False here).
     init_a2("u4-advance", decision="advance", attempts=0)
     r = t.dispatch_pulse(repo, "u4-advance")
-    led = m.read_ledger(repo, "u4-advance")
+    led = m.read_run_record(repo, "u4-advance")
     print(json.dumps({
         "action": r.get("action"),
         "reason": r.get("reason"),
@@ -235,7 +235,7 @@ elif op == "iterate-under-bound":
     init_a2("u4-iter-under", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
     r = t.dispatch_pulse(repo, "u4-iter-under")
-    led = m.read_ledger(repo, "u4-iter-under")
+    led = m.read_run_record(repo, "u4-iter-under")
     plan_ids = sorted(u["id"] for u in led["steps"] if u.get("phase") == "plan")
     judge = next(u for u in led["steps"] if u["id"] == "judge")
     print(json.dumps({
@@ -257,7 +257,7 @@ elif op == "iterate-over-attempts":
     init_a2("u4-bound-attempts", decision="iterate", attempts=5,
             max_attempts=5, emit_count=2)
     r = t.dispatch_pulse(repo, "u4-bound-attempts")
-    led = m.read_ledger(repo, "u4-bound-attempts")
+    led = m.read_run_record(repo, "u4-bound-attempts")
     judge = next(u for u in led["steps"] if u["id"] == "judge")
     dc = judge.get("dispatch_context") or {}
     override = dc.get("bound_override") or {}
@@ -278,7 +278,7 @@ elif op == "iterate-over-wall":
     init_a2("u4-bound-wall", decision="iterate", attempts=1,
             active_wall=1900, max_attempts=5, max_wall=1800, emit_count=1)
     r = t.dispatch_pulse(repo, "u4-bound-wall")
-    led = m.read_ledger(repo, "u4-bound-wall")
+    led = m.read_run_record(repo, "u4-bound-wall")
     judge = next(u for u in led["steps"] if u["id"] == "judge")
     override = (judge.get("dispatch_context") or {}).get("bound_override") or {}
     print(json.dumps({
@@ -294,43 +294,43 @@ elif op == "finally-crash-accumulates":
     # raises; after pulse: active_wall_seconds > A0. Because the inner
     # try/except in _pulse_body_inner CATCHES the backend raise and converts
     # it to a recorded stall (so _pulse_body returns normally), we instead
-    # force the raise INSIDE the finally region by monkey-patching ledger
+    # force the raise INSIDE the finally region by monkey-patching run-record
     # read to raise after the body started. Simpler: prove the finally fires
     # on the NORMAL return path too — accumulate_active_time fires once per
     # pulse regardless of return path. We probe a regular pulse + a pulse whose
     # backend raises (the try/except path inside _pulse_body_inner).
     init_a1("u4-fin-crash")
-    before = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
+    before = m.read_run_record(repo, "u4-fin-crash").get("active_wall_seconds", 0)
     t.dispatch_pulse(repo, "u4-fin-crash")
-    after_clean = m.read_ledger(repo, "u4-fin-crash").get("active_wall_seconds", 0)
-    # Now drive a raise via a BoomBackend on a plan-phase ledger (the inner
+    after_clean = m.read_run_record(repo, "u4-fin-crash").get("active_wall_seconds", 0)
+    # Now drive a raise via a BoomBackend on a plan-phase run-record (the inner
     # try/except converts it to a stall; the finally still fires).
-    p2 = m.ledger_path(repo, "u4-fin-raise")
+    p2 = m.run_record_path(repo, "u4-fin-raise")
     if os.path.exists(p2): os.unlink(p2)
-    m.init_ledger(repo, "u4-fin-raise", backend="ce", loop_phase="plan",
+    m.init_run_record(repo, "u4-fin-raise", backend="ce", loop_phase="plan",
                   steps=[{"id": "U1", "state": "dispatched",
                           "dispatched_at": "2026-01-01T00:00:00Z",
                           "stall_threshold_seconds": 600}])
-    before2 = m.read_ledger(repo, "u4-fin-raise").get("active_wall_seconds", 0)
+    before2 = m.read_run_record(repo, "u4-fin-raise").get("active_wall_seconds", 0)
     class Boom:
         def next_plan_step(self, led):
             raise RuntimeError("boom")
     t.dispatch_pulse(repo, "u4-fin-raise", backend=Boom())
-    after_raise = m.read_ledger(repo, "u4-fin-raise").get("active_wall_seconds", 0)
+    after_raise = m.read_run_record(repo, "u4-fin-raise").get("active_wall_seconds", 0)
     print(json.dumps({
         "clean_advanced": after_clean > before,
         "raise_advanced": after_raise > before2,
     }))
 
 elif op == "shortcircuit-suppressed-by-iteration":
-    # R6: an iteration-pending ledger composes met=False even when the work
+    # R6: an iteration-pending run-record composes met=False even when the work
     # branch would otherwise compute met=True. The short-circuit at lines
     # 564-576 yields; advance_iteration_loop runs FIRST and iterates.
     init_a2("u4-shortcircuit", decision="iterate", attempts=1, emit_count=1)
     # All plan steps terminal + judge verdict-returned with NO findings →
     # blocker=0/major=0/all_steps_terminal=True. Without iteration_pending,
     # met would be True. With it, met=False and the loop iterates.
-    led = m.read_ledger(repo, "u4-shortcircuit")
+    led = m.read_run_record(repo, "u4-shortcircuit")
     pred_before = led.get("exit_predicate_result") or {}
     r = t.dispatch_pulse(repo, "u4-shortcircuit")
     print(json.dumps({
@@ -342,15 +342,15 @@ elif op == "shortcircuit-suppressed-by-iteration":
 
 elif op == "a1-early-return":
     # R7 a1: no iteration block → advance_iteration_loop returns None at
-    # step 1. Zero ledger writes from the helper. The pulse proceeds as
+    # step 1. Zero run-record writes from the helper. The pulse proceeds as
     # v0.2.1 (a fix-applied advance on the verdict-returned+blocker step).
     init_a1("u4-a1")
-    before = json.dumps(m.read_ledger(repo, "u4-a1")["steps"][0], sort_keys=True)
+    before = json.dumps(m.read_run_record(repo, "u4-a1")["steps"][0], sort_keys=True)
     # Probe the helper directly to assert it returns None.
-    led = m.read_ledger(repo, "u4-a1")
+    led = m.read_run_record(repo, "u4-a1")
     direct = t.pulse_advance.advance_iteration_loop(repo, "u4-a1", led)
     r = t.dispatch_pulse(repo, "u4-a1")
-    after_state = m.read_ledger(repo, "u4-a1")["steps"][0].get("state")
+    after_state = m.read_run_record(repo, "u4-a1")["steps"][0].get("state")
     print(json.dumps({
         "direct_is_none": direct is None,
         "action": r.get("action"),
@@ -361,13 +361,13 @@ elif op == "a1-early-return":
 elif op == "w-early-return":
     # R7 W: same shape as a1 — no iteration block. Different step set;
     # helper still early-returns at step 1.
-    p = m.ledger_path(repo, "u4-w")
+    p = m.run_record_path(repo, "u4-w")
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, "u4-w", backend="ce", loop_phase="work",
+    m.init_run_record(repo, "u4-w", backend="ce", loop_phase="work",
                   phase_order=["work"], terminal_phase="work",
                   steps=[{"id": "W1", "state": "verdict-returned",
                           "findings": [{"severity": "blocker", "note": "x"}]}])
-    led = m.read_ledger(repo, "u4-w")
+    led = m.read_run_record(repo, "u4-w")
     direct = t.pulse_advance.advance_iteration_loop(repo, "u4-w", led)
     print(json.dumps({"direct_is_none": direct is None}))
 
@@ -376,7 +376,7 @@ elif op == "r9-last-attempt-guidance":
     # before bound" guidance. The NEXT iterate decision (read at
     # attempts_made==max_attempts) will be overridden to exit by
     # iteration.evaluate_decision (lib/iteration.py:136). We pulse a non-
-    # iterating ledger (decision=None with attempts=5 == max=5) so the
+    # iterating run-record (decision=None with attempts=5 == max=5) so the
     # rearm path fires; the helper's branch 2 sees attempts==max and
     # prepends the warning to the operator_guidance body.
     # v0.3.0 F2 (ADV-3 off-by-one): pre-F2 this seeded attempts=4 (one
@@ -394,7 +394,7 @@ elif op == "r9-last-attempt-guidance":
             "stall_threshold_seconds": 600, "last_error": None,
             "verdict_at": None, "dispatched_at": None, "attempt": 0,
         })
-    m._with_locked_ledger(repo, "u4-r9-last", seed)
+    m._with_locked_run_record(repo, "u4-r9-last", seed)
     r = t.dispatch_pulse(repo, "u4-r9-last")
     guidance = r.get("operator_guidance") or ""
     print(json.dumps({
@@ -411,13 +411,13 @@ elif op == "r9-bound-override-guidance":
     # bound-exit a follow-up pulse reads the same gate with bound_override
     # written; if it were to re-arm (a contrived scenario), guidance would
     # surface. For test purposes we probe the helper _iteration_guidance_
-    # prefix directly with a primed ledger.
+    # prefix directly with a primed run-record.
     init_a2("u4-r9-override", decision="iterate", attempts=5, max_attempts=5,
             emit_count=1)
     # Run the pulse — it bound-exits. The next call to _operator_guidance_for
     # would surface the override; we probe the helper directly.
     r = t.dispatch_pulse(repo, "u4-r9-override")
-    led = m.read_ledger(repo, "u4-r9-override")
+    led = m.read_run_record(repo, "u4-r9-override")
     prefix = t._iteration_guidance_prefix(led)
     print(json.dumps({
         "report_has_override": (r.get("report") or {}).get("bound_override") is not None,
@@ -432,7 +432,7 @@ elif op == "kill-switch":
     # proceeds as if iteration didn't exist.
     init_a2("u4-killswitch", decision="iterate", attempts=1, max_attempts=5,
             emit_count=2)
-    led = m.read_ledger(repo, "u4-killswitch")
+    led = m.read_run_record(repo, "u4-killswitch")
     os.environ["CLAUDE_AUTO_DISABLE_ITERATION"] = "1"
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
@@ -441,7 +441,7 @@ elif op == "kill-switch":
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
         # Don't unset the sentinel — tests/run.sh exports it for the whole
         # process tree; locally setting it here is harmless.
-    after = m.read_ledger(repo, "u4-killswitch")
+    after = m.read_run_record(repo, "u4-killswitch")
     judge = next(u for u in after["steps"] if u["id"] == "judge")
     print(json.dumps({
         "direct_is_none": direct is None,
@@ -452,13 +452,13 @@ elif op == "kill-switch":
     }))
 
 elif op == "integration-a2-iterate":
-    # Production-path drive: init A2-shape ledger; gate writes record_verdict
+    # Production-path drive: init A2-shape run-record; gate writes record_verdict
     # + set_verdict_decision("iterate", payload={emit_count: 2}); pulse re-
     # emits plan-4/5 + resets judge. Mirrors v0.2.0 fix-pass I's pattern.
     init_a2("u4-int-a2", decision="iterate", attempts=0, max_attempts=5,
             emit_count=2)
     t.dispatch_pulse(repo, "u4-int-a2")
-    led = m.read_ledger(repo, "u4-int-a2")
+    led = m.read_run_record(repo, "u4-int-a2")
     new_plans = sorted(u["id"] for u in led["steps"]
                        if u.get("phase") == "plan" and u["id"] not in
                        ("plan-1", "plan-2", "plan-3"))
@@ -474,7 +474,7 @@ elif op == "integration-a4-iterate":
     # a "compare" gate. Comparator writes decision="iterate" with emit_count=
     # 1 → pulse re-emits a 3rd builder + resets compare with extended
     # depends_on.
-    p = m.ledger_path(repo, "u4-int-a4")
+    p = m.run_record_path(repo, "u4-int-a4")
     if os.path.exists(p): os.unlink(p)
     steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
@@ -485,7 +485,7 @@ elif op == "integration-a4-iterate":
         {"id": "compare", "state": "pending", "phase": "work",
          "depends_on": ["build-clarity", "build-perf"]},
     ]
-    m.init_ledger(repo, "u4-int-a4", backend="ce", loop_phase="work",
+    m.init_run_record(repo, "u4-int-a4", backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
                   steps=steps)
     def seed(L):
@@ -499,12 +499,12 @@ elif op == "integration-a4-iterate":
         for u in L["steps"]:
             if u["id"] == "compare":
                 u["state"] = "dispatched"
-    m._with_locked_ledger(repo, "u4-int-a4", seed)
+    m._with_locked_run_record(repo, "u4-int-a4", seed)
     m.record_verdict(repo, "u4-int-a4", "compare", [])
     m.set_verdict_decision(repo, "u4-int-a4", "compare", "iterate",
                             payload={"emit_count": 1})
     t.dispatch_pulse(repo, "u4-int-a4")
-    led = m.read_ledger(repo, "u4-int-a4")
+    led = m.read_run_record(repo, "u4-int-a4")
     builders = sorted(u["id"] for u in led["steps"] if (u.get("id") or "").startswith("build-"))
     cmp_step = next(u for u in led["steps"] if u["id"] == "compare")
     print(json.dumps({
@@ -519,7 +519,7 @@ elif op == "shortcircuit-yielded-met-recompose":
     # gate step, the predicate composition gives iteration_pending=True and
     # met=False even with all-terminal work steps.
     init_a2("u4-r6-recompose", decision="iterate", attempts=0)
-    led = m.read_ledger(repo, "u4-r6-recompose")
+    led = m.read_run_record(repo, "u4-r6-recompose")
     pred = led.get("exit_predicate_result") or {}
     print(json.dumps({
         "iteration_pending": pred.get("iteration_pending"),
@@ -688,7 +688,7 @@ else
 fi
 
 # ─── U4 Scenario 14: predicate composition recomposes met under iteration ────
-it "U4 R6 predicate composition: setting decision=iterate on terminal-steps ledger → met=False, iteration_pending=True"
+it "U4 R6 predicate composition: setting decision=iterate on terminal-steps run_record → met=False, iteration_pending=True"
 res="$(u4_driver shortcircuit-yielded-met-recompose)"
 pending="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['iteration_pending'])" "$res")"
 met="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['met'])" "$res")"
@@ -732,7 +732,7 @@ import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-m = load_lib_module("ledger")
+m = load_lib_module("run_record")
 tmpdir = os.environ["PULSE_PY_OVERRIDE_DIR"]
 # Pre-load the patched siblings under the names pulse.py looks up, masking
 # __file__ so load_lib_module's path-keyed cache accepts them (the canonical
@@ -753,14 +753,14 @@ t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 # Re-use the production seeds from above; for brevity we re-init inline.
 def _init_iter(run, **kw):
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     plans = kw.get("plans", ["plan-1","plan-2","plan-3"])
     steps = [{"id": pid, "state": "fixed", "phase": "plan", "findings": []}
              for pid in plans]
     steps.append({"id":"judge","state":"pending","phase":"work",
                   "depends_on":list(plans)})
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
                   steps=steps)
     def seed(L):
@@ -775,7 +775,7 @@ def _init_iter(run, **kw):
         for u in L["steps"]:
             if u["id"] == "judge":
                 u["state"] = "dispatched"
-    m._with_locked_ledger(repo, run, seed)
+    m._with_locked_run_record(repo, run, seed)
     m.record_verdict(repo, run, "judge", [])
     if kw.get("decision"):
         payload = None
@@ -795,7 +795,7 @@ elif op == "df-shortcircuit-no-suppression":
     # Without iteration_pending in the short-circuit, the work-loop's
     # met=True (computed against all_steps_terminal) would fire EARLY —
     # pulse exits "predicate-met" / "done" before iteration runs.
-    # NOTE: the predicate composition itself is in ledger.py and sets
+    # NOTE: the predicate composition itself is in run_record.py and sets
     # iteration_pending; the pulse's short-circuit then must AND-NOT it.
     # Since the composition has already ANDed met=False, the patched
     # short-circuit going via pred["met"] alone would still see False.
@@ -815,7 +815,7 @@ elif op == "df-killswitch-ignored":
     os.environ["CLAUDE_AUTO_DISABLE_ITERATION"] = "1"
     os.environ["CLAUDE_AUTO_TEST_HARNESS"] = "1"
     try:
-        led = m.read_ledger(repo, "u4-df-kill")
+        led = m.read_run_record(repo, "u4-df-kill")
         direct = t.pulse_advance.advance_iteration_loop(repo, "u4-df-kill", led)
     finally:
         del os.environ["CLAUDE_AUTO_DISABLE_ITERATION"]
@@ -827,13 +827,13 @@ elif op == "df-finally-skipped":
     # leaves active_wall_seconds unchanged. We drive a raise-pulse (the
     # inner try/except in _pulse_body_inner captures the backend raise so
     # the pulse returns; the finally would otherwise still accumulate).
-    p = m.ledger_path(repo, "u4-df-fin")
+    p = m.run_record_path(repo, "u4-df-fin")
     if os.path.exists(p): os.unlink(p)
-    m.init_ledger(repo, "u4-df-fin", backend="ce", loop_phase="plan",
+    m.init_run_record(repo, "u4-df-fin", backend="ce", loop_phase="plan",
                   steps=[{"id":"U1","state":"dispatched",
                           "dispatched_at":"2026-01-01T00:00:00Z",
                           "stall_threshold_seconds":600}])
-    before = m.read_ledger(repo, "u4-df-fin").get("active_wall_seconds", 0)
+    before = m.read_run_record(repo, "u4-df-fin").get("active_wall_seconds", 0)
     class Boom:
         def next_plan_step(self, led):
             raise RuntimeError("boom")
@@ -841,7 +841,7 @@ elif op == "df-finally-skipped":
         t.dispatch_pulse(repo, "u4-df-fin", backend=Boom())
     except Exception:
         pass
-    after = m.read_ledger(repo, "u4-df-fin").get("active_wall_seconds", 0)
+    after = m.read_run_record(repo, "u4-df-fin").get("active_wall_seconds", 0)
     print(json.dumps({"advanced": after > before}))
 
 else:
@@ -882,13 +882,13 @@ cat > "$DF_DIR/df2_short_circuit_no_suppress.py" <<'PYEOF'
 short-circuit at pulse.py:564-576. The short-circuit then fires on raw
 `met` alone — but `recompute_predicate` ANDs iteration_pending into met (U2
 KTD §B), so even without the local guard, met is False on an iterate-
-pending ledger. To prove the GUARD is load-bearing in isolation, we ALSO
+pending run_record. To prove the GUARD is load-bearing in isolation, we ALSO
 patch advance_iteration_loop to no-op AND patch the composed met to ignore
 iteration_pending. Cleaner single-shot: instead, prove the GUARD is load-
 bearing by ALSO disabling the composition (set CLAUDE_AUTO_TEST_NO_RECOMPUTE)
 — but that needs the hatch. We take the simpler path: patch the short-
 circuit to ALSO accept iteration_pending=True as a trigger, then disable
-the iteration helper. With both disabled, an iterate-pending ledger exits
+the iteration helper. With both disabled, an iterate-pending run_record exits
 'predicate-met' instead of iterating."""
 import os, sys
 # B4: anchor 1 (advance_iteration_loop no-op) is in pulse_advance.py; anchor 2
@@ -939,10 +939,10 @@ if old1 not in src:
 src = src.replace(old1, new1)
 old2 = ("    finally:\n"
         "        # accumulate_active_time is best-effort: an exception inside it must\n"
-        "        # never bury the real exception/return value. (E.g. a torn ledger\n"
+        "        # never bury the real exception/return value. (E.g. a torn run-record\n"
         "        # during a stalled-write recovery would otherwise mask the original.)\n"
         "        try:\n"
-        "            ledger.accumulate_active_time(\n"
+        "            run_record.accumulate_active_time(\n"
         "                repo_root, run_id, time.monotonic() - t_start\n"
         "            )\n"
         "        except Exception:  # noqa: BLE001\n"
@@ -967,10 +967,10 @@ else
 fi
 
 # DF#2 — make advance_iteration_loop a no-op AND force the short-circuit to
-# fire on iteration_pending too. Together: iterate-pending ledger exits as
+# fire on iteration_pending too. Together: iterate-pending run-record exits as
 # "predicate-met" (the suppression is no longer load-bearing). Proves the
 # iteration check + short-circuit-suppression contract.
-it "U4 DELIBERATE-FAIL #2: skipping the iteration check + dropping the AND-NOT clause → iterate ledger exits predicate-met"
+it "U4 DELIBERATE-FAIL #2: skipping the iteration check + dropping the AND-NOT clause → iterate run_record exits predicate-met"
 res="$(u4_df_with_patched_pulse "$DF_DIR/df2_short_circuit_no_suppress.py" df-shortcircuit-no-suppression)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res")"
 reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['reason'])" "$res")"
@@ -1012,11 +1012,11 @@ fi
 
 # DF#5 patch: remove the try/except around advance_iteration_loop in
 # _pulse_body_inner so an iteration-check raise propagates straight up. Without
-# the wrap, a malformed iterate ledger raises out of dispatch_pulse → _cli
-# (which catches only PulseError/LedgerError) → no JSON intent, wedge.
+# the wrap, a malformed iterate run-record raises out of dispatch_pulse → _cli
+# (which catches only PulseError/RunRecordError) → no JSON intent, wedge.
 cat > "$DF_DIR/df5_no_iteration_try.py" <<'PYEOF'
 """DF#5: strip the try/except around advance_iteration_loop in
-_try_iteration_check (pulse.py, post-B4) so a non-Ledger raise propagates
+_try_iteration_check (pulse.py, post-B4) so a non-RunRecord raise propagates
 instead of being converted into a stop intent."""
 import os, sys
 p = os.path.join(sys.argv[1], "pulse.py")  # B4: the try/except is in _try_iteration_check (pulse.py)
@@ -1024,7 +1024,7 @@ src = open(p).read()
 old = (
     "    try:\n"
     "        iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)\n"
-    "    except (ledger.UnknownStep, ledger.InvalidTransition, ledger.StaleVerdict) as exc:\n"
+    "    except (run_record.UnknownStep, run_record.InvalidTransition, run_record.StaleVerdict) as exc:\n"
 )
 if old not in src:
     sys.exit("DF#5 anchor 1 not found")
@@ -1059,7 +1059,7 @@ old = (
     '            producer = producers.iterate_template\n'
     '        else:\n'
     '            producer = producers.no_emit\n'
-    '        ledger.atomic_iterate_step(\n'
+    '        run_record.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'
     '            gate_step_id,\n'
@@ -1068,7 +1068,7 @@ old = (
     '        )'
 )
 new = (
-    '        ledger.atomic_iterate_step(\n'
+    '        run_record.atomic_iterate_step(\n'
     '            repo_root,\n'
     '            run_id,\n'
     '            gate_step_id,\n'
@@ -1123,7 +1123,7 @@ import json, sys, os, importlib.util
 auto_root, repo, op = sys.argv[1:4]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-m = load_lib_module("ledger")
+m = load_lib_module("run_record")
 tmpdir = os.environ["PULSE_PY_OVERRIDE_DIR"]
 def _preload(name):
     spec = importlib.util.spec_from_file_location(name, os.path.join(tmpdir, name + ".py"))
@@ -1139,10 +1139,10 @@ t_spec = importlib.util.spec_from_file_location("pulse_patched", t_path)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
-    """Seed an A4-style ledger with iteration but NO emit_template — the
+    """Seed an A4-style run_record with iteration but NO emit_template — the
     F2-correctness-emit-template shape. Used by both df-no-emit-raises (DF#6)
     and the corresponding green-path test."""
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
@@ -1153,7 +1153,7 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
         {"id": "compare", "state": "pending", "phase": "work",
          "depends_on": ["build-clarity", "build-perf"]},
     ]
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
                   steps=steps)
     def seed(L):
@@ -1165,22 +1165,22 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
         for u in L["steps"]:
             if u["id"] == "compare":
                 u["state"] = "dispatched"
-    m._with_locked_ledger(repo, run, seed)
+    m._with_locked_run_record(repo, run, seed)
     m.record_verdict(repo, run, "compare", [])
     m.set_verdict_decision(repo, run, "compare", "iterate")
 
 def _init_iter_bad_decision(run):
-    """Seed an iteration ledger with a CORRUPTED gate decision so
+    """Seed an iteration run_record with a CORRUPTED gate decision so
     iteration.evaluate_decision raises ValueError. Used by DF#5 probe to
     prove the unwrapped path wedges."""
-    p = m.ledger_path(repo, run)
+    p = m.run_record_path(repo, run)
     if os.path.exists(p): os.unlink(p)
     steps = [
         {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
         {"id": "judge", "state": "pending", "phase": "work",
          "depends_on": ["plan-1"]},
     ]
-    m.init_ledger(repo, run, backend="ce", loop_phase="work",
+    m.init_run_record(repo, run, backend="ce", loop_phase="work",
                   phase_order=["plan","handoff","work"], terminal_phase="work",
                   steps=steps)
     def seed(L):
@@ -1194,9 +1194,9 @@ def _init_iter_bad_decision(run):
         for u in L["steps"]:
             if u["id"] == "judge":
                 u["state"] = "dispatched"
-    m._with_locked_ledger(repo, run, seed)
+    m._with_locked_run_record(repo, run, seed)
     m.record_verdict(repo, run, "judge", [])
-    # Write a BOGUS decision string directly via _with_locked_ledger so we
+    # Write a BOGUS decision string directly via _with_locked_run_record so we
     # bypass set_verdict_decision's validation. evaluate_decision will
     # then raise ValueError ("must be one of {advance,iterate,exit}").
     def corrupt(L):
@@ -1204,7 +1204,7 @@ def _init_iter_bad_decision(run):
             if u["id"] == "judge":
                 dc = u.setdefault("dispatch_context", {})
                 dc["decision"] = "GARBAGE"
-    m._with_locked_ledger(repo, run, corrupt)
+    m._with_locked_run_record(repo, run, corrupt)
 
 if op == "df-iteration-raise-unwrapped":
     # DF#5: pulse.py has no try/except around advance_iteration_loop. A
@@ -1238,9 +1238,9 @@ elif op == "df-off-by-one-warns-early":
     # DF#7: the off-by-one is reverted, so the warning fires at
     # attempts==max-1 even though TWO more iterates would be honored before
     # bound trip. With the F2 fix, no warning fires at attempts==max-1.
-    # We seed an attempts=max-1 ledger and call the helper directly.
+    # We seed an attempts=max-1 run-record and call the helper directly.
     _init_iter_no_emit("f2-df-obo", attempts=4, max_attempts=5)
-    led = m.read_ledger(repo, "f2-df-obo")
+    led = m.read_run_record(repo, "f2-df-obo")
     prefix = t._iteration_guidance_prefix(led)
     print(json.dumps({
         "warns_early": "last attempt before bound" in prefix,
@@ -1298,7 +1298,7 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# v0.3.0 G2 — exit_reason persistence (AN-W1) + LedgerError-subclass narrow
+# v0.3.0 G2 — exit_reason persistence (AN-W1) + RunRecordError-subclass narrow
 # catch (rel-r2-2). Two GREEN-path tests + one DF cycle each. Both run against
 # the PRODUCTION pulse.py (not a patched copy) so the assertions verify the
 # fix is wired in the canonical source. The DF cycles are documented as
@@ -1308,32 +1308,32 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 
 # G2 GREEN test #1 (AN-W1): on an iteration-check crash, F2's try/except must
-# persist exit_reason on the ledger BEFORE force-marking the loop done. This
+# persist exit_reason on the run-record BEFORE force-marking the loop done. This
 # uses the SAME corrupted-gate-decision shape as DF#5 (decision="GARBAGE" →
 # iteration.evaluate_decision raises ValueError → caught by the generic
 # Exception branch). The contract: exit_reason.kind == "iteration-check-failed"
 # AND exit_reason.error carries {type, message}. DF cycle (operator probe):
-# comment out the `ledger.set_exit_reason(...)` call in the Exception branch
+# comment out the `run_record.set_exit_reason(...)` call in the Exception branch
 # of lib/pulse.py → this test reports exit_reason=None.
-it "G2 AN-W1: iteration-check crash persists exit_reason on the ledger (kind=iteration-check-failed)"
-g2_anw1="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
+it "G2 AN-W1: iteration-check crash persists exit_reason on the run_record (kind=iteration-check-failed)"
+g2_anw1="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, os, importlib.util
-auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
+auto_root, repo, pulse_py, run_record_py = sys.argv[1:5]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-m = load_lib_module("ledger")
+m = load_lib_module("run_record")
 t_spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 run = "g2-anw1"
-p = m.ledger_path(repo, run)
+p = m.run_record_path(repo, run)
 if os.path.exists(p): os.unlink(p)
 steps = [
     {"id": "plan-1", "state": "fixed", "phase": "plan", "findings": []},
     {"id": "judge", "state": "pending", "phase": "work",
      "depends_on": ["plan-1"]},
 ]
-m.init_ledger(repo, run, backend="ce", loop_phase="work",
+m.init_run_record(repo, run, backend="ce", loop_phase="work",
               phase_order=["plan","handoff","work"], terminal_phase="work",
               steps=steps)
 def seed(L):
@@ -1347,17 +1347,17 @@ def seed(L):
     for u in L["steps"]:
         if u["id"] == "judge":
             u["state"] = "dispatched"
-m._with_locked_ledger(repo, run, seed)
+m._with_locked_run_record(repo, run, seed)
 m.record_verdict(repo, run, "judge", [])
 def corrupt(L):
     for u in L["steps"]:
         if u["id"] == "judge":
             dc = u.setdefault("dispatch_context", {})
             dc["decision"] = "GARBAGE"
-m._with_locked_ledger(repo, run, corrupt)
+m._with_locked_run_record(repo, run, corrupt)
 
 r = t.dispatch_pulse(repo, run)
-after = m.read_ledger(repo, run)
+after = m.read_run_record(repo, run)
 er = after.get("exit_reason") or {}
 err = er.get("error") or {}
 print(json.dumps({
@@ -1382,44 +1382,44 @@ else
 fi
 
 # G2 GREEN test #2 (rel-r2-2): when advance_iteration_loop raises a
-# LedgerError SUBCLASS (UnknownStep / InvalidTransition / StaleVerdict — these
-# indicate a workflow-bug caller, NOT a torn ledger), F2's try/except must
+# RunRecordError SUBCLASS (UnknownStep / InvalidTransition / StaleVerdict — these
+# indicate a workflow-bug caller, NOT a torn run-record), F2's try/except must
 # catch it via the NARROWED branch and emit reason="workflow-bug". The bare
-# `except ledger.LedgerError: raise` MUST come AFTER the subclass tuple, or
-# the parent catch would shadow the subclasses (they ARE LedgerError).
+# `except run_record.RunRecordError: raise` MUST come AFTER the subclass tuple, or
+# the parent catch would shadow the subclasses (they ARE RunRecordError).
 # We monkey-patch advance_iteration_loop on the production pulse module to
 # raise UnknownStep directly — same shape as a workflow-bug field bug.
 # DF cycle (operator probe): swap the except-order in lib/pulse.py so the
-# bare LedgerError catch precedes the subclass tuple → this test sees the
-# raise propagate (no stop intent, no exit_reason on the ledger).
-it "G2 rel-r2-2: ledger.UnknownStep from advance_iteration_loop → stop reason=workflow-bug + exit_reason persisted"
-g2_workflow="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
+# bare RunRecordError catch precedes the subclass tuple → this test sees the
+# raise propagate (no stop intent, no exit_reason on the run-record).
+it "G2 rel-r2-2: run_record.UnknownStep from advance_iteration_loop → stop reason=workflow-bug + exit_reason persisted"
+g2_workflow="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, os, importlib.util
-auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
+auto_root, repo, pulse_py, run_record_py = sys.argv[1:5]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-m = load_lib_module("ledger")
+m = load_lib_module("run_record")
 t_spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(t_spec); t_spec.loader.exec_module(t)
 
 run = "g2-relr22"
-p = m.ledger_path(repo, run)
+p = m.run_record_path(repo, run)
 if os.path.exists(p): os.unlink(p)
-# Plan-loop ledger so the iteration check normally returns None — but the
+# Plan-loop run-record so the iteration check normally returns None — but the
 # monkey-patched advance_iteration_loop forces an UnknownStep raise
-# regardless of ledger shape. We seed it with one pending plan step so
+# regardless of run-record shape. We seed it with one pending plan step so
 # dispatch_pulse reaches the iteration check.
 steps = [{"id": "plan-1", "state": "pending", "phase": "plan"}]
-m.init_ledger(repo, run, backend="ce", loop_phase="plan",
+m.init_run_record(repo, run, backend="ce", loop_phase="plan",
               phase_order=["plan","work"], terminal_phase="work",
               steps=steps)
 
 # Monkey-patch the advance helper — replace advance_iteration_loop with one
-# that raises ledger.UnknownStep. Post-B4 the function lives in the sibling
+# that raises run_record.UnknownStep. Post-B4 the function lives in the sibling
 # pulse_advance module and the dispatcher calls it qualified
 # (pulse_advance.advance_iteration_loop), so we patch it THERE (patching the
 # pulse-module re-export alias would not affect the qualified call site). The
-# narrowed except in _pulse_body_inner refers to the same `ledger` module
+# narrowed except in _pulse_body_inner refers to the same `run_record` module
 # (shared via load_lib_module's __file__-keyed cache), so the isinstance
 # check matches.
 def _boom(repo_root, run_id, led):
@@ -1435,7 +1435,7 @@ except Exception as exc:
     raised = True
     exc_type = type(exc).__name__
 
-after = m.read_ledger(repo, run)
+after = m.read_run_record(repo, run)
 er = after.get("exit_reason") or {}
 err = er.get("error") or {}
 print(json.dumps({

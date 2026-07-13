@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto v0.3.0 U6 integration test: a4 workflow with iteration block + structural
 # compare — three scenarios (GREEN/ITERATE/BOUND) driving the full workflow→
-# ledger→pulse path.
+# run-record→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # After U6, a4's `compare` step is declared structurally in steps[] (with
@@ -9,7 +9,7 @@
 # emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
 # proves the structural+producer split survives the production init→pulse path:
-# the workflow→ledger→pulse wire materializes builders AND honors compare as
+# the workflow→run-record→pulse wire materializes builders AND honors compare as
 # the iteration gate.
 #
 # CONTRACT (KTD §A+§C+§D — v0.3.0 U6):
@@ -17,11 +17,11 @@
 #   "bias-builder", iteration.bound={max_attempts:4, max_wall_seconds:1200}.
 #   plus emit_templates.bias-builder={phase:"work", invokes:{backend_op:"do_step"},
 #   id_prefix:"build-"}. compare is structural with depends_on the bias-builder
-#   prefix references. auto.run + init_ledger thread iteration+emit_templates
-#   onto the ledger (U6 plumbing).
+#   prefix references. auto.run + init_run_record thread iteration+emit_templates
+#   onto the run-record (U6 plumbing).
 #
 #   Drive: plan-done → auto-flip via plan_output_to_paired_builders emits
-#   build-clarity + build-perf (NOT compare — structural already on ledger).
+#   build-clarity + build-perf (NOT compare — structural already on run-record).
 #   Then compare verdicts per scenario.
 #
 # STRUCTURE: init via auto.run with --workflow a4; prime the plan step's
@@ -70,7 +70,7 @@ sys.path.insert(0, os.path.join(auto_root, "lib"))
 
 from _bootstrap import load_lib_module
 a = load_lib_module("auto")
-ledger = load_lib_module("ledger")
+run_record = load_lib_module("run_record")
 pulse = load_lib_module("pulse")
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
@@ -78,7 +78,7 @@ os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
 # Step 1: init via /auto plan.md --workflow a4 — PRODUCTION path. U6 plumbing
-# carries workflow.iteration + workflow.emit_templates onto the ledger.
+# carries workflow.iteration + workflow.emit_templates onto the run-record.
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan, "--workflow", "a4"])
 run_id = None
@@ -87,9 +87,9 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         run_id = os.path.basename(f).rsplit(".json", 1)[0]
         break
 
-# Sanity: U6 plumbing alive — iteration block on ledger, compare structural.
-led0 = ledger.read_ledger(repo, run_id)
-assert led0.get("iteration"), f"iteration block missing on ledger after init: {sorted(led0.keys())!r}"
+# Sanity: U6 plumbing alive — iteration block on run-record, compare structural.
+led0 = run_record.read_run_record(repo, run_id)
+assert led0.get("iteration"), f"iteration block missing on run_record after init: {sorted(led0.keys())!r}"
 assert led0["iteration"]["gate_step"] == "compare", led0["iteration"]
 assert led0.get("emit_templates", {}).get("bias-builder"), led0.get("emit_templates")
 # Compare structural: in steps[] from init (NOT producer-synthesized).
@@ -99,11 +99,11 @@ assert "compare" in step_ids_at_init, f"compare not in initial steps[]: {step_id
 # Step 2: prime the plan step's enumerated_steps (the producer passes these to
 # each builder's dispatch_context as plan_items). Set gaps_open=0 + plan_step=
 # review_plan so plan-met fires.
-ledger.set_enumerated_steps(repo, run_id, "plan",
+run_record.set_enumerated_steps(repo, run_id, "plan",
     [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
      {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
-ledger.set_gaps_open(repo, run_id, 0)
-ledger.set_loop(repo, run_id, plan_step="review_plan")
+run_record.set_gaps_open(repo, run_id, 0)
+run_record.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 3: pulse auto=True → _maybe_handoff auto-flips → plan_output_to_paired_builders
 # emits build-clarity + build-perf (NOT compare — structural). loop_phase=work.
@@ -117,39 +117,39 @@ with contextlib.redirect_stdout(io.StringIO()):
 # bump the counter; only _apply_emit (used by iterate_template) does. This means
 # the first iterate-emit produces `build-<counter+1>` = "build-1" (no collision
 # with build-clarity / build-perf because the suffix is numeric vs word).
-led1 = ledger.read_ledger(repo, run_id)
+led1 = run_record.read_run_record(repo, run_id)
 builders_now = sorted(u["id"] for u in led1["steps"] if u["id"].startswith("build-"))
 assert builders_now == ["build-clarity", "build-perf"], builders_now
 assert led1["iteration_emit_count"] == 0, f"counter={led1['iteration_emit_count']!r}"
 
 # Step 4: mark both builders fixed (no findings) so compare's dependencies are
 # satisfied; pre-seed iteration_attempts for BOUND scenario.
-ledger.transition(repo, run_id, "build-clarity", "dispatched")
-ledger.transition(repo, run_id, "build-clarity", "verdict-returned")
-ledger.record_verdict(repo, run_id, "build-clarity", [])
-ledger.transition(repo, run_id, "build-perf", "dispatched")
-ledger.transition(repo, run_id, "build-perf", "verdict-returned")
-ledger.record_verdict(repo, run_id, "build-perf", [])
+run_record.transition(repo, run_id, "build-clarity", "dispatched")
+run_record.transition(repo, run_id, "build-clarity", "verdict-returned")
+run_record.record_verdict(repo, run_id, "build-clarity", [])
+run_record.transition(repo, run_id, "build-perf", "dispatched")
+run_record.transition(repo, run_id, "build-perf", "verdict-returned")
+run_record.record_verdict(repo, run_id, "build-perf", [])
 
 def seed(L):
     if scenario == "bound":
         L["iteration_attempts"] = 4
-ledger._with_locked_ledger(repo, run_id, seed)
+run_record._with_locked_run_record(repo, run_id, seed)
 
 # Step 5: dispatch compare + write its verdict per scenario.
-ledger.transition(repo, run_id, "compare", "dispatched")
-ledger.record_verdict(repo, run_id, "compare",
+run_record.transition(repo, run_id, "compare", "dispatched")
+run_record.record_verdict(repo, run_id, "compare",
     [{"severity": "minor", "note": f"scenario={scenario}"}])
 if scenario == "green":
     # advance: iteration block does NOT fire; standard work-flow.
-    ledger.set_verdict_decision(repo, run_id, "compare", "advance")
+    run_record.set_verdict_decision(repo, run_id, "compare", "advance")
 elif scenario == "iterate":
     # iterate under bound: iterate_template emits build-3 (counter 2 + 1 = 3).
-    ledger.set_verdict_decision(repo, run_id, "compare", "iterate",
+    run_record.set_verdict_decision(repo, run_id, "compare", "iterate",
         payload={"emit_count": 1})
 elif scenario == "bound":
     # iterate over bound (attempts == max=4): bound_override fires.
-    ledger.set_verdict_decision(repo, run_id, "compare", "iterate",
+    run_record.set_verdict_decision(repo, run_id, "compare", "iterate",
         payload={"emit_count": 1})
 
 # Step 6: pulse. advance_iteration_loop fires at the top of _pulse_body_inner.
@@ -157,7 +157,7 @@ with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
-led = ledger.read_ledger(repo, run_id)
+led = run_record.read_run_record(repo, run_id)
 compare = next(u for u in led["steps"] if u["id"] == "compare")
 new_builders = sorted(u["id"] for u in led["steps"]
                       if u["id"].startswith("build-")

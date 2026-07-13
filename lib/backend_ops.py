@@ -7,10 +7,10 @@ launching an agent against a misspelled/unknown op. Historically this frozenset
 lived inline in ``lib/dispatcher.py``. v0.14.0 (U1, addressable-step-contents)
 lifted it HERE so a second validator — ``lib/presets.py::validate_preset`` —
 can check a preset's op against the SAME set without importing the dispatcher
-(which pulls in the ledger and the whole dispatch surface).
+(which pulls in the run-record and the whole dispatch surface).
 
 This module is a pure-stdlib DAG LEAF: it imports NO sibling lib module (exactly
-like ``workflow_validate`` and ``ledger_core`` are DAG roots). Both
+like ``workflow_validate`` and ``run_record_core`` are DAG roots). Both
 ``dispatcher.py`` and ``presets.py`` import THIS, so there is ONE definition;
 ``tests/unit/presets.test.sh`` asserts ``backend_ops.VALID_BACKEND_OPS ==
 dispatcher.VALID_BACKEND_OPS`` (the symmetry test that proves the lift did not

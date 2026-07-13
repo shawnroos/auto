@@ -3,9 +3,9 @@ argument-hint: "[<run> | freeform sentence]"
 allowed-tools: Bash, AskUserQuestion
 ---
 
-Show the ledger and health of an auto run.
+Show the run-record and health of an auto run.
 
-`/auto-status` reads the durable ledger at
+`/auto-status` reads the durable run-record at
 `<repo>/.claude/auto/<run-slug>.json` and reports the loop phase, the
 cached exit-predicate result (blockers / majors / minors / gaps_open and
 whether it is met), per-step states, the driver (`self` while a pulse chain
@@ -14,11 +14,11 @@ is self-pacing, `manual` when paused awaiting resume), and liveness
 `last_error` cause and, at exit, the remaining minors report for operator
 promotion.
 
-It is read-only — it never mutates the ledger or arms a pulse.
+It is read-only — it never mutates the run-record or arms a pulse.
 
 ### Iteration section (v0.3.0)
 
-When the run is iteration-aware — the ledger declares an `iteration`
+When the run is iteration-aware — the run-record declares an `iteration`
 block, or `iteration_attempts > 0`, or `active_wall_seconds > 0`, or any
 step carries a `dispatch_context.bound_override` — `/auto-status` prints
 an additional `iteration:` block between the exit-predicate line and the
@@ -61,19 +61,19 @@ beneath the loop_phase line. It surfaces a forced exit driven by an
 unexpected raise in the iteration check (NOT the clean predicate-met or
 bound-breach paths — those are silent on this line because they're not
 diagnostic). The line carries `kind: <error-type>: <message>`. Two
-`kind` values exist (see `lib/ledger.py::EXIT_REASON_KINDS`):
+`kind` values exist (see `lib/run_record.py::EXIT_REASON_KINDS`):
 
 - `iteration-check-failed` — `advance_iteration_loop` raised a
-  non-`LedgerError` exception (typically a malformed iteration block, a
+  non-`RunRecordError` exception (typically a malformed iteration block, a
   corrupted gate verdict, or a raise from the producer). Investigate the
-  ledger's `iteration` block + the gate step's `dispatch_context`.
-- `workflow-bug` — `advance_iteration_loop` raised a `LedgerError`
+  run-record's `iteration` block + the gate step's `dispatch_context`.
+- `workflow-bug` — `advance_iteration_loop` raised a `RunRecordError`
   subclass (`UnknownStep`, `InvalidTransition`, `StaleVerdict`) — the
   workflow's `steps[]` / `phase_transitions` don't match what the engine
   reached for. Investigate the workflow JSON against the schema in
   `docs/contracts/workflow-format.md`.
 
-`exit_reason` is persisted on the ledger BEFORE the forced
+`exit_reason` is persisted on the run-record BEFORE the forced
 `loop_phase=done` write, so the operator surface can distinguish a
 crash-marked-done run from a clean exit. The transient harness stop
 intent (`{action: "stop", reason: "..."}`) carries the same `kind` —
@@ -92,9 +92,9 @@ Inspect the argument string and route as follows:
 3. **Freeform sentence** (e.g. "how's the latest run going?", "show me the
    auth one", "status of yesterday's run") — interpret intent:
    - If clearly the most recent / active run → invoke with no args.
-   - If a specific run is named or implied AND only one ledger matches →
+   - If a specific run is named or implied AND only one run-record matches →
      invoke with that resolved run id.
-   - If multiple ledgers could match (e.g. "the auth one" with two
+   - If multiple run-records could match (e.g. "the auth one" with two
      matching runs) → `AskUserQuestion` listing the candidates with the
      most-recent one as Recommended, then invoke with the chosen id.
    - If intent is unparseable → `AskUserQuestion` offering the recent
@@ -122,5 +122,5 @@ bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-status.sh" "<resolved-run-id>"
 tool with the constructed command.)
 
 For the full agent operating contract (the verb surface, argument shapes,
-and rejection modes), run `python3 lib/ledger.py describe` — see
+and rejection modes), run `python3 lib/run_record.py describe` — see
 `docs/contracts/agent-tool-surface.md`.

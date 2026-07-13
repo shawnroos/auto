@@ -6,16 +6,16 @@ Consumer: the engine's OWN Stop hook (.claude/hooks/on-stop.sh). NOT native
 predicate handoff — see docs/research/native-goal-mechanism-spike.md).
 
 FRESHNESS GUARANTEE (C2 / I-1):
-    No cached copy exists; we read the I-1-fresh field directly off the ledger.
-    `exit_predicate_result` is recomputed inside ledger.py's single atomic-write
+    No cached copy exists; we read the I-1-fresh field directly off the run-record.
+    `exit_predicate_result` is recomputed inside run_record.py's single atomic-write
     chokepoint on every write (schema §5 I-1). Here we ONLY read it back — we do
     NOT maintain a separate `done` that could drift. `done` IS
     `exit_predicate_result.met` from the same atomic snapshot. There is no
-    staleness window where status says done while the ledger says not (the
+    staleness window where status says done while the run-record says not (the
     re-review verdict-returned → pending reopen is reflected immediately because
     the predicate is recomputed on that very write).
 
-Reads the ledger LOCK-FREE: the atomic-rename invariant (mkstemp + os.rename)
+Reads the run-record LOCK-FREE: the atomic-rename invariant (mkstemp + os.rename)
 means a reader always sees a whole, consistent file — never a torn one. This
 keeps the Stop hook trivially under any hook timeout (no flock contention with a
 slow writer).
@@ -23,7 +23,7 @@ slow writer).
 Output: one JSON object on stdout —
     {"active": bool, "done": bool, "reason": str, "iterations": int}
 
-A missing or malformed ledger yields active:false (allow stop) and exit 0
+A missing or malformed run-record yields active:false (allow stop) and exit 0
 (rel-001 — never break the harness).
 """
 
@@ -35,7 +35,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_run_record, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
@@ -63,14 +63,14 @@ def _build_reason(predicate: dict, all_terminal: bool) -> str:
 def status(repo_root: str, run_id: str) -> dict:
     """Compute the deterministic status dict for ONE run.
 
-    Reads the ledger directly (lock-free). `done` is the I-1-fresh
+    Reads the run-record directly (lock-free). `done` is the I-1-fresh
     `exit_predicate_result.met` — never a separate cached value.
     """
-    ledger = load_ledger()
+    run_record = load_run_record()
     try:
-        led = ledger.read_ledger(repo_root, run_id)
+        led = run_record.read_run_record(repo_root, run_id)
     except Exception:
-        # Missing / unreadable ledger => not active => allow stop.
+        # Missing / unreadable run-record => not active => allow stop.
         return {"active": False, "done": False, "reason": "no active run", "iterations": 0}
 
     phase = phase_grammar.current_phase(led)
@@ -91,7 +91,7 @@ def status(repo_root: str, run_id: str) -> dict:
         "active": active,
         "done": done,
         "reason": reason,
-        # The ledger carries no iteration counter; informational placeholder
+        # The run-record carries no iteration counter; informational placeholder
         # only — never gates (the predicate is the sole authority).
         "iterations": 0,
     }

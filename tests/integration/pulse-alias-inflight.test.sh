@@ -35,7 +35,7 @@ PULSE_SH="${AUTO_ROOT}/lib/pulse.sh"
 STUB_SH="${AUTO_ROOT}/lib/tick.sh"
 ALIAS_MD="${AUTO_ROOT}/commands/auto-tick.md"
 CANON_MD="${AUTO_ROOT}/commands/auto-pulse.md"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness (mirrors tests/unit/pulse.test.sh) ──────────
@@ -72,13 +72,13 @@ mkdir -p "$REPO"
 # whose finding is still open: the predicate is NOT met, so a pulse applies one
 # fix (verdict-returned -> fixed) and signals re-arm. That state flip is the
 # "did this entry point actually advance the run?" discriminator below.
-ledger_init() {
-  "$PY" - "$REPO" "$1" "$LEDGER_PY" <<'PYEOF'
+run_record_init() {
+  "$PY" - "$REPO" "$1" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, ledger_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, run_record_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(
+m.init_run_record(
     repo, run, backend="ce", loop_phase="work",
     steps=[{"id": "U1", "state": "verdict-returned",
             "findings": [{"severity": "blocker", "note": "open"}]}],
@@ -87,12 +87,12 @@ PYEOF
 }
 
 step_state() {
-  "$PY" - "$REPO" "$1" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$1" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, ledger_py = sys.argv[1:4]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, run_record_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(m.read_ledger(repo, run)["steps"][0]["state"])
+print(m.read_run_record(repo, run)["steps"][0]["state"])
 PYEOF
 }
 
@@ -103,7 +103,7 @@ echo "pulse-alias-inflight.test.sh"
 
 # ─── Scenario 1: the canonical entry emits the NEW rearm prompt ──────────────
 it "canonical lib/pulse.sh advances the run and rearms with /auto:auto-pulse"
-ledger_init "canonrun"
+run_record_init "canonrun"
 canon_out="$(CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "canonrun" 2>/dev/null)"
 if [ "$(jget "$canon_out" action)" = "rearm" ] \
    && [ "$(jget "$canon_out" prompt)" = "/auto:auto-pulse canonrun" ] \
@@ -129,7 +129,7 @@ case "$alias_line" in
 esac
 
 it "firing the OLD /auto:auto-tick command path ADVANCES an in-flight run"
-ledger_init "aliasrun"
+run_record_init "aliasrun"
 CLAUDE_PLUGIN_ROOT="$AUTO_ROOT"
 ARGUMENTS="aliasrun --repo ${REPO}"
 export CLAUDE_PLUGIN_ROOT ARGUMENTS
@@ -147,7 +147,7 @@ assert_eq "/auto:auto-pulse aliasrun" "$(jget "$alias_out" prompt)"
 
 # ─── Scenario 3: the KEPT lib/tick.sh STUB drives an in-flight run ───────────
 it "the lib/tick.sh forwarding stub ADVANCES an in-flight run"
-ledger_init "stubrun"
+run_record_init "stubrun"
 stub_out="$(CLAUDE_AUTO_REPO="$REPO" bash "$STUB_SH" "stubrun" 2>/dev/null)"
 stub_state="$(step_state stubrun)"
 if [ "$(jget "$stub_out" action)" = "rearm" ] && [ "$stub_state" = "fixed" ]; then
@@ -163,7 +163,7 @@ assert_eq "/auto:auto-pulse stubrun" "$(jget "$stub_out" prompt)"
 # The driving model parses stdout as a single JSON object. A deprecation line on
 # stdout would break every legacy-path rearm — the stub must speak on stderr.
 it "the stub's deprecation notice goes to stderr, stdout stays a clean JSON intent"
-ledger_init "cleanrun"
+run_record_init "cleanrun"
 stub_err="$(CLAUDE_AUTO_REPO="$REPO" bash "$STUB_SH" "cleanrun" 2>&1 >/dev/null)"
 stub_stdout="$(CLAUDE_AUTO_REPO="$REPO" bash "$STUB_SH" "cleanrun" 2>/dev/null)"
 parses="$("$PY" -c "import json,sys
@@ -183,7 +183,7 @@ esac
 # broken command path and prove it does NOT advance (state stays verdict-returned)
 # — so "state == fixed" above is genuinely caused by the legacy entry point.
 it "deliberate-fail: a broken dispatch path does NOT advance the run"
-ledger_init "dfrun"
+run_record_init "dfrun"
 CLAUDE_AUTO_REPO="$REPO" bash "${AUTO_ROOT}/lib/__no_such_entry__.sh" "dfrun" >/dev/null 2>&1 || true
 df_state="$(step_state dfrun)"
 assert_eq "verdict-returned" "$df_state"

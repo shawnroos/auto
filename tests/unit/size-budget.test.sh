@@ -51,35 +51,35 @@ FUNC_BUDGET=120
 # fires (so growth-of-allowlisted-debt is still caught).
 
 ALLOWED_FILES=(
-  # (lib/ledger_core.py:1055 waiver retired — U16 extracted the pure predicate
+  # (lib/run_record_core.py:1055 waiver retired — U16 extracted the pure predicate
   # evaluator (recompute_predicate + B7 helpers, gating_severities,
-  # step_is_terminal, is_orphaned) into lib/ledger_predicate.py, dropping core
+  # step_is_terminal, is_orphaned) into lib/run_record_predicate.py, dropping core
   # from 1055 to ~710 LOC — back under the 1000 budget. "Decompose below
   # threshold → remove the waiver": no lib/*.py file is over budget now, so this
   # array is intentionally empty.)
 )
 
 ALLOWED_FUNCTIONS=(
-  # init_ledger is the construction-time invariant chokepoint (validate the
+  # init_run_record is the construction-time invariant chokepoint (validate the
   # 6-arg shape, normalize steps, seed iteration_emit_count per F0,
   # construct the legacy-compatible top-level dict). Decomposing it would
   # mean extracting helpers per concern — viable but bigger than B7 was.
   # Tracked: structural-debt decomposition candidate for v0.3.2 / v0.4.x.
   # v0.4.0 U1 added: +1 goal_intent param, +2-line type validation, +7-line
-  # comment + 1 dict line = 18 LOC growth. The init_ledger split remains
+  # comment + 1 dict line = 18 LOC growth. The init_run_record split remains
   # the right move; keeping U1 scoped to bumping the waiver.
   # v0.6.0 U5 added driving_session_id (KTD-5): +1 param, +3-line type
-  # validation, +4-line ledger-dict field. A ledger field's only home is
+  # validation, +4-line run-record-dict field. A run-record field's only home is
   # this chokepoint; the split stays the right move, kept off U5.
   # v0.13.0 U8 added agent_session_ids (KTD-7/R21, the PreToolUse ownership
   # set): +1 dict line, +1 comment. Same reasoning as driving_session_id —
   # a schema field's only home is this chokepoint, and the field is what
   # lets the destructive backstop reach the sub-agent tree. The verb-surface
-  # work DID decompose where decomposition was real: ledger_mutators.py's
-  # steering verbs moved to ledger_steering.py, and ledger.py's whole CLI
+  # work DID decompose where decomposition was real: run_record_mutators.py's
+  # steering verbs moved to run_record_steering.py, and run_record.py's whole CLI
   # collapsed into the _VERBS registry with per-verb _h_* handlers (no function
   # over 40 LOC), both back under budget without a waiver.
-  "lib/ledger_core.py:init_ledger:231"
+  "lib/run_record_core.py:init_run_record:231"
   # (_try_iteration_check waiver retired: the workflow-bug + iteration-crash
   # except branches were collapsed into the shared `_wedge_done_stop` helper,
   # bringing the function back under the 120-LOC budget — decompose, don't bump.)
@@ -132,7 +132,7 @@ ALLOWED_FUNCTIONS=(
   # here) so the readiness engine can order the producer fan-out — 125 → 137.
   "lib/backend-ce.py:_next_plan_step:137"
   # run() is auto.py's linear run-creation dispatcher (parse → validate workflow
-  # → build steps → init ledger → emit arm intent). Already partially decomposed
+  # → build steps → init run-record → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,
   # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in
   # _bind_presatisfied_plan, off-budget; the residual is glue). Further splitting

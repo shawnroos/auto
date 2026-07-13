@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
 # auto U4 integration test: the advisor-gate PreToolUse hooks.
 #
-# Exercises the REAL ledger.py + the U4 hook scripts (.sh wrappers exec'ing into
+# Exercises the REAL run_record.py + the U4 hook scripts (.sh wrappers exec'ing into
 # the sibling .py) wired exactly as the plugin manifest wires them. The ONLY
 # injection points are the repo path (a sandbox tmp repo) and the PreToolUse event
 # JSON (fed on stdin, as the harness would). Nothing is mocked.
 #
-# `driving_session_id` is recorded on the ledger by U5 (the arm-time setter),
+# `driving_session_id` is recorded on the run-record by U5 (the arm-time setter),
 # which is not part of THIS step. So — exactly as hooks.test.sh hand-ages
 # last_beat_at — we inject driving_session_id by a direct read-edit-write of the
-# ledger JSON. Without it the defensive read finds the key absent and ALLOWS, so
+# run-record JSON. Without it the defensive read finds the key absent and ALLOWS, so
 # every deny scenario depends on this injection.
 #
 # Scenarios (U4 plan):
 #   askuser hook:
 #     - live self-driven run + MATCHING session_id   -> deny + advisor redirect
 #     - live run + MISMATCHED session_id (standalone) -> allow (KTD-5)
-#     - no ledger / phase==done / driver==manual / stale (>3900s) -> allow
-#     - malformed ledger -> allow + exit 0 (rel-001)
+#     - no run-record / phase==done / driver==manual / stale (>3900s) -> allow
+#     - malformed run-record -> allow + exit 0 (rel-001)
 #   action hook (same ownership gate):
 #     - destructive (push --force / rm -rf / reset --hard / branch -D) on a
 #       live owned run -> deny + the run is PAUSED (driver=manual, blocked_on)
-#     - benign (ls / git status) -> allow, ledger untouched
+#     - benign (ls / git status) -> allow, run-record untouched
 #     - fail-CLOSED: deny-unsupported hatch -> systemMessage (NOT empty) AND the
-#       run is still PAUSED on the ledger
-#     - mismatched session_id + destructive -> allow, ledger untouched (scope)
-#   .sh shim: malformed ledger -> exit 0
+#       run is still PAUSED on the run-record
+#     - mismatched session_id + destructive -> allow, run-record untouched (scope)
+#   .sh shim: malformed run-record -> exit 0
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 ASKUSER_SH="${AUTO_ROOT}/.claude/hooks/on-pretooluse-askuser.sh"
 ASKUSER_PY="${AUTO_ROOT}/lib/on-pretooluse-askuser.py"
 ACTION_SH="${AUTO_ROOT}/.claude/hooks/on-pretooluse-action.sh"
@@ -73,20 +73,20 @@ mkrepo() {
   printf '%s' "$repo"
 }
 
-pyledger() {
+py_run_record() {
   local repo="$1"; shift
-  "$PY" - "$repo" "$LEDGER_PY"
+  "$PY" - "$repo" "$RUN_RECORD_PY"
 }
 
-# Inject driving_session_id onto a run's ledger by direct JSON edit (U5 owns the
+# Inject driving_session_id onto a run's run-record by direct JSON edit (U5 owns the
 # real setter — mirrors hooks.test.sh hand-aging last_beat_at).
 set_driving_session() {
   local repo="$1" run="$2" sid="$3"
-  "$PY" - "$repo" "$run" "$sid" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$repo" "$run" "$sid" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util, json
-repo, run, sid, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-p = L.ledger_path(repo, run)
+repo, run, sid, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+p = L.run_record_path(repo, run)
 with open(p) as f: led = json.load(f)
 led["driving_session_id"] = sid
 with open(p,"w") as f: json.dump(led,f)
@@ -99,10 +99,10 @@ try:
 except Exception:
     print('')" "$1" "$2"; }
 
-# Read loop.driver / loop.blocked_on for ledger assertions.
+# Read loop.driver / loop.blocked_on for run-record assertions.
 rd_loop() {
   local repo="$1" run="$2" field="$3"
-  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$repo','$run');print(l['loop'].get('$field'))"
+  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_run_record('$repo','$run');print(l['loop'].get('$field'))"
 }
 
 # Read the top-level advisor_audit list (NOT under loop) — count + a field of
@@ -110,8 +110,8 @@ rd_loop() {
 rd_audit() {
   local repo="$1" run="$2" what="$3"
   "$PY" -c "import importlib.util as u,sys
-s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m)
-l=m.read_ledger('$repo','$run');aud=l.get('advisor_audit') or []
+s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m)
+l=m.read_run_record('$repo','$run');aud=l.get('advisor_audit') or []
 what='$what'
 if what=='count': print(len(aud))
 elif aud: print(aud[-1].get(what,''))
@@ -128,7 +128,7 @@ except Exception:
 }
 
 # The test harness sentinel + a self-driven LIVE run is the common setup. The
-# staleness gate stays ON (a fresh init_ledger stamps last_beat_at=now), so we
+# staleness gate stays ON (a fresh init_run_record stamps last_beat_at=now), so we
 # do NOT set NO_STALENESS_CHECK except for the explicit stale scenario.
 EVENT() {  # EVENT <session_id> <tool_name> <command>
   "$PY" -c "import json,sys; print(json.dumps({'session_id':sys.argv[1],'tool_name':sys.argv[2],'tool_input':{'command':sys.argv[3]}}))" "$1" "$2" "$3"
@@ -140,11 +140,11 @@ echo "advisor-gate.test.sh"
 # ─── askuser: live self-driven run + MATCHING session_id -> deny ──────────────
 it "askuser: live self-driven run + matching session_id -> deny + advisor redirect"
 REPO="$(mkrepo askuser-match)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"liverun",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"liverun",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 set_driving_session "$REPO" liverun "sess-AAA"
@@ -174,20 +174,20 @@ out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
 # ─── askuser: no driving_session_id recorded -> allow (defensive read) ────────
-it "askuser: live run but driving_session_id ABSENT (pre-U5 ledger) -> allow"
+it "askuser: live run but driving_session_id ABSENT (pre-U5 run_record) -> allow"
 REPO="$(mkrepo askuser-nosid)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"nosid",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"nosid",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── askuser: no ledger at all -> allow ───────────────────────────────────────
+# ─── askuser: no run-record at all -> allow ───────────────────────────────────────
 it "askuser: empty dispatch dir (no run) -> allow"
 REPO="$(mkrepo askuser-empty)"
 ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
@@ -197,11 +197,11 @@ assert_empty "$out"
 # ─── askuser: phase==done -> allow ────────────────────────────────────────────
 it "askuser: a done run (matching session_id) -> allow (run finished)"
 REPO="$(mkrepo askuser-done)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done")
 PYEOF
 set_driving_session "$REPO" donerun "sess-AAA"
@@ -212,11 +212,11 @@ assert_empty "$out"
 # ─── askuser: driver==manual (handoff/blocked pause) -> allow ────────────────────
 it "askuser: a manual-driver (paused) run -> allow (not a live pulse chain)"
 REPO="$(mkrepo askuser-manual)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"manualrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"manualrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"manualrun",driver="manual")
 PYEOF
 set_driving_session "$REPO" manualrun "sess-AAA"
@@ -227,14 +227,14 @@ assert_empty "$out"
 # ─── askuser: stale driver==self chain (>3900s) -> allow ──────────────────────
 it "askuser: a STALE self chain (last_beat_at > DRIVER_SELF_STALE_SECONDS) -> allow (dead chain)"
 REPO="$(mkrepo askuser-stale)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util, json, datetime
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleself",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"staleself",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.ledger_path(repo,"staleself")
+p = L.run_record_path(repo,"staleself")
 with open(p) as f: led = json.load(f)
 led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
@@ -245,17 +245,17 @@ ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── askuser: malformed ledger -> allow + exit 0 (rel-001) ────────────────────
-it "askuser: malformed ledger -> allow (no crash)"
+# ─── askuser: malformed run-record -> allow + exit 0 (rel-001) ────────────────────
+it "askuser: malformed run_record -> allow (no crash)"
 REPO="$(mkrepo askuser-malformed)"
 printf '{ not valid json' > "${REPO}/.claude/auto/broken.json"
 ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
-it "askuser.py: malformed ledger -> exit 0 (rel-001)"
+it "askuser.py: malformed run_record -> exit 0 (rel-001)"
 printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO" >/dev/null 2>&1
 assert_eq "0" "$?"
-it "askuser.sh shim: malformed ledger -> exit 0 (rel-001)"
+it "askuser.sh shim: malformed run_record -> exit 0 (rel-001)"
 ( cd "$REPO" && printf '%s' "$ev" | bash "$ASKUSER_SH" >/dev/null 2>&1 )
 assert_eq "0" "$?"
 
@@ -266,11 +266,11 @@ assert_eq "0" "$?"
 # Build a fresh live owned run for the action scenarios.
 mk_live_owned() {  # mk_live_owned <name> <run> <sid>
   local repo; repo="$(mkrepo "$1")"
-  "$PY" - "$repo" "$2" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$repo" "$2" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
   set_driving_session "$repo" "$2" "$3"
   printf '%s' "$repo"
@@ -309,7 +309,7 @@ for cmd in \
   esac
 done
 
-# ─── action: benign command -> allow, ledger untouched ────────────────────────
+# ─── action: benign command -> allow, run-record untouched ────────────────────────
 it "action: benign 'git status' on a live owned run -> allow"
 REPO="$(mk_live_owned action-benign actrun sess-AAA)"
 ev="$(EVENT sess-AAA Bash 'git status')"
@@ -436,7 +436,7 @@ it "action: mismatched-session destructive leaves driver==self (no pause)"
 assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 
 # ─── action: a fired backstop appends a kind="action" audit record (KTD-5) ────
-# driver-reference.md §Audit / SKILL.md §4.5 / ledger-schema §2.1 assert the
+# driver-reference.md §Audit / SKILL.md §4.5 / run-record-schema §2.1 assert the
 # action backstop appends its OWN advisor_audit record when it pauses — without
 # it a fired backstop is invisible in the exit report (round-1 P1).
 it "action: a destructive command on a live owned run appends ONE advisor_audit record"
@@ -482,8 +482,8 @@ assert_eq "True" "$(rd_loop "$REPO" actrun backstop_latched)"
 # match must surface a top-level `systemMessage` (a transcript-visible operator
 # signal) ALONGSIDE the deny — confirmed against the CC hooks contract that
 # systemMessage is not suppressed by a permissionDecision. Without it the deny
-# only surfaced the agent-facing reason + a ledger pause (silent to an operator
-# not watching the ledger — the P3-a finding).
+# only surfaced the agent-facing reason + a run-record pause (silent to an operator
+# not watching the run-record — the P3-a finding).
 it "action P3-a: production destructive deny emits a top-level systemMessage"
 REPO="$(mk_live_owned action-sysmsg actrun sess-AAA)"
 ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
@@ -538,32 +538,32 @@ assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
 # freshness. _pause_run does NOT re-stamp last_beat_at (set_loop without
 # beat=True), so a run paused-by-backstop goes stale while the operator
 # deliberates; if the action hook read stale->allow, a SECOND rm -rf would slip
-# through. This primes the IDENTICAL stale ledger the askuser hook ALLOWS (lines
+# through. This primes the IDENTICAL stale run-record the askuser hook ALLOWS (lines
 # ~228-246) but asserts the OPPOSITE: the action hook still DENIES + PAUSES. That
-# contrast (same stale ledger: askuser allows / action denies) is the invariant.
+# contrast (same stale run-record: askuser allows / action denies) is the invariant.
 # NO NO_STALENESS workaround — staleness is genuinely irrelevant to this hook now.
 REPO="$(mkrepo action-stale)"
-"$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+"$PY" - "$REPO" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util, json, datetime
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleact",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"staleact",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.ledger_path(repo,"staleact")
+p = L.run_record_path(repo,"staleact")
 with open(p) as f: led = json.load(f)
 led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
 led["driving_session_id"] = "sess-AAA"
 with open(p,"w") as f: json.dump(led,f)
 PYEOF
-# Contrast control FIRST (before the action hook mutates the ledger): the
-# askuser hook on this SAME stale self-driven ledger ALLOWS (fail-open) —
+# Contrast control FIRST (before the action hook mutates the run-record): the
+# askuser hook on this SAME stale self-driven run-record ALLOWS (fail-open) —
 # staleness stays in the question hook.
-it "contrast: askuser on the stale self-driven owned ledger -> ALLOW (fail-open; staleness kept here)"
+it "contrast: askuser on the stale self-driven owned run_record -> ALLOW (fail-open; staleness kept here)"
 out_q="$(printf '%s' "$(EVENT sess-AAA AskUserQuestion 'noop')" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out_q"
-# Now the action hook on the IDENTICAL stale ledger DENIES + PAUSES (fail-closed).
+# Now the action hook on the IDENTICAL stale run-record DENIES + PAUSES (fail-closed).
 it "action: a STALE self chain (>3900s) + destructive -> STILL deny (fail-closed, no staleness coupling)"
 ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
 out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
@@ -582,26 +582,26 @@ assert_empty "$(perm_decision "$out")"
 it "action FAIL-CLOSED: the run is STILL paused (fail closed, not allow)"
 assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
 
-# ─── action: malformed ledger -> allow + exit 0 ───────────────────────────────
-it "action: malformed ledger + destructive command -> allow (no crash)"
+# ─── action: malformed run-record -> allow + exit 0 ───────────────────────────────
+it "action: malformed run_record + destructive command -> allow (no crash)"
 REPO="$(mkrepo action-malformed)"
 printf '{ not valid json' > "${REPO}/.claude/auto/broken.json"
 ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
 out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
 assert_empty "$out"
-it "action.sh shim: malformed ledger -> exit 0 (rel-001)"
+it "action.sh shim: malformed run_record -> exit 0 (rel-001)"
 ( cd "$REPO" && printf '%s' "$ev" | bash "$ACTION_SH" >/dev/null 2>&1 )
 assert_eq "0" "$?"
 
-# ─── action: a sibling NON-DICT ledger does NOT disarm the backstop ───────────
-# load_ledger_safe folds in a dict-guard: a valid-JSON-but-non-dict ledger file
-# (array/scalar) returns None and is SKIPPED by iter_worktree_ledgers — it must
-# NOT abort the scan that finds the real owning ledger sitting beside it. If the
+# ─── action: a sibling NON-DICT run-record does NOT disarm the backstop ───────────
+# load_run_record_safe folds in a dict-guard: a valid-JSON-but-non-dict run-record file
+# (array/scalar) returns None and is SKIPPED by iter_worktree_run_records — it must
+# NOT abort the scan that finds the real owning run-record sitting beside it. If the
 # scan ever propagated a non-dict through to `_owns_session` (AttributeError on
 # `led.get(...)`) or stopped early on it, a single junk file in .claude/auto/
 # would silently disarm the fail-closed destructive backstop. Pins the
 # deliberate dict-guard behavior change at the security-load-bearing site.
-it "action: a sibling non-dict ledger file does NOT disarm the destructive backstop -> still deny"
+it "action: a sibling non-dict run_record file does NOT disarm the destructive backstop -> still deny"
 REPO="$(mk_live_owned action-nondict actrun sess-AAA)"
 printf '[]' > "${REPO}/.claude/auto/junk.json"   # valid JSON, non-dict
 ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
@@ -637,21 +637,21 @@ assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 # re-arming. These tests drive the REAL auto-resume.py + the REAL action hook.
 RESUME_PY="${AUTO_ROOT}/lib/auto-resume.py"
 
-# Read the top-level driving_session_id off a ledger (the field the gates match).
+# Read the top-level driving_session_id off a run-record (the field the gates match).
 rd_driving() {
   local repo="$1" run="$2"
-  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$repo','$run');print(l.get('driving_session_id') or '')"
+  "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_run_record('$repo','$run');print(l.get('driving_session_id') or '')"
 }
 
 # A blocked-paused run owned by session A (driver=manual + driving_session_id=A),
 # mirroring auto-resume.py `pause` then a cross-session `continue`.
 mk_paused_owned() {  # mk_paused_owned <name> <run> <sid>
   local repo; repo="$(mkrepo "$1")"
-  "$PY" - "$repo" "$2" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$repo" "$2" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,run,driver="manual",blocked_on="waiting on a human")
 PYEOF
   set_driving_session "$repo" "$2" "$3"
@@ -676,20 +676,20 @@ assert_eq "manual" "$(rd_loop "$REPO" rrun driver)"
 
 # ─── handoff->work branch ALSO re-records (different write path) ─────────────────
 # _cmd_continue records the session BEFORE branching, but handoff->work routes
-# through pulse.advance_to_phase -> ledger.transition_and_emit (a DIFFERENT write
+# through pulse.advance_to_phase -> run_record.transition_and_emit (a DIFFERENT write
 # path than the blocked-pause set_loop). transition_and_emit does an in-place
 # locked RMW (it never reconstructs the dict), so the top-level
 # driving_session_id survives the phase advance. This asserts that explicitly so
 # a future refactor of the emit path can't silently reintroduce the P1 bug.
 it "resume: handoff-paused legacy run resumed under session B re-records the session through the handoff->work path"
 REPO="$(mkrepo resume-handoff)"
-"$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
+"$PY" - "$REPO" "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# Legacy ledger (workflow=None) so advance_to_phase falls through to the raw
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+# Legacy run-record (workflow=None) so advance_to_phase falls through to the raw
 # set_loop branch; a handoff pause is the precondition for the handoff->work flip.
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
+L.init_run_record(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual",handoff_paused=True)
 PYEOF
 set_driving_session "$REPO" handoffrun "sess-AAA"
@@ -697,7 +697,7 @@ CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" env -u CLAUDE_CODE_CH
   "$PY" "$RESUME_PY" continue handoffrun >/dev/null 2>&1
 assert_eq "sess-BBB" "$(rd_driving "$REPO" handoffrun)"
 it "resume: the handoff->work flip still advanced the phase (session re-record did not break the advance)"
-assert_eq "work" "$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','handoffrun')['loop_phase'])")"
+assert_eq "work" "$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','handoffrun')['loop_phase'])")"
 
 # ─── regression guard: WITHOUT the fix, the stale id would let B through ──────
 # Same destructive command but issued from the STALE arm-time session A: it must
@@ -740,11 +740,11 @@ assert_eq "sess-BBB" "$(rd_driving "$REPO" rrun)"
 # session AAA must NOT be silently stolen by a `continue`/`advance` from session
 # BBB — that would dark the ORIGINAL driver's destructive backstop mid-run.
 REPO="$(mkrepo resume-steal)"
-"$PY" - "$REPO" stealrun "$LEDGER_PY" <<'PYEOF'
+"$PY" - "$REPO" stealrun "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
-repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,run,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,run,driver="self",beat=True)   # LIVE: self-driven + fresh heartbeat
 PYEOF
 set_driving_session "$REPO" stealrun sess-AAA

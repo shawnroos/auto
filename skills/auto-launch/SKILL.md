@@ -228,7 +228,7 @@ The full chooser:
   must reach the engine, and the only mechanism that carries it is a workflow whose
   `iteration.gate_step` names the declared gate (`judge` / `compare` / the
   custom's own). So compile a validated run-scoped workflow, dispatch it, then tear
-  it down once the ledger is initialized.
+  it down once the run-record is initialized.
 
 The discriminated-union option-payload shape for any `AskUserQuestion` follows
 `docs/contracts/driver-reference.md` §9 (branch on the situation before reading a
@@ -269,20 +269,20 @@ backends. The mechanics:
 4. **Dispatch the run-scoped workflow WITH self-teardown:**
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<spec> --workflow <builtin>-<run-slug> --teardown-workflow-after-init"`.
    The `--teardown-workflow-after-init` flag makes `auto.py` delete the run-scoped
-   workspace workflow **itself, atomically once `init_ledger` returns** — the engine
+   workspace workflow **itself, atomically once `init_run_record` returns** — the engine
    is workflow-blind thereafter (`workflow-format.md` §1: pulse, dispatch, predicate,
-   and *resume* all operate off the ledger; phase_order / phase_transitions /
+   and *resume* all operate off the run-record; phase_order / phase_transitions /
    iteration / emit_templates are persisted onto it, never the workflow file). So on
    the success path you do **not** delete it yourself and you do **not** infer
-   "ledger initialized" from this command's output — `auto.py` owns it.
+   "run_record initialized" from this command's output — `auto.py` owns it.
 5. **Failure-path cleanup (only when step 4 fails before init).** If `auto.sh`
-   exits **non-zero** — it crashed *before* `init_ledger`, so its own teardown
+   exits **non-zero** — it crashed *before* `init_run_record`, so its own teardown
    never ran — best-effort delete
    `<repo>/.claude/auto/workflows/<builtin>-<run-slug>.json` yourself (ignore "file
    not found"). This is keyed on the exit code, not a stdout-timing guess. Between
    `auto.py`'s post-init teardown (success) and this exit-code cleanup (failure),
    nothing accumulates in the workspace tier across runs, and a subsequent resume
-   of a successful run still drives from the ledger alone. (This is the "inline
+   of a successful run still drives from the run-record alone. (This is the "inline
    compile-and-run" scope boundary — the run-scoped variant is never a persisted,
    reusable workflow; that is `auto-author-workflow`'s separate save flow.)
 

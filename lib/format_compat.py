@@ -10,8 +10,8 @@ user's workflow file. This module maps v1 → v2 in memory at every read
 chokepoint, so every other module in the tree speaks ONLY the new vocabulary.
 
 DAG ROOT. Pure stdlib; imports no sibling. Wired into:
-  * ``ledger_core._read_json``        — read_ledger + the locked RMW path
-  * ``_bootstrap.load_ledger_safe``   — every hook and scan consumer
+  * ``run_record_core._read_json``        — read_run_record + the locked RMW path
+  * ``_bootstrap.load_run_record_safe``   — every hook and scan consumer
   * ``workflows.resolve``             — workflow-file reads, before validate()
   * ``workflow_validate.validate_and_lint`` — the authoring WRITE gate
 

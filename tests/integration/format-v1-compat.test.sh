@@ -8,8 +8,8 @@
 # only injected input is a sandbox repo seeded with the captured v1 fixtures.
 #
 # THE TWO READ CHOKEPOINTS (KTD-1) — both must be wired independently:
-#   1. ledger_core._read_json     — read_ledger + the locked read-modify-write
-#   2. _bootstrap.load_ledger_safe — EVERY hook + scan consumer (on-stop,
+#   1. run_record_core._read_json     — read_run_record + the locked read-modify-write
+#   2. _bootstrap.load_run_record_safe — EVERY hook + scan consumer (on-stop,
 #      on-session-start, on-pretooluse-*, auto-detect, auto-resume's scan,
 #      auto-status's list-all, launch-mode). This path does NOT go through (1).
 # Scenario 6 is the anti-shadowing proof: it drives the hook path directly, and
@@ -18,14 +18,14 @@
 # shadowing) and the P0 would ship silently.
 #
 # Scenarios:
-#   1  v1 run-record reads as v2 through read_ledger (chokepoint 1)
+#   1  v1 run-record reads as v2 through read_run_record (chokepoint 1)
 #   2  v1 record + ONE real mutation → on-disk file is v2, stamped format:2,
 #      predicate recomputed under the new `all_steps_terminal` field
 #   3  a v1 WORKFLOW file resolves + validates + projects with backend_op
 #   4  the handoff-paused v1 record reads as handoff_paused / loop_phase=handoff
 #      and /auto-resume ADVANCES it (the in-flight population the shim protects)
 #   5  a producer-name VALUE off a v1 record resolves in the producer REGISTRY
-#   6  the HOOK path (_bootstrap.load_ledger_safe) upgrades — chokepoint 2
+#   6  the HOOK path (_bootstrap.load_run_record_safe) upgrades — chokepoint 2
 #   6b DELIBERATE-FAIL: comment out the chokepoint-2 call specifically → RED
 #   7  the authoring WRITE gate accepts a v1-keyed draft (validates an upgraded
 #      copy, warnings-list signature unchanged)
@@ -71,13 +71,13 @@ drive() {
 import sys, os, json
 auto_root, repo, fixdir = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-from _bootstrap import load_lib_module, load_ledger_safe
+from _bootstrap import load_lib_module, load_run_record_safe
 op = sys.argv[4]
 out = {}
 
 if op == "read-v1":
-    ledger = load_lib_module("ledger")
-    led = ledger.read_ledger(repo, "midwork")
+    run_record = load_lib_module("run_record")
+    led = run_record.read_run_record(repo, "midwork")
     out = {
         "steps": [u["id"] for u in led["steps"]],
         "no_units_key": "units" not in led,
@@ -90,8 +90,8 @@ if op == "read-v1":
 
 elif op == "mutate-v1":
     # ONE real mutation through the locked RMW path, then inspect the BYTES on disk.
-    ledger = load_lib_module("ledger")
-    ledger.transition(repo, "midwork", "w-2", "dispatched")
+    run_record = load_lib_module("run_record")
+    run_record.transition(repo, "midwork", "w-2", "dispatched")
     with open(os.path.join(repo, ".claude", "auto", "midwork.json")) as fh:
         raw = json.load(fh)      # RAW read — no shim, so this is the true on-disk shape
     blob = json.dumps(raw)
@@ -158,7 +158,7 @@ elif op == "v1-workflow":
 
 elif op == "legacy-dir-arms-run":
     # The same legacy pair (v1 keys + legacy dir) must ARM A RUN, not merely
-    # resolve: `auto.py` -> load_and_validate -> step_for -> init_ledger. A shim
+    # resolve: `auto.py` -> load_and_validate -> step_for -> init_run_record. A shim
     # that satisfies the registry but produces a topology the engine can't init
     # is not compat. This drives the REAL init path end-to-end and reads the
     # resulting run-record back off disk.
@@ -172,10 +172,10 @@ elif op == "legacy-dir-arms-run":
         json.dump(v1, fh)
 
     wf, tier = workflows.load_and_validate("legacy", repo)     # both shims fire
-    ledger = load_lib_module("ledger")
+    run_record = load_lib_module("run_record")
     init_steps = [workflows.step_for(u, wf) for u in wf.get("steps", [])]
     phase_order = wf.get("phase_order", ["plan", "handoff", "work"])
-    ledger.init_ledger(
+    run_record.init_run_record(
         repo, "legacy-run",
         backend=wf.get("default_backend", "ce"),
         steps=init_steps,
@@ -189,7 +189,7 @@ elif op == "legacy-dir-arms-run":
     )
     # Read the run-record back off DISK (not the returned dict) — the bytes are
     # the claim: the engine must persist v2 even when the source file was v1.
-    with open(ledger.ledger_path(repo, "legacy-run")) as fh:
+    with open(run_record.run_record_path(repo, "legacy-run")) as fh:
         rec = json.load(fh)
     out = {
         "tier": tier,
@@ -207,9 +207,9 @@ elif op == "legacy-dir-arms-run":
 elif op == "producer-registry":
     # The producer-name VALUE carried by the v1 record must resolve in the REGISTRY
     # after upgrade (the value renamed with the key).
-    ledger = load_lib_module("ledger")
+    run_record = load_lib_module("run_record")
     producers = load_lib_module("step_producers")
-    led = ledger.read_ledger(repo, "parked")
+    led = run_record.read_run_record(repo, "parked")
     name = led["phase_transitions"][0]["producer"]
     out = {
         "producer_name": name,
@@ -218,8 +218,8 @@ elif op == "producer-registry":
     }
 
 elif op == "hook-path":
-    # CHOKEPOINT 2 — the path every hook takes. NOT via ledger_core._read_json.
-    led = load_ledger_safe(os.path.join(repo, ".claude", "auto", "parked.json"))
+    # CHOKEPOINT 2 — the path every hook takes. NOT via run_record_core._read_json.
+    led = load_run_record_safe(os.path.join(repo, ".claude", "auto", "parked.json"))
     out = {
         "loop_phase": led.get("loop_phase"),
         "handoff_paused": led.get("handoff_paused"),
@@ -302,10 +302,10 @@ print(json.dumps(out, sort_keys=True))
 PYEOF
 }
 
-echo "── chokepoint 1: ledger_core._read_json (read_ledger + locked RMW) ──"
+echo "── chokepoint 1: run_record_core._read_json (read_run_record + locked RMW) ──"
 
 seed
-it "a format-v1 run-record reads as v2 through read_ledger"
+it "a format-v1 run-record reads as v2 through read_run_record"
 r="$(drive read-v1 2>&1)"
 expected='{"all_steps_terminal": false, "backend": "ce", "backend_op": "next_plan_step", "handoff_paused": false, "no_units_key": true, "steps": ["plan-1", "plan-2", "plan-3", "judge", "w-1", "w-2", "w-3"], "workflow": "a2"}'
 assert_eq "$expected" "$r"
@@ -326,7 +326,7 @@ expected='{"default_backend": "ce", "file_still_v1": true, "gate_step": "judge",
 assert_eq "$expected" "$r"
 
 seed
-it "U8 KTD-7: that same legacy pair ARMS A RUN — init_ledger writes a v2 run-record, source file untouched"
+it "U8 KTD-7: that same legacy pair ARMS A RUN — init_run_record writes a v2 run-record, source file untouched"
 r="$(drive legacy-dir-arms-run 2>&1)"
 expected='{"armed": true, "record_format": 2, "record_no_v1_workflow_key": true, "record_v2_keys": true, "record_workflow_name": "legacy", "source_file_still_v1": true, "step_ids": ["plan-1", "plan-2", "plan-3", "judge"], "tier": "workspace"}'
 assert_eq "$expected" "$r"
@@ -338,7 +338,7 @@ expected='{"callable": true, "producer_name": "plan_output_to_work_steps", "reso
 assert_eq "$expected" "$r"
 
 echo ""
-echo "── chokepoint 2: _bootstrap.load_ledger_safe — the HOOK/scan path ──"
+echo "── chokepoint 2: _bootstrap.load_run_record_safe — the HOOK/scan path ──"
 
 seed
 it "the handoff-paused v1 record reads as handoff_paused/loop_phase=handoff via the HOOK path"
@@ -354,7 +354,7 @@ phase="$("$PY" - "$AUTO_ROOT" "$REPO" <<'PYEOF' 2>&1
 import sys, os
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
-led = load_lib_module("ledger").read_ledger(sys.argv[2], "parked")
+led = load_lib_module("run_record").read_run_record(sys.argv[2], "parked")
 print(led["loop_phase"])
 PYEOF
 )"
@@ -365,9 +365,9 @@ else
 fi
 
 # ── DELIBERATE-FAIL: prove chokepoint 2 is INDEPENDENTLY wired ───────────────
-# If the shim were wired ONLY at ledger_core._read_json, the hook-path assertion
-# above could still pass by SHADOWING (a consumer reaching the ledger facade). So
-# comment out the upgrade call in load_ledger_safe SPECIFICALLY and re-run the
+# If the shim were wired ONLY at run_record_core._read_json, the hook-path assertion
+# above could still pass by SHADOWING (a consumer reaching the run-record facade). So
+# comment out the upgrade call in load_run_record_safe SPECIFICALLY and re-run the
 # hook-path probe: it MUST go red. This is what makes the second wiring a proven
 # claim rather than an assumed one — the plan calls missing it a P0.
 echo ""
@@ -379,7 +379,7 @@ cp "$BOOT" "$BACKUP"
 restore_bootstrap() { cp "$BACKUP" "$BOOT"; }
 trap 'restore_bootstrap; cleanup' EXIT
 
-# Neutralize ONLY load_ledger_safe's upgrade call (chokepoint 2). Chokepoint 1 is
+# Neutralize ONLY load_run_record_safe's upgrade call (chokepoint 2). Chokepoint 1 is
 # untouched, so anything that still reports `handoff` must be reading through it.
 "$PY" - "$BOOT" <<'PYEOF'
 import sys
@@ -391,7 +391,7 @@ open(p, "w").write(src.replace(target, "        return led  # DELIBERATE-FAIL PR
 PYEOF
 
 seed
-it "deliberate-fail: with load_ledger_safe's upgrade commented out, the hook path reads V1 (goes RED)"
+it "deliberate-fail: with load_run_record_safe's upgrade commented out, the hook path reads V1 (goes RED)"
 r="$(drive hook-path 2>&1)"
 # It must now report the RAW v1 shape: no handoff_paused, seam_paused still present.
 if printf '%s' "$r" | grep -q '"handoff_paused": null' \

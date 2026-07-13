@@ -11,8 +11,8 @@ They were extracted VERBATIM from lib/pulse.py (B4); no logic changed. The
 dependency graph is one-way:
 
     pulse.py        → pulse_advance, pulse_guidance
-    pulse_advance   → ledger, iteration, producers, phase_grammar, pulse_guidance
-    pulse_guidance  → ledger, phase_grammar (leaf)
+    pulse_advance   → run_record, iteration, producers, phase_grammar, pulse_guidance
+    pulse_guidance  → run_record, phase_grammar (leaf)
 
 No cycle: nothing here imports pulse.py. `PulseError` is defined HERE (raised by
 ``advance_plan_loop``) and re-exported by pulse.py so the single class identity
@@ -33,12 +33,12 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     is_iteration_disabled,
-    load_ledger,
+    load_run_record,
     load_lib_module,
     test_hatch_enabled,
 )
 
-ledger = load_ledger()
+run_record = load_run_record()
 phase_grammar = load_lib_module("phase-grammar")
 iteration = load_lib_module("iteration")
 import step_producers as producers  # noqa: E402
@@ -69,7 +69,7 @@ _PLAN_STEP_OPS = ("plan", "deepen", "review_plan")
 
 
 def _seconds_since(iso_value, now) -> float:
-    parsed = ledger.parse_iso(iso_value)
+    parsed = run_record.parse_iso(iso_value)
     if parsed is None:
         return -1.0
     return (now - parsed).total_seconds()
@@ -92,23 +92,23 @@ def _transitive_dependents(steps, root_ids):
     return halted
 
 
-def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
+def detect_and_halt_stalled(repo_root, run_id, run_record_dict, now):
     """Mark dispatched-past-threshold steps `stalled`; return the halted-id set.
 
     A step is stalled if it is `dispatched` and has been so for longer than its
-    `stall_threshold_seconds` with no verdict. We mark it via ledger.transition
+    `stall_threshold_seconds` with no verdict. We mark it via run_record.transition
     (so the write goes through the I-1 chokepoint) with last_error preserved as
     null (a plain timeout; a backend raise sets last_error elsewhere). The
     stalled step AND its transitive dependents are halted for this pulse;
     independent siblings still advance.
     """
     newly_stalled = []
-    for u in ledger_dict.get("steps", []):
+    for u in run_record_dict.get("steps", []):
         if u.get("state") != "dispatched":
             continue
         threshold = int(
             u.get("stall_threshold_seconds")
-            or ledger.DEFAULT_STALL_THRESHOLD_SECONDS
+            or run_record.DEFAULT_STALL_THRESHOLD_SECONDS
         )
         age = _seconds_since(u.get("dispatched_at"), now)
         if age >= 0 and age > threshold:
@@ -127,11 +127,11 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         # unconfirmed" (steps_awaiting_reap) — the only Python-visible handle on a
         # kill that is otherwise entirely model-side.
         try:
-            ledger.transition(repo_root, run_id, uid, "stalled", reap_pending=True)
-        except ledger.InvalidTransition:
+            run_record.transition(repo_root, run_id, uid, "stalled", reap_pending=True)
+        except run_record.InvalidTransition:
             # Lost race — newly exposed by U1's dispatch-time heartbeat, which
             # runs this detector WHILE background agents are live. The step left
-            # `dispatched` between the snapshot read (ledger_dict) above and this
+            # `dispatched` between the snapshot read (run_record_dict) above and this
             # locked transition: a concurrent record_verdict (a healthy sibling
             # landing its verdict) or a death-path reap_step already resolved it.
             # Swallow so the pulse doesn't crash and wedge the run — the exact hang
@@ -143,7 +143,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
         confirmed_stalled.append(uid)
 
     # Compute the full halted set (newly + already-stalled) and their dependents.
-    fresh = ledger.read_ledger(repo_root, run_id)
+    fresh = run_record.read_run_record(repo_root, run_id)
     stalled_ids = [
         u.get("id") for u in fresh.get("steps", []) if u.get("state") == "stalled"
     ]
@@ -157,7 +157,7 @@ def reap_step(repo_root, run_id, step_id, attempt):
     The death path's counterpart to detect_and_halt_stalled's timeout path. On a
     native death signal (crash / auth-churn / completion with no verdict) the
     driver reconciles the dead step HERE instead of waiting out the stall
-    threshold. The flip goes through ledger.transition (the I-1 chokepoint),
+    threshold. The flip goes through run_record.transition (the I-1 chokepoint),
     mirroring detect_and_halt_stalled.
 
     It transitions ONLY when the step exists, is currently `dispatched`, AND its
@@ -178,7 +178,7 @@ def reap_step(repo_root, run_id, step_id, attempt):
     ``InvalidTransition`` defensively (a lost race — the step left `dispatched`
     between the read and the locked transition — is treated as a no-op).
     """
-    fresh = ledger.read_ledger(repo_root, run_id)
+    fresh = run_record.read_run_record(repo_root, run_id)
     step = None
     for u in fresh.get("steps", []):
         if u.get("id") == step_id:
@@ -194,8 +194,8 @@ def reap_step(repo_root, run_id, step_id, attempt):
         # reap_pending (U3): mirror detect_and_halt_stalled — the death path also
         # owes a model-side kill (TaskStop + SIGTERM) of whatever process is still
         # up, recorded on the same atomic flip so a forgotten kill stays visible.
-        ledger.transition(repo_root, run_id, step_id, "stalled", reap_pending=True)
-    except ledger.InvalidTransition:
+        run_record.transition(repo_root, run_id, step_id, "stalled", reap_pending=True)
+    except run_record.InvalidTransition:
         return False
     return True
 
@@ -215,7 +215,7 @@ def clear_reap_pending(repo_root, run_id, step_id):
     ``stalled -> stalled`` is not a legal grammar edge, so this is a same-state
     FIELD update and does NOT go through ``transition`` (which would raise
     InvalidTransition). It routes the write through the SAME atomic chokepoint —
-    ``ledger._with_locked_ledger`` -> ``_atomic_write`` (which recomputes the
+    ``run_record._with_locked_run_record`` -> ``_atomic_write`` (which recomputes the
     predicate under flock) — so clearing the marker is never a bypass of the I-1
     write path. Returns True iff the step was found and its marker cleared.
     """
@@ -226,10 +226,10 @@ def clear_reap_pending(repo_root, run_id, step_id):
                 return True
         return False
 
-    return ledger._with_locked_ledger(repo_root, run_id, mutate)
+    return run_record._with_locked_run_record(repo_root, run_id, mutate)
 
 
-def steps_awaiting_reap(ledger_dict):
+def steps_awaiting_reap(run_record_dict):
     """Pure: the ids of ``stalled`` steps whose ``reap_pending`` marker is truthy.
 
     The assertable "kill requested but unconfirmed" set. The stalled transition
@@ -241,13 +241,13 @@ def steps_awaiting_reap(ledger_dict):
     """
     return [
         u.get("id")
-        for u in ledger_dict.get("steps", [])
+        for u in run_record_dict.get("steps", [])
         if u.get("state") == "stalled" and u.get("reap_pending")
     ]
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Error recording (atomic, via ledger.py).
+# Error recording (atomic, via run_record.py).
 
 
 def record_stall_error(repo_root, run_id, step_id, call, message, now_iso):
@@ -260,7 +260,7 @@ def record_stall_error(repo_root, run_id, step_id, call, message, now_iso):
     flipping the loop to manual and surfacing — the caller decides. We return a
     flag indicating whether a step-level stall was recorded.
     """
-    fresh = ledger.read_ledger(repo_root, run_id)
+    fresh = run_record.read_run_record(repo_root, run_id)
     step = None
     for u in fresh.get("steps", []):
         if u.get("id") == step_id:
@@ -268,7 +268,7 @@ def record_stall_error(repo_root, run_id, step_id, call, message, now_iso):
             break
     err = {"call": call, "message": message, "at": now_iso}
     if step is not None and step.get("state") == "dispatched":
-        ledger.transition(
+        run_record.transition(
             repo_root, run_id, step_id, "stalled", last_error=err
         )
         return True
@@ -279,7 +279,7 @@ def record_stall_error(repo_root, run_id, step_id, call, message, now_iso):
 # The advance.
 
 
-def _ready_fix_step(ledger_dict, halted_ids):
+def _ready_fix_step(run_record_dict, halted_ids):
     """Pick ONE step whose latest verdict is converged and needs a fix applied.
 
     A fix-due step is `verdict-returned` with an open GATING finding and is NOT
@@ -288,15 +288,15 @@ def _ready_fix_step(ledger_dict, halted_ids):
     a fresh verdict). Returns the step id or None.
 
     SCALE-AWARE (Bug #3): which severities are fix-due is decided by the SINGLE
-    helper ``ledger.gating_severities(scale)``, read off this ledger's
+    helper ``run_record.gating_severities(scale)``, read off this run-record's
     ``backend_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
     blocker-only run: the pulse would forever try to fix a major-only step that
     re-reviews to the same advisory major, fix→re-enqueue→re-review forever, while
     the predicate already reports met. The fix-class and the terminality class
     MUST share the gating decision so they agree on which steps still need work.
     """
-    gating = ledger.gating_severities(ledger_dict.get("backend_scale", "three-tier"))
-    for u in ledger_dict.get("steps", []):
+    gating = run_record.gating_severities(run_record_dict.get("backend_scale", "three-tier"))
+    for u in run_record_dict.get("steps", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "verdict-returned":
@@ -307,7 +307,7 @@ def _ready_fix_step(ledger_dict, halted_ids):
     return None
 
 
-def _ready_reenqueue_step(ledger_dict, halted_ids):
+def _ready_reenqueue_step(run_record_dict, halted_ids):
     """Pick ONE `fixed` step whose STALE verdict still shows a GATING finding.
 
     After a fix is applied (verdict-returned → fixed) the findings remain stale
@@ -319,8 +319,8 @@ def _ready_reenqueue_step(ledger_dict, halted_ids):
     and ``step_is_terminal`` — a blocker-only run never re-enqueues a major-only
     fixed step (majors are advisory), so it cannot churn fix→re-enqueue forever.
     """
-    gating = ledger.gating_severities(ledger_dict.get("backend_scale", "three-tier"))
-    for u in ledger_dict.get("steps", []):
+    gating = run_record.gating_severities(run_record_dict.get("backend_scale", "three-tier"))
+    for u in run_record_dict.get("steps", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "fixed":
@@ -331,7 +331,7 @@ def _ready_reenqueue_step(ledger_dict, halted_ids):
     return None
 
 
-def _collect_upstream_findings(ledger_dict):
+def _collect_upstream_findings(run_record_dict):
     """Gather role-tagged finding records from verdict-returned steps'
     ``dispatch_context`` (the `decision`/`winner_step_id` channel — findings[]
     is normalized to {severity, note}, so role/phase tags survive only here).
@@ -343,7 +343,7 @@ def _collect_upstream_findings(ledger_dict):
     non-list cluster_findings, etc. contributes nothing rather than raising.
     """
     collected = []
-    for u in ledger_dict.get("steps", []) or []:
+    for u in run_record_dict.get("steps", []) or []:
         if not isinstance(u, dict) or u.get("state") != "verdict-returned":
             continue
         dc = u.get("dispatch_context")
@@ -355,7 +355,7 @@ def _collect_upstream_findings(ledger_dict):
     return collected
 
 
-def detect_upstream_cluster(ledger_dict):
+def detect_upstream_cluster(run_record_dict):
     """Read-only: classify whether this run's review findings cluster on a single
     UPSTREAM spine phase (KTD-6, role-diversity-weighted). Returns the classifier
     result dict (always five keys). Degrade-safe: ANY failure collapses to a
@@ -367,9 +367,9 @@ def detect_upstream_cluster(ledger_dict):
     classifier as args.
     """
     try:
-        current = phase_grammar.current_phase(ledger_dict)
-        order = phase_grammar.phase_order(ledger_dict)
-        findings = _collect_upstream_findings(ledger_dict)
+        current = phase_grammar.current_phase(run_record_dict)
+        order = phase_grammar.phase_order(run_record_dict)
+        findings = _collect_upstream_findings(run_record_dict)
         return upstream_cluster.classify(findings, current, order)
     except Exception:  # noqa: BLE001 — detection must never break a write path.
         return {
@@ -382,7 +382,7 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
     """Escalate a detected upstream cluster to the operator via the EXISTING
     pause handoff — driver=manual + a blocked_on message naming the upstream phase
     and the converging findings. This is the SAME mechanism auto-resume.py's
-    `pause` uses (ledger.set_loop direct, mirroring advance_iteration_loop's
+    `pause` uses (run_record.set_loop direct, mirroring advance_iteration_loop's
     bound-exit), so on-stop.py's manual carve-out lets the session stop and
     _resumable_runs surfaces the run for `/auto-resume continue`.
 
@@ -393,7 +393,7 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
     rearm (which would otherwise immediately undo this pause).
     """
     message = upstream_cluster.escalation_message(result) or "upstream-cluster detected"
-    ledger.set_loop(repo_root, run_id, driver="manual", blocked_on=message)
+    run_record.set_loop(repo_root, run_id, driver="manual", blocked_on=message)
     return {
         "advanced": "upstream-cluster-escalation",
         "handoff_pause": True,
@@ -406,7 +406,7 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
     }
 
 
-def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
+def advance_work_loop(repo_root, run_id, run_record_dict, halted_ids):
     """Work-loop advance: apply ONE fix, OR re-enqueue ONE fixed-stale step.
 
     Returns a dict describing what advanced (for the pulse result). The pulse
@@ -438,17 +438,17 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     current phase cannot close (KTD-6). The check is read-only + degrade-safe;
     on a workflow-blind / non-spine run upstream_phases is empty so it never fires.
     """
-    cluster = detect_upstream_cluster(ledger_dict)
+    cluster = detect_upstream_cluster(run_record_dict)
     if cluster.get("detected"):
         return _escalate_upstream_cluster(repo_root, run_id, cluster)
-    fix_uid = _ready_fix_step(ledger_dict, halted_ids)
+    fix_uid = _ready_fix_step(run_record_dict, halted_ids)
     if fix_uid is not None:
-        ledger.transition(repo_root, run_id, fix_uid, "fixed")
+        run_record.transition(repo_root, run_id, fix_uid, "fixed")
         return {"advanced": "fix-applied", "step": fix_uid}
     if not test_hatch_enabled("CLAUDE_AUTO_TEST_NO_REENQUEUE"):
-        reenq_uid = _ready_reenqueue_step(ledger_dict, halted_ids)
+        reenq_uid = _ready_reenqueue_step(run_record_dict, halted_ids)
         if reenq_uid is not None:
-            ledger.transition(repo_root, run_id, reenq_uid, "pending")
+            run_record.transition(repo_root, run_id, reenq_uid, "pending")
             return {"advanced": "re-enqueued", "step": reenq_uid}
     return {"advanced": "none", "reason": "no-fix-due"}
 
@@ -458,13 +458,13 @@ def _persist_enumerated_steps(repo_root, run_id, enumerated):
 
     Targets the plan-phase step being advanced. For A1 (single plan step) and the
     per-pulse serialized A2 advance, that is the lone plan step currently at
-    plan-done; we resolve it from the fresh ledger (the step whose phase is
+    plan-done; we resolve it from the fresh run-record (the step whose phase is
     'plan'). If there are multiple plan steps (A2), the active one is the one the
     round-robin advanced this pulse — for the V1 testable slice we target the first
     plan-phase step lacking enumerated_steps, which the serialized one-per-pulse
     advance makes unambiguous. Idempotent-safe: re-persist overwrites.
     """
-    led = ledger.read_ledger(repo_root, run_id)
+    led = run_record.read_run_record(repo_root, run_id)
     plan_steps = [u for u in led.get("steps", []) if u.get("phase") == "plan"]
     if not plan_steps:
         return
@@ -473,10 +473,10 @@ def _persist_enumerated_steps(repo_root, run_id, enumerated):
          if not iteration.read_enumerated_steps(u)),
         plan_steps[0],
     )
-    ledger.set_enumerated_steps(repo_root, run_id, target["id"], enumerated)
+    run_record.set_enumerated_steps(repo_root, run_id, target["id"], enumerated)
 
 
-def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
+def advance_plan_loop(repo_root, run_id, run_record_dict, backend):
     """Plan-loop advance: ask the backend for the next step and call that ONE
     step. The BACKEND owns plan-step sequencing — the engine never picks it.
 
@@ -487,8 +487,8 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     NOT catch and never signals the raising op back through its return value.
 
     CRITICAL (anti-livelock — schema §3.1): after the backend op returns
-    SUCCESSFULLY, we PERSIST the executed step to the ledger via
-    ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the ledger and
+    SUCCESSFULLY, we PERSIST the executed step to the run-record via
+    ``set_loop(plan_step=step)``. ``next_plan_step`` is pure over the run-record and
     each pulse is a fresh process reading ALL state from disk; without this write
     the next pulse reads ``plan_step == null``, the backend returns ``"plan"``,
     and the plan-loop re-plans forever. The persist is AFTER ``op(...)`` (and
@@ -503,7 +503,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
 
     GAPS persist (gap-write, backend-contract §2.2): when the executed step is
     ``review_plan``, its return is the gap-set; the engine reads ONLY its length
-    and persists ``gaps_open = len(gap_set)`` via ``ledger.set_gaps_open`` (the
+    and persists ``gaps_open = len(gap_set)`` via ``run_record.set_gaps_open`` (the
     I-1 atomic write path). The gap-set arrives either as a bare list (a direct
     return) OR inside the live PREPARE envelope (a dict) under the canonical
     ``gap_set`` key (§2.2), which the model fills out-of-band before the engine
@@ -512,7 +512,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     short-circuit). This is what makes plan-met depend on a REAL review having
     reported its gaps, not the default — closing the deepen-refinement loop.
     """
-    step = backend.next_plan_step(ledger_dict)
+    step = backend.next_plan_step(run_record_dict)
     if step == "done":
         # PLAN-DONE: the plan sequence finished — enumerate this plan's work steps
         # via the v0.2.0 backend op and PERSIST them onto the plan step's
@@ -526,7 +526,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
         enum_op = getattr(backend, "enumerate_plan_steps", None)
         enum_envelope = None
         if callable(enum_op):
-            enum_result = enum_op(ledger_dict)
+            enum_result = enum_op(run_record_dict)
             enumerated = None
             if isinstance(enum_result, list):
                 enumerated = enum_result
@@ -549,7 +549,7 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
         raise PulseError(f"backend missing op {step!r}")
     # The backend step is the work-bearing call; the caller wraps this in the
     # try/except so a raise becomes a recorded last_error, not a crash.
-    result = op(ledger_dict)
+    result = op(run_record_dict)
     # review_plan returns the gap-set; the engine reads ONLY its length and
     # persists it (backend-contract §2.2). The gap-set arrives in one of two
     # shapes (Bug #5 — gaps_open was never written from the LIVE backends, which
@@ -567,10 +567,10 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):
         gap_set = result["gap_set"]
     if step == "review_plan" and gap_set is not None:
-        ledger.set_gaps_open(repo_root, run_id, len(gap_set))
+        run_record.set_gaps_open(repo_root, run_id, len(gap_set))
     # Op succeeded — persist the step so the NEXT fresh-process pulse advances
     # from it instead of re-reading null and re-planning (the livelock).
-    ledger.set_loop(repo_root, run_id, plan_step=step)
+    run_record.set_loop(repo_root, run_id, plan_step=step)
     return {"advanced": "plan-step", "step": step}
 
 
@@ -599,7 +599,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         existing predicate-met short-circuit (now suppressed only by
         iteration_pending=True) advances to the terminal "done" state via the
         normal flow.
-      * "iterate" under bound → call `ledger.atomic_iterate_step` (one locked
+      * "iterate" under bound → call `run_record.atomic_iterate_step` (one locked
         body: increment + emit + reset). Return {"action": "iterate"}. The
         caller emits a rearm intent so the next pulse dispatches the new steps.
       * "exit" OR "iterate over bound" → write `bound_override` on the gate
@@ -609,7 +609,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         — KTD §D / round-2 P0 fix). Return {"action": "stop", "reason":
         "bound-exit", "report": ...}.
 
-    Two safety gates fire BEFORE the decision read (no ledger writes on either
+    Two safety gates fire BEFORE the decision read (no run-record writes on either
     early-return path — keeps a1/W pulses side-effect-clean):
       1. a1/W early-return: `led.get("iteration")` missing OR `gate_step` is
          None → return None. No call to `evaluate_decision`.
@@ -621,11 +621,11 @@ def advance_iteration_loop(repo_root, run_id, led):
          it used to require the CLAUDE_AUTO_TEST_HARNESS=1 sentinel as well.
 
     The `new_depends_on` argument to `atomic_iterate_step` is passed as `None`:
-    the ledger mutator computes the union of `gate.depends_on + appended` ids
-    INSIDE the locked body (lib/ledger.py:1605-1607). Pre-computing here would
+    the run-record mutator computes the union of `gate.depends_on + appended` ids
+    INSIDE the locked body (lib/run_record.py:1605-1607). Pre-computing here would
     race with the in-locked-body `_apply_emit` counter bump.
     """
-    # Gate 1: no iteration declared (a1, W, legacy ledgers). Side-effect-free.
+    # Gate 1: no iteration declared (a1, W, legacy run-records). Side-effect-free.
     iter_block = led.get("iteration") or {}
     gate_step_id = iter_block.get("gate_step")
     if not gate_step_id:
@@ -667,7 +667,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         # must still advance the loop (increment iteration_attempts + reset
         # the gate) WITHOUT emitting new steps; the existing steps re-
         # engage. We honor that by passing a no-op producer to
-        # atomic_iterate_step: `_apply_emit` calls `producer(ledger,
+        # atomic_iterate_step: `_apply_emit` calls `producer(run-record,
         # to_phase) or []`, so returning `[]` cleanly skips emission AND
         # leaves iteration_emit_count unchanged (the counter bumps PER
         # emitted step). The deps default (`caller_depends_on=None` →
@@ -680,7 +680,7 @@ def advance_iteration_loop(repo_root, run_id, led):
             producer = producers.iterate_template
         else:
             producer = producers.no_emit
-        ledger.atomic_iterate_step(
+        run_record.atomic_iterate_step(
             repo_root,
             run_id,
             gate_step_id,
@@ -699,14 +699,14 @@ def advance_iteration_loop(repo_root, run_id, led):
     bound_type = eval_result.get("bound_type")
     original = eval_result.get("original_decision") or "iterate"
     if eval_result.get("bound_breached"):
-        ledger.set_bound_override(
+        run_record.set_bound_override(
             repo_root, run_id, gate_step_id,
             bound_type=bound_type, original_decision=original,
         )
-    ledger.set_loop(
+    run_record.set_loop(
         repo_root, run_id, loop_phase="done", driver="manual", beat=True,
     )
-    final_led = ledger.read_ledger(repo_root, run_id)
+    final_led = run_record.read_run_record(repo_root, run_id)
     report = _build_bound_exit_report(final_led, gate_step_id)
     return {
         "action": "stop",
@@ -756,7 +756,7 @@ def _plan_has_enumerated_steps(led) -> bool:
 
 def _is_auto(auto_flag) -> bool:
     """Auto mode: the explicit --auto flag. The pulse honors only the flag the
-    driver passes; there is no ledger-driven auto marker (the schema has no slot
+    driver passes; there is no run-record-driven auto marker (the schema has no slot
     for one, and the driver owns the policy). Kept as a named predicate so the
     handoff-routing call site reads intentionally."""
     return bool(auto_flag)
@@ -768,13 +768,13 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
 
     v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
     the workflow's {to: to_phase} producer via phase_grammar.producer_name_for_arrival
-    and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
+    and calls run_record.transition_and_emit (atomic advance+emit+recompute). When
     no producer is declared we still need to fall back to a raw set_loop:
 
-    * Legacy ledger (workflow is None, e.g. a v0.1.x run resumed under v0.2.0) —
+    * Legacy run-record (workflow is None, e.g. a v0.1.x run resumed under v0.2.0) —
       no workflow means no phase_transitions; use set_loop to preserve byte-
       identical R13 behavior.
-    * v0.2.0 ledger with no matching transition — the workflow declares no
+    * v0.2.0 run-record with no matching transition — the workflow declares no
       producer for arrival at to_phase; this is a WORKFLOW BUG (the validator
       should have rejected it earlier, but defense in depth: raise here so a
       misconfigured workspace workflow can't silently no-op).
@@ -784,10 +784,10 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
     through here.
     """
     producer_name = phase_grammar.producer_name_for_arrival(led, to_phase)
-    legacy_ledger = led.get("workflow") is None
+    legacy_run_record = led.get("workflow") is None
     if producer_name is None:
-        if not legacy_ledger:
-            raise ledger.LedgerError(
+        if not legacy_run_record:
+            raise run_record.RunRecordError(
                 f"workflow {led.get('workflow',{}).get('name')!r} declares no producer "
                 f"for arrival at {to_phase!r}; either add a phase_transitions entry "
                 f"or fix the workflow"
@@ -795,10 +795,10 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
         # legacy: no workflow declared, behave like v0.1.x — raw advance.
         # transition_and_emit's v0.2.0 path writes handoff_paused=(to_phase=="handoff");
         # we mirror that here so manual handoff→work via auto-resume clears the
-        # pause flag on legacy ledgers too. The auto-flip path (called with
+        # pause flag on legacy run-records too. The auto-flip path (called with
         # to_phase="work") clears it; future helpers that arrive at "handoff"
         # would set it. Either way, both writes happen in one set_loop.
-        ledger.set_loop(
+        run_record.set_loop(
             repo_root,
             run_id,
             loop_phase=to_phase,
@@ -808,7 +808,7 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
         )
         return
     producer_fn = producers.resolve(producer_name)
-    ledger.transition_and_emit(repo_root, run_id, to_phase, producer_fn)
+    run_record.transition_and_emit(repo_root, run_id, to_phase, producer_fn)
 
 
 def _brainstorm_step_ready(led) -> bool:
@@ -873,10 +873,10 @@ def _maybe_handoff(repo_root, run_id, led, *, auto, advance_result):
     Auto: flip plan → work directly via the workflow's producer (v0.2.0; P0 #1
     fix-pass A.2 — the load-bearing rewire). Reads the workflow's
     phase_transitions for the {to: work} producer, resolves it, and calls
-    ledger.transition_and_emit atomically (advance + emit + recompute in ONE
-    locked snapshot — the G3/F2 invariant). Legacy ledgers (no workflow) fall
+    run_record.transition_and_emit atomically (advance + emit + recompute in ONE
+    locked snapshot — the G3/F2 invariant). Legacy run-records (no workflow) fall
     back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep
-    working. A v0.2.0 ledger missing the {to: work} declaration is a workflow
+    working. A v0.2.0 run-record missing the {to: work} declaration is a workflow
     bug; we raise rather than silently no-op (per
     feedback_plan_documents_transition_code_doesnt_wire_it — silent fallback
     on configured workflows IS the build-bug class).
@@ -910,7 +910,7 @@ def _maybe_handoff(repo_root, run_id, led, *, auto, advance_result):
         out = dict(advance_result or {})
         out["handoff"] = "auto-flip-to-work"
         return out
-    ledger.set_loop(
+    run_record.set_loop(
         repo_root,
         run_id,
         loop_phase="handoff",

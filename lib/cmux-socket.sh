@@ -19,12 +19,12 @@
 #
 # DOUBLE-DRIVE GUARD (the load-bearing piece): before spawning, this probes the
 # SAME per-run pulse lock that lib/pulse.py::_pulse_lock holds (the `.pulse.lock`
-# sibling of the ledger). If a LIVE pulse already holds it, a driver is already
+# sibling of the run-record). If a LIVE pulse already holds it, a driver is already
 # running — auto-resume NO-OPS (it must never spawn a competing driver). The
 # probe is a non-blocking flock-then-release; the spawned /auto-resume will
 # itself contend for that same lock, so any pulse that arrives after the probe
 # window simply loses non-blockingly. We derive the lock base from the PUBLIC
-# ledger.lock_path() and swap `.lock` -> `.pulse.lock` (we do NOT import pulse.py's
+# run_record.lock_path() and swap `.lock` -> `.pulse.lock` (we do NOT import pulse.py's
 # private _pulse_lock_path).
 #
 # RUNAWAY PREVENTION (auto-resume must never spawn runaway workspaces):
@@ -53,7 +53,7 @@
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via
 # CLAUDE_AUTO_PYTHON3) — never bare `python3` (parity: lib/auto-resume.sh:41,
-# lib/ledger.sh, lib/pulse.sh).
+# lib/run_record.sh, lib/pulse.sh).
 
 set -uo pipefail
 
@@ -69,15 +69,15 @@ _cmux_socket::script_dir() {
 }
 
 # auto::pulse_lock_path <repo> <run>
-#   Echo the per-run pulse-lock path (the .pulse.lock sibling of the ledger),
-#   derived from the PUBLIC ledger.lock_path(). Empty on slugify failure.
+#   Echo the per-run pulse-lock path (the .pulse.lock sibling of the run-record),
+#   derived from the PUBLIC run_record.lock_path(). Empty on slugify failure.
 auto::pulse_lock_path() {
   local repo="$1" run="$2" script_dir
   script_dir="$(_cmux_socket::script_dir)"
-  "$CLAUDE_AUTO_PYTHON3" - "$repo" "$run" "${script_dir}/ledger.py" <<'PYEOF'
+  "$CLAUDE_AUTO_PYTHON3" - "$repo" "$run" "${script_dir}/run_record.py" <<'PYEOF'
 import importlib.util, sys
-repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
 try:
     lpath = L.lock_path(repo, run)
@@ -118,7 +118,7 @@ PYEOF
 #   Print run-ids that are AUTO-RESUMABLE: is_orphaned()==true AND NOT handoff-
 #   paused. A handoff-paused run is is_orphaned()==true but is the intentional
 #   "awaiting confirmation" orphan — excluded so we never arm work uninvited.
-#   A malformed ledger is skipped (never aborts the scan of its siblings).
+#   A malformed run-record is skipped (never aborts the scan of its siblings).
 auto::resumable_orphans() {
   local repo="$1" script_dir
   script_dir="$(_cmux_socket::script_dir)"
@@ -126,11 +126,11 @@ auto::resumable_orphans() {
 import os, sys
 repo, lib_dir = sys.argv[1], sys.argv[2]
 sys.path.insert(0, lib_dir)
-from _bootstrap import iter_worktree_ledgers, load_ledger  # the shared per-worktree scan.
-L = load_ledger()
-# iter_worktree_ledgers owns the glob + safe-load + non-dict skip + run_id
+from _bootstrap import iter_worktree_run_records, load_run_record  # the shared per-worktree scan.
+L = load_run_record()
+# iter_worktree_run_records owns the glob + safe-load + non-dict skip + run_id
 # derivation (the scan scaffold that was copy-pasted across the hooks).
-for run_id, led in iter_worktree_ledgers(repo):
+for run_id, led in iter_worktree_run_records(repo):
     # Handoff-paused is the INTENTIONAL orphan (awaiting human confirmation) — never
     # auto-resume it (parity with on-session-start.py handoff-before-orphan order).
     if led.get("loop_phase") == "handoff" and led.get("handoff_paused"):
@@ -262,13 +262,13 @@ auto::spawn_resume() {
 
   # ── Runaway guard: a spawn for this run is already in flight. ─────────────
   local sentinel="${repo}/.claude/auto/$(
-    "$CLAUDE_AUTO_PYTHON3" - "$repo" "$run" "$(_cmux_socket::script_dir)/ledger.py" <<'PYEOF'
+    "$CLAUDE_AUTO_PYTHON3" - "$repo" "$run" "$(_cmux_socket::script_dir)/run_record.py" <<'PYEOF'
 import importlib.util, os, sys
-repo, run, ledger_py = sys.argv[1], sys.argv[2], sys.argv[3]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
 try:
-    print(os.path.basename(L.ledger_path(repo, run))[: -len(".json")] + ".spawn.attempt")
+    print(os.path.basename(L.run_record_path(repo, run))[: -len(".json")] + ".spawn.attempt")
 except Exception:
     sys.exit(0)
 PYEOF

@@ -17,7 +17,7 @@
 #   the run (driver=manual + blocked_on) UNCONDITIONALLY — even if the deny
 #   contract is unavailable. It never degrades to silent-allow on a destructive
 #   match. The write happens in the sibling lib/*.py; this wrapper still always
-#   exits 0 at the process level (the halt is on the ledger, not the exit code).
+#   exits 0 at the process level (the halt is on the run-record, not the exit code).
 #
 # rel-001: presence-gate first; ALWAYS exit 0 at the process level; heavy work
 # exec'd into Python. Mirrors .claude/hooks/on-stop.sh.
@@ -52,7 +52,7 @@ if [ ! -t 0 ]; then
 fi
 
 # Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0
-# (rel-001); the fail-closed halt is recorded on the LEDGER inside the .py, not
+# (rel-001); the fail-closed halt is recorded on the RUN_RECORD inside the .py, not
 # via a non-zero exit code.
 exec "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-pretooluse-action.py" "$__cd_repo" <<< "$__cd_stdin_json" || true
 

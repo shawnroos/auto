@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # auto v0.4.0 U4: on-stop.py discovers committed batch sidecars and blocks
-# stop until every sub-run's ledger predicate is met.
+# stop until every sub-run's run-record predicate is met.
 #
 # Asserts:
 #   - committed batch with all sub-runs unmet → BLOCK
 #   - committed batch with all sub-runs met → ALLOW
 #   - committed batch with sub-runs done (loop_phase=="done") → ALLOW
 #   - provisional batch → IGNORED (half-built batch does NOT gate stop)
-#   - batch with missing sub-run ledgers → ALLOW (no proof to block on)
+#   - batch with missing sub-run run-records → ALLOW (no proof to block on)
 
 set -uo pipefail
 
@@ -32,7 +32,7 @@ make_fixture() {
   echo "$d"
 }
 
-# Plant a sub-run ledger inside a worktree.
+# Plant a sub-run run-record inside a worktree.
 # Args: <worktree-abs-path> <run-id> <met:true|false> <phase:plan|work|done>
 plant_subrun() {
   local wt="$1" run="$2" met="$3" phase="$4"
@@ -136,16 +136,16 @@ else
 fi
 rm -rf "$R3"
 
-# ── Scenario 4: committed batch with missing sub-run ledgers → ALLOW
-auto_test::it "committed batch with no sub-run ledgers allows stop"
+# ── Scenario 4: committed batch with missing sub-run run-records → ALLOW
+auto_test::it "committed batch with no sub-run run_records allows stop"
 R4="$(make_fixture)"
-# Sidecar references a worktree but the sub-run never wrote its ledger.
+# Sidecar references a worktree but the sub-run never wrote its run-record.
 mkdir -p "${R4}/worktrees/plan-a"
 plant_sidecar "$R4" "test-batch-4" "committed" \
   '[{"path":"a","slug":"plan-a","worktree":"'"${R4}/worktrees/plan-a"'","branch":"x","port":3001,"suggested_run_id":"plan-a-2026-05-28"}]'
 out="$(on_stop_decision "$R4")"
 if echo "$out" | grep -q '"decision":[[:space:]]*"block"'; then
-  auto_test::fail "expected allow (no sub-run ledgers); got block: $out"
+  auto_test::fail "expected allow (no sub-run run_records); got block: $out"
 else
   auto_test::pass
 fi
@@ -239,7 +239,7 @@ R6="$(make_fixture)"
 WT_R6="${R6}/worktrees/plan-z"
 # Create a real git worktree (its .git is a gitlink file).
 (cd "$R6" && git worktree add -b auto/plan-z "$WT_R6" >/dev/null 2>&1)
-# Sub-run ledger at worktree-local path.
+# Sub-run run-record at worktree-local path.
 plant_subrun "$WT_R6" "plan-z-2026-05-28" "false" "work"
 # Host's batches/ sidecar references it.
 plant_sidecar "$R6" "test-batch-6" "committed" \

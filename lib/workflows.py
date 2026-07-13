@@ -3,7 +3,7 @@
 
 A *workflow* is a named, file-backed JSON declaration of a LOOP topology — an
 ordered graph of steps (CONCEPTS.md) — the
-initial-ledger shape `/auto` builds a run from. This module is the three-tier
+initial-run-record shape `/auto` builds a run from. This module is the three-tier
 REGISTRY (workspace → global → built-in, first-wins) and the public surface every
 consumer reaches through the ``workflows.`` namespace.
 
@@ -14,7 +14,7 @@ validation surface (``validate`` / ``validate_and_lint`` / ``WorkflowError`` /
 ``V1_PRODUCER_NAMES`` / the ``_validate_*`` helpers ``resolve``/``step_for`` need)
 so existing callers that do ``workflows.validate(...)``, ``except workflows.WorkflowError``,
 ``workflows.V1_PRODUCER_NAMES`` etc. keep resolving unchanged — exactly the pattern
-the ledger facade uses for ledger_core/mutators/producers. ``WorkflowError`` lives in
+the run-record facade uses for run_record_core/mutators/producers. ``WorkflowError`` lives in
 workflow_validate (the root) and is re-exported here, so it is importable from BOTH
 modules with no import cycle (facade → workflow_validate, one direction).
 
@@ -36,7 +36,7 @@ import sys
 # spec_from_file_location, which does NOT add lib/ to sys.path), so a plain
 # `from workflow_validate import ...` is not guaranteed to resolve. Prepending
 # lib/ + routing through _bootstrap.load_lib_module is the one robust load
-# strategy the codebase already uses for sibling modules (see lib/ledger.py).
+# strategy the codebase already uses for sibling modules (see lib/run_record.py).
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
@@ -272,8 +272,8 @@ def load_and_validate(name: str, repo_root: str):
 
 
 def step_for(workflow_step: dict, workflow: dict) -> dict:
-    """Project a WORKFLOW step dict onto a LEDGER step dict (the shape
-    ``ledger.init_ledger`` expects). Merges workflow-side ``invokes`` metadata
+    """Project a WORKFLOW step dict onto a RUN_RECORD step dict (the shape
+    ``run_record.init_run_record`` expects). Merges workflow-side ``invokes`` metadata
     (``prompt_template`` etc.) into ``dispatch_context`` — RE-VALIDATING the
     path bound (the second enforcement point; the first is ``validate``). The
     ``backend_op`` stays in ``dispatch_context`` so the backend reads it via the

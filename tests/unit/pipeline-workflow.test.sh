@@ -8,7 +8,7 @@
 #   1. pipeline.json validates and resolves through the three-tier registry.
 #   2. Init at `brainstorm` bakes loop_phase="brainstorm" + the full phase_order
 #      (the workflow-generic `loop_phase=phase_order[0]` init line threads it; no
-#      auto.py change needed — init_ledger validates membership, line ~808).
+#      auto.py change needed — init_run_record validates membership, line ~808).
 #   3. Forward advance brainstorm→plan emits the plan step via the PRODUCER path
 #      (transition_and_emit / direct-dict-mutation), not predicate-met.
 #   4. A spine-phase loop_phase write via the direct-mutation path
@@ -39,7 +39,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Driver: load workflows/ledger/producers via _bootstrap, run an op, print result.
+# Driver: load workflows/run_record/producers via _bootstrap, run an op, print result.
 pl() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json, tempfile
@@ -47,18 +47,18 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
 workflows = load_lib_module("workflows")
-ledger = load_lib_module("ledger")
+run_record = load_lib_module("run_record")
 producers = load_lib_module("step_producers")
 op = sys.argv[2]
 
 
 def _init_from_workflow(repo, run, name):
-    """Init a ledger from a built-in workflow exactly as lib/auto.py does (the
+    """Init a run_record from a built-in workflow exactly as lib/auto.py does (the
     workflow-generic init call: loop_phase=phase_order[0])."""
     r, tier = workflows.load_and_validate(name, repo)
     init_steps = [workflows.step_for(u, r) for u in r.get("steps", [])]
     po = r.get("phase_order", ["plan", "handoff", "work"])
-    ledger.init_ledger(
+    run_record.init_run_record(
         repo, run, backend="ce", steps=init_steps,
         loop_phase=po[0],
         workflow={"name": r["name"], "source_tier": tier},
@@ -76,7 +76,7 @@ if op == "validate-resolve":
 elif op == "init-brainstorm":
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "pl", "pipeline")
-    led = ledger.read_ledger(repo, "pl")
+    led = run_record.read_run_record(repo, "pl")
     print("%s|%s|%s" % (
         led["loop_phase"], ",".join(led["phase_order"]),
         ",".join(u["id"] for u in led["steps"])))
@@ -88,7 +88,7 @@ elif op == "forward-advance":
     # requirements-doc rode through onto the plan step's dispatch_context.
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "pl", "pipeline")
-    path = ledger.ledger_path(repo, "pl")
+    path = run_record.run_record_path(repo, "pl")
     with open(path) as f:
         d = json.load(f)
     for u in d["steps"]:
@@ -97,9 +97,9 @@ elif op == "forward-advance":
             u["state"] = "verdict-returned"
     with open(path, "w") as f:
         json.dump(d, f)
-    appended = ledger.transition_and_emit(
+    appended = run_record.transition_and_emit(
         repo, "pl", "plan", producers.brainstorm_output_to_plan_step)
-    led = ledger.read_ledger(repo, "pl")
+    led = run_record.read_run_record(repo, "pl")
     plan = next(u for u in led["steps"] if u["id"] == "plan")
     print("%s|%s|%s" % (
         led["loop_phase"], ",".join(sorted(appended)),
@@ -113,9 +113,9 @@ elif op == "set-loop-rejects-brainstorm":
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "pl", "pipeline")
     try:
-        ledger.set_loop(repo, "pl", loop_phase="brainstorm")
+        run_record.set_loop(repo, "pl", loop_phase="brainstorm")
         print("NO-RAISE")
-    except ledger.LedgerError:
+    except run_record.RunRecordError:
         print("raised")
 
 elif op == "predicate-not-met-at-brainstorm":
@@ -124,19 +124,19 @@ elif op == "predicate-not-met-at-brainstorm":
     # advance, never via predicate-met.
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "pl", "pipeline")
-    led = ledger.read_ledger(repo, "pl")
+    led = run_record.read_run_record(repo, "pl")
     print("%s|%s" % (led["terminal_phase"], led["exit_predicate_result"]["met"]))
 
 elif op == "plan-entry-a1":
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "r", "a1")
-    led = ledger.read_ledger(repo, "r")
+    led = run_record.read_run_record(repo, "r")
     print("%s|%s" % (led["loop_phase"], ",".join(led["phase_order"])))
 
 elif op == "work-entry-w":
     repo = tempfile.mkdtemp()
     _init_from_workflow(repo, "r", "w")
-    led = ledger.read_ledger(repo, "r")
+    led = run_record.read_run_record(repo, "r")
     print("%s|%s" % (led["loop_phase"], ",".join(led["phase_order"])))
 PYEOF
 }

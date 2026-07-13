@@ -38,7 +38,7 @@ that narrows intent. It should be "goal-pilled": goal first, disk clutter second
     auto-spawn N worktrees), which is exactly why it shouldn't trigger under a
     well-defined goal.
 - **The goal signal already exists but is only half-plumbed:** the detector reads
-  `goal_intent` from the ledger and surfaces it for **in-flight / not-met runs**
+  `goal_intent` from the run-record and surfaces it for **in-flight / not-met runs**
   (`_scan_runs` ~L313–353, used at L505+, L518, L529, L550). That same goal signal
   is **never consulted** in the plan-discovery / multi-plan path. The fix is
   plumbing goal-awareness into `_discover_plans` / `_rank_plans_safe` /
@@ -47,7 +47,7 @@ that narrows intent. It should be "goal-pilled": goal first, disk clutter second
   `goal-status.sh` (goal state), `lib/plan-rank.py` (already the ranking seam —
   natural place to add goal-conditioned scoring), `lib/recommender.py`. The native
   `/goal` is **model-judged, not an externally-settable predicate** — so "is there a
-  goal" likely means: a bound native goal, a ledger `goal_intent`, and/or the intent
+  goal" likely means: a bound native goal, a run-record `goal_intent`, and/or the intent
   in the invoking `/auto` prompt. Decide which sources count.
 - **Repo/version:** `/Users/shawnroos/projects/auto`, currently `0.8.0`, published to
   the shrimpshack marketplace (version-gated — bump the plugin version so an install
@@ -60,7 +60,7 @@ that narrows intent. It should be "goal-pilled": goal first, disk clutter second
 - **How is goal↔plan match scored?** Freshness is already there; goal-relevance is
   new. Cheap lexical/heuristic match in `plan-rank.py`, or a model-judged step?
   Prefer deterministic first (Shawn won't ship probabilistic v1s).
-- **Which goal sources are authoritative** (bound native goal vs ledger `goal_intent`
+- **Which goal sources are authoritative** (bound native goal vs run-record `goal_intent`
   vs the invoking prompt), and precedence when they disagree.
 - **Fanout guardrail:** should a well-defined goal *hard-suppress* `multi-plan`
   (never auto-spawn N worktrees under a clear goal), or just de-rank it? Given

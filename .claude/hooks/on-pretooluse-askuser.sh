@@ -9,7 +9,7 @@
 #   itself classify: mechanical clarification -> resolve and proceed; a
 #   substantive design/architecture fork -> escalate via the pause handoff.
 #
-# FIRES ONLY when the PreToolUse stdin `session_id` equals the ledger's
+# FIRES ONLY when the PreToolUse stdin `session_id` equals the run-record's
 # `driving_session_id` AND a live self-driven run exists (KTD-5). A concurrent
 # standalone /ce-plan in the same worktree has a DIFFERENT session_id and is
 # never intercepted. The decision logic lives in the sibling lib/*.py.

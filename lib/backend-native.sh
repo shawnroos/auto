@@ -6,7 +6,7 @@
 # mapping a bare native-Claude workflow (prose plan, native edit/Task, self-review
 # against an injected rubric) onto the engine's fixed interface.
 #
-# A backend is a PURE PROVIDER OF OPERATIONS. It NEVER writes the ledger
+# A backend is a PURE PROVIDER OF OPERATIONS. It NEVER writes the run-record
 # (contract §1). Ops return data to stdout; the engine persists it. jq + the
 # pinned python3 are the only external dependencies; all $-bearing logic lives
 # here, never in a command `.md` (memory feedback_slash_command_arg_substitution).
@@ -37,7 +37,7 @@
 # major/minor findings drops us off "three-tier".
 #
 # THEREFORE: `backend_scale = "blocker-only"`.
-#   The predicate evaluator (which reads backend_scale from the ledger) applies
+#   The predicate evaluator (which reads backend_scale from the run-record) applies
 #   blocker-only logic for native runs: only `blocker` reliably gates the
 #   work-loop. R2's "widest gap" rationale is therefore PARTIALLY met for native
 #   — the blocker gate is trustworthy; the major gate is best-effort. Native

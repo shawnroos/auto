@@ -10,8 +10,8 @@
 #     - native finding validation (on-scale passthrough; off-scale rejected)
 #     - next_plan_step state machines + the §4.1 coherence guard
 #     - the declared backend_scale (rubric-probe fixture)
-#   The work-loop "exit predicate" is the engine's (ledger.py §I-2). We do NOT
-#   import it (U6b must not touch ledger.py); we assert the backend SUPPLIES the
+#   The work-loop "exit predicate" is the engine's (run_record.py §I-2). We do NOT
+#   import it (U6b must not touch run_record.py); we assert the backend SUPPLIES the
 #   right inputs by computing `blockers + majors == 0` inline over the mapped
 #   findings, which is exactly the input the engine consumes.
 #
@@ -69,9 +69,9 @@ plan_predicate_met() {
   if [ "$n" -eq 0 ]; then printf 'true'; else printf 'false'; fi
 }
 
-# A ledger fixture with a given plan_step + gaps_open (the only fields
-# next_plan_step reads). Keeps the test independent of ledger.py's full shape.
-ledger_fixture() {
+# A run-record fixture with a given plan_step + gaps_open (the only fields
+# next_plan_step reads). Keeps the test independent of run_record.py's full shape.
+run_record_fixture() {
   local plan_step="$1" gaps_open="$2"
   if [ "$plan_step" = "null" ]; then
     printf '{"plan_step":null,"exit_predicate_result":{"gaps_open":%s}}' "$gaps_open"
@@ -196,28 +196,28 @@ auto_test::assert_eq "true" "$(plan_predicate_met '[]')"
 
 # ── next_plan_step state machines (CE: plan->deepen->review_plan->done) ──
 
-auto_test::it "CE next_plan_step: fresh ledger -> plan"
-auto_test::assert_eq "plan" "$(bash "$CE" next-plan-step "$(ledger_fixture null 0)")"
+auto_test::it "CE next_plan_step: fresh run_record -> plan"
+auto_test::assert_eq "plan" "$(bash "$CE" next-plan-step "$(run_record_fixture null 0)")"
 
 auto_test::it "CE next_plan_step: after plan -> deepen"
-auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture plan 0)")"
+auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(run_record_fixture plan 0)")"
 
 auto_test::it "CE next_plan_step: after deepen -> review_plan"
-auto_test::assert_eq "review_plan" "$(bash "$CE" next-plan-step "$(ledger_fixture deepen 0)")"
+auto_test::assert_eq "review_plan" "$(bash "$CE" next-plan-step "$(run_record_fixture deepen 0)")"
 
 auto_test::it "CE next_plan_step: review_plan with gaps open -> deepen (loop)"
-auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 3)")"
+auto_test::assert_eq "deepen" "$(bash "$CE" next-plan-step "$(run_record_fixture review_plan 3)")"
 
 # ── native next_plan_step (plan->review_plan->done, NEVER deepen) ──
 
-auto_test::it "native next_plan_step: fresh ledger -> plan"
-auto_test::assert_eq "plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture null 0)")"
+auto_test::it "native next_plan_step: fresh run_record -> plan"
+auto_test::assert_eq "plan" "$(bash "$NATIVE" next-plan-step "$(run_record_fixture null 0)")"
 
 auto_test::it "native next_plan_step: after plan -> review_plan (no deepen)"
-auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture plan 0)")"
+auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(run_record_fixture plan 0)")"
 
 auto_test::it "native next_plan_step: review_plan with gaps open -> review_plan (loop, never deepen)"
-auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 2)")"
+auto_test::assert_eq "review_plan" "$(bash "$NATIVE" next-plan-step "$(run_record_fixture review_plan 2)")"
 
 auto_test::it "native deepen is a no-op (returns plan unchanged)"
 auto_test::assert_eq "PLAN-X" "$(bash "$NATIVE" deepen "PLAN-X")"
@@ -227,15 +227,15 @@ auto_test::assert_eq "PLAN-X" "$(bash "$NATIVE" deepen "PLAN-X")"
 # ════════════════════════════════════════════════════════════════════════════
 
 auto_test::it "coherence: CE gaps_open==0 after review_plan -> done (no livelock)"
-auto_test::assert_eq "done" "$(bash "$CE" next-plan-step "$(ledger_fixture review_plan 0)")"
+auto_test::assert_eq "done" "$(bash "$CE" next-plan-step "$(run_record_fixture review_plan 0)")"
 
 auto_test::it "coherence: native gaps_open==0 after review_plan -> done (no livelock)"
-auto_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(ledger_fixture review_plan 0)")"
+auto_test::assert_eq "done" "$(bash "$NATIVE" next-plan-step "$(run_record_fixture review_plan 0)")"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 7. PYTHON BACKEND SURFACE — the modules pulse.py (U4) actually imports.
 #    resolve_backend (pulse.py:170-197) loads lib/backend-{name}.py, instantiates
-#    module.Backend(), and calls ops as `getattr(backend, step)(ledger)`. We
+#    module.Backend(), and calls ops as `getattr(backend, step)(run-record)`. We
 #    drive the .py modules the SAME way to prove the import shape matches and the
 #    pure logic mirrors the bash sibling.
 # ════════════════════════════════════════════════════════════════════════════
@@ -272,7 +272,7 @@ auto_test::it "py native validate: off-scale severity raises"
 auto_test::assert_false "py_backend native 'a.review({\"findings\":[{\"severity\":\"P0\",\"note\":\"x\"}]})'"
 
 # next_plan_step called exactly as pulse.py:337 does — getattr(backend, op) shape.
-auto_test::it "py CE next_plan_step: fresh ledger -> plan (pulse.py import shape)"
+auto_test::it "py CE next_plan_step: fresh run_record -> plan (pulse.py import shape)"
 auto_test::assert_eq "plan" "$(py_backend ce 'a.next_plan_step({"plan_step":None,"exit_predicate_result":{"gaps_open":0}})')"
 
 auto_test::it "py CE next_plan_step: plan->deepen, then deepen->review_plan"

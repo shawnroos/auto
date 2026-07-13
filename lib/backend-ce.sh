@@ -5,9 +5,9 @@
 # the six ops `plan / deepen / review_plan / next_plan_step / do_step / review`,
 # mapping the CE `/ce-*` workflow onto the engine's fixed interface.
 #
-# A backend is a PURE PROVIDER OF OPERATIONS. It NEVER writes the ledger
+# A backend is a PURE PROVIDER OF OPERATIONS. It NEVER writes the run-record
 # (contract §1). The four ops below return data to stdout (JSON or a literal
-# token); the engine persists it through ledger.py's recording paths. We pin
+# token); the engine persists it through run_record.py's recording paths. We pin
 # the interpreter (jq is the only external dependency) and keep all $-bearing
 # logic here, never in a command `.md` (memory feedback_slash_command_arg_substitution).
 #
@@ -23,7 +23,7 @@
 # The PARSE half is pure and fully unit-tested (severity mapping is deterministic
 # for CE). The PREPARE half emits a documented envelope; what is NOT faked is a
 # live command result — that genuinely requires the model. `next_plan_step` is
-# fully pure (a state machine over the ledger) and needs no live invocation.
+# fully pure (a state machine over the run-record) and needs no live invocation.
 #
 # ── DECLARED SEVERITY MAPPING (contract §3.1, fixed property of this backend) ──
 #   CE verdict level   ->  shared scale

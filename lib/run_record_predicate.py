@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""auto ledger predicate evaluator: the PURE exit-predicate logic (I-2 / §4).
+"""auto run-record predicate evaluator: the PURE exit-predicate logic (I-2 / §4).
 
-Extracted from ledger_core (U16) so the core file stays under the size budget
+Extracted from run_record_core (U16) so the core file stays under the size budget
 and the predicate evaluator has a home of its own. This module holds the pure,
 side-effect-free predicate surface: ``recompute_predicate`` and its B7 helpers
 (``_count_severities_by_step``, ``_read_cached_gaps_open``,
@@ -9,22 +9,22 @@ side-effect-free predicate surface: ``recompute_predicate`` and its B7 helpers
 plus ``gating_severities``, ``step_is_terminal``, and ``is_orphaned``.
 
 Topology (the load-bearing acyclic discipline): this module imports ONLY
-``ledger_core`` (for the constants ``GATING_SEVERITIES`` / ``GRACE_SECONDS``, the
+``run_record_core`` (for the constants ``GATING_SEVERITIES`` / ``GRACE_SECONDS``, the
 test-hatch fence ``_test_hatch_enabled``, the time helper ``parse_iso``, and the
 lazy-load idiom ``_lazy_load`` used to reach ``iteration`` / ``phase-grammar``
-cycle-safely). ``ledger_core`` does NOT import this module at top level — its
+cycle-safely). ``run_record_core`` does NOT import this module at top level — its
 ``_atomic_write`` chokepoint reaches ``recompute_predicate`` via
-``_lazy_load("ledger_predicate")`` INSIDE the function body, so the
+``_lazy_load("run_record_predicate")`` INSIDE the function body, so the
 core → predicate edge is deferred and no import cycle forms (same cycle-safe
 shape core already uses for ``iteration`` / ``phase-grammar``). The facade
-``lib/ledger.py`` re-exports this module's public predicate names so
-``ledger.<name>`` keeps resolving unchanged.
+``lib/run_record.py`` re-exports this module's public predicate names so
+``run_record.<name>`` keeps resolving unchanged.
 
-The predicate is pure per I-2 (contract §4/§5): it reads the ledger dict and
-returns a fresh ``exit_predicate_result`` — it NEVER mutates the ledger. The
-one serialization chokepoint (``ledger_core._atomic_write``) assigns the
+The predicate is pure per I-2 (contract §4/§5): it reads the run-record dict and
+returns a fresh ``exit_predicate_result`` — it NEVER mutates the run-record. The
+one serialization chokepoint (``run_record_core._atomic_write``) assigns the
 returned dict immediately before every write, so predicate freshness is
-structural. See docs/contracts/ledger-schema.md for the authoritative spec — if
+structural. See docs/contracts/run-record-schema.md for the authoritative spec — if
 they disagree, the contract wins and this file is the bug.
 """
 
@@ -34,10 +34,10 @@ import datetime
 import os
 import sys
 
-# Load ledger_core via the standard bootstrap loader (mirrors ledger_mutators /
-# ledger_emitters). The ledger surface is loaded from many sites by file path
+# Load run_record_core via the standard bootstrap loader (mirrors run_record_mutators /
+# run_record_producers). The run-record surface is loaded from many sites by file path
 # (the test harness uses spec_from_file_location, which does NOT add lib/ to
-# sys.path), so a plain `import ledger_core` is not guaranteed to resolve.
+# sys.path), so a plain `import run_record_core` is not guaranteed to resolve.
 # Prepending lib/ + routing through _bootstrap.load_lib_module is the one robust
 # load strategy the codebase already uses for sibling modules.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +45,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-ledger_core = load_lib_module("ledger_core")
+run_record_core = load_lib_module("run_record_core")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -70,8 +70,8 @@ def gating_severities(scale: str = "three-tier") -> tuple:
         (surfaced at exit, never blocking). Unknown -> three-tier is the safe
         default (gates more, never under-blocks).
 
-    The corresponding ``ledger`` field is ``backend_scale``; read it once per call
-    site (e.g. ``ledger.get("backend_scale", "three-tier")``) and pass it in.
+    The corresponding ``run_record`` field is ``backend_scale``; read it once per call
+    site (e.g. ``run_record.get("backend_scale", "three-tier")``) and pass it in.
 
     Test-only deliberate-fail hatch ``CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING``:
     when set to ``"1"`` this helper IGNORES ``scale`` and always returns the
@@ -83,9 +83,9 @@ def gating_severities(scale: str = "three-tier") -> tuple:
     hatch reverts ALL sites at once, so the test proves the CLASS is closed (no
     site bypasses scale), not merely one instance.
     """
-    if ledger_core._test_hatch_enabled("CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING"):
-        return ledger_core.GATING_SEVERITIES
-    return ("blocker",) if scale == "blocker-only" else ledger_core.GATING_SEVERITIES
+    if run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING"):
+        return run_record_core.GATING_SEVERITIES
+    return ("blocker",) if scale == "blocker-only" else run_record_core.GATING_SEVERITIES
 
 
 def step_is_terminal(step: dict, scale: str = "three-tier") -> bool:
@@ -114,14 +114,14 @@ def step_is_terminal(step: dict, scale: str = "three-tier") -> bool:
     return False
 
 
-def _count_severities_by_step(ledger: dict) -> tuple:
+def _count_severities_by_step(run_record: dict) -> tuple:
     """B7 helper: total (blockers, majors, minors) finding counts across all steps.
 
     Extracted VERBATIM from ``recompute_predicate``'s leading count loop — pure,
     no mutation, byte-equivalent tallies.
     """
     blockers = majors = minors = 0
-    for step in ledger.get("steps", []):
+    for step in run_record.get("steps", []):
         for finding in step.get("findings") or []:
             sev = finding.get("severity")
             if sev == "blocker":
@@ -133,7 +133,7 @@ def _count_severities_by_step(ledger: dict) -> tuple:
     return blockers, majors, minors
 
 
-def _read_cached_gaps_open(ledger: dict):
+def _read_cached_gaps_open(run_record: dict):
     """B7 helper: read the backend-supplied ``gaps_open`` from the prior predicate.
 
     gaps_open is backend-supplied; preserve any existing value (the engine
@@ -146,14 +146,14 @@ def _read_cached_gaps_open(ledger: dict):
 
     Extracted VERBATIM; returns ``None`` (unknown) or an ``int``.
     """
-    prev = ledger.get("exit_predicate_result") or {}
+    prev = run_record.get("exit_predicate_result") or {}
     gaps_open = prev.get("gaps_open")
     if gaps_open is not None:
         gaps_open = int(gaps_open)
     return gaps_open
 
 
-def _compute_terminality(ledger: dict) -> dict:
+def _compute_terminality(run_record: dict) -> dict:
     """B7 helper: compute the phase-scoped + global terminality facts.
 
     Returns a dict with keys ``current_phase``, ``terminal_phase``, ``scale``,
@@ -161,11 +161,11 @@ def _compute_terminality(ledger: dict) -> dict:
     VERBATIM from ``recompute_predicate``'s terminality block — pure, no mutation.
 
     The current-phase read routes through ``phase_grammar.current_phase`` (the one
-    phase-decision module) rather than a raw ``ledger["loop_phase"]`` subscript —
-    byte-identical return (``ledger.get("loop_phase") or "plan"``), and it keeps
+    phase-decision module) rather than a raw ``run_record["loop_phase"]`` subscript —
+    byte-identical return (``run_record.get("loop_phase") or "plan"``), and it keeps
     the raw ``loop_phase`` literal out of this module (the AST-lint's single-source
     rule; same convention ``is_orphaned`` follows). Lazy-loaded to preserve the
-    load-order discipline the ledger surface needs.
+    load-order discipline the run-record surface needs.
 
     v0.2.0 fix-pass A.1 (correctness P0 #3 / api-contract AC-2): the work-loop
     exit predicate's terminal check is scoped to the steps in the CURRENT phase,
@@ -180,15 +180,15 @@ def _compute_terminality(ledger: dict) -> dict:
     didn't honor it). Global all_steps_terminal is retained for the
     exit_predicate_result reporting field (downstream consumers may want it).
     """
-    phase_grammar = ledger_core._lazy_load("phase-grammar")
-    scale = ledger.get("backend_scale", "three-tier")
-    current_phase = phase_grammar.current_phase(ledger)
-    terminal_phase = ledger.get("terminal_phase") or "work"
+    phase_grammar = run_record_core._lazy_load("phase-grammar")
+    scale = run_record.get("backend_scale", "three-tier")
+    current_phase = phase_grammar.current_phase(run_record)
+    terminal_phase = run_record.get("terminal_phase") or "work"
     all_steps_terminal_global = all(
-        step_is_terminal(u, scale) for u in ledger.get("steps", [])
+        step_is_terminal(u, scale) for u in run_record.get("steps", [])
     )
     current_phase_steps = [
-        u for u in ledger.get("steps", []) if u.get("phase") == current_phase
+        u for u in run_record.get("steps", []) if u.get("phase") == current_phase
     ]
     return {
         "current_phase": current_phase,
@@ -199,7 +199,7 @@ def _compute_terminality(ledger: dict) -> dict:
     }
 
 
-def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
+def _evaluate_met(run_record: dict, counts: tuple, gaps_open, term: dict) -> bool:
     """B7 helper: the phase-aware ``met`` decision, PRE-iteration_pending.
 
     Extracted VERBATIM from ``recompute_predicate``'s plan/work branch. Returns
@@ -247,7 +247,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         met = (
             gaps_open is not None
             and gaps_open == 0
-            and ledger.get("plan_step") == "review_plan"
+            and run_record.get("plan_step") == "review_plan"
         )
     else:
         # Work-loop exit, SCALE-AWARE (Bug #3 — backend_scale was stored but never
@@ -285,7 +285,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         eval_phase_steps = (
             current_phase_steps
             if current_phase != "done"
-            else [u for u in ledger.get("steps", []) if u.get("phase") == terminal_phase]
+            else [u for u in run_record.get("steps", []) if u.get("phase") == terminal_phase]
         )
         all_terminal_in_eval_phase = all(
             step_is_terminal(u, scale) for u in eval_phase_steps
@@ -301,8 +301,8 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
     return bool(met)
 
 
-def recompute_predicate(ledger: dict) -> dict:
-    """Compute ``exit_predicate_result`` purely from the ledger's current state.
+def recompute_predicate(run_record: dict) -> dict:
+    """Compute ``exit_predicate_result`` purely from the run-record's current state.
 
     Counts findings across all steps, computes ``all_steps_terminal``, and sets
     ``met`` PHASE-AWARELY (I-2, contract §5). See the B7 helpers
@@ -320,23 +320,23 @@ def recompute_predicate(ledger: dict) -> dict:
     work-met fire spuriously (the work-loop branch above scopes terminality to
     current-phase steps; pending plan-N steps are phase=plan, invisible) — see
     KTD §A. The gate-decision read routes through ``iteration.read_decision`` to
-    keep the ledger surface off the AST-lint's allowlist for that semantic — the
+    keep the run-record surface off the AST-lint's allowlist for that semantic — the
     lint permits the literal in the writer site but the convention is to consume
     via the centralized reader (mirrors how ``is_orphaned`` reads ``loop_phase``
     via ``phase_grammar.current_phase`` rather than raw subscript).
 
-    Returns the new dict (does NOT mutate ``ledger``; the caller assigns it).
+    Returns the new dict (does NOT mutate ``run_record``; the caller assigns it).
     """
-    blockers, majors, minors = _count_severities_by_step(ledger)
-    gaps_open = _read_cached_gaps_open(ledger)
-    term = _compute_terminality(ledger)
-    met = _evaluate_met(ledger, (blockers, majors, minors), gaps_open, term)
+    blockers, majors, minors = _count_severities_by_step(run_record)
+    gaps_open = _read_cached_gaps_open(run_record)
+    term = _compute_terminality(run_record)
+    met = _evaluate_met(run_record, (blockers, majors, minors), gaps_open, term)
 
     # v0.3.0 KTD §B — iteration_pending composition. Compute BEFORE finalizing
     # `met` so the AND-NOT clause can suppress a work-loop met that would
     # otherwise short-circuit the iteration loop (see KTD §A: the pulse's
     # predicate-met short-circuit yields when iteration_pending is True).
-    iteration_pending = _compute_iteration_pending(ledger)
+    iteration_pending = _compute_iteration_pending(run_record)
     met = bool(met) and not iteration_pending
 
     return {
@@ -350,7 +350,7 @@ def recompute_predicate(ledger: dict) -> dict:
     }
 
 
-def _compute_iteration_pending(ledger: dict) -> bool:
+def _compute_iteration_pending(run_record: dict) -> bool:
     """Compute KTD §B's iteration_pending bool for ``recompute_predicate``.
 
     Thin delegating wrapper over ``iteration.compute_pending_state`` — the
@@ -369,14 +369,14 @@ def _compute_iteration_pending(ledger: dict) -> bool:
     Brittleness contract (rel-2): ``compute_pending_state`` swallows
     coercion errors on the numeric bound fields and returns ``False`` on
     bad input — a corrupted ``iteration_attempts`` MUST NOT raise from
-    ``_atomic_write`` and lock every subsequent ledger write, including the
+    ``_atomic_write`` and lock every subsequent run-record write, including the
     one needed to recover.
     """
-    iteration = ledger_core._lazy_load("iteration")
-    return iteration.compute_pending_state(ledger)
+    iteration = run_record_core._lazy_load("iteration")
+    return iteration.compute_pending_state(run_record)
 
 
-def is_orphaned(ledger: dict, now=None) -> bool:
+def is_orphaned(run_record: dict, now=None) -> bool:
     """I-3 orphan predicate (§5), excluding handoff-paused surfacing (U7's concern).
 
     Resumable iff current phase != "done" AND (driver == "manual" OR last_beat_at
@@ -384,25 +384,25 @@ def is_orphaned(ledger: dict, now=None) -> bool:
 
     P2-10: routes the current-phase read through ``phase_grammar.current_phase``
     for consistency with the rest of the codebase (the AST lint allows the raw
-    literal in the ledger surface, but the convention is to read the field through
+    literal in the run-record surface, but the convention is to read the field through
     the one phase-decision module). Lazy import to avoid module-load ordering
-    surprises (the ledger surface is loaded from many sites, sometimes before
+    surprises (the run-record surface is loaded from many sites, sometimes before
     sys.path is set up for sibling modules).
     """
     # Lazy load: phase-grammar.py is a sibling lib module; loading it at
     # module import time would create a load-order dependency, so we defer.
-    phase_grammar = ledger_core._lazy_load("phase-grammar")
+    phase_grammar = run_record_core._lazy_load("phase-grammar")
 
-    if phase_grammar.current_phase(ledger) == "done":
+    if phase_grammar.current_phase(run_record) == "done":
         return False
-    loop = ledger.get("loop") or {}
+    loop = run_record.get("loop") or {}
     if loop.get("driver") == "manual":
         return True
-    last_beat = ledger_core.parse_iso(loop.get("last_beat_at"))
+    last_beat = run_record_core.parse_iso(loop.get("last_beat_at"))
     if last_beat is None:
         # No beat ever recorded on a non-done run => treat as resumable.
         return True
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
     age = (now - last_beat).total_seconds()
-    return age > ledger_core.GRACE_SECONDS
+    return age > run_record_core.GRACE_SECONDS

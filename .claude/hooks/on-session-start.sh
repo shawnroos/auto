@@ -3,7 +3,7 @@
 #
 # A self-paced ScheduleWakeup pulse chain does NOT survive a full session exit
 # (in-session only; durable cron is denied by cmux). No work is lost — the
-# ledger is durable on disk and each background agent self-writes its verdict
+# run-record is durable on disk and each background agent self-writes its verdict
 # atomically — but the lost re-arm leaves a run "orphaned" (no live driver).
 # This hook SURFACES resumable runs at the start of a fresh session so the
 # operator can `/auto-resume` them. It SURFACES ONLY — it never auto-runs
@@ -47,8 +47,8 @@ if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
   CLAUDE_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 
-# Hand off the per-ledger scan + GRACE/orphan/handoff classification to Python
-# (which imports ledger.py's is_orphaned + GRACE_SECONDS — never hardcoded).
+# Hand off the per-run-record scan + GRACE/orphan/handoff classification to Python
+# (which imports run_record.py's is_orphaned + GRACE_SECONDS — never hardcoded).
 # It prints surfacing lines on stdout; the harness shows them to the operator.
 # `|| true` belt-and-braces so an exec/python failure cannot propagate non-zero.
 exec "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-session-start.py" "$__cd_repo" || true

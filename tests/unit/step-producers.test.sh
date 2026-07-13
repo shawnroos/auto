@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto U5b unit test: lib/step_producers.py (3 producers + registry) and the
-# ledger.transition_and_emit primitive (atomic emit).
+# run_record.transition_and_emit primitive (atomic emit).
 #
 # v0.3.0 / U3 additions: iterate_template producer scenarios + judge_winner
 # gate-step generalization + backward-compat fallback + counter-integration
@@ -16,20 +16,20 @@
 #   5. judge_winner_to_work_steps: no winner in findings → raises (hard error)
 #   6. plan_output_to_paired_builders: 2 biased builders + comparator depends_on both
 #   7. transition_and_emit: emits + advances + recomputes atomically within ONE
-#      _with_locked_ledger body; a reader BETWEEN the emit and the advance sees
+#      _with_locked_run_record body; a reader BETWEEN the emit and the advance sees
 #      a consistent (predicate-recomputed-post-emit) snapshot — there is no
 #      torn intermediate state (G3/F2 property). Narrower than "one write": no
 #      external observer can witness new-phase-without-new-steps OR
 #      new-steps-without-recomputed-predicate.
-#   8. producers are pure: a registry producer never calls a ledger mutator (smoke:
+#   8. producers are pure: a registry producer never calls a run-record mutator (smoke:
 #      transition_and_emit with a real producer completes without deadlock)
 #   9. iterate_template happy: 3 plan-* steps, counter=3, emit_count=1 → plan-4
 #  10. iterate_template happy: emit_count=2 → plan-4, plan-5
 #  11. iterate_template counter-resume: counter=7, steps plan-1..plan-4, emit_count=1 → plan-8
 #  12. judge_winner generalized: iteration.gate_step="custom_judge", no "judge" step → still emits
 #  13. judge_winner backward-compat: no iteration field, step "judge" exists → still emits
-#  14. iterate_template no-iteration: ledger lacks iteration field → raises
-#  15. iterate_template missing counter: legacy ledger w/o iteration_emit_count → defaults to 0
+#  14. iterate_template no-iteration: run-record lacks iteration field → raises
+#  15. iterate_template missing counter: legacy run-record w/o iteration_emit_count → defaults to 0
 #  16. emit_count validation: 0, 11, "five", -1, 1.5, True all raise
 #  17. iterate_template bad template ref: emit_template names unknown key → raises
 #  18. integration: emit_within_phase + iterate_template → counter advances atomically
@@ -58,18 +58,18 @@ em() {
 import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-from _bootstrap import load_lib_module, load_ledger
+from _bootstrap import load_lib_module, load_run_record
 producers = load_lib_module("step_producers")
 workflows = load_lib_module("workflows")
-ledger = load_ledger()
+run_record = load_run_record()
 op = sys.argv[2]
 
 
-# U3 helper: build an in-memory ledger dict for the iterate_template producer
-# to read. The producer is PURE — it reads ledger.iteration, ledger.emit_templates,
-# ledger.iteration_emit_count, and the gate step's dispatch_context.
+# U3 helper: build an in-memory run-record dict for the iterate_template producer
+# to read. The producer is PURE — it reads run_record.iteration, run_record.emit_templates,
+# run_record.iteration_emit_count, and the gate step's dispatch_context.
 # decision_payload. No flock needed; no file needed.
-def _ledger_for_iter(steps, *, gate_step="judge", template_name="plan-candidate",
+def _run_record_for_iter(steps, *, gate_step="judge", template_name="plan-candidate",
                     id_prefix="plan-", phase="plan", counter=0,
                     invokes=None, missing_iteration=False, missing_template=False):
     led = {
@@ -122,7 +122,7 @@ elif op == "brainstorm-emit":
         ",".join(sorted(u.keys()))))
 
 elif op == "brainstorm-pure":
-    # The producer is PURE — it must not mutate the input ledger dict. Snapshot
+    # The producer is PURE — it must not mutate the input run-record dict. Snapshot
     # the steps list identity + content before/after; both must be unchanged.
     led = {"steps": [
         {"id": "brainstorm", "phase": "brainstorm",
@@ -192,19 +192,19 @@ elif op == "a4-pair":
 
 elif op == "atomic-emit":
     # transition_and_emit emits + advances + recomputes atomically within ONE
-    # _with_locked_ledger body; a reader between the emit and the advance sees
+    # _with_locked_run_record body; a reader between the emit and the advance sees
     # a consistent (predicate-recomputed-post-emit) snapshot.
     repo = tempfile.mkdtemp(); run = "ae"
-    ledger.init_ledger(repo, run, backend="ce",
+    run_record.init_run_record(repo, run, backend="ce",
         workflow={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
         steps=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
                 "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]}}])
-    appended = ledger.transition_and_emit(repo, run, "work",
+    appended = run_record.transition_and_emit(repo, run, "work",
         producers.plan_output_to_work_steps)
-    led = ledger.read_ledger(repo, run)
+    led = run_record.read_run_record(repo, run)
     work_steps = [u["id"] for u in led["steps"] if u["phase"] == "work"]
     # phase advanced to work; 2 work steps appended; predicate saw them (not met —
     # they're pending, so all_steps_terminal is False).
@@ -213,13 +213,13 @@ elif op == "atomic-emit":
         ",".join(sorted(work_steps)), led["exit_predicate_result"]["met"]))
 
 # ─── U3 (v0.3.0) iterate_template scenarios ───────────────────────────────
-# The _ledger_for_iter helper is defined at the top (it must precede the
+# The _run_record_for_iter helper is defined at the top (it must precede the
 # if/elif dispatch chain). Each scenario below uses it to construct a fresh
-# in-memory ledger and exercises one facet of the iterate_template contract.
+# in-memory run-record and exercises one facet of the iterate_template contract.
 
 elif op == "iter-tpl-happy-1":
     # 3 plan-* steps exist, counter=3, emit_count=1 (default) → plan-4
-    led = _ledger_for_iter(
+    led = _run_record_for_iter(
         steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
@@ -234,7 +234,7 @@ elif op == "iter-tpl-happy-1":
 
 elif op == "iter-tpl-happy-2":
     # emit_count=2 → plan-4, plan-5
-    led = _ledger_for_iter(
+    led = _run_record_for_iter(
         steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
@@ -250,7 +250,7 @@ elif op == "iter-tpl-happy-2":
 elif op == "iter-tpl-counter-resume":
     # Counter=7 but only plan-1..plan-4 exist (partial-emit crash deleted 5/6/7).
     # emit_count=1 → plan-8 (NOT plan-5). Closes round-3 P0-R3-2.
-    led = _ledger_for_iter(
+    led = _run_record_for_iter(
         steps=[
             {"id": "plan-1", "phase": "plan"},
             {"id": "plan-2", "phase": "plan"},
@@ -298,7 +298,7 @@ elif op == "judge-backcompat":
     print(",".join(u["id"] for u in out))
 
 elif op == "iter-tpl-no-iteration":
-    # Ledger has no iteration field → iterate_template raises WorkflowError.
+    # RunRecord has no iteration field → iterate_template raises WorkflowError.
     led = {"steps": [], "iteration_emit_count": 0}
     try:
         producers.iterate_template(led, "plan"); print("NO-RAISE")
@@ -306,7 +306,7 @@ elif op == "iter-tpl-no-iteration":
         print("raised")
 
 elif op == "iter-tpl-missing-counter":
-    # v0.2.x-shaped ledger missing iteration_emit_count field. .get default
+    # v0.2.x-shaped run-record missing iteration_emit_count field. .get default
     # returns 0; first emit id is plan-1.
     led = {
         "iteration": {"gate_step": "judge", "emit_template": "plan-candidate"},
@@ -336,7 +336,7 @@ elif op == "iter-tpl-emit-count-validation":
     results = []
     for bad in (0, 11, "five", -1, 1.5, True):
         base_steps[1]["dispatch_context"]["decision_payload"]["emit_count"] = bad
-        led = _ledger_for_iter(steps=list(base_steps), counter=1)
+        led = _run_record_for_iter(steps=list(base_steps), counter=1)
         try:
             producers.iterate_template(led, "plan")
             results.append(f"{bad!r}:NO-RAISE")
@@ -372,7 +372,7 @@ elif op == "iter-tpl-integration":
     # this scenario, both the producer (pure read) and _apply_emit (per-step
     # bump) could be individually correct but the composition broken.
     repo = tempfile.mkdtemp(); run = "iter-integration"
-    ledger.init_ledger(repo, run, backend="ce",
+    run_record.init_run_record(repo, run, backend="ce",
         workflow={"name": "a2", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="plan",
@@ -384,9 +384,9 @@ elif op == "iter-tpl-integration":
              "dispatch_context": {"decision_payload": {"emit_count": 2}}},
         ])
     # Inject iteration + emit_templates + counter directly on disk — these
-    # ledger fields are populated by U6 (engine wiring) which is not yet
+    # run-record fields are populated by U6 (engine wiring) which is not yet
     # landed. The producer only READS them, so direct injection is correct.
-    path = ledger.ledger_path(repo, run)
+    path = run_record.run_record_path(repo, run)
     with open(path) as f:
         led = json.load(f)
     led["iteration"] = {"gate_step": "judge", "emit_template": "plan-candidate"}
@@ -400,8 +400,8 @@ elif op == "iter-tpl-integration":
     led["iteration_emit_count"] = 3
     with open(path, "w") as f:
         json.dump(led, f)
-    appended = ledger.emit_within_phase(repo, run, "plan", producers.iterate_template)
-    led = ledger.read_ledger(repo, run)
+    appended = run_record.emit_within_phase(repo, run, "plan", producers.iterate_template)
+    led = run_record.read_run_record(repo, run)
     new_ids = [u["id"] for u in led["steps"] if u["id"].startswith("plan-")
                and u["id"] not in {"plan-1", "plan-2", "plan-3"}]
     print("%s|%s|%s" % (
@@ -412,14 +412,14 @@ elif op == "iter-tpl-integration":
 # ─── U14: dependency-engine passthrough + origination ───────────────────────
 elif op == "a1-passthrough":
     # U14 passthrough (DELIBERATE-FAIL before the Site-1 fix): an enumerated
-    # item carrying a non-empty depends_on must materialize onto the ledger
+    # item carrying a non-empty depends_on must materialize onto the run-record
     # step. Driven through the FULL transition_and_emit path so _normalize_step's
     # edge preservation is proven end-to-end (not just the producer's return dict).
     # Prints "w2.depends_on|w1.depends_on": after the fix "w1|" (w2 depends on
     # w1; w1 carries none — regression coverage in the same assertion). On
     # CURRENT code Site 1 hardcodes [], so w2's edge is dropped -> "|" (RED).
     repo = tempfile.mkdtemp(); run = "pt"
-    ledger.init_ledger(repo, run, backend="ce",
+    run_record.init_run_record(repo, run, backend="ce",
         workflow={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
@@ -427,8 +427,8 @@ elif op == "a1-passthrough":
                 "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}},
                     {"id": "w2", "invokes": {}, "depends_on": ["w1"]}]}}])
-    ledger.transition_and_emit(repo, run, "work", producers.plan_output_to_work_steps)
-    led = ledger.read_ledger(repo, run)
+    run_record.transition_and_emit(repo, run, "work", producers.plan_output_to_work_steps)
+    led = run_record.read_run_record(repo, run)
     w1 = next(u for u in led["steps"] if u["id"] == "w1")
     w2 = next(u for u in led["steps"] if u["id"] == "w2")
     print("%s|%s" % (",".join(w2["depends_on"]), ",".join(w1["depends_on"])))
@@ -497,7 +497,7 @@ assert_eq "0" "$(em a1-empty)"
 it "U8: brainstorm_output_to_plan_step → one plan step (5-key, requirements-doc carried)"
 assert_eq "1|plan|plan|next_plan_step|docs/brainstorms/x-requirements.md|depends_on,dispatch_context,id,invokes,phase" "$(em brainstorm-emit)"
 
-it "U8: brainstorm_output_to_plan_step is pure (no ledger mutation)"
+it "U8: brainstorm_output_to_plan_step is pure (no run_record mutation)"
 assert_eq "unchanged" "$(em brainstorm-pure)"
 
 it "U8: no brainstorm step → WorkflowError (not a silent empty emit)"
@@ -518,7 +518,7 @@ assert_eq "raised" "$(em judge-no-winner)"
 # compare). U6 moved compare into a4.json's `steps[]` (declared with
 # depends_on: [build-clarity, build-perf] — forward-referencing the bias-builder
 # emit_template id_prefix). The producer now produces ONLY the two builders;
-# compare is on the ledger from init. This closes round-2 P0 #7 (compare's
+# compare is on the run-record from init. This closes round-2 P0 #7 (compare's
 # dual-source definition).
 it "plan_output_to_paired_builders: 2 biased builders only; compare is structural (U6 — NOT in producer output)"
 assert_eq "build-clarity,build-perf|clarity,perf|no" "$(em a4-pair)"
@@ -552,11 +552,11 @@ it "judge_winner_to_work_steps: no iteration field → falls back to literal 'ju
 assert_eq "wA" "$(em judge-backcompat)"
 
 # ─── Scenario 14: iterate_template with no iteration field → raises ─────────
-it "iterate_template: ledger has no iteration block → raises WorkflowError"
+it "iterate_template: run_record has no iteration block → raises WorkflowError"
 assert_eq "raised" "$(em iter-tpl-no-iteration)"
 
 # ─── Scenario 15: missing iteration_emit_count → defaults to 0 ──────────────
-it "iterate_template: legacy ledger missing iteration_emit_count → first id is plan-1"
+it "iterate_template: legacy run_record missing iteration_emit_count → first id is plan-1"
 assert_eq "plan-1" "$(em iter-tpl-missing-counter)"
 
 # ─── Scenario 16: emit_count validation (round-3 P1-R3-4) ───────────────────
@@ -581,7 +581,7 @@ assert_eq "plan-4,plan-5|plan-4,plan-5|5" "$(em iter-tpl-integration)"
 
 # ─── Passthrough (DELIBERATE-FAIL before Site 1): edge survives materialization ─
 # An enumerated item carrying depends_on:["w1"] must land on the materialized
-# ledger step (full transition_and_emit path, so _normalize_step preservation is
+# run-record step (full transition_and_emit path, so _normalize_step preservation is
 # proven too). RED on current code ("|"); GREEN after ("w1|").
 it "U14 Site1: enumerated item's depends_on materializes onto the work step (deliberate-fail)"
 assert_eq "w1|" "$(em a1-passthrough)"

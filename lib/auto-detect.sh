@@ -43,7 +43,7 @@
 #
 # Situations:
 #   in-flight       — exactly ONE run with exit_predicate_result.met == false.
-#                     `in_flight.run_id` carries the run. FRESH run (ledger
+#                     `in_flight.run_id` carries the run. FRESH run (run-record
 #                     touched within CLAUDE_AUTO_INFLIGHT_TTL_SECONDS, default
 #                     1 day) → ambiguity null → driver resumes silently. STALE
 #                     run (idle past the TTL) → ambiguity is a choice (resume vs
@@ -85,7 +85,7 @@
 #                     but the situation is still raw because there's no
 #                     deterministic dispatch from a diff alone.
 #
-# READ-ONLY: scans the ledger dir + plan dirs + git status; never writes.
+# READ-ONLY: scans the run-record dir + plan dirs + git status; never writes.
 # Repo root resolved by the Python (CLAUDE_AUTO_REPO or walk-up).
 #
 # Hypothesis-shape stability (NO TSV legacy): the previous TSV consumer was
@@ -104,7 +104,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # dir as argv[1]. The `.py` reached back through `_bootstrap` for the three
 # formerly-inlined duplications: `_repo_root` → `resolve_repo`; the twice-inlined
 # importlib sibling-load (auto-workspace.py + plan-rank.py) → `load_lib_module`;
-# `_read_in_flight`'s inline json.load+dict-guard → `load_ledger_safe`.
+# `_read_in_flight`'s inline json.load+dict-guard → `load_run_record_safe`.
 #
 # The `script_dir` argv passing is load-bearing: `auto-detect.py` reads it as
 # argv[1] (the P0 fix from the plan 004 round-1 review — a single-quoted heredoc

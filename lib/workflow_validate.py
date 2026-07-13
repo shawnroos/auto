@@ -3,7 +3,7 @@
 
 A *workflow* is a named, file-backed JSON declaration of a LOOP topology — an
 ordered graph of steps (CONCEPTS.md) — the
-initial-ledger shape `/auto` builds a run from. This module is the SINGLE place
+initial-run-record shape `/auto` builds a run from. This module is the SINGLE place
 workflows are VALIDATED; both the engine loader (at run start) and the authoring
 skill (at write time) reach `validate()` / `validate_and_lint()` here (via the
 `workflows` facade re-export), so a workflow the skill writes is exactly what the
@@ -112,7 +112,7 @@ _RESERVED_TOPLEVEL = frozenset({"python_hook"})
 # and imports no sibling — workflows.py imports THIS module, so importing workflows
 # back would cycle. workflows.py re-exports this map and a drift-guard test asserts
 # `workflows._ALIASES == _RESERVED_ALIAS_STEMS`, so the two copies never diverge
-# (the "keep the literal in sync" pattern ledger_core uses for PULSE_COMMAND).
+# (the "keep the literal in sync" pattern run_record_core uses for PULSE_COMMAND).
 _RESERVED_ALIAS_STEMS = {
     "plan-build-review": "a1",
     "parallel-theories": "a2",
@@ -755,7 +755,7 @@ def _validate_iteration(workflow: dict, phase_order: list, step_ids: set,
 def _validate_work_only_gap(workflow: dict, phase_order: list) -> None:
     """Work-only init-time gap (P1 #6, fix-pass D). A workflow with
     phase_order: ["work"] and steps: [] is UNRUNNABLE in v0.2.0 — at
-    init_ledger time the engine creates a ledger with zero steps, the
+    init_run_record time the engine creates a run-record with zero steps, the
     work-loop predicate's has_steps_in_phase guard is vacuous so met never
     fires, and the engine re-arms forever while the operator sees nothing.
     The intended runtime path (init-time enumeration via the backend's
@@ -766,7 +766,7 @@ def _validate_work_only_gap(workflow: dict, phase_order: list) -> None:
         _bad(
             "v0.2.0 work-only workflows require pre-declared steps; init-time "
             "enumeration ships in v0.2.1 (KTD-15). A workflow with "
-            "phase_order: ['work'] and steps: [] would create a ledger with "
+            "phase_order: ['work'] and steps: [] would create a run_record with "
             "zero steps and the engine would re-arm forever without dispatching."
         )
 

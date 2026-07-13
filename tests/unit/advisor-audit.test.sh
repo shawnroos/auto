@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # auto U5 unit test: the advisor-gate decision audit + driving_session_id.
 #
-# SELF-CONTAINED inline harness (same style as ledger-mutators.test.sh /
+# SELF-CONTAINED inline harness (same style as run-record-mutators.test.sh /
 # producers.test.sh). Shells into Python via _bootstrap.load_lib_module against
-# the REAL ledger facade — nothing mocked except a sandbox tmp repo.
+# the REAL run-record facade — nothing mocked except a sandbox tmp repo.
 #
 # Scenarios (U5 plan):
-#   1. init_ledger records driving_session_id at arm time; absent => null.
+#   1. init_run_record records driving_session_id at arm time; absent => null.
 #   2. set_driving_session_id round-trips; None clears the field.
 #   3. append_advisor_audit round-trips both kinds (advisor + action), each
 #      timestamped; the records survive a subsequent predicate recompute (I-1).
 #   4. The audit mutator routes through the LOCKED atomic-write path — a
 #      concurrent record_verdict landing between two audit appends does NOT
 #      clobber the list (all three writes are observed).
-#   5. Validation: bad kind / empty field / non-string session_id -> LedgerError.
-#   6. Both new mutators are re-exported through the ledger FACADE (ledger.py).
+#   5. Validation: bad kind / empty field / non-string session_id -> RunRecordError.
+#   6. Both new mutators are re-exported through the run-record FACADE (run_record.py).
 #   7. Doc-content checks on skills/auto/SKILL.md + commands/auto.md:
 #      escalation rule, pause routing, audit surfacing, and the fan-out
 #      two-handoff instruction carrying BOTH (i) question-routing AND
@@ -60,47 +60,47 @@ mkdir -p "${REPO}/.claude/auto"
 echo "advisor-audit.test.sh"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Scenarios 1-6 run inside ONE Python driver (the deterministic ledger surface).
+# Scenarios 1-6 run inside ONE Python driver (the deterministic run-record surface).
 # It prints a "tag=value" line per assertion; bash asserts on each.
 # ════════════════════════════════════════════════════════════════════════════
 out="$("$PY" - "$AUTO_ROOT" "$REPO" <<'PYEOF'
 import sys, os
 auto_root, repo = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-from _bootstrap import load_ledger
-ledger = load_ledger()
+from _bootstrap import load_run_record
+run_record = load_run_record()
 
 def emit(tag, val):
     print(f"{tag}={val}")
 
 # ── 1. init records driving_session_id at arm time ──────────────────────────
-ledger.init_ledger(repo, "armed", backend="ce", loop_phase="work",
+run_record.init_run_record(repo, "armed", backend="ce", loop_phase="work",
                    steps=[{"id": "U1", "state": "pending"}],
                    driving_session_id="sess-ARM")
-L = ledger.read_ledger(repo, "armed")
+L = run_record.read_run_record(repo, "armed")
 emit("init_sid", L.get("driving_session_id"))
 
 # init WITHOUT the kwarg => field present and null (always-present field).
-ledger.init_ledger(repo, "noarm", backend="ce", loop_phase="work",
+run_record.init_run_record(repo, "noarm", backend="ce", loop_phase="work",
                    steps=[{"id": "U1", "state": "pending"}])
-L = ledger.read_ledger(repo, "noarm")
+L = run_record.read_run_record(repo, "noarm")
 emit("noarm_has_key", "driving_session_id" in L)
 emit("noarm_sid", L.get("driving_session_id"))
 
 # ── 2. setter round-trip + None clears ──────────────────────────────────────
-ledger.set_driving_session_id(repo, "noarm", "sess-SET")
-emit("set_sid", ledger.read_ledger(repo, "noarm").get("driving_session_id"))
-ledger.set_driving_session_id(repo, "noarm", None)
-emit("cleared_absent", "driving_session_id" not in ledger.read_ledger(repo, "noarm"))
+run_record.set_driving_session_id(repo, "noarm", "sess-SET")
+emit("set_sid", run_record.read_run_record(repo, "noarm").get("driving_session_id"))
+run_record.set_driving_session_id(repo, "noarm", None)
+emit("cleared_absent", "driving_session_id" not in run_record.read_run_record(repo, "noarm"))
 
 # ── 3. append_advisor_audit both kinds, timestamped ─────────────────────────
-ledger.append_advisor_audit(repo, "armed", kind="advisor",
+run_record.append_advisor_audit(repo, "armed", kind="advisor",
     subject="which output directory?", classification="mechanical",
     resolution="resolved-autonomously")
-ledger.append_advisor_audit(repo, "armed", kind="action",
+run_record.append_advisor_audit(repo, "armed", kind="action",
     subject="git push --force origin main", classification="git push --force / -f / --force-with-lease",
     resolution="blocked-and-paused")
-L = ledger.read_ledger(repo, "armed")
+L = run_record.read_run_record(repo, "armed")
 aud = L.get("advisor_audit", [])
 emit("audit_len", len(aud))
 emit("audit0_kind", aud[0]["kind"])
@@ -109,26 +109,26 @@ emit("audit0_has_at", "at" in aud[0] and bool(aud[0]["at"]))
 emit("audit0_class", aud[0]["classification"])
 
 # ── 3b. records survive a predicate recompute (I-1) ─────────────────────────
-before = list(ledger.read_ledger(repo, "armed").get("advisor_audit", []))
+before = list(run_record.read_run_record(repo, "armed").get("advisor_audit", []))
 # record_verdict forces a recompute in the same atomic snapshot.
-ledger.transition(repo, "armed", "U1", "dispatched")
-ledger.record_verdict(repo, "armed", "U1", [{"severity": "blocker", "note": "x"}])
-after = list(ledger.read_ledger(repo, "armed").get("advisor_audit", []))
+run_record.transition(repo, "armed", "U1", "dispatched")
+run_record.record_verdict(repo, "armed", "U1", [{"severity": "blocker", "note": "x"}])
+after = list(run_record.read_run_record(repo, "armed").get("advisor_audit", []))
 emit("audit_survives_recompute", before == after and len(after) == 2)
 
 # ── 4. concurrent record_verdict between appends does not clobber the list ───
 # Init a run, append one audit, do an unrelated locked write, append another:
 # all three end states must coexist (the append-inside-the-lock contract).
-ledger.init_ledger(repo, "concur", backend="ce", loop_phase="work",
+run_record.init_run_record(repo, "concur", backend="ce", loop_phase="work",
                    steps=[{"id": "V1", "state": "pending"}],
                    driving_session_id="sess-C")
-ledger.append_advisor_audit(repo, "concur", kind="advisor",
+run_record.append_advisor_audit(repo, "concur", kind="advisor",
     subject="q1", classification="mechanical", resolution="resolved-autonomously")
-ledger.transition(repo, "concur", "V1", "dispatched")        # interleaved locked write
-ledger.record_verdict(repo, "concur", "V1", [])              # another locked write
-ledger.append_advisor_audit(repo, "concur", kind="action",
+run_record.transition(repo, "concur", "V1", "dispatched")        # interleaved locked write
+run_record.record_verdict(repo, "concur", "V1", [])              # another locked write
+run_record.append_advisor_audit(repo, "concur", kind="action",
     subject="rm -rf build/", classification="rm -rf", resolution="blocked-and-paused")
-L = ledger.read_ledger(repo, "concur")
+L = run_record.read_run_record(repo, "concur")
 emit("concur_audit_len", len(L.get("advisor_audit", [])))
 emit("concur_step_state", L["steps"][0]["state"])
 
@@ -136,26 +136,26 @@ emit("concur_step_state", L["steps"][0]["state"])
 def rejects(fn):
     try:
         fn(); return False
-    except ledger.LedgerError:
+    except run_record.RunRecordError:
         return True
 
-emit("reject_bad_kind", rejects(lambda: ledger.append_advisor_audit(
+emit("reject_bad_kind", rejects(lambda: run_record.append_advisor_audit(
     repo, "armed", kind="bogus", subject="s", classification="c", resolution="r")))
-emit("reject_empty_subject", rejects(lambda: ledger.append_advisor_audit(
+emit("reject_empty_subject", rejects(lambda: run_record.append_advisor_audit(
     repo, "armed", kind="advisor", subject="", classification="c", resolution="r")))
-emit("reject_nonstr_sid", rejects(lambda: ledger.set_driving_session_id(
+emit("reject_nonstr_sid", rejects(lambda: run_record.set_driving_session_id(
     repo, "armed", 123)))
 
 # ── 6. facade re-exports ────────────────────────────────────────────────────
-emit("facade_set", hasattr(ledger, "set_driving_session_id"))
-emit("facade_append", hasattr(ledger, "append_advisor_audit"))
+emit("facade_set", hasattr(run_record, "set_driving_session_id"))
+emit("facade_append", hasattr(run_record, "append_advisor_audit"))
 PYEOF
 )"
 
 # Pull a tag's value out of the driver output.
 g() { printf '%s\n' "$out" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
 
-it "init_ledger records driving_session_id at arm time"
+it "init_run_record records driving_session_id at arm time"
 assert_eq "sess-ARM" "$(g init_sid)"
 it "init without the kwarg => field present"
 assert_eq "True" "$(g noarm_has_key)"
@@ -191,9 +191,9 @@ assert_eq "True" "$(g reject_empty_subject)"
 it "set_driving_session_id rejects a non-string id"
 assert_eq "True" "$(g reject_nonstr_sid)"
 
-it "ledger facade re-exports set_driving_session_id"
+it "run_record facade re-exports set_driving_session_id"
 assert_eq "True" "$(g facade_set)"
-it "ledger facade re-exports append_advisor_audit"
+it "run_record facade re-exports append_advisor_audit"
 assert_eq "True" "$(g facade_append)"
 
 # ════════════════════════════════════════════════════════════════════════════

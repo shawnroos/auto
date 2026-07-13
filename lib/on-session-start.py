@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto U7: resurrection / handoff surfacing behind on-session-start.sh.
 
-Scans every ledger under <repo>/.claude/auto/ and prints a one-line resume
+Scans every run-record under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
 Classification (schema §5 I-3), in order:
@@ -9,14 +9,14 @@ Classification (schema §5 I-3), in order:
   * loop_phase == "handoff" AND handoff_paused == true  -> handoff-specific hint
     (checked BEFORE the time-based orphan branch — handoff is the INTENTIONAL
     orphan).
-  * else is_orphaned(ledger) (driver == "manual" OR last_beat_at older than
+  * else is_orphaned(run-record) (driver == "manual" OR last_beat_at older than
     GRACE_SECONDS)                                -> generic resume hint.
 
-GRACE_SECONDS and the is_orphaned predicate are IMPORTED from ledger.py, never
+GRACE_SECONDS and the is_orphaned predicate are IMPORTED from run_record.py, never
 hardcoded (schema §6 — consumers read the module constants to avoid drift).
 
-rel-001: any failure (missing dir, malformed ledger) prints nothing and exits 0.
-A single bad ledger never aborts the scan of its siblings.
+rel-001: any failure (missing dir, malformed run-record) prints nothing and exits 0.
+A single bad run-record never aborts the scan of its siblings.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
-    iter_worktree_ledgers,
-    load_ledger,
+    iter_worktree_run_records,
+    load_run_record,
     load_lib_module,
 )
 
@@ -38,10 +38,10 @@ phase_grammar = load_lib_module("phase-grammar")
 
 
 def surfacing_lines(repo_root: str):
-    """Return the list of resume-hint lines for the repo's ledgers."""
-    ledger = load_ledger()
+    """Return the list of resume-hint lines for the repo's run_records."""
+    run_record = load_run_record()
     lines = []
-    for run_id, led in iter_worktree_ledgers(repo_root):
+    for run_id, led in iter_worktree_run_records(repo_root):
         phase = phase_grammar.current_phase(led)
         if phase == "done":
             continue
@@ -58,7 +58,7 @@ def surfacing_lines(repo_root: str):
 
         # Time/driver-based orphan (the pulse chain died with a prior session).
         try:
-            orphaned = ledger.is_orphaned(led)
+            orphaned = run_record.is_orphaned(led)
         except Exception:
             orphaned = False
         if orphaned:

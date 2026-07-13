@@ -90,7 +90,7 @@ unenforced schema doc would just duplicate this one.
 `lib/presets.py` reuses `lib/workflow_validate.py`'s `_check_prompt_template` and
 `_validate_workflow_name`, and imports `VALID_BACKEND_OPS` from the pure-stdlib leaf
 `lib/backend_ops.py`. It **must not** import `lib/dispatcher.py` (the heavy
-dispatch module that pulls in the ledger) — the validator stays a light DAG leaf.
+dispatch module that pulls in the run-record) — the validator stays a light DAG leaf.
 `tests/unit/import-topology.test.sh` asserts this boundary, and
 `tests/unit/presets.test.sh` asserts `backend_ops.VALID_BACKEND_OPS` equals the
 set `dispatcher.py` uses.

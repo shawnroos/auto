@@ -2,11 +2,11 @@
 """auto: /auto run-creation logic behind dispatch.sh.
 
 This is the run-creation entry point the engine otherwise lacks: it parses the
-/auto argument string, creates a fresh ledger via ledger.py (so the
+/auto argument string, creates a fresh run-record via run_record.py (so the
 init-time RMW flock + I-1 predicate recompute are inherited — no new flock), and
 emits an arm-first-pulse INTENT (the model fires the actual ScheduleWakeup +
 /goal). It mirrors resume.py's shape: parse argv positionally, route through
-ledger.py, emit one JSON intent line, exit 0 on a clean surface.
+run_record.py, emit one JSON intent line, exit 0 on a clean surface.
 
 Argument forms (parsed HERE, never in the .md body — Claude Code does not
 dispatch space-separated subcommands, per memory
@@ -22,21 +22,21 @@ dispatch space-separated subcommands, per memory
 
 A new run starts at loop_phase="plan" with an EMPTY steps[] — the plan-loop
 (backend-driven, via the pulse) populates the work steps later; /auto does
-NOT parse steps from the plan. init_ledger's defaults are exactly this shape.
+NOT parse steps from the plan. init_run_record's defaults are exactly this shape.
 
-The plan path, goal text, and `auto` flag have NO ledger field (schema §2 has
-no slot for any of them, and ledger.py is the locked contract). They ride in the
+The plan path, goal text, and `auto` flag have NO run-record field (schema §2 has
+no slot for any of them, and run_record.py is the locked contract). They ride in the
 EMITTED INTENT as payload the model consumes — the same intent-shape extension
 resume.py uses. The model issues `/goal <text>` and `ScheduleWakeup(60,
 "/auto:auto-pulse <run>[ --auto]")`.
 
-DOUBLE-DRIVE: init_ledger holds the per-run init flock across the
+DOUBLE-DRIVE: init_run_record holds the per-run init flock across the
 existence-check + write; the arm-first-pulse path emits intent only — the pulse's
 own non-blocking process-held _pulse_lock is the double-drive guard. No new flock
 here. No file sentinel.
 
 rel-001-ish: empty args / a usage surface exits 0 (surfacing, not an error);
-only a genuine failure (missing plan file, ledger already exists, bad backend)
+only a genuine failure (missing plan file, run-record already exists, bad backend)
 exits non-zero so the operator sees it.
 """
 
@@ -49,7 +49,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import build_arm_intent, build_pulse_prompt, load_ledger, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import build_arm_intent, build_pulse_prompt, load_run_record, load_lib_module, resolve_repo, resolve_shared_dir  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 # The ONE driving-session identity helper (KTD-5), shared with the resume
 # re-arm path so arm and re-arm record ownership identically (fix-round-6 P1).
@@ -113,9 +113,9 @@ def _parse_args(argv):
     goal = None
     workflow = None
     # Launch-chooser U5 / agent-native Gap 3: when set, delete the run-scoped
-    # workspace workflow file once the ledger is initialized (engine is workflow-blind
+    # workspace workflow file once the run-record is initialized (engine is workflow-blind
     # thereafter). Owning teardown HERE makes it atomic with init — the chooser no
-    # longer infers "ledger initialized" from this process's stdout.
+    # longer infers "run_record initialized" from this process's stdout.
     teardown_workflow = False
 
     i = 0
@@ -286,18 +286,18 @@ def _derive_goal_intent(plan: str) -> str:
     return os.path.splitext(os.path.basename(plan))[0] or "run"
 
 
-def _make_run_id(ledger, repo_root: str, plan: str) -> str:
+def _make_run_id(run_record, repo_root: str, plan: str) -> str:
     """Derive a run-id from the plan stem + today's date; uniquify on collision.
 
-    `<plan-stem>-<YYYY-MM-DD>`; if a ledger already exists at that slug, append
-    `-<HHMMSS>`. The raw string is handed to init_ledger, which slugifies it
+    `<plan-stem>-<YYYY-MM-DD>`; if a run-record already exists at that slug, append
+    `-<HHMMSS>`. The raw string is handed to init_run_record, which slugifies it
     internally (we never pre-slug).
     """
     stem = os.path.splitext(os.path.basename(plan))[0] or "run"
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     candidate = f"{stem}-{today}"
     try:
-        if os.path.exists(ledger.ledger_path(repo_root, candidate)):
+        if os.path.exists(run_record.run_record_path(repo_root, candidate)):
             stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S")
             candidate = f"{candidate}-{stamp}"
     except ValueError:
@@ -309,14 +309,14 @@ def _make_run_id(ledger, repo_root: str, plan: str) -> str:
 
 def _bind_presatisfied_plan(presatisfied: bool, init_steps: list, plan: str):
     """v0.4.3 KTD-15: wire a plan_presatisfied run's init state. Returns the
-    plan_step to pass to init_ledger ("review_plan" when presatisfied, else None).
+    plan_step to pass to init_run_record ("review_plan" when presatisfied, else None).
 
     A plan_presatisfied workflow (W) declares its plan phase already done. The
     engine inits plan_step="review_plan" (here) and gaps_open=0 (post-init, in
     run()) so the FIRST pulse's next_plan_step returns "done" → enumerate_plan_steps
     → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
     "auto re-plans a finished plan" bug). The plan doc path has no top-level
-    ledger slot (schema §2), so we bind it to the single plan step's
+    run-record slot (schema §2), so we bind it to the single plan step's
     dispatch_context.plan_path — the durable home the backend's
     enumerate_plan_steps reads to tell the model WHICH plan to enumerate. The
     validator guarantees exactly one plan step when presatisfied is true.
@@ -369,9 +369,9 @@ def _teardown_run_scoped_workflow(workflows, repo_root: str, name: str) -> None:
 
     Launch-chooser / agent-native Gap 3: with ``--teardown-workflow-after-init`` the
     chooser hands auto.py ownership of teardown, so the delete is atomic with init
-    and the chooser never infers "ledger initialized" from this process's stdout.
+    and the chooser never infers "run_record initialized" from this process's stdout.
     The engine is workflow-blind post-init (``workflow-format.md`` §1: pulse / dispatch
-    / predicate / resume all read the ledger, never the workflow file), so the file
+    / predicate / resume all read the run-record, never the workflow file), so the file
     is dead weight here. Targets ONLY the workspace-tier path for this name (never
     a built-in / global), and is best-effort — ENOENT (a built-in resolved, or the
     file already cleaned) is fine; the chooser keeps its own exit-code-keyed
@@ -384,7 +384,7 @@ def _teardown_run_scoped_workflow(workflows, repo_root: str, name: str) -> None:
 
 
 def run(argv) -> int:
-    ledger = load_ledger()
+    run_record = load_run_record()
     workflows = load_lib_module("workflows")
     repo_root = _resolve_repo()
 
@@ -435,20 +435,20 @@ def run(argv) -> int:
             f"[auto] resolving workflow {workflow['name']!r} from {source_tier}\n"
         )
 
-    # Build the initial ledger topology FROM the workflow (KTD-4). The workflow's
-    # declared steps become the initial ledger steps; phase_order / terminal_phase
+    # Build the initial run-record topology FROM the workflow (KTD-4). The workflow's
+    # declared steps become the initial run-record steps; phase_order / terminal_phase
     # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan step,
     # default grammar — R13 regression).
     init_steps = [workflows.step_for(u, workflow) for u in workflow.get("steps", [])]
     phase_order = workflow.get("phase_order", ["plan", "handoff", "work"])
-    run_id = _make_run_id(ledger, repo_root, plan)
+    run_id = _make_run_id(run_record, repo_root, plan)
 
     # v0.4.3 KTD-15: plan_presatisfied (W) — init the plan phase already-done.
     presatisfied = bool(workflow.get("plan_presatisfied"))
     init_plan_step = _bind_presatisfied_plan(presatisfied, init_steps, plan)
 
     # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
-    # Frozen on the ledger so the bare-/auto hypothesis funnel can render it
+    # Frozen on the run-record so the bare-/auto hypothesis funnel can render it
     # verbatim when disambiguating among multiple in-flight runs.
     goal_intent = _derive_goal_intent(plan)
 
@@ -461,7 +461,7 @@ def run(argv) -> int:
         _warn_if_backstop_dark(run_id)
 
     try:
-        ledger.init_ledger(
+        run_record.init_run_record(
             repo_root,
             run_id,
             backend=backend,
@@ -472,7 +472,7 @@ def run(argv) -> int:
             terminal_phase=workflow.get("terminal_phase", "work"),
             phase_transitions=workflow.get("phase_transitions", []),
             # v0.3.0 U6: workflow-declared iteration / emit_templates flow to the
-            # ledger here. None on v0.2.x workflows; U5's validator has already
+            # run-record here. None on v0.2.x workflows; U5's validator has already
             # checked shape if non-None.
             iteration=workflow.get("iteration"),
             emit_templates=workflow.get("emit_templates"),
@@ -484,10 +484,10 @@ def run(argv) -> int:
             # v0.4.3 KTD-15: plan_presatisfied (W) inits the plan phase done.
             plan_step=init_plan_step,
         )
-    except ledger.LedgerExists as exc:
+    except run_record.RunRecordExists as exc:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
-    except ledger.LedgerError as exc:
+    except run_record.RunRecordError as exc:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
 
@@ -495,9 +495,9 @@ def run(argv) -> int:
         _teardown_run_scoped_workflow(workflows, repo_root, args["workflow"])
 
     # v0.4.3 KTD-15: finish the pre-satisfied state — plan-met also needs a
-    # non-null gaps_open=0 (init_ledger set plan_step; see _bind_presatisfied_plan).
+    # non-null gaps_open=0 (init_run_record set plan_step; see _bind_presatisfied_plan).
     if presatisfied:
-        ledger.set_gaps_open(repo_root, run_id, 0)
+        run_record.set_gaps_open(repo_root, run_id, 0)
 
     return _emit_arm(
         run_id,

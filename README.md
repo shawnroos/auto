@@ -3,8 +3,8 @@
 A workflow-agnostic **pulsed loop engine** for Claude Code. `auto` runs the loop
 pattern you run by hand — plan → build → review → fix until only the small stuff
 remains — as a durable, observable state machine. A disk-persisted per-unit
-ledger is the source of truth, so a run survives rate limits and session exits;
-resume is one command off the ledger.
+run-record is the source of truth, so a run survives rate limits and session exits;
+resume is one command off the run-record.
 
 The engine is **workflow-blind**: it drives any workflow through a thin adapter
 (Compound Engineering's `/ce-*` commands, native Claude, or your own).
@@ -14,7 +14,7 @@ The engine is **workflow-blind**: it drives any workflow through a thin adapter
 - **`/auto [<plan>]`** — start (or, bare, *gather context and pick up*: resume an
   in-flight run, offer to build a reviewed plan, or recommend `/ce-plan` for raw
   work). Pick a workflow at start, or pass `--workflow <name>` to skip the picker.
-- **`/auto-status [<run>]`** — read-only ledger + health of a run.
+- **`/auto-status [<run>]`** — read-only run-record + health of a run.
 - **`/auto-resume [continue|abort|retry|skip] [<run>] [<unit>]`** — the durable
   recovery / continuation path.
 - **`/auto-author-workflow`** — author a new workflow from a plain-language
@@ -74,14 +74,14 @@ line: **a workflow is an ordered set of steps; each step runs a preset.**
 For reading older code, plans, and run-records, the **retired** identifiers map:
 `recipe` → **workflow**, `unit` → **step**, `content` → **preset**, `adapter` →
 **backend**, `orchestrator` → **dispatcher**, `emitter` → **producer**, `tick` →
-**pulse**, `seam` → **handoff**. (`ledger` → **run-record** is still in flight.)
+**pulse**, `seam` → **handoff**, `ledger` → **run-record**.
 Run-records and workflow files written before the rename **keep working** — old
 keys are upgraded on read, indefinitely.
 
 ## Contracts
 
 - `docs/contracts/workflow-format.md` — the workflow JSON format (LOCKED v0.5.0).
-- `docs/contracts/ledger-schema.md` — the per-unit ledger (the source of truth).
+- `docs/contracts/run-record-schema.md` — the per-unit run-record (the source of truth).
 - `docs/contracts/backend-contract.md` — the seven backend ops a workflow maps onto.
 
 ## Tests

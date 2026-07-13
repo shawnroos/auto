@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # auto U5 unit test: inline gate compilation for gated workflows.
 #
-# Exercises the REAL lib/workflows.py / lib/ledger.py / lib/pulse.py surfaces the
+# Exercises the REAL lib/workflows.py / lib/run_record.py / lib/pulse.py surfaces the
 # auto-launch §6.1 compile-and-dispatch step drives — independent of
 # AskUserQuestion (the chooser is prose; this tests the mechanics under it).
 #
-# SELF-CONTAINED inline harness (same style as ledger.test.sh / workflows.test.sh):
+# SELF-CONTAINED inline harness (same style as run-record.test.sh / workflows.test.sh):
 # its own it/pass/fail/assert helpers + HOME/sandbox isolation. HOME is moved to
 # the sandbox so resolve()'s GLOBAL tier (~/.claude/auto/workflows) can't leak the
 # operator's real workflows into the run, and the workspace tier lives under a
@@ -25,10 +25,10 @@
 #      `built-in` (unshadowed); a verbatim-built-in description triggers only a
 #      validate_and_lint WARNING (not a hard error), which the agent treats as
 #      blocking; a distinct description clears it.
-#   5. Teardown / workflow-blind-after-init — after init_ledger the run-scoped
+#   5. Teardown / workflow-blind-after-init — after init_run_record the run-scoped
 #      workflow file is deleted, yet a post-init drive (dispatch_pulse, which
-#      resolves producers off the LEDGER, never the workflow file) still advances the
-#      run, read_ledger still carries the topology, and nothing persists in
+#      resolves producers off the RUN_RECORD, never the workflow file) still advances the
+#      run, read_run_record still carries the topology, and nothing persists in
 #      .claude/auto/workflows/.
 
 set -uo pipefail
@@ -212,10 +212,10 @@ elif op == "desc-warning":
     )
 
 elif op == "teardown":
-    # Write the run-scoped workflow, init a ledger from it (the ONLY point the
+    # Write the run-scoped workflow, init a run-record from it (the ONLY point the
     # engine reads the workflow), delete the workflow, then drive a post-init pulse
-    # purely from ledger state — workflow-blind-after-init (workflow-format §1).
-    ledger = load_lib_module("ledger")
+    # purely from run-record state — workflow-blind-after-init (workflow-format §1).
+    run_record = load_lib_module("run_record")
     pulse = load_lib_module("pulse")
     slug = sys.argv[4]
     # Snapshot the workspace tier BEFORE this run so "nothing accumulates across
@@ -231,7 +231,7 @@ elif op == "teardown":
     init_steps = [workflows.step_for(u, workflow) for u in workflow.get("steps", [])]
     phase_order = workflow.get("phase_order", ["plan", "handoff", "work"])
     run_id = "teardown-" + slug
-    ledger.init_ledger(
+    run_record.init_run_record(
         repo, run_id,
         backend=workflow.get("default_backend", "ce"),
         steps=init_steps,
@@ -257,8 +257,8 @@ elif op == "teardown":
     except workflows.WorkflowError:
         resolve_after = "missing"
 
-    # ...yet read_ledger still carries the persisted topology...
-    led = ledger.read_ledger(repo, run_id)
+    # ...yet read_run_record still carries the persisted topology...
+    led = run_record.read_run_record(repo, run_id)
     led_steps = sorted(u["id"] for u in led.get("steps", []))
     expected = sorted(u["id"] for u in init_steps)
     topo_ok = int(led_steps == expected)
@@ -318,14 +318,14 @@ it "verbatim-desc: a distinct provenance description clears the spoof warning"
 assert_eq "0" "$(field distinct_spoof "$R")"
 
 # ── 5. Teardown / workflow-blind-after-init ───────────────────────────────────
-R="$(drv teardown ledger-run)"
-it "teardown: the run-scoped workflow file is deleted after ledger init"
+R="$(drv teardown run-record-run)"
+it "teardown: the run-scoped workflow file is deleted after run_record init"
 assert_eq "1" "$(field file_gone "$R")"
 it "teardown: nothing persists in .claude/auto/workflows/ (zero net residue across the run)"
 assert_eq "0" "$(field net_residue "$R")"
 it "teardown: resolve() can no longer find the deleted run-scoped workflow"
 assert_eq "missing" "$(field resolve_after "$R")"
-it "teardown: read_ledger still carries the run's persisted topology"
+it "teardown: read_run_record still carries the run's persisted topology"
 assert_eq "1" "$(field topo_ok "$R")"
 it "teardown: a post-init dispatch_pulse still drives the run (workflow-blind after init)"
 assert_eq "rearm" "$(field pulse_action "$R")"

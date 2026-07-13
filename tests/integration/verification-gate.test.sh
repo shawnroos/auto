@@ -60,7 +60,7 @@ def workflow(prog_argv):
     }
 
 def led_from(workflow_dict):
-    # minimal ledger mirror of the gate step (engine reads steps[])
+    # minimal run-record mirror of the gate step (engine reads steps[])
     gate = next(u for u in workflow_dict["steps"] if u["id"] == "gate")
     return {"steps": [{"id": "gate", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": {}, "verification": gate["verification"]}]}
@@ -89,7 +89,7 @@ elif op == "advisor-pending":
 
 elif op == "predicate-untouched":
     # A verification block on a step must not break the predicate recompute path
-    # (compute_pending_state is called on every ledger write). No iteration block
+    # (compute_pending_state is called on every run-record write). No iteration block
     # here → iteration_pending must be False regardless of the verification data.
     led = led_from(workflow(["true"]))
     print("pending=" + str(iteration.compute_pending_state(led)))

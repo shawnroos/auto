@@ -7,7 +7,7 @@ its own live transcript + a ~2-day ce-sessions lookback, classifies the session
 into ONE state label, and asks THIS module which ce-family step to run.
 
 This module is a PURE function of (state_label, confidence). It does NOT read the
-transcript, the ledger, or the filesystem — the driver supplies the classified
+transcript, the run-record, or the filesystem — the driver supplies the classified
 state and a confidence score; the module returns the deterministic recommendation
 tuple. Keeping the mapping here (not in skill prose) makes the routing taxonomy
 deterministic, testable, and grep-checkable — `feedback_deterministic_over_

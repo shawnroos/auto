@@ -3,13 +3,13 @@
 
 These are the READ-ONLY helpers the pulse uses to build the operator-guidance
 block that rides every rearm intent, the gaps_open livelock warning, and the
-exit/most-recently-dispatched reports. They read the ledger snapshot they are
-handed (or re-read via the canonical ledger module) but never mutate it, so
+exit/most-recently-dispatched reports. They read the run-record snapshot they are
+handed (or re-read via the canonical run-record module) but never mutate it, so
 they form the LEAF of the pulse module graph:
 
     pulse.py        → pulse_advance, pulse_guidance
     pulse_advance   → pulse_guidance
-    pulse_guidance  → ledger (read-only) + phase_grammar (report shape)
+    pulse_guidance  → run_record (read-only) + phase_grammar (report shape)
 
 No cycle: nothing here imports pulse.py or pulse_advance.
 """
@@ -25,9 +25,9 @@ import sys
 # (that would create a cycle); each lib/ module does its own _bootstrap load.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger, load_lib_module  # noqa: E402
+from _bootstrap import load_run_record, load_lib_module  # noqa: E402
 
-ledger = load_ledger()
+run_record = load_run_record()
 phase_grammar = load_lib_module("phase-grammar")
 # U12: typed dispatch_context accessors (iteration is a `_bootstrap`-only leaf —
 # no import cycle, and import-topology only forbids the pulse/pulse_advance edges).
@@ -40,7 +40,7 @@ def _operator_guidance_for(phase, advance_result, led):
     v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
     field bug where an agent pulsed 5 times expecting steps to populate. Root
     cause was invisible contract: the pulse prepares invocations; the model
-    EXECUTES them; if the model doesn't, the ledger doesn't progress. The
+    EXECUTES them; if the model doesn't, the run-record doesn't progress. The
     rearm intent now carries this reminder explicitly. Phase-aware so plan-
     loop and work-loop get the right framing.
 
@@ -70,7 +70,7 @@ def _operator_guidance_for(phase, advance_result, led):
         body = (
             "plan complete — ENUMERATE its work steps. Read the reviewed plan"
             f"{whence}, produce the work-step list, then PERSIST it via Bash: "
-            "`bash \"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-enumerated-steps "
+            "`bash \"$CLAUDE_PLUGIN_ROOT/lib/run_record.sh\" set-enumerated-steps "
             "<run> <plan-step-id> '[{\"id\":\"...\",\"invokes\":{...}}]'`. The "
             "NEXT pulse transitions to the work-loop. Re-pulsing WITHOUT "
             "persisting leaves the run in the plan phase with no steps to "
@@ -88,7 +88,7 @@ def _operator_guidance_for(phase, advance_result, led):
             "YOU must run it. I do NOT dispatch the work — my role is to "
             "advance the state machine AFTER you feed structured results back "
             "(after /ce-doc-review, persist gaps via `bash "
-            "\"$CLAUDE_PLUGIN_ROOT/lib/ledger.sh\" set-gaps-open <run> <N>`). "
+            "\"$CLAUDE_PLUGIN_ROOT/lib/run_record.sh\" set-gaps-open <run> <N>`). "
             "Re-pulsing without running "
             f"the invocation is a NO-OP — steps will stay []. Just-prepared "
             f"step: {step!r}; expected invocation: {invocation}. "
@@ -117,9 +117,9 @@ def _operator_guidance_for(phase, advance_result, led):
             "step, record BOTH (i) dispatch_context.requirements_doc = <the doc "
             "path> AND (ii) state `verdict-returned`, via the existing mutators "
             "in THIS order (the step starts `pending`, from which record_verdict "
-            "would raise): ledger.transition(repo, run, 'brainstorm', "
+            "would raise): run_record.transition(repo, run, 'brainstorm', "
             "'dispatched', dispatch_context={'requirements_doc': <path>}) then "
-            "ledger.record_verdict(repo, run, 'brainstorm', []). Both conditions "
+            "run_record.record_verdict(repo, run, 'brainstorm', []). Both conditions "
             "are required before the spine advances brainstorm→plan. Re-pulsing "
             "without running /ce-brainstorm and recording the doc is a NO-OP — "
             "the brainstorm phase stays put until both conditions hold."
@@ -139,7 +139,7 @@ def _operator_guidance_for(phase, advance_result, led):
         return iteration_prefix + body if iteration_prefix else body
     body = (
         "prepare/execute contract: I prepare; YOU execute. Re-pulsing without "
-        "running the prepared invocation does not advance the ledger."
+        "running the prepared invocation does not advance the run_record."
     )
     return iteration_prefix + body if iteration_prefix else body
 
@@ -223,7 +223,7 @@ def _gaps_open_guard(phase, led):
     The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
     ``gaps_open is None``. We do NOT key only on review_plan because the pulse
     PERSISTS plan_step AFTER the step runs (anti-livelock §3.1 fix), so by the
-    time this guard reads the ledger the just-completed review_plan has been
+    time this guard reads the run-record the just-completed review_plan has been
     succeeded by a deepen → plan_step="deepen", gaps_open still null. Both
     states are diagnostically equivalent: the operator hasn't fed back gaps yet.
     """
@@ -237,7 +237,7 @@ def _gaps_open_guard(phase, led):
         return None
     return (
         "gaps_open is NULL — plan-met cannot fire until a real review_plan "
-        "step has run and you call ledger.set_gaps_open(<N>) with the gap "
+        "step has run and you call run_record.set_gaps_open(<N>) with the gap "
         "count from /ce-doc-review's output. Without this the plan-loop will "
         "deepen↔review_plan forever and steps will never materialize. "
         "Feeding back gaps_open=0 closes the loop and starts the work-loop."
@@ -277,7 +277,7 @@ def _most_recently_dispatched(led):
     for u in led.get("steps", []):
         if u.get("state") != "dispatched":
             continue
-        at = ledger.parse_iso(u.get("dispatched_at"))
+        at = run_record.parse_iso(u.get("dispatched_at"))
         if at is None:
             continue
         if best_at is None or at > best_at:

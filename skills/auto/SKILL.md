@@ -7,23 +7,23 @@ description: >
   invoked via /auto, when continuing after a handoff, or when resuming a
   run. This skill IS the driving agent: arms the pulse chain, decides
   the work-loop fan-out cap per wave (resizable in flight), reads the
-  ledger's cached exit predicate to know when the loop is done. NEVER
+  run-record's cached exit predicate to know when the loop is done. NEVER
   re-evaluates the predicate itself.
 ---
 
 # auto (loop driver)
 
-**Prepare/execute, ledger-anchored.** This skill PREPARES intents; the
+**Prepare/execute, run-record-anchored.** This skill PREPARES intents; the
 model EXECUTES them. Re-pulsing without running the prepared
-invocation is a no-op. Source of truth is the disk ledger at
+invocation is a no-op. Source of truth is the disk run-record at
 `<repo>/.claude/auto/<run>.json`; the conversation is advisory. Full
 contract + traps (bash-loop, deepen↔review livelock):
 `docs/contracts/driver-reference.md` §1.
 
 **Orientation on demand (R6/R7).** The stable operating contract — the
-ledger path, the intent-envelope grammar, and every read / feedback /
+run-record path, the intent-envelope grammar, and every read / feedback /
 steering verb with its argument shape and rejection modes — is one call
-away: `python3 lib/ledger.py describe` (one JSON object). Prose home:
+away: `python3 lib/run_record.py describe` (one JSON object). Prose home:
 `docs/contracts/agent-tool-surface.md`. Fetch it instead of re-deriving
 the verb surface from this skill; the one rule is *read freely, write
 only through a verb that revalidates under the lock and can reject.*
@@ -38,15 +38,15 @@ Every `/auto` run is goaled before arming.
   to BOTH the loop's `met` AND the operator's clause.
 
 Auto's deliberate-stop is its OWN Stop hook (`lib/on-stop.py` via
-`lib/goal-status.py`), which reads the ledger's `exit_predicate_result`.
-This "goal" is the ledger predicate — **not** the native `/goal`
+`lib/goal-status.py`), which reads the run-record's `exit_predicate_result`.
+This "goal" is the run-record predicate — **not** the native `/goal`
 command. Do NOT run native `/goal`: it is model-judged with no external
 predicate handoff (U9 spike), so auto can neither feed it the verdict nor
 clear it — a native `/goal` set alongside a run will re-prompt "Goal not
 yet met… continuing" on every turn and auto cannot stop it (only
-`/goal clear` can). Binding is automatic: ensure the run's ledger exists
+`/goal clear` can). Binding is automatic: ensure the run's run-record exists
 and `loop.driver` reflects state (`"self"` / `"manual"`); the Stop hook
-engages off that. Never proceed without a legible ledger predicate. Full
+engages off that. Never proceed without a legible run-record predicate. Full
 mechanism: `driver-reference.md` §3.
 
 If the operator WANTS a native `/goal` (opt-in, additive to the Stop
@@ -66,14 +66,14 @@ agent-native answer to a harness limit, not a workaround bolted on.
 - **Full authority (R14).** The boss may rewrite ANY part of the goal
   doc, including the done-definition, as understanding evolves. Changes
   are visible in the doc's history; they are not gated.
-- **The done-floor is the ledger predicate, not the prose (R16).** The
+- **The done-floor is the run-record predicate, not the prose (R16).** The
   boss CANNOT make a run done by editing goal-doc text. `met` is
   computed from real verdicts; any open blocker/major finding keeps it
   false regardless of what the doc says (AE2). Prose states intent; the
   predicate states completion.
 - **Drive while the next step is clear; hand back when it isn't (R13).**
   The fuzzy judgment "is the next step clear?" stays in the model; the
-  CRISP outcome is one of two ledger writes — same split as
+  CRISP outcome is one of two run-record writes — same split as
   `goal-route.py` (model classifies, code decides):
   - **clear →** materialize the next step as a step via a steering verb
     (`add-step`, per R15) and keep driving (`driver` stays `self`, so
@@ -107,7 +107,7 @@ dispatch:
 | `action` | phase | what you do |
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
-| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready steps (genuinely stalled) |
+| `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(run_record), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready steps (genuinely stalled) |
 | `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `handoff-pause` → surface handoff (§3) |
 | `noop`   | any   | another live pulse holds the lock; do nothing |
 
@@ -132,7 +132,7 @@ describing the prepare op). (`/auto-resume advance` on a plan-phase run
 doesn't emit this itself — it emits its own `arm-pulse` to arm the pulse
 that THEN surfaces the handshake.) The handshake is an instruction, not
 noise: run the enumerate prepare op and stash the work steps via
-`ledger.py set-enumerated-steps`, **then re-arm the pulse**. The NEXT
+`run_record.py set-enumerated-steps`, **then re-arm the pulse**. The NEXT
 pulse — once steps are stashed — flips `plan → work`. Do NOT read the
 envelope as "done planning, start building" and skip the re-arm: skipping
 it leaves the run at `plan` with the work-loop never armed.
@@ -163,10 +163,10 @@ IS the wake signal. Per wave:
    `pipeline`); `review` → `/ce-code-review` (the `review.json`
    off-spine step, U11). `dispatch_batch` never consults the backend, so
    THIS mapping is the driver's job — see `driver-reference.md` §7.
-   Each agent self-writes its verdict via `ledger.record_verdict` —
+   Each agent self-writes its verdict via `run_record.record_verdict` —
    durable independent of this session.
 4. YIELD for verdicts — end the turn — AND arm ONE watchdog-heartbeat
-   `ScheduleWakeup(watchdog_wakeup_delay(ledger), "/auto:auto-pulse <run>")`
+   `ScheduleWakeup(watchdog_wakeup_delay(run_record), "/auto:auto-pulse <run>")`
    at dispatch. This single long wakeup (~the soonest in-flight stall
    threshold, clamped to `[60, 3600]s`) fires a pulse even while work is
    in flight, so `detect_and_halt_stalled` reaps a wedged-but-alive
@@ -219,7 +219,7 @@ dependents, so this policy runs **per stalled node while independent
 siblings keep advancing** — one wedged branch never freezes the wave.
 
 **Nested `do_step` reap.** A `do_step` fan-out agent is not its own
-ledger row (KTD-5), so a wedged nested agent is reaped through its
+run-record row (KTD-5), so a wedged nested agent is reaped through its
 **parent** fan-out step: the parent flips to `stalled` and its whole
 fan-out wave is reaped + re-dispatched together (coarse-grained v1 —
 node-level reap of a single nested agent is deferred). The watch view
@@ -227,7 +227,7 @@ still surfaces the individual wedged node for visibility.
 
 **`reap_pending` semantics.** The stalled transition sets
 `reap_pending`; the driver clears it (step 2) after the kill;
-`pulse_advance.steps_awaiting_reap(ledger)` returns the `stalled` steps
+`pulse_advance.steps_awaiting_reap(run_record)` returns the `stalled` steps
 whose marker is still set — an **uncleared marker on a later pulse means
 "kill owed but unconfirmed"** (a possible zombie agent). It is the only
 Python-visible handle on a kill that is otherwise entirely model-side.
@@ -274,7 +274,7 @@ and redirects you here. Do NOT stop to ask the operator. Instead:
    - **When unsure between the two, treat it as a fork and escalate** — the
      default for substantive choices is escalate, not auto-resolve.
 3. **Audit every cycle.** Append a record via
-   `ledger.append_advisor_audit(repo, run, kind="advisor", subject="<the
+   `run_record.append_advisor_audit(repo, run, kind="advisor", subject="<the
    question>", classification="<mechanical|design-fork>", resolution="<resolved-
    autonomously|escalated-via-pause>")`. The destructive-action backstop
    (`lib/on-pretooluse-action.py`, §4.5 wall) appends its own `kind="action"`
@@ -307,7 +307,7 @@ destructive backstop) can reach them. When you construct a fan-out step prompt
     hook cannot gate it — so the constraint MUST ride in the prompt.
   - **(iii) self-termination on no-progress:** "If you cannot make progress
     within N minutes (blocked on something you cannot resolve, or spinning
-    without advancing), record a blocker verdict via `ledger.record_verdict`
+    without advancing), record a blocker verdict via `run_record.record_verdict`
     and RETURN — do not keep spinning." This catches soft-stalls from the
     inside (R12). It is defense-in-depth only: a truly wedged process cannot
     self-report, so the watchdog heartbeat + stalled-node reap (U1/U3) remain
@@ -335,14 +335,14 @@ the §4.6 pattern:
    pause handoff instead). When no judges remain pending the call yields a
    non-None `signal`.
 4. **Commit** the signal as the gate's decision via
-   `ledger_mutators.set_verdict_decision(repo, run, gate_step_id, signal)` — the
+   `run_record_mutators.set_verdict_decision(repo, run, gate_step_id, signal)` — the
    single, centralized decision write. A `None` signal means judges are still
    pending (`pending_judges` non-empty): commit nothing, audit nothing.
 5. **Audit — only when a judge verdict resolved the gate.** When the resolved
    gate carries a judge-type criterion (`advisor_judge` / `model_judge` /
    `human`) — i.e. the signal is non-None, so `pending_judges` is empty and every
    judge criterion contributed a verdict — log one record per judge criterion via
-   `ledger.append_advisor_audit(repo, run, kind="advisor",
+   `run_record.append_advisor_audit(repo, run, kind="advisor",
    subject="<gate_step_id>: <criterion id>",
    classification="<the criterion's `type`>", resolution="<advance|iterate>")`,
    surfaced in the exit report (§5). A **programmatic-only** gate (no judge
@@ -370,7 +370,7 @@ call. `dispatcher.dispatch_batch` runs inside a `python3` subprocess with NO
 access to that tool — its `launch_fn` is and REMAINS a no-op
 (`dispatcher._default_launch_fn` returns `None`; the `dispatcher.py dispatch`
 CLI uses it). So **the boss (this session) issues the spawns itself, in-turn** —
-`dispatch_batch` performs ONLY the `pending → dispatched` ledger transition. This
+`dispatch_batch` performs ONLY the `pending → dispatched` run-record transition. This
 matches auto's standing "the pulse PREPARES, YOU EXECUTE" contract
 (`driver-reference.md` §1, §16). `lib/dispatcher.py` is unchanged.
 
@@ -387,10 +387,10 @@ Each pulse, on a `rearm` intent in the work phase:
    step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
    two-handoff constraints — question routing, destructive-action avoidance,
    self-termination on no-progress); and the instruction to **self-write its
-   verdict on completion** via `bash lib/ledger.py record-verdict <run> <step>
+   verdict on completion** via `bash lib/run_record.py record-verdict <run> <step>
    '<json-findings>' <attempt>`.
    - **FIRST line of every phase sub-agent prompt (R21 — LOAD-BEARING SAFETY):**
-     `bash lib/ledger.py register-session <run>`. A dispatched sub-agent carries
+     `bash lib/run_record.py register-session <run>`. A dispatched sub-agent carries
      its OWN `session_id`, so until it registers into the run's ownership set the
      destructive-command backstop and the advisor gate are DARK for it —
      including the `fix` phase, which writes code and runs Bash. Registration MUST
@@ -400,20 +400,20 @@ Each pulse, on a `rearm` intent in the work phase:
      a sub-agent can only ever add ITSELF to the set (never a third party).
      Omitting this line silently reverts U8: the backstop never reaches the tree.
    - **Source the sub-agent's operating contract from the `describe` CLI verb**
-     (`bash lib/ledger.py describe`, shipping in U4) — NOT a `SKILL.md` line-range
+     (`bash lib/run_record.py describe`, shipping in U4) — NOT a `SKILL.md` line-range
      citation. Hardcoding line ranges is the orientation tax this runtime removes
-     (R6/R7). **Dependency:** if `describe` is not yet on `lib/ledger.py`, the
-     prompt-builder still CALLS `bash lib/ledger.py describe`; only if the verb is
+     (R6/R7). **Dependency:** if `describe` is not yet on `lib/run_record.py`, the
+     prompt-builder still CALLS `bash lib/run_record.py describe`; only if the verb is
      genuinely absent does it fall back to pointing at this section — never to a
      line range.
-3. **YIELD, then converge from the LEDGER.** End the turn (§4 step 4, plus the
+3. **YIELD, then converge from the RUN_RECORD.** End the turn (§4 step 4, plus the
    watchdog heartbeat). On re-invocation, `dispatcher.converge(repo, run)`
    reads landed verdicts off disk — **NEVER from sub-agent return text.** A
    verdict is durable the moment the sub-agent's `record-verdict` process writes
    it, independent of whether the boss turn survived; convergence on a later
    pulse picks it up even after the dispatching turn has exited (the durability
    property, proved by `tests/integration/tree-dispatch.test.sh`). Reading
-   verdicts from the ledger — not from returned prose — is what keeps the boss
+   verdicts from the run-record — not from returned prose — is what keeps the boss
    context flat across pulses (RISK-3).
 4. **Stamp `last_beat_at` every pulse (R19).** The pulse's `beat=True` write is
    the boss's keep-alive; it is what lets `lib/on-stop.py` tell a live boss from a
@@ -430,15 +430,15 @@ threshold`).
 ## 5. Exit
 
 Loop exits when pulse returns `stop` with `predicate-met` reason and
-ledger shows `loop_phase == "done"`. Read `exit_predicate_result.met`
-from the ledger; never re-derive. Pulse supplies a `report` in its
+run-record shows `loop_phase == "done"`. Read `exit_predicate_result.met`
+from the run-record; never re-derive. Pulse supplies a `report` in its
 stop intent; surface it (lists remaining minor findings for operator
 promotion). If `exit_reason` is non-null the loop did NOT exit
 cleanly — surface kind + error. Full taxonomy:
 `driver-reference.md` §8.
 
 **Surface the advisor/action audit (v0.6.0).** Alongside the P3 findings,
-list the ledger's `advisor_audit` records — every advisor-resolved question
+list the run-record's `advisor_audit` records — every advisor-resolved question
 (`kind=advisor`) AND every destructive-action backstop denial (`kind=action`),
 each with its `subject` / `classification` / `resolution` / `at`. A wrong
 autonomous call or a fired backstop must be diagnosable at exit (KTD-5
@@ -455,7 +455,7 @@ predicate is met (provisional sidecars ignored). Mechanism:
 ## Invariants
 
 - **Read, never re-derive.** `exit_predicate_result.met` /
-  `all_steps_terminal` come straight from the ledger.
+  `all_steps_terminal` come straight from the run-record.
 - **Re-arm only on `action == "rearm"`.** `stop` and `noop` end the
   chain.
 - **Driver owns cap; engine owns advance.** Never hardcode

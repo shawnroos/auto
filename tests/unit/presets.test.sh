@@ -11,7 +11,7 @@
 # shared-leaf symmetry that proves the VALID_BACKEND_OPS refactor preserved
 # dispatcher's dispatch guard.
 #
-# SELF-CONTAINED inline harness (same style as workflows.test.sh / ledger.test.sh).
+# SELF-CONTAINED inline harness (same style as workflows.test.sh / run-record.test.sh).
 #
 # Scenarios (U1):
 #   1. a valid built-in preset (tuned-review) loads and validates

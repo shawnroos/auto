@@ -21,8 +21,8 @@ The "many same-role local findings" negative case falls out for free: one role
 contributes distinct-role-count == 1 to any phase, below the threshold.
 
 WHERE THE METADATA LIVES (the `decision` / `winner_step_id` precedent —
-lib/iteration.py, lib/ledger_mutators.set_winner_step_id): `record_verdict`
-NORMALIZES findings to ``{severity, note}`` only (lib/ledger_mutators.py:150),
+lib/iteration.py, lib/run_record_mutators.set_winner_step_id): `record_verdict`
+NORMALIZES findings to ``{severity, note}`` only (lib/run_record_mutators.py:150),
 so any reviewer-role / target-phase tag on a finding is STRIPPED on the
 canonical write path. Role-tagged findings therefore survive on the step's
 ``dispatch_context`` (preserved by ``transition`` / the verdict-write path with
@@ -38,11 +38,11 @@ populates these tags the classifier simply returns "no cluster" (degrade-safe).
 
 PURE + STDLIB-ONLY (import-topology / pure-leaf discipline): this module imports
 NO lib siblings — it takes the current phase + phase order as ARGS (never reads
-``ledger["loop_phase"]``, which would trip the phase-grammar AST lint) and never
-writes the ledger. That makes it a trivially-testable leaf and adds only the one
+``run_record["loop_phase"]``, which would trip the phase-grammar AST lint) and never
+writes the run-record. That makes it a trivially-testable leaf and adds only the one
 edge ``pulse_advance → upstream_cluster`` to the import DAG.
 
-DEGRADE-SAFE (never crash a ledger write path): every accessor tolerates a
+DEGRADE-SAFE (never crash a run-record write path): every accessor tolerates a
 malformed/partial finding record (non-dict entries, missing/blank role or phase,
 a non-list ``findings`` arg, a non-list ``phase_order``). On ANY malformed shape
 the classifier collapses to the safe default — ``detected=False`` — so a torn
@@ -216,7 +216,7 @@ def escalation_message(result):
     """A one-line operator message for the pause handoff's ``blocked_on`` field.
 
     Names the upstream phase + the converging findings so the operator can see
-    WHY the run halted without opening the ledger. Returns None when the result
+    WHY the run halted without opening the run-record. Returns None when the result
     is not a detection (the caller should only escalate on ``detected``).
     """
     if not isinstance(result, dict) or not result.get("detected"):

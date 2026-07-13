@@ -3,12 +3,12 @@
 
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-native.py`, prefers a module-level ``Backend`` factory, and
-calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_step(step) / review(step)``.
+calls the six ops on it: ``next_plan_step(run-record) / plan(run-record) /
+deepen(run-record) / review_plan(run-record) / do_step(step) / review(step)``.
 
 The pure logic (severity validation + the plan-step state machine) is here so
 pulse.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
-CLI for direct testing. A backend NEVER writes the ledger (contract §1).
+CLI for direct testing. A backend NEVER writes the run-record (contract §1).
 
 ══════════════════════════════════════════════════════════════════════════════
 RUBRIC PROBE OUTCOME (gates this backend — contract §3.1, plan U6b "FIRST"):
@@ -34,7 +34,7 @@ RUBRIC PROBE OUTCOME (gates this backend — contract §3.1, plan U6b "FIRST"):
   native majors as advisory rather than gating.
 ══════════════════════════════════════════════════════════════════════════════
 
-PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
+PLAN-STEP STATE: `next_plan_step` reads `run_record["plan_step"]` (the plan-phase
 sub-state, schema §3.1); the pulse persists the executed step via
 `set_loop(plan_step=step)` after each plan-loop advance (pulse_advance.py), so a
 fresh-process pulse reads the real sub-state and the loop advances rather than
@@ -88,7 +88,7 @@ def validate_findings(findings):
     return out
 
 
-def _next_plan_step(ledger):
+def _next_plan_step(run_record):
     """Thin native wrapper over the shared ``plan_step_sequencer`` (U10).
 
     Native has NO deepen step, so it NEVER emits "deepen": plan -> review_plan
@@ -96,11 +96,11 @@ def _next_plan_step(ledger):
     closes the gaps the shared §4.1 coherence guard returns "done". That
     per-backend difference is now the injected ``_PLAN_SEQUENCE``; the guard +
     ``plan_step is None`` first-step logic live once in ``_bootstrap``.
-    ``plan_step`` IS a real validated ledger field (``ledger_core.PLAN_STEPS``)
+    ``plan_step`` IS a real validated run-record field (``run_record_core.PLAN_STEPS``)
     that the pulse persists — read identically by both backends (there is no
     native-specific schema gap; the sequencer just keeps native's None-tolerance).
     """
-    return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
+    return plan_step_sequencer(run_record, sequence=_PLAN_SEQUENCE)
 
 
 class Backend:
@@ -114,16 +114,16 @@ class Backend:
     review_rubric = REVIEW_RUBRIC
 
     # ── plan-loop ops ──────────────────────────────────────────────────────
-    def next_plan_step(self, ledger):
-        return _next_plan_step(ledger)
+    def next_plan_step(self, run_record):
+        return _next_plan_step(run_record)
 
-    def enumerate_plan_steps(self, ledger):
+    def enumerate_plan_steps(self, run_record):
         """PREPARE the plan→work-steps enumeration (v0.2.0 contract re-lock, KTD-4).
 
         Native counterpart of the CE op. Prepare-only: the model reads the
         reviewed prose plan and returns a list of step dicts; the engine persists
         them to the plan step's dispatch_context.enumerated_steps (U6) and the
-        producers (U5b) shape them into ledger steps. The producer the producers
+        producers (U5b) shape them into run-record steps. The producer the producers
         read — resolves the F4 gap.
 
         U14 (KTD-1): each enumerated item carries a depends_on list (sibling step
@@ -140,7 +140,7 @@ class Backend:
             ),
         }
 
-    def plan(self, ledger):
+    def plan(self, run_record):
         """PREPARE a prose-plan invocation; the model writes the plan."""
         return {"backend": BACKEND_NAME, "op": "plan", "invocation": "write-prose-plan"}
 

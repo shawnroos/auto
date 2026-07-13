@@ -20,7 +20,7 @@ This module is pure path/JSON/subprocess; no Python deps. It's
 importable from auto-spawn.py and from the skill via a thin bash
 wrapper.
 
-Atomic writes use the same mkstemp+fchmod+rename pattern as ledger_core
+Atomic writes use the same mkstemp+fchmod+rename pattern as run_record_core
 (parity with the batch sidecar lifecycle).
 """
 
@@ -39,13 +39,13 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import (
     CMUX_REF_CHARS as _CMUX_REF_CHARS,
     cmux_available as _cmux_available,
-    load_ledger,
+    load_run_record,
     resolve_host_repo_root,
 )  # noqa: E402
 
-# The ledger facade owns the canonical ISO-Z time stamp (ledger.now_iso). Load
-# it via the facade so the marker's created_at matches every ledger timestamp.
-ledger = load_ledger()
+# The run-record facade owns the canonical ISO-Z time stamp (run_record.now_iso). Load
+# it via the facade so the marker's created_at matches every run-record timestamp.
+run_record = load_run_record()
 
 
 # ── Public API surface ─────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ def marker_path(host_repo: str) -> str:
 def read_marker(host_repo: str) -> dict | None:
     """Return the parsed marker dict, or None if missing/unreadable.
 
-    Returns None on read errors (rel-001 parity with the ledger): a
+    Returns None on read errors (rel-001 parity with the run-record): a
     corrupted marker should NEVER break callers; the worst case
     degrades to "no project workspace" and the skill falls back to
     workspace-per-plan dispatch.
@@ -301,7 +301,7 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
     # Step 4: build + write the marker.
     marker = {
         "workspace_id": workspace_id,
-        "created_at": ledger.now_iso(),
+        "created_at": run_record.now_iso(),
         "layout_version": "v1",
         "left_pane_id": left_pane_id,
         "right_pane_id": right_pane_id,

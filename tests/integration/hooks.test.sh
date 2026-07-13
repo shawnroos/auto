@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # auto U7 integration test: the hooks + resume + goal-status surface.
 #
-# Exercises the REAL ledger.py + the U7 scripts wired exactly as the plugin
+# Exercises the REAL run_record.py + the U7 scripts wired exactly as the plugin
 # manifest / command body wire them. The ONLY injected handoff is the repo path
 # (a sandbox tmp repo) and the Stop event JSON (fed on stdin, as the harness
-# would). Nothing is mocked — every ledger write goes through ledger.py's I-1
+# would). Nothing is mocked — every run-record write goes through run_record.py's I-1
 # atomic chokepoint; every classification goes through the real hook scripts.
 #
 # Per U9 spike (docs/research/native-goal-mechanism-spike.md): native /goal is a
@@ -16,11 +16,11 @@
 #
 # Scenarios (U7 plan):
 #   on-session-start:
-#     - orphaned ledger (driver==manual / last_beat_at>GRACE) -> resume hint
+#     - orphaned run-record (driver==manual / last_beat_at>GRACE) -> resume hint
 #     - handoff_paused -> handoff-specific hint (continue/abort)
 #     - done -> skipped (no line)
 #     - no active run -> fast no-op (no output)
-#     - malformed ledger -> never exits non-zero
+#     - malformed run-record -> never exits non-zero
 #   on-stop:
 #     - predicate unmet (driver=self) -> blocks (decision JSON)
 #     - met -> allows stop (no decision)
@@ -40,7 +40,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 GOAL_STATUS_SH="${AUTO_ROOT}/lib/goal-status.sh"
 RESUME_SH="${AUTO_ROOT}/lib/auto-resume.sh"
 ON_STOP_SH="${AUTO_ROOT}/.claude/hooks/on-stop.sh"
@@ -86,11 +86,11 @@ mkrepo() {
   printf '%s' "$repo"
 }
 
-# Run a Python snippet against ledger.py with the repo as argv[1]; the snippet
+# Run a Python snippet against run_record.py with the repo as argv[1]; the snippet
 # body is fed on stdin via a QUOTED heredoc so no bash $-expansion leaks in.
-pyledger() {
+py_run_record() {
   local repo="$1"; shift
-  "$PY" - "$repo" "$LEDGER_PY"
+  "$PY" - "$repo" "$RUN_RECORD_PY"
 }
 
 # Extract a JSON field from a one-line JSON string (jq-free).
@@ -106,11 +106,11 @@ echo "hooks.test.sh"
 # ─── on-session-start: orphaned (driver==manual) -> resume hint ───────────────
 it "on-session-start: orphaned run (driver==manual) surfaces a resume hint"
 REPO="$(mkrepo orphan-manual)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"orphanrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"orphanrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -119,16 +119,16 @@ assert_contains "$out" "loop orphanrun can be resumed: /auto-resume orphanrun"
 # ─── on-session-start: orphaned (last_beat_at > GRACE) -> resume hint ──────────
 it "on-session-start: orphaned run (last_beat_at older than GRACE) surfaces a hint"
 REPO="$(mkrepo orphan-stale)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util, datetime, json, os
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"staleorphan",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"staleorphan",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 # Hand-age last_beat_at well beyond GRACE_SECONDS while keeping driver=self
 # (so ONLY the time branch can flag it — proves the GRACE path, not driver).
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.GRACE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.ledger_path(repo,"staleorphan")
+p = L.run_record_path(repo,"staleorphan")
 with open(p) as f: led = json.load(f)
 led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
@@ -140,11 +140,11 @@ assert_contains "$out" "loop staleorphan can be resumed"
 # ─── on-session-start: handoff_paused -> handoff-specific hint ──────────────────────
 it "on-session-start: handoff_paused surfaces the handoff-specific continue/abort hint"
 REPO="$(mkrepo handoff)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -155,11 +155,11 @@ assert_contains "$out" "/auto-resume continue handoffrun"
 # ─── on-session-start: done -> skipped (no line) ──────────────────────────────
 it "on-session-start: a done run is skipped (no surfacing line)"
 REPO="$(mkrepo done)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"donerun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"terminal-skip"}])
 L.set_loop(repo,"donerun",loop_phase="done",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
@@ -171,8 +171,8 @@ REPO="$(mkrepo empty)"
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── on-session-start: malformed ledger -> never non-zero ─────────────────────
-it "on-session-start: malformed ledger never exits non-zero (rel-001)"
+# ─── on-session-start: malformed run-record -> never non-zero ─────────────────────
+it "on-session-start: malformed run_record never exits non-zero (rel-001)"
 REPO="$(mkrepo malformed)"
 printf '{ this is not valid json' > "${REPO}/.claude/auto/broken.json"
 "$PY" "$ON_SESSION_PY" "$REPO" >/dev/null 2>&1
@@ -181,11 +181,11 @@ assert_eq "0" "$?"
 # ─── on-stop: predicate unmet (driver=self) -> blocks ─────────────────────────
 it "on-stop: unmet predicate (driver=self) blocks via decision JSON"
 REPO="$(mkrepo stop-unmet)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"unmet",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"unmet",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -217,12 +217,12 @@ fi
 # ─── on-stop: met -> allows stop (no decision) ────────────────────────────────
 it "on-stop: met predicate allows the stop (no decision JSON)"
 REPO="$(mkrepo stop-met)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # verdict-returned with ONLY a minor (does not gate) -> terminal -> met==true.
-L.init_ledger(repo,"clean",backend="ce",loop_phase="work",
+L.init_run_record(repo,"clean",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"nit"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -231,13 +231,13 @@ assert_empty "$out"
 # ─── on-stop: all_steps_terminal gate (counters zero, stalled step lurking) ───
 it "on-stop: counters zero but a stalled step lurks -> still BLOCKED (I-2 gate)"
 REPO="$(mkrepo stop-stalled)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # A dispatched step -> stalled (NOT terminal). No findings anywhere, so
 # blockers==majors==0, but all_steps_terminal==false => met==false.
-L.init_ledger(repo,"lurking",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
+L.init_run_record(repo,"lurking",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"lurking","U1","stalled")
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -250,11 +250,11 @@ assert_contains "$out" "steps not yet terminal"
 # (it emits action:"stop" + driver:"manual"). The Stop hook must respect it.
 it "on-stop: handoff-paused run (driver=manual) ALLOWS stop (no self-conflict)"
 REPO="$(mkrepo stop-handoff)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"handoffstop",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"handoffstop",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffstop",driver="manual")
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -263,11 +263,11 @@ assert_empty "$out"
 # ─── on-stop: stop_hook_active==true -> ALLOWS stop (loop-safety) ─────────────
 it "on-stop: stop_hook_active=true allows stop even with an unmet run (loop-safety)"
 REPO="$(mkrepo stop-refire)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"unmet2",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"unmet2",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{"stop_hook_active":true}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -287,18 +287,18 @@ assert_empty "$out"
 # resume instead). A FRESH driver==self chain (recent beat) still blocks.
 it "on-stop: dead driver==self chain (last_beat_at > stale threshold) does NOT block stop"
 REPO="$(mkrepo stop-stale-self)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util, json, datetime
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Unmet work run, driver==self (a live-looking chain), but the beat is stale:
 # older than DRIVER_SELF_STALE_SECONDS (yet still younger than GRACE, so this is
 # specifically the stale-block window, not the orphan window).
-L.init_ledger(repo,"deadself",backend="ce",loop_phase="work",
+L.init_run_record(repo,"deadself",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.ledger_path(repo,"deadself")
+p = L.run_record_path(repo,"deadself")
 with open(p) as f: led = json.load(f)
 led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
@@ -309,12 +309,12 @@ assert_empty "$out"
 
 it "on-stop: a FRESH driver==self chain (recent beat) + unmet still BLOCKS (the gate only frees DEAD chains)"
 REPO="$(mkrepo stop-fresh-self)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# init_ledger stamps last_beat_at = now (fresh) and driver=self; unmet (blocker).
-L.init_ledger(repo,"liveself",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+# init_run_record stamps last_beat_at = now (fresh) and driver=self; unmet (blocker).
+L.init_run_record(repo,"liveself",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
@@ -325,15 +325,15 @@ it "on-stop Bug #9 deliberate-fail: WITHOUT the staleness gate, the dead self-ch
 # dead chain from the first scenario then blocks stop — proving the gate is
 # load-bearing and the prior allow came from the freshness check, not by accident.
 REPO="$(mkrepo stop-stale-nofix)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util, json, datetime
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"deadself2",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"deadself2",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 old = (datetime.datetime.now(datetime.timezone.utc)
        - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.ledger_path(repo,"deadself2")
+p = L.run_record_path(repo,"deadself2")
 with open(p) as f: led = json.load(f)
 led["loop"]["last_beat_at"] = old
 led["loop"]["driver"] = "self"
@@ -342,8 +342,8 @@ PYEOF
 out="$(printf '{}' | CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1 "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"
 
-# ─── on-stop: the .sh shim never exits non-zero on a malformed ledger ─────────
-it "on-stop.sh shim: malformed ledger -> exit 0 (rel-001)"
+# ─── on-stop: the .sh shim never exits non-zero on a malformed run-record ─────────
+it "on-stop.sh shim: malformed run_record -> exit 0 (rel-001)"
 REPO="$(mkrepo stop-malformed)"
 printf 'not json' > "${REPO}/.claude/auto/x.json"
 ( cd "$REPO" && printf '{}' | bash "$ON_STOP_SH" >/dev/null 2>&1 )
@@ -353,24 +353,24 @@ assert_eq "0" "$?"
 # A clean step (met==true) is re-reviewed and the verdict reopens a blocker.
 # Because goal-status reads exit_predicate_result.met DIRECTLY (no cached copy),
 # the status MUST flip done:true -> done:false in the SAME snapshot — proving
-# there is no staleness window where it says done while the ledger says not.
+# there is no staleness window where it says done while the run-record says not.
 it "goal-status: done flips true with a clean (met) step"
 REPO="$(mkrepo gs-fresh)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Start clean: verdict-returned with no gating findings -> terminal -> met.
-L.init_ledger(repo,"reopen",backend="ce",loop_phase="work",
+L.init_run_record(repo,"reopen",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[]}])
 PYEOF
 out1="$(bash "$GOAL_STATUS_SH" "$REPO" reopen)"
 assert_eq "True" "$(jget "$out1" done)"
 it "goal-status: a re-review reopening a blocker flips done:true -> false (no stale done)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Re-review surfaces a blocker (verdict OVERWRITES findings; predicate recomputed
 # in the SAME atomic write). met must now be false.
 L.record_verdict(repo,"reopen","U1",[{"severity":"blocker","note":"regressed"}])
@@ -383,11 +383,11 @@ assert_contains "$out2" "1 blocker"
 # ─── resume continue: handoff -> work + arm-pulse intent ──────────────────────────
 it "resume continue: flips handoff -> work"
 REPO="$(mkrepo resume-continue)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"contrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"contrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"contrun",driver="manual")
 PYEOF
 # fix-round-6 P1: continue RE-records driving_session_id, so it needs the
@@ -395,42 +395,42 @@ PYEOF
 # `-u CLAUDE_CODE_CHILD_SESSION` simulates the interactive driver (not a spawned
 # child) — the test harness itself runs as a child, which would otherwise refuse.
 out="$(env -u CLAUDE_CODE_CHILD_SESSION CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-RESUME" bash "$RESUME_SH" continue contrun)"
-phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['loop_phase'])")"
+phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','contrun')['loop_phase'])")"
 assert_eq "work" "$phase"
 it "resume continue: emits an arm-pulse intent for the model to fire /auto:auto-pulse"
 assert_eq "arm-pulse" "$(jget "$out" action)"
 it "resume continue: the arm-pulse prompt is NAMESPACED (/auto:auto-pulse, not bare)"
 assert_eq "/auto:auto-pulse contrun" "$(jget "$out" prompt)"
 it "resume continue: clears handoff_paused on the handoff->work flip"
-sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['handoff_paused'])")"
+sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','contrun')['handoff_paused'])")"
 assert_eq "False" "$sp"
 
 # ─── resume abort: -> done ────────────────────────────────────────────────────
 it "resume abort: flips the run to loop_phase=done"
 REPO="$(mkrepo resume-abort)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"abortrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"abortrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" abort abortrun >/dev/null
-phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','abortrun')['loop_phase'])")"
+phase="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','abortrun')['loop_phase'])")"
 assert_eq "done" "$phase"
 
 # ─── resume pause: blocked-on-human -> driver=manual, NOT done, records reason ─
 it "resume pause: flips driver to manual without marking the loop done"
 REPO="$(mkrepo resume-pause)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"pauserun",backend="ce",loop_phase="work",
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"pauserun",backend="ce",loop_phase="work",
               steps=[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"x"}]}])
 L.set_loop(repo,"pauserun",driver="self",beat=True)  # a LIVE chain.
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" pause pauserun "run bf auth login --env dev4" >/dev/null
-rd() { "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','pauserun');print($1)"; }
+rd() { "$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_run_record('$REPO','pauserun');print($1)"; }
 assert_eq "manual" "$(rd "l['loop']['driver']")"
 it "resume pause: stays NOT done (resumable, not a cancellation)"
 assert_eq "work" "$(rd "l['loop_phase']")"
@@ -451,43 +451,43 @@ assert_eq "None" "$(rd "l['loop'].get('blocked_on')")"
 # ─── resume retry: stalled -> pending + clears last_error ─────────────────────
 it "resume retry: stalled step -> pending"
 REPO="$(mkrepo resume-retry)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"retryrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"retryrun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"retryrun","U1","stalled",last_error={"call":"plan","message":"boom","at":"2026-01-01T00:00:00Z"})
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" retry retryrun U1 >/dev/null
-state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['steps'][0]['state'])")"
+state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','retryrun')['steps'][0]['state'])")"
 assert_eq "pending" "$state"
 it "resume retry: clears last_error on the stalled -> pending edge"
-le="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['steps'][0]['last_error'])")"
+le="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','retryrun')['steps'][0]['last_error'])")"
 assert_eq "None" "$le"
 
 # ─── resume skip: stalled -> terminal-skip ────────────────────────────────────
 it "resume skip: stalled step -> terminal-skip (counts as terminal for I-2)"
 REPO="$(mkrepo resume-skip)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"skiprun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"skiprun",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"skiprun","U1","stalled")
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" skip skiprun U1 >/dev/null
-state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','skiprun')['steps'][0]['state'])")"
+state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','skiprun')['steps'][0]['state'])")"
 assert_eq "terminal-skip" "$state"
 
 # ─── resume ambiguous: >1 resumable, none given -> disambiguation prompt ──────
 it "resume (no run, >1 resumable): lists the runs and asks for disambiguation"
 REPO="$(mkrepo resume-ambiguous)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 for r in ("alpha","beta"):
-    L.init_ledger(repo,r,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+    L.init_run_record(repo,r,backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
     L.set_loop(repo,r,driver="manual")  # both resumable (orphaned).
 PYEOF
 out="$(CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH")"
@@ -498,11 +498,11 @@ case "$out" in *alpha*beta*|*beta*alpha*) pass ;; *) fail "expected both alpha a
 # ─── resume single resumable (no run given) -> auto-selects it ────────────────
 it "resume (no run, exactly 1 resumable): auto-selects it and emits arm-pulse"
 REPO="$(mkrepo resume-single)"
-pyledger "$REPO" <<'PYEOF'
+py_run_record "$REPO" <<'PYEOF'
 import sys, importlib.util
-repo, ledger_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"solo",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
+repo, run_record_py = sys.argv[1], sys.argv[2]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.init_run_record(repo,"solo",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"solo",driver="manual")
 PYEOF
 # fix-round-6 P1: bare resume defaults to `continue`, which re-records

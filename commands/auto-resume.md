@@ -7,9 +7,9 @@ Manually resume an auto run — the F4 floor.
 
 A self-paced `ScheduleWakeup` pulse chain does NOT survive a full session
 exit (in-session only; durable cron is denied by cmux). No work is lost —
-the ledger is on disk and each background agent self-writes its verdict
+the run-record is on disk and each background agent self-writes its verdict
 atomically — and resume after any suspend is this one cheap command, which
-reads the durable ledger fresh. Resume is also the routine long-run
+reads the durable run-record fresh. Resume is also the routine long-run
 continuation path (a long run's end-state is a context-exhaust that
 surfaces as a normal resume), not just the crash path.
 

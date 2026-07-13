@@ -2,9 +2,9 @@
 """auto v0.6.0 — the driving-session identity helper (KTD-5).
 
 ONE source of truth for "what is the interactive driver's session_id?", shared
-by every code path that records ``driving_session_id`` on a ledger:
+by every code path that records ``driving_session_id`` on a run-record:
 
-  * lib/auto.py        — records it at arm time (init_ledger).
+  * lib/auto.py        — records it at arm time (init_run_record).
   * lib/auto-resume.py — RE-records it on the resume/re-arm path so a run
                          resumed from a DIFFERENT interactive session (after a
                          handoff pause, a crash, or the next day from a fresh
@@ -16,7 +16,7 @@ Why this matters (the load-bearing fact for BOTH advisor-gate hooks): the
 PreToolUse hooks (lib/on-pretooluse-askuser.py + lib/on-pretooluse-action.py)
 match a question/destructive-action to a live auto run by comparing the hook's
 stdin ``session_id`` against the recorded ``driving_session_id`` — session-id
-EQUALITY, not ledger-state alone. If a re-armed run keeps a STALE arm-time id,
+EQUALITY, not run-record-state alone. If a re-armed run keeps a STALE arm-time id,
 the new driving session never matches and BOTH gates fall through to ALLOW —
 including the destructive-action backstop, which would then let a live
 self-driven run execute ``rm -rf`` / force-push unintercepted. Re-recording the
@@ -29,7 +29,7 @@ guard — the canonical explanation lives on ``driving_session_id`` below; don't
 re-tell it here.)
 
 CRITICAL for the resume path: a None return must NEVER be passed to
-``ledger.set_driving_session_id`` — that setter treats None as "clear the
+``run_record.set_driving_session_id`` — that setter treats None as "clear the
 field", and a cleared field makes BOTH gates fail OPEN (no owner => allow). The
 caller must refuse to re-arm (leave the run paused, surface a loud warning)
 rather than re-arm a self-driven run with a dark backstop. See

@@ -43,7 +43,7 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 resume = load("auto_resume", os.path.join(auto_root, "lib", "auto-resume.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
@@ -67,11 +67,11 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 
 if scenario == "continue":
     # handoff→work continue.
-    ledger.set_loop(repo, run_id, loop_phase="handoff", handoff_paused=True, driver="manual")
-    fn = lambda: resume._cmd_continue(ledger, repo, run_id)
+    run_record.set_loop(repo, run_id, loop_phase="handoff", handoff_paused=True, driver="manual")
+    fn = lambda: resume._cmd_continue(run_record, repo, run_id)
 elif scenario == "advance":
     # plan→enumerate advance.
-    fn = lambda: resume._cmd_advance(ledger, repo, run_id)
+    fn = lambda: resume._cmd_advance(run_record, repo, run_id)
 
 out, err = io.StringIO(), io.StringIO()
 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

@@ -28,13 +28,13 @@ just relaxing line 201**. Each new phase boundary needs:
 - a registered emitter — possibly a *new* one in `lib/emitters.py` (register in
   `REGISTRY` + add the name to `recipes.py:48-59` `V1_EMITTER_NAMES`).
 
-A run bakes ONE recipe at `init_ledger`; resume never reloads. So "chain phases"
+A run bakes ONE recipe at `init_run_record`; resume never reloads. So "chain phases"
 = author a single multi-phase recipe, not runtime recipe-chaining.
 
 ### R2 — The review→verify→fix-until-only-P3 loop already exists
 It IS auto's core exit predicate: `exit_predicate_result.met == true` iff
 `blockers==0 AND majors==0 AND all_units_terminal==true`. Recomputed atomically
-on every ledger write (I-1); the Stop hook (`lib/on-stop.py`) owns the verdict
+on every run-record write (I-1); the Stop hook (`lib/on-stop.py`) owns the verdict
 and blocks Stop until met (carve-out: `driver=="manual"` for paused seams).
 "Fix" = re-dispatch within the work-loop; closure only when no blocker/major
 findings remain. **The smart-entry layer doesn't build this loop — it wraps a
@@ -149,7 +149,7 @@ thresholds are brainstorm/plan work.
 - Phases/recipes: `lib/recipes.py:201` (the lock), `lib/phase-grammar.py`
   (general), `lib/emitters.py` (emitter registry), `recipes/*.json`.
 - Goal: `skills/auto-author-goal/SKILL.md`.
-- Engine theory: `docs/contracts/driver-reference.md`, `docs/contracts/ledger-schema.md`.
+- Engine theory: `docs/contracts/driver-reference.md`, `docs/contracts/run-record-schema.md`.
 
 ## Suggested first move
 `/ce-brainstorm` to lock **D1** (advisor-routing mechanism) and confirm **D2**

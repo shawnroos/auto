@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # auto launch-chooser (agent-native Gap 3): `auto.sh ... --teardown-workflow-after-init`
 # makes auto.py delete the run-scoped WORKSPACE workflow itself, atomically once the
-# ledger is initialized — so the chooser never infers "ledger initialized" from
+# run-record is initialized — so the chooser never infers "run_record initialized" from
 # stdout. This pins: (a) WITH the flag the workspace workflow file is gone after a
-# successful run-create and the ledger still exists; (b) WITHOUT the flag the file
+# successful run-create and the run-record still exists; (b) WITHOUT the flag the file
 # remains (the flag is what triggers teardown, not a side effect).
 
 set -uo pipefail
@@ -26,7 +26,7 @@ cleanup() { rm -rf "$SANDBOX"; }
 trap cleanup EXIT
 export HOME="$SANDBOX"                 # isolate the global workflow tier
 WORKFLOWS_DIR="${SANDBOX}/.claude/auto/workflows"
-LEDGER_DIR="${SANDBOX}/.claude/auto"
+RUN_RECORD_DIR="${SANDBOX}/.claude/auto"
 mkdir -p "$WORKFLOWS_DIR"
 
 PLAN="${SANDBOX}/plan.md"
@@ -54,26 +54,26 @@ run_auto() {  # run_auto "<arg string>"  -> runs auto.sh, repo pinned to sandbox
     bash "$AUTO_SH" "$1" >/dev/null 2>&1
 }
 
-ledger_count() { ls "${LEDGER_DIR}"/*.json 2>/dev/null | grep -v '/workflows/' | wc -l | tr -d ' '; }
+run_record_count() { ls "${RUN_RECORD_DIR}"/*.json 2>/dev/null | grep -v '/workflows/' | wc -l | tr -d ' '; }
 
-# ── 1. WITH the flag: workflow file is deleted, ledger still created ────────────
+# ── 1. WITH the flag: workflow file is deleted, run-record still created ────────────
 write_variant "a2-teardown-a"
-rm -f "${LEDGER_DIR}"/*.json 2>/dev/null || true
+rm -f "${RUN_RECORD_DIR}"/*.json 2>/dev/null || true
 run_auto "${PLAN} --workflow a2-teardown-a --teardown-workflow-after-init"
 it "with --teardown-workflow-after-init: the workspace workflow file is gone post-init"
 [ -f "${WORKFLOWS_DIR}/a2-teardown-a.json" ] && fail "workflow file still present" || pass
-it "with --teardown-workflow-after-init: the run ledger was still created"
-[ "$(ledger_count)" -ge 1 ] && pass || fail "no ledger created"
+it "with --teardown-workflow-after-init: the run run_record was still created"
+[ "$(run_record_count)" -ge 1 ] && pass || fail "no run_record created"
 
 # ── 2. WITHOUT the flag: workflow file remains (teardown is opt-in) ────────────
 write_variant "a2-teardown-b"
-rm -f "${LEDGER_DIR}"/*.json 2>/dev/null || true
+rm -f "${RUN_RECORD_DIR}"/*.json 2>/dev/null || true
 run_auto "${PLAN} --workflow a2-teardown-b"
-it "without the flag: the run ledger was created (control run succeeded)"
+it "without the flag: the run run_record was created (control run succeeded)"
 # Gate the control on success: without this, 'file remains' would pass even if
 # run_auto bailed BEFORE init (leaving the file for the wrong reason), making the
 # with-vs-without contrast meaningless.
-[ "$(ledger_count)" -ge 1 ] && pass || fail "no ledger — control run failed, so 'file remains' proves nothing"
+[ "$(run_record_count)" -ge 1 ] && pass || fail "no run_record — control run failed, so 'file remains' proves nothing"
 it "without the flag: the workspace workflow file remains (opt-in teardown)"
 [ -f "${WORKFLOWS_DIR}/a2-teardown-b.json" ] && pass || fail "workflow file was deleted without the flag"
 

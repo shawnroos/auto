@@ -2,7 +2,7 @@
 # v0.6.0 (security-review fix): auto.py arm-time guard on a null driving_session_id.
 #
 # The advisor-gate destructive-action backstop (lib/on-pretooluse-action.py) owns a
-# run by session-id EQUALITY (PreToolUse stdin.session_id == ledger.driving_session_id).
+# run by session-id EQUALITY (PreToolUse stdin.session_id == run_record.driving_session_id).
 # If the driving session can't be determined at arm (CLAUDE_CODE_SESSION_ID unset —
 # a truly headless context), the recorded id is null and the backstop is DARK for the
 # whole run (gates fail open with no owning session). The RESUME path refuses on a null
@@ -35,15 +35,15 @@ _mkrepo() {
   printf '%s' "$repo"
 }
 
-# Print the single ledger's driving_session_id ("null" for None, "__NO_LEDGER__" if
+# Print the single run-record's driving_session_id ("null" for None, "__NO_RUN_RECORD__" if
 # nothing was armed, "__ABSENT__" if the field is missing entirely).
-_ledger_sid() {
+_run_record_sid() {
   "$PY" - "$1" <<'PYEOF'
 import json, sys, glob, os
 repo = sys.argv[1]
 files = sorted(glob.glob(os.path.join(repo, ".claude", "auto", "*.json")))
 if not files:
-    print("__NO_LEDGER__"); raise SystemExit(0)
+    print("__NO_RUN_RECORD__"); raise SystemExit(0)
 d = json.load(open(files[0]))
 v = d.get("driving_session_id", "__ABSENT__")
 print("null" if v is None else v)
@@ -55,7 +55,7 @@ it "null driving session: warns DARK, still arms, records null id"
 repo="$(_mkrepo)"
 err="$(CLAUDE_AUTO_REPO="$repo" CLAUDE_CODE_SESSION_ID="" CLAUDE_CODE_CHILD_SESSION="" \
   bash "$AUTO_SH" "$repo/docs/plans/p.md" 2>&1 >/dev/null)"
-sid="$(_ledger_sid "$repo")"
+sid="$(_run_record_sid "$repo")"
 if echo "$err" | grep -q "DARK" && [ "$sid" = "null" ]; then pass; else fail "err=[$err] sid=[$sid]"; fi
 rm -rf "$repo"
 
@@ -68,16 +68,16 @@ it "CHILD_SESSION set with a real id: backstop ARMS (no DARK warning, id persist
 repo="$(_mkrepo)"
 err="$(CLAUDE_AUTO_REPO="$repo" CLAUDE_CODE_SESSION_ID="sess-xyz" CLAUDE_CODE_CHILD_SESSION="1" \
   bash "$AUTO_SH" "$repo/docs/plans/p.md" 2>&1 >/dev/null)"
-sid="$(_ledger_sid "$repo")"
+sid="$(_run_record_sid "$repo")"
 if ! echo "$err" | grep -q "DARK" && [ "$sid" = "sess-xyz" ]; then pass; else fail "err=[$err] sid=[$sid]"; fi
 rm -rf "$repo"
 
-# Scenario 3 — real driving session: NO warning + the id is persisted on the ledger.
+# Scenario 3 — real driving session: NO warning + the id is persisted on the run-record.
 it "real driving session: no DARK warning, id persisted"
 repo="$(_mkrepo)"
 err="$(CLAUDE_AUTO_REPO="$repo" CLAUDE_CODE_SESSION_ID="sess-abc-123" CLAUDE_CODE_CHILD_SESSION="" \
   bash "$AUTO_SH" "$repo/docs/plans/p.md" 2>&1 >/dev/null)"
-sid="$(_ledger_sid "$repo")"
+sid="$(_run_record_sid "$repo")"
 if ! echo "$err" | grep -q "DARK" && [ "$sid" = "sess-abc-123" ]; then pass; else fail "err=[$err] sid=[$sid]"; fi
 rm -rf "$repo"
 

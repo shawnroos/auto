@@ -17,7 +17,7 @@
 #   5. attributed phase is the CURRENT phase (not upstream) → NOT detected
 #   6. two upstream phases both qualify → pick the MOST-diverse, tie → earliest
 #   7. escalation_message names the upstream phase + roles; None when not detected
-#   8. classify never reads ledger["loop_phase"] (args-only) — workflow-blind /
+#   8. classify never reads run_record["loop_phase"] (args-only) — workflow-blind /
 #      empty order yields no upstream phases → not detected
 
 set -uo pipefail

@@ -27,7 +27,7 @@ import subprocess
 from typing import Optional
 
 # Bound the evidence captured from a programmatic criterion so a chatty (or
-# binary-spewing) command can't bloat the ledger. Bytes, not chars — applied to
+# binary-spewing) command can't bloat the run-record. Bytes, not chars — applied to
 # the encoded output before decode.
 _EVIDENCE_CAP_BYTES = 8192
 # Default per-criterion subprocess timeout when the criterion omits timeout_sec.

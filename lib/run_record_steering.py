@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""auto ledger steering: the AGENT-FACING write verbs (R3/R5/R20/R21).
+"""auto run-record steering: the AGENT-FACING write verbs (R3/R5/R20/R21).
 
-The steering layer of the ledger surface. Where ``ledger_mutators`` holds the
+The steering layer of the run-record surface. Where ``run_record_mutators`` holds the
 engine's own scalar mutators, this module holds the verbs a DRIVING AGENT calls to
 reshape a live run: retire an obsolete step, add newly-discovered work, re-wire a
 dependency, and join the ownership set that the PreToolUse hooks gate on.
 
-Extracted from ``ledger_mutators`` when that file crossed the 1000-LOC budget. The
+Extracted from ``run_record_mutators`` when that file crossed the 1000-LOC budget. The
 split is conceptual, not merely mechanical: these four verbs are the surface the
 agent-native runtime exposes as tools, and they share one contract —
 
@@ -14,14 +14,14 @@ agent-native runtime exposes as tools, and they share one contract —
     INSIDE the flock and can REJECT.
 
 Every verb here wraps precondition + mutate + predicate-recompute in a single
-``ledger_core._with_locked_ledger`` call (I-1 / KTD-2). The model never holds the
+``run_record_core._with_locked_run_record`` call (I-1 / KTD-2). The model never holds the
 lock and never does a read-then-write across two invocations, so a slow agent
 deciding against a stale snapshot has its write rejected rather than merged.
 ``tests/unit/steering-verbs.test.sh`` asserts that structurally, per verb, via AST.
 
-Sits ABOVE ledger_mutators in the acyclic DAG
-(core ← mutators ← steering ← facade): imports ledger_core for the lock primitive
-and errors, and ledger_mutators for the two graph helpers ``add_step`` /
+Sits ABOVE run_record_mutators in the acyclic DAG
+(core ← mutators ← steering ← facade): imports run_record_core for the lock primitive
+and errors, and run_record_mutators for the two graph helpers ``add_step`` /
 ``reshape_deps`` reuse (``_sanitize_enumerated_depends_on``,
 ``_find_depends_on_back_edge``) rather than hand-rolling a second sanitizer or
 cycle detector. Imports NOTHING from producers or the facade.
@@ -32,21 +32,21 @@ from __future__ import annotations
 import os
 import sys
 
-# Same bootstrap-loader rationale as ledger_mutators: the ledger surface is loaded
+# Same bootstrap-loader rationale as run_record_mutators: the run-record surface is loaded
 # from many sites by file path (spec_from_file_location does NOT add lib/ to
-# sys.path), so a plain `import ledger_core` is not guaranteed to resolve.
+# sys.path), so a plain `import run_record_core` is not guaranteed to resolve.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import AGENT_SESSIONS_KEY, load_lib_module  # noqa: E402
 
-ledger_core = load_lib_module("ledger_core")
-ledger_mutators = load_lib_module("ledger_mutators")
+run_record_core = load_lib_module("run_record_core")
+run_record_mutators = load_lib_module("run_record_mutators")
 
 # The two graph helpers add_step / reshape_deps reuse. Bound at import so the
-# moved function bodies read exactly as they did in ledger_mutators.
-_sanitize_enumerated_depends_on = ledger_mutators._sanitize_enumerated_depends_on
-_find_depends_on_back_edge = ledger_mutators._find_depends_on_back_edge
+# moved function bodies read exactly as they did in run_record_mutators.
+_sanitize_enumerated_depends_on = run_record_mutators._sanitize_enumerated_depends_on
+_find_depends_on_back_edge = run_record_mutators._find_depends_on_back_edge
 
 
 
@@ -76,14 +76,14 @@ def force_skip(repo_root, run_id, step_id, reason):
 
     ``reason`` is REQUIRED and must be non-blank (R20) — a skip is auditable,
     never silent. It is stored on the step as ``skip_reason`` and rendered by
-    /auto-status. A blank/absent reason raises LedgerError and writes nothing.
+    /auto-status. A blank/absent reason raises RunRecordError and writes nothing.
     Because the edges live in ``_FORCE_SKIP_SOURCE_STATES`` rather than
     ALLOWED_TRANSITIONS, the reason cannot be bypassed by calling `transition()`.
 
     I-1 (KTD-2): the precondition check, the mutation, and the predicate
-    recompute all happen inside ONE ``_with_locked_ledger`` call, so a slow agent
+    recompute all happen inside ONE ``_with_locked_run_record`` call, so a slow agent
     deciding against a stale snapshot has its write REJECTED rather than merged.
-    This function performs no ledger read or write outside that closure; the
+    This function performs no run-record read or write outside that closure; the
     steering-verbs test asserts that structurally.
 
     Does NOT bury findings: a skipped step keeps its ``findings``, and
@@ -93,23 +93,23 @@ def force_skip(repo_root, run_id, step_id, reason):
     the done-floor is "no open gating findings" (R16), not "all work performed."
     """
     if reason is None or not str(reason).strip():
-        raise ledger_core.LedgerError(
+        raise run_record_core.RunRecordError(
             f"force_skip requires a non-blank reason for step {step_id!r} (R20)"
         )
     clean_reason = str(reason).strip()
 
-    def mutate(ledger):
-        step = ledger_core._find_step(ledger, step_id)
+    def mutate(run_record):
+        step = run_record_core._find_step(run_record, step_id)
         current = step.get("state")
         if current not in _FORCE_SKIP_SOURCE_STATES:
-            raise ledger_core.InvalidTransition(
+            raise run_record_core.InvalidTransition(
                 f"{current!r} -> 'terminal-skip' not permitted for step {step_id!r}"
             )
         step["state"] = "terminal-skip"
         step["skip_reason"] = clean_reason
         return step["state"]
 
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
 
 
 def add_step(repo_root, run_id, step_id, depends_on=None, phase=None):
@@ -117,17 +117,17 @@ def add_step(repo_root, run_id, step_id, depends_on=None, phase=None):
 
     The steering verb behind R3 (an agent that discovers the plan needs one more
     step of work adds it directly, instead of re-running the plan phase). The new
-    step is built through ``ledger_core._normalize_step`` — it enters the ledger
+    step is built through ``run_record_core._normalize_step`` — it enters the run-record
     with the SAME shape as an init-time or enumerate-time step (state defaults to
     ``pending``, the full findings/depends_on/attempt/skip_reason/… key set
     present), so no downstream reader has to special-case an agent-added step. We
     do NOT hand-assemble the step dict; the one step-builder is the SSOT for shape.
 
     I-1 (KTD-2): the duplicate-id check, the depends_on sanitize, the normalize
-    and the append all run inside ONE ``_with_locked_ledger`` call, and the
+    and the append all run inside ONE ``_with_locked_run_record`` call, and the
     predicate is recomputed in that same atomic snapshot. A slow agent adding a
     step against a stale view has its write REVALIDATED and REJECTED rather than
-    merged; this function performs no ledger read or write outside that closure
+    merged; this function performs no run-record read or write outside that closure
     (the steering-verbs lock-discipline test asserts this structurally).
 
     Two invariants, both enforced INSIDE the lock because either violation would
@@ -156,13 +156,13 @@ def add_step(repo_root, run_id, step_id, depends_on=None, phase=None):
     """
     deps = list(depends_on or [])
 
-    def mutate(ledger):
-        steps = ledger.setdefault("steps", [])
+    def mutate(run_record):
+        steps = run_record.setdefault("steps", [])
         existing_ids = {u.get("id") for u in steps}
         # DUPLICATE id: reject before any write — a colliding id is corruption
         # (ambiguous _find_step), not a stall we can repair by dropping.
         if step_id in existing_ids:
-            raise ledger_core.LedgerError(
+            raise run_record_core.RunRecordError(
                 f"cannot add step {step_id!r}: id already exists"
             )
         # Reuse the enumerate-path sanitizer as the ONE depends_on validator, but
@@ -173,21 +173,21 @@ def add_step(repo_root, run_id, step_id, depends_on=None, phase=None):
         )
         if dropped:
             _u, dep, reason = dropped[0]
-            raise ledger_core.LedgerError(
+            raise run_record_core.RunRecordError(
                 f"cannot add step {step_id!r}: depends_on edge to {dep!r} is "
                 f"{reason} (must name an existing step, and not itself)"
             )
         clean_deps = sanitized[0].get("depends_on", [])
         # Normalize through the ONE step-builder so an agent-added step is shape-
         # identical to an init/enumerate step (do NOT hand-build the dict).
-        loop_phase = ledger.get("loop_phase", "plan")
+        loop_phase = run_record.get("loop_phase", "plan")
         raw = {"id": step_id, "state": "pending", "depends_on": clean_deps}
         if phase is not None:
             raw["phase"] = phase
-        steps.append(ledger_core._normalize_step(raw, loop_phase=loop_phase))
+        steps.append(run_record_core._normalize_step(raw, loop_phase=loop_phase))
         return step_id
 
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
 
 
 def reshape_deps(repo_root, run_id, step_id, depends_on):
@@ -200,16 +200,16 @@ def reshape_deps(repo_root, run_id, step_id, depends_on):
     states unexpressible.
 
     I-1 (KTD-2): the step lookup, the unknown-dep + cycle checks and the write
-    all run inside ONE ``_with_locked_ledger`` call, predicate recomputed in the
+    all run inside ONE ``_with_locked_run_record`` call, predicate recomputed in the
     same snapshot. A reshape decided against a stale graph is REVALIDATED and
-    REJECTED, never merged; no ledger read/write happens outside the closure
+    REJECTED, never merged; no run-record read/write happens outside the closure
     (asserted by the steering-verbs lock-discipline test).
 
     Two rejections, both guarding readiness liveness:
       * an edge to an UNKNOWN step → rejected. A dangling dep leaves the step
         permanently un-``_is_ready`` (``dep is None -> False``); same class
         ``set_enumerated_steps`` sanitizes away, but a deliberate single reshape
-        surfaces it loudly. On rejection the ledger is untouched.
+        surfaces it loudly. On rejection the run-record is untouched.
       * a change that would introduce a CYCLE → rejected. A cycle makes every
         step on it mutually-unsatisfiable → never ready, never dispatched → a
         silent full-run livelock. The check runs the SHARED detector
@@ -223,15 +223,15 @@ def reshape_deps(repo_root, run_id, step_id, depends_on):
     """
     proposed = list(depends_on or [])
 
-    def mutate(ledger):
-        step = ledger_core._find_step(ledger, step_id)  # raises UnknownStep
-        steps = ledger.get("steps", [])
+    def mutate(run_record):
+        step = run_record_core._find_step(run_record, step_id)  # raises UnknownStep
+        steps = run_record.get("steps", [])
         all_ids = {u.get("id") for u in steps}
         # UNKNOWN-dep guard: every proposed edge must name a real step, else the
         # reshaped step can never become ready.
         for d in proposed:
             if not isinstance(d, str) or d not in all_ids:
-                raise ledger_core.LedgerError(
+                raise run_record_core.RunRecordError(
                     f"cannot reshape {step_id!r}: depends_on edge to {d!r} names "
                     f"no existing step"
                 )
@@ -247,14 +247,14 @@ def reshape_deps(repo_root, run_id, step_id, depends_on):
             adj[uid] = [d for d in edges if d in all_ids]
         back = _find_depends_on_back_edge(adj)
         if back is not None:
-            raise ledger_core.LedgerError(
+            raise run_record_core.RunRecordError(
                 f"cannot reshape {step_id!r}: the change introduces a dependency "
                 f"cycle (back edge {back[0]!r} -> {back[1]!r})"
             )
         step["depends_on"] = proposed
         return proposed
 
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
 
 
 _MAX_AGENT_SESSIONS = 256
@@ -276,7 +276,7 @@ def register_session(repo_root, run_id, session_id):
     Idempotent — re-registering an already-present id is a no-op, so a sub-agent
     that retries its own start does not grow the set. Bounded at
     ``_MAX_AGENT_SESSIONS`` so a pathological re-dispatch loop cannot grow the
-    ledger without limit; the oldest entry is evicted first.
+    run-record without limit; the oldest entry is evicted first.
 
     EVICTION IS A FIFO HEURISTIC, NOT A LIVENESS GUARANTEE (adversarial/security
     review, v0.13.0). The oldest-registered id is the one MOST LIKELY already
@@ -289,10 +289,10 @@ def register_session(repo_root, run_id, session_id):
     wave, idempotent retries don't grow the set), so eviction should never fire in
     a normal run; if it does, that run is anomalous. This is defense-in-depth
     against a MISBEHAVING agent, not a sandbox against a MALICIOUS one — an agent
-    with Bash can edit the ledger JSON directly regardless.
+    with Bash can edit the run-record JSON directly regardless.
 
     I-1: read + membership check + append happen inside ONE
-    ``_with_locked_ledger`` call. Two sub-agents registering concurrently
+    ``_with_locked_run_record`` call. Two sub-agents registering concurrently
     serialize; neither loses the other's id.
 
     CALLER-TRUST: the CLI verb accepts an arbitrary ``session_id`` arg, so it is
@@ -307,19 +307,19 @@ def register_session(repo_root, run_id, session_id):
     carve-out (see on-pretooluse-action.py::_owns_session).
     """
     if not session_id or not isinstance(session_id, str):
-        raise ledger_core.LedgerError(
+        raise run_record_core.RunRecordError(
             f"register_session requires a non-empty session_id string: {session_id!r}"
         )
 
-    def mutate(ledger):
-        existing = ledger.get(AGENT_SESSIONS_KEY)
+    def mutate(run_record):
+        existing = run_record.get(AGENT_SESSIONS_KEY)
         if not isinstance(existing, list):
             existing = []
         if session_id not in existing:
             existing.append(session_id)
             if len(existing) > _MAX_AGENT_SESSIONS:
                 existing = existing[-_MAX_AGENT_SESSIONS:]
-        ledger[AGENT_SESSIONS_KEY] = existing
+        run_record[AGENT_SESSIONS_KEY] = existing
         return list(existing)
 
-    return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)

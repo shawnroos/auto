@@ -3,9 +3,9 @@
 #
 # WHY THIS EXISTS (U9 spike — docs/research/native-goal-mechanism-spike.md):
 #   Native `/goal` is a CLOSED, model-judged continuation loop with NO external
-#   predicate handoff — the engine CANNOT feed it the ledger result. So
+#   predicate handoff — the engine CANNOT feed it the run-record result. So
 #   auto ships its OWN thin Stop hook. This is NOT optional. Its
-#   verdict is DETERMINISTIC and engine-owned (read from the ledger's I-1-fresh
+#   verdict is DETERMINISTIC and engine-owned (read from the run-record's I-1-fresh
 #   `exit_predicate_result`), consistent with Shawn's
 #   `feedback_deterministic_over_probabilistic_v1` preference.
 #
@@ -25,14 +25,14 @@
 #   via systemMessage. The deterministic gate fires ONCE per stop attempt.
 #
 # ACTIVE-RUN POLICY:
-#   There may be N ledgers under <repo>/.claude/auto/. We BLOCK if ANY has
+#   There may be N run-records under <repo>/.claude/auto/. We BLOCK if ANY has
 #   `loop_phase != "done" AND exit_predicate_result.met == false`. The reason
 #   names the offending run(s). This matches goal-status.sh's per-run verdict.
 #   The all_steps_terminal gate is honored implicitly: `met` already requires
 #   `all_steps_terminal == true` (schema §5 I-2), so a lurking stalled step
 #   (counters zero) keeps `met == false` and the stop stays blocked.
 #
-# READS THE LEDGER LOCK-FREE: the atomic-rename invariant gives a consistent
+# READS THE RUN_RECORD LOCK-FREE: the atomic-rename invariant gives a consistent
 # snapshot; no flock => no contention with a slow writer => trivially under any
 # hook timeout (the 10s cmux budget).
 #

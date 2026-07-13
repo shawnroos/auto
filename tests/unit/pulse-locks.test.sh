@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # auto U4 unit test: lib/pulse.py — one ScheduleWakeup-paced advance
-# of the ledger. The pulse reads ALL loop state from the disk ledger, does ONE
+# of the run-record. The pulse reads ALL loop state from the disk run-record, does ONE
 # smallest-useful advance inside a try/except, persists atomically via
-# ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
+# run_record.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
 # ScheduleWakeup — that is a model tool, not a CLI).
 #
 # SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
-# and HOME isolation inline, mirroring tests/unit/ledger.test.sh. It does NOT
+# and HOME isolation inline, mirroring tests/unit/run-record.test.sh. It does NOT
 # source claude-modes' test-helpers nor auto shared helpers (those
 # are U2's, not yet present). When U2 lands, this file may migrate to them.
 #
@@ -17,13 +17,13 @@
 #      stalled; it + transitive dependents halted; independent siblings advance
 #      (Covers AE4)
 #   4. backend raises mid-pulse -> step.last_error recorded + step marked stalled;
-#      ledger never half-written; + deliberate-fail control proving the backend
+#      run-record never half-written; + deliberate-fail control proving the backend
 #      genuinely raises (so the clean-return is real try/except capture)
 #   5. pulse NEVER dispatches and NEVER writes verdicts: a work-loop pulse that
 #      sees a self-written verdict reads it + applies a fix (verdict-returned ->
 #      fixed) but makes NO dispatch call and writes NO finding
 #   6. non-stateless safety: invoke the pulse twice from FRESH processes against
-#      the same ledger -> it advances purely from ledger state
+#      the same run-record -> it advances purely from run-record state
 #   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
 #      ACROSS fresh-process pulses WITHOUT re-planning. The pulse persists the
 #      executed plan_step (schema §3.1) so the next pulse reads it instead of
@@ -49,7 +49,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PULSE_PY="${AUTO_ROOT}/lib/pulse.py"
 PULSE_SH="${AUTO_ROOT}/lib/pulse.sh"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # ── Minimal inline test harness ────────────────────────────────────────────
@@ -83,27 +83,27 @@ REPO="${SANDBOX}/repo"
 mkdir -p "$REPO"
 
 # ── tiny python helpers run against the modules ────────────────────────────
-# init <run> <json-steps> [backend] [phase]  — create a ledger with given steps.
-ledger_init() {
+# init <run> <json-steps> [backend] [phase]  — create a run-record with given steps.
+run_record_init() {
   local run="$1" steps_json="$2" backend="${3:-ce}" phase="${4:-work}"
-  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$steps_json" "$backend" "$phase" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, steps_json, backend, phase, ledger_py = sys.argv[1:7]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, steps_json, backend, phase, run_record_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.init_ledger(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
+m.init_run_record(repo, run, backend=backend, steps=json.loads(steps_json), loop_phase=phase)
 PYEOF
 }
 
-# field <run> <python-expr-on-ledger-named-L>  — print a value from the ledger.
-ledger_field() {
+# field <run> <python-expr-on-run-record-named-L>  — print a value from the run-record.
+run_record_field() {
   local run="$1" expr="$2"
-  "$PY" - "$REPO" "$run" "$expr" "$LEDGER_PY" <<'PYEOF'
+  "$PY" - "$REPO" "$run" "$expr" "$RUN_RECORD_PY" <<'PYEOF'
 import json, sys, importlib.util
-repo, run, expr, ledger_py = sys.argv[1:5]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+repo, run, expr, run_record_py = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-L = m.read_ledger(repo, run)
+L = m.read_run_record(repo, run)
 print(eval(expr))
 PYEOF
 }
@@ -134,7 +134,7 @@ echo "pulse-locks.test.sh"
 #       task #31's "unfenced" half.
 
 it "task #31 GREEN: double-drive guard fires — second pulse raises _PulseLockHeld while first holds lock"
-ledger_init "pulse-lock-green" '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"x"}]}]' >/dev/null 2>&1
+run_record_init "pulse-lock-green" '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"minor","note":"x"}]}]' >/dev/null 2>&1
 green_result="$("$PY" - "$REPO" "pulse-lock-green" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, pulse_py = sys.argv[1:4]
@@ -152,7 +152,7 @@ PYEOF
 assert_eq "blocked" "$green_result"
 
 it "task #31 DELIBERATE-FAIL: with the hatch fully enabled (sentinel + var) the inner lock acquires (proves the guard is real and the hatch is reachable)"
-ledger_init "pulse-lock-disabled" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
+run_record_init "pulse-lock-disabled" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
 disabled_result="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 "$PY" - "$REPO" "pulse-lock-disabled" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util
 repo, run, pulse_py = sys.argv[1:4]
@@ -173,10 +173,10 @@ PYEOF
 assert_eq "both-acquired" "$disabled_result"
 
 it "task #31 FENCE: hatch alone WITHOUT the harness sentinel does NOT disable the guard (production-safety)"
-ledger_init "pulse-lock-fence" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
+run_record_init "pulse-lock-fence" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
 # CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 is exported BUT CLAUDE_AUTO_TEST_HARNESS is
 # explicitly UNSET. The fence at lib/_bootstrap.py::test_hatch_enabled (and the
-# local copy in lib/ledger.py) requires BOTH; with only one, the hatch is
+# local copy in lib/run_record.py) requires BOTH; with only one, the hatch is
 # inert and the guard fires.
 fence_result="$(env -u CLAUDE_AUTO_TEST_HARNESS CLAUDE_AUTO_TEST_NO_PULSE_LOCK=1 "$PY" - "$REPO" "pulse-lock-fence" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util

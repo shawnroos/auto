@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """auto: /auto-status logic behind status.sh.
 
-READ-ONLY. Parses an optional run-id, reads the durable ledger(s) via ledger.py,
+READ-ONLY. Parses an optional run-id, reads the durable run_record(s) via run_record.py,
 and prints a human-readable status: loop_phase (+ plan_step), the cached
 exit_predicate_result (blockers / majors / minors / gaps_open / met), per-step
 states, the driver, last_beat_at + liveness, and any stalled steps with their
-last_error cause. It NEVER mutates the ledger or arms a pulse.
+last_error cause. It NEVER mutates the run-record or arms a pulse.
 
 Argument forms (parsed HERE, never in the .md body, per memory
 `feedback_slash_command_arg_substitution`):
@@ -13,7 +13,7 @@ Argument forms (parsed HERE, never in the .md body, per memory
     (no args)        report the only active run; if >1 active, LIST them.
     <run>            report that specific run.
 
-Mirrors resume.py's shape: parse argv positionally, route through ledger.py,
+Mirrors resume.py's shape: parse argv positionally, route through run_record.py,
 exit 0 on a clean surface; only a genuine failure (unknown run-id) exits
 non-zero so the operator sees it.
 
@@ -33,8 +33,8 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     is_iteration_disabled,
     iter_active_runs,
-    iter_worktree_ledgers,
-    load_ledger,
+    iter_worktree_run_records,
+    load_run_record,
     load_lib_module,
     resolve_repo,
 )
@@ -53,7 +53,7 @@ _resolve_repo = resolve_repo
 
 
 def _should_render_iteration(led: dict) -> bool:
-    """v0.3.0 F1 — render the Iteration section iff the ledger shows ANY
+    """v0.3.0 F1 — render the Iteration section iff the run-record shows ANY
     iteration signal.
 
     Per F1 task: render WHEN any of:
@@ -64,9 +64,9 @@ def _should_render_iteration(led: dict) -> bool:
         breached at exit).
 
     Otherwise the section is OMITTED — non-iteration workflows (a1, W, legacy
-    v0.2.x a2/a4) stay quiet. ``init_ledger`` always sets ``iteration``=None
-    by default, so the check is ``bool(ledger.get("iteration"))``, NOT
-    ``"iteration" in ledger`` — the key is always present.
+    v0.2.x a2/a4) stay quiet. ``init_run_record`` always sets ``iteration``=None
+    by default, so the check is ``bool(run_record.get("iteration"))``, NOT
+    ``"iteration" in run_record`` — the key is always present.
 
     G7 (ADV-R2-2) — SHAPE-DEFENSIVE on the READ chokepoint. A corrupt
     ``iteration`` (non-dict, non-None) or stringified ``iteration_attempts``
@@ -114,7 +114,7 @@ def _render_iteration_section(led: dict) -> None:
     via ``_should_render_iteration``.
 
     Fields (per F1 task):
-      • gate_step — ledger["iteration"]["gate_step"]
+      • gate_step — run_record["iteration"]["gate_step"]
       • attempts  — iteration_attempts / iteration["bound"]["max_attempts"]
       • wall_time — active_wall_seconds / iteration["bound"].get("max_wall_seconds", "—")
       • emit_count — iteration_emit_count (monotonic counter)
@@ -203,7 +203,7 @@ def _render_iteration_section(led: dict) -> None:
         )
 
 
-def _liveness(ledger, led: dict) -> str:
+def _liveness(run_record, led: dict) -> str:
     """Human note on last_beat_at vs the orphan GRACE."""
     loop = led.get("loop") or {}
     last_beat = loop.get("last_beat_at")
@@ -218,7 +218,7 @@ def _liveness(ledger, led: dict) -> str:
         return f"{last_beat} (unparseable)"
     now = datetime.datetime.now(datetime.timezone.utc)
     age = int((now - parsed).total_seconds())
-    grace = getattr(ledger, "GRACE_SECONDS", 4200)
+    grace = getattr(run_record, "GRACE_SECONDS", 4200)
     flag = " — STALE (> GRACE)" if age > grace else ""
     return f"{last_beat} ({age}s ago, GRACE={grace}s){flag}"
 
@@ -228,7 +228,7 @@ def _print_skip_reason(step: dict, state: str) -> None:
 
     A skip is auditable in the operator's face, never silent (mirrors the finding
     / bound_exit sub-bullet shape). Only `terminal-skip` steps carry a
-    `skip_reason`; a legacy ledger or a never-skipped step reads None and prints
+    `skip_reason`; a legacy run-record or a never-skipped step reads None and prints
     nothing. Extracted from `_print_run` to keep it inside the function budget.
     """
     if state != "terminal-skip":
@@ -238,7 +238,7 @@ def _print_skip_reason(step: dict, state: str) -> None:
         sys.stdout.write(f"        skip_reason: {reason}\n")
 
 
-def _print_run(ledger, run_id: str, led: dict) -> None:
+def _print_run(run_record, run_id: str, led: dict) -> None:
     loop = led.get("loop") or {}
     epr = led.get("exit_predicate_result") or {}
     steps = led.get("steps") or []
@@ -270,7 +270,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     )
     sys.stdout.write(
         f"  driver: {loop.get('driver', '?')}    "
-        f"last_beat_at: {_liveness(ledger, led)}\n"
+        f"last_beat_at: {_liveness(run_record, led)}\n"
     )
 
     # Cached exit predicate — READ, never re-derive.
@@ -305,7 +305,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         scale = led.get("backend_scale", "three-tier")
         for u in steps:
             try:
-                terminal = ledger.step_is_terminal(u, scale)
+                terminal = run_record.step_is_terminal(u, scale)
             except Exception:
                 terminal = False
             mark = "terminal" if terminal else "active"
@@ -320,7 +320,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
                     f"        finding: {f.get('severity')} — {f.get('note', '')}\n"
                 )
             # v0.3.0 F1: bound_exit sub-bullet — surfaces a forced exit driven
-            # by an iteration-bound breach (KTD §D / ledger.set_bound_override
+            # by an iteration-bound breach (KTD §D / run_record.set_bound_override
             # writes `dispatch_context.bound_override = {bound, original_decision,
             # at}`). Includes original_decision so the rendered surface matches
             # the stored payload exactly (fix-the-class — no asymmetry between
@@ -366,7 +366,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
 
 
 def run(argv) -> int:
-    ledger = load_ledger()
+    run_record = load_run_record()
     repo_root = _resolve_repo()
 
     rest = list(argv)
@@ -374,30 +374,30 @@ def run(argv) -> int:
 
     if run_arg:
         try:
-            led = ledger.read_ledger(repo_root, run_arg)
-        except ledger.LedgerNotFound as exc:
+            led = run_record.read_run_record(repo_root, run_arg)
+        except run_record.RunRecordNotFound as exc:
             sys.stderr.write(f"status: {exc}\n")
             return 1
         run_id = led.get("run_id") or run_arg
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     # No run-id: resolve the active run, or list if ambiguous / report none.
     active = list(iter_active_runs(repo_root))
     if not active:
-        all_runs = list(iter_worktree_ledgers(repo_root))
+        all_runs = list(iter_worktree_run_records(repo_root))
         if not all_runs:
             sys.stdout.write("status: no auto run found in this repo.\n")
             return 0
         # All runs are done — show the most recent one (last by sorted slug).
         run_id, led = all_runs[-1]
         sys.stdout.write("status: no active run; showing the most recent (done):\n")
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     if len(active) == 1:
         run_id, led = active[0]
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     sys.stdout.write("status: multiple active runs — specify one:\n")

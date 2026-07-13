@@ -62,7 +62,7 @@ tick=done
 seam=done
 unit=done
 recipe=done
-ledger=pending"
+ledger=done"
 
 # ─── SCAN SCOPE ─────────────────────────────────────────────────────────────
 # The shipped trees that must speak only the new vocabulary once a term is
@@ -87,23 +87,32 @@ SCAN_ROOTS=(lib skills commands docs/contracts tests workflows presets .claude/h
 #     lib/format_compat.py: these are the files whose JOB is to know both.
 #   * This test file itself — it names every old term in prose/patterns.
 #
-# U7 REMOVED `lib/ledger.py` + `lib/ledger.sh` from this list. They were added in
-# U6 in ANTICIPATION of becoming KTD-4 forwarding stubs — but that only happens at
-# U9, when `ledger.py` → `run_record.py` and `ledger.py` is left behind as the
-# re-export shim. TODAY they are the REAL facade and the REAL bash entrypoint, and
-# `lib/ledger.py` owns `_VERBS` — the CLI verb registry U7 renames (`add-unit` →
-# `add-step`, `set-enumerated-units` → `set-enumerated-steps`). Whitelisting it made
-# the audit structurally unable to police the `unit` term inside the one file that
-# defines the term's entire CLI surface. Both are clean for every currently-`done`
-# term, so they scan like any other file. **U9 re-adds `lib/ledger.py`** (and
-# `lib/ledger.sh`) here at the moment they actually become stubs.
+# U9 RE-ADDS `lib/ledger.py` + `lib/ledger.sh`. They were on this list in U6 in
+# ANTICIPATION of becoming KTD-4 forwarding stubs, and U7 REMOVED them because that
+# had not happened yet: until U9 they were the REAL facade and the REAL bash
+# entrypoint, and `lib/ledger.py` owned `_VERBS` — the CLI verb registry U7 renamed
+# (`add-unit` → `add-step`). Whitelisting a LIVE file makes the audit structurally
+# unable to police the term inside the one file that defines its entire CLI surface.
+# As of U9 they ARE the stubs (`lib/run_record.py` / `lib/run_record.sh` are the real
+# thing), so the entries are finally EARNED rather than premature. Same story as
+# `lib/recipes-list.sh`, which U8 earned the same way.
 #
-# U8 NOTE — `lib/recipes-list.sh` was on this list from U1 in ANTICIPATION (the same
-# mistake U7 found with `lib/ledger.py`): until U8 it was the REAL picker data layer,
-# and whitelisting it blinded the audit to a live file. As of U8 it IS the KTD-4
-# forwarding stub (2 lines, execs `lib/workflows-list.sh`), so the entry is now
-# earned rather than premature. `lib/ledger.py` / `lib/ledger.sh` are still ABSENT
-# here — they remain the real facade until U9.
+# `lib/ledger.py` is NOT a 2-line exec forwarder like the others — it is a
+# module-importable RE-EXPORT shim (KTD-4), because by-path loaders
+# (`spec_from_file_location("ledger", …)`) reach for SYMBOLS on it
+# (`.ledger_path`) inside an `except: sys.exit(0)`, where a missing name fails
+# SILENTLY OPEN. It therefore legitimately spells the whole retired surface.
+#
+# `tests/unit/run-record-stub.test.sh` is whitelisted for the SAME reason
+# `tests/unit/format-compat.test.sh` is: its JOB is to know both vocabularies. It
+# pins that the retired surface still resolves — the by-path
+# `spec_from_file_location("ledger", …)` load, `.ledger_path` / `.LedgerError`
+# symbol access, the byte-clean legacy CLI — and it cannot assert any of that
+# without SPELLING every retired name. (A path-whitelisted file can never fail this
+# audit, so nothing here would notice if the shims broke — but that is exactly what
+# that test is for: it is the thing doing the policing, not a thing needing to be
+# policed. If the shim breaks, the test goes red on behaviour, which is stronger
+# than a grep.)
 GLOBAL_PATH_WHITELIST=(
   'lib/format_compat.py'
   'lib/tick.sh'
@@ -111,9 +120,12 @@ GLOBAL_PATH_WHITELIST=(
   'lib/adapter-ce.sh'
   'lib/adapter-native.sh'
   'lib/recipes-list.sh'
+  'lib/ledger.py'
+  'lib/ledger.sh'
   'commands/auto-tick.md'
   'tests/unit/format-compat.test.sh'
   'tests/integration/format-v1-compat.test.sh'
+  'tests/unit/run-record-stub.test.sh'
   'tests/unit/vocabulary-audit.test.sh'
 )
 
@@ -162,16 +174,23 @@ term_status() {
   printf '%s\n' "$TERM_STATUS" | sed -n "s/^$1=//p"
 }
 
-# audit_term_hits <term> → prints the filtered (non-whitelisted) grep hits for
-# the term's OLD identifier, one `path:lineno:content` per line. Empty output
+# audit_term_hits <term> [root] → prints the filtered (non-whitelisted) grep hits
+# for the term's OLD identifier, one `path:lineno:content` per line. Empty output
 # means the term is clean. Ignores the status table — the caller decides
 # whether to run it (so the deliberate-fail control can force a term).
+#
+# [root] defaults to the real tree. Scenario 2 (the deliberate-fail control) passes
+# a SYNTHETIC tree instead — every whitelist below is keyed on the RELATIVE
+# `path:lineno:` prefix of a hit, so the exact same filter pipeline applies to
+# either root. That is the point: the control must exercise the REAL filters, not a
+# reimplementation of them, or it proves nothing about the audit that ships.
 audit_term_hits() {
   local term="$1"
+  local root="${2:-$AUTO_ROOT}"
   local regex; regex="$(regex_for_term "$term")"
 
   local raw
-  raw="$(cd "$AUTO_ROOT" && grep -rniE "$regex" "${SCAN_ROOTS[@]}" \
+  raw="$(cd "$root" && grep -rniE "$regex" "${SCAN_ROOTS[@]}" \
           --include='*.py' --include='*.sh' --include='*.md' --include='*.json' \
           --exclude-dir='__pycache__' \
           --exclude='*.pyc' \
@@ -306,7 +325,7 @@ audit_term_hits() {
           # two tokens, only in the one test that asserts they are gone — any OTHER
           # stale `unit` in that file still fails the audit. (Matched on $0, the RAW
           # line: `p` has already had tests/unit scrubbed to @TIER@.)
-          if ($0 ~ /^tests\/unit\/ledger-cli-feedback\.test\.sh:/) {
+          if ($0 ~ /^tests\/unit\/run-record-cli-feedback\.test\.sh:/) {
             gsub(/add-unit|set-enumerated-units/, "@RETIRED@", p)
           }
 
@@ -429,43 +448,22 @@ audit_term_hits() {
              | grep -vE '^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh):[0-9]+:.*(auto-tick|tick\.sh)' \
              || true)"
       ;;
-    emitter)
-      # (U6 REMOVED the TEMP persisted-key exemption here — the JSON key
-      # `phase_transitions[].emitter` is now flipped ON DISK to `.producer`. The
-      # only module that may still spell it is lib/format_compat.py, which is
-      # path-whitelisted.)
-      #
-      # Two-term MODULE FAMILIES whose final name lands in a later unit (KTD-3):
-      # each gets ONE file move, in the unit that owns its FAMILY, not two.
-      #   * lib/unit_emitters.py → lib/step_producers.py — LANDED IN U7 (the `unit`
-      #     family). Its sibling test moved with it (unit-emitters.test.sh →
-      #     step-producers.test.sh, summary line updated so tests/run.sh still
-      #     tallies it), and every `load_lib_module("unit_emitters")` call site was
-      #     repointed. The `unit_emitters` token no longer exists in the tree.
-      #   * lib/ledger_emitters.py → lib/run_record_producers.py — STILL PENDING
-      #     (U9, the `ledger` family). Until then the module name, its sibling test
-      #     (ledger-emitters.test.sh), and every `load_lib_module("ledger_emitters")`
-      #     call site legitimately carry the `emitters` token.
-      #
-      # NB (U6): the `_`-prefixed forms became VISIBLE to this audit only when
-      # regex_for_term gained its `_` alternative — a bare `\bemitter` never
-      # matched `ledger_emitters` at all. So this exemption is load-bearing; it is
-      # scoped to the `[_-]emitters` token so any un-renamed emitter ROLE prose or
-      # symbol still fails. This branch drops out entirely at U9.
-      #
-      # TOKEN-SCRUBBED + PATH-ANCHORED (U8 hardening). The old form was an UNANCHORED
-      # whole-line `grep -vE '[_-]emitters'` — it dropped ANY line ANYWHERE in the tree
-      # that merely contained the substring `_emitters`, so a stale `emitter` symbol
-      # sharing a line with `ledger_emitters` was invisible. Now: only the two-term
-      # module-family TOKENS are scrubbed, only in the files that legitimately carry
-      # them, and any surviving `emitter` still fails. This branch disappears at U9.
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          gsub(/ledger_emitters|ledger-emitters/, "@FAMILY@", p)
-          if (tolower(p) ~ /(^|[^a-z0-9])emitter/) print $0
-        }' || true)"
-      ;;
+    # NB: there is deliberately NO `emitter` branch any more. U1–U8 carried one to
+    # exempt the two-term MODULE FAMILIES (KTD-3) whose final name lands in the unit
+    # that owns their FAMILY, not their first term:
+    #   * lib/unit_emitters.py  → lib/step_producers.py        — landed U7 (`unit`)
+    #   * lib/ledger_emitters.py → lib/run_record_producers.py — landed U9 (`ledger`)
+    # Both have now moved, so NO file in the tree spells `[_-]emitters` and the
+    # exemption has nothing left to exempt. An empty-but-present branch is worse than
+    # no branch: it is a standing invitation for a future stale `emitter` to be waved
+    # through. Deleted at U9, as U1 said it would be.
+    # NB: there is deliberately NO `ledger` branch. Every file that legitimately
+    # spells the retired run-record surface is PATH-whitelisted above — the two KTD-4
+    # stubs (`lib/ledger.py`, `lib/ledger.sh`) and the one test whose job is to prove
+    # they still resolve (`tests/unit/run-record-stub.test.sh`). Nothing else in the
+    # tree may name the term, so there is no token to scrub and no branch to write.
+    # The contract's retired-identifier map earns the `<!--legacy-->` exemption
+    # instead — and Scenario 1b POLICES that exemption row by row.
   esac
 
   [ -z "$raw" ] && return 0
@@ -544,8 +542,12 @@ while IFS= read -r hit; do
   # Skip the HEADER row — identified by its FIRST CELL, not by a substring anywhere
   # on the line (a data row must never be able to opt out of this check by quoting
   # the header's wording in a later column). `key` heads the key map; `location`
-  # heads the U8 tier-dir map.
-  case "$n1" in "legacy (v1) key"|"legacy (v1) location") continue ;; esac
+  # heads the U8 tier-dir map; `identifier` heads the U9 code map (the run-record
+  # rename touched no persisted key, so its legacy table maps SYMBOLS, not keys —
+  # but it claims the same `<!--legacy-->` exemption, so it gets the same policing).
+  case "$n1" in
+    "legacy (v1) key"|"legacy (v1) location"|"legacy (v1) identifier") continue ;;
+  esac
   # (a) the v1 cell must name one of the 8 retired terms
   if ! printf '%s' "$n1" \
        | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger)'; then
@@ -564,39 +566,95 @@ else
   fail "the <!--legacy--> exemption is being claimed by rows that are not legacy:${legacy_bad}"
 fi
 
-# ─── Scenario 2: deliberate-fail control — force a still-PENDING term `done` ──
-# Probe a term that has NOT yet been renamed (its old identifier still lives all
-# over the tree): auditing it as `done` MUST produce hits that name offending
-# files. This runs on EVERY invocation and proves the audit is not vacuous — a
-# 0-assertion test or a never-firing grep would report green while checking
-# nothing. It does NOT touch the real status table above.
+# ─── Scenario 2: deliberate-fail control — a PLANTED stale identifier trips the audit ──
+# U9 RE-GROUNDED THIS CONTROL. Every term is now `done` (`ledger` was the last), so the
+# old shape — "audit a term that is still PENDING and watch its old identifier light up
+# the tree" — has no term left to point at. That is precisely the moment a green
+# Scenario 1 becomes worthless: a broken grep, a regex that stopped matching, a
+# whitelist that swallowed the whole tree, a typo'd SCAN_ROOTS — every one of those
+# failure modes reports "no stale identifiers found" and looks EXACTLY like success.
+# An audit with nothing left to catch must prove it can still catch.
 #
-# NB: this MUST track a term whose real status is still `pending`. Once a term is
-# renamed it no longer produces non-whitelisted hits, so the control would go
-# vacuous itself; each rename unit re-points this to the next still-pending term.
-# U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`;
-# U5 renamed `tick`; U6 renamed `seam`; U7 renamed `unit`; U8 renamed `recipe`, so
-# it now probes `ledger` — the LAST pending term (U9). When U9 lands there is no
-# pending term left to probe: the control must then be re-pointed at a synthetic
-# probe (or the file's anti-vacuity proof re-grounded), NOT silently deleted.
-DF_TERM="ledger"
-it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
-df_hits="$(audit_term_hits "$DF_TERM")"
-if [ -n "$df_hits" ]; then
-  # Confirm the output actually NAMES files (path:lineno:… shape), not just
-  # non-empty noise. NB: no `grep -q` here — a large hit set (e.g. `adapter`,
-  # >64KB) would make grep early-exit and SIGPIPE the upstream `printf`, which
-  # `set -o pipefail` then reports as a pipeline failure (a false negative that
-  # only shows up once the probed term is populous enough to exceed the pipe
-  # buffer). Reading all input with a plain `grep … >/dev/null` avoids it.
-  if printf '%s\n' "$df_hits" | grep -E '^[^:]+:[0-9]+:' >/dev/null; then
-    pass
-  else
-    fail "audit fired but did not name files: ${df_hits}"
+# So the control moves from a pending TERM to a synthetic TREE. For each of the 8
+# retired terms we PLANT a file that reintroduces that term's old identifier, then run
+# the REAL audit pipeline over it — same regex_for_term, same whitelists, same awk
+# scrubs (audit_term_hits takes the root as a parameter precisely so the control cannot
+# drift into testing a reimplementation). Each term MUST produce hits that NAME the
+# planted file. Runs on every invocation; proves the harness is live for all 8 terms,
+# not just whichever one happened to be pending.
+#
+# Scenario 2b then proves the filter DISCRIMINATES: the same stale content, planted at
+# a WHITELISTED path, must produce NO hits. Without 2b, an audit that simply failed on
+# everything would sail through 2a.
+df_tmp="$(mktemp -d)"
+trap 'rm -rf "$df_tmp"' EXIT
+mkdir -p "$df_tmp/lib"
+
+# One plant per retired term, shaped like real CODE (a symbol, not prose) — a stale
+# identifier is how a term actually comes back. Includes the leading-underscore form,
+# the class regex_for_term's `_` alternative exists to catch (U6 hardening).
+# Deliberately placed in lib/ under a name no whitelist entry is a substring of.
+DF_PLANTS=(
+  'orchestrator:orch = load_lib_module("orchestrator")  # _orchestrator_for'
+  'emitter:_maybe_emitter = rec["phase_transitions"][0]["emitter"]'
+  'adapter:from adapter_ops import VALID_ADAPTER_OPS  # adapter_scale'
+  'tick:TICK_COMMAND = "/auto:auto-tick"  # tick_advance'
+  'seam:_try_seam_pause(run, seam_paused=True)  # phase == "seam"'
+  'unit:add_unit(run, unit_id, enumerated_units=[])'
+  'recipe:raise RecipeError("bad recipe")  # recipe_validate'
+  'ledger:led = ledger.read_ledger(repo, run)  # _with_locked_ledger'
+)
+for _plant in "${DF_PLANTS[@]}"; do
+  _term="${_plant%%:*}"
+  printf '%s\n' "${_plant#*:}" > "$df_tmp/lib/df_probe_${_term}.py"
+done
+
+df_bad=""
+for _plant in "${DF_PLANTS[@]}"; do
+  _term="${_plant%%:*}"
+  _hits="$(audit_term_hits "$_term" "$df_tmp")"
+  # Must NAME the planted file in `path:lineno:content` shape — not merely be
+  # non-empty. NB no `grep -q`: an early exit SIGPIPEs the upstream `printf`, which
+  # `set -o pipefail` reports as a pipeline failure. Read all input.
+  if ! printf '%s\n' "$_hits" \
+       | grep -E "^lib/df_probe_${_term}\.py:[0-9]+:" >/dev/null; then
+    df_bad="${df_bad}
+    [${_term}] the audit did NOT catch a planted stale identifier (hits: ${_hits:-<none>})"
   fi
+done
+
+it "deliberate-fail: a planted stale identifier trips the audit for EVERY retired term"
+if [ -z "$df_bad" ]; then
+  pass
 else
-  fail "audit of '${DF_TERM}' found NO hits — the harness is vacuous"
+  fail "the audit is VACUOUS — it no longer catches a reintroduced old identifier:${df_bad}"
 fi
+
+# ─── Scenario 2b: the whitelist still DISCRIMINATES (2a is not "everything fails") ──
+# Plant the SAME stale `ledger` content at two WHITELISTED paths — `lib/format_compat.py`
+# (the permanent both-vocabularies module) and `lib/ledger.py` (the KTD-4 re-export
+# shim). The audit must report NOTHING for them while STILL reporting the unwhitelisted
+# probe from 2a. If this ever fails, the path whitelist has stopped applying — and every
+# stub/shim in the tree is about to fail the audit for doing its job.
+printf 'led = ledger.read_ledger(repo, run)  # _with_locked_ledger\n' \
+  > "$df_tmp/lib/format_compat.py"
+printf 'ledger_path = _rr.run_record_path  # LedgerError = _rr.RunRecordError\n' \
+  > "$df_tmp/lib/ledger.py"
+
+it "the path whitelist still exempts the shim/stub paths (the audit discriminates)"
+wl_hits="$(audit_term_hits ledger "$df_tmp")"
+wl_bad=""
+printf '%s\n' "$wl_hits" | grep -E '^lib/(format_compat|ledger)\.py:' >/dev/null \
+  && wl_bad="the whitelist did NOT exempt lib/format_compat.py / lib/ledger.py"
+printf '%s\n' "$wl_hits" | grep -E '^lib/df_probe_ledger\.py:' >/dev/null \
+  || wl_bad="${wl_bad:+$wl_bad; }the un-whitelisted probe stopped being reported"
+if [ -z "$wl_bad" ]; then
+  pass
+else
+  fail "$wl_bad (hits: ${wl_hits:-<none>})"
+fi
+
+rm -rf "$df_tmp"; trap - EXIT
 
 # ─── Scenario 3: the summary line matches the runner's tally regex ──────────
 # tests/run.sh tallies on: ^<name>.test.sh(:| results:) N passed, M failed

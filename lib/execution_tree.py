@@ -310,7 +310,7 @@ def derive_execution_tree(workflow: dict, cap: int) -> dict:
           "preview":   "<topology-render-style card string>",
         }
 
-    Pure: no ledger, no dispatch, no filesystem. Raises `ExecutionTreeError` on a
+    Pure: no run-record, no dispatch, no filesystem. Raises `ExecutionTreeError` on a
     non-positive cap or an underivable DAG (cycle / unsatisfiable dependency).
     """
     if cap is None or int(cap) < 1:

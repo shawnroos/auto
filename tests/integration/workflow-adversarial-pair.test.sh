@@ -67,14 +67,14 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --workflow a4. Creates a ledger with one plan
+# Step 1: init via /auto plan.md --workflow a4. Creates a run-record with one plan
 # step (`plan`) + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan, "--workflow", "a4"])
@@ -92,15 +92,15 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 # "model hasn't enumerated yet" (key absent) — which waits. The empty-emission
 # property under test is the former, so we set [].
 if not empty_plan:
-    ledger.set_enumerated_steps(repo, run_id, "plan",
+    run_record.set_enumerated_steps(repo, run_id, "plan",
         [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
          {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
 else:
-    ledger.set_enumerated_steps(repo, run_id, "plan", [])
+    run_record.set_enumerated_steps(repo, run_id, "plan", [])
 
 # Set gaps_open=0 + plan_step=review_plan so plan-met fires.
-ledger.set_gaps_open(repo, run_id, 0)
-ledger.set_loop(repo, run_id, plan_step="review_plan")
+run_record.set_gaps_open(repo, run_id, 0)
+run_record.set_loop(repo, run_id, plan_step="review_plan")
 
 # Step 2b (deliberate-fail control parity with a1): monkey-patch
 # transition_and_emit to a no-op BEFORE the pulse fires. If the engine routes
@@ -108,8 +108,8 @@ ledger.set_loop(repo, run_id, plan_step="review_plan")
 # zero new steps even though the workflow declares a producer for {to:work}.
 if producer_off:
     def _noop(*a, **kw): pass
-    ledger.transition_and_emit = _noop
-    pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
+    run_record.transition_and_emit = _noop
+    pulse.run_record.transition_and_emit = _noop  # pulse imports run_record as a module
 
 # Step 3: pulse. auto=True so _maybe_handoff takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
@@ -150,7 +150,7 @@ esac
 it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_steps → producer returns [], no builders (compare structural remains)"
 res_empty="$(drive_a4 1 0)"
 # v0.3.0 U6: compare is now STRUCTURAL (declared in a4.json's steps[]) so it
-# is on the ledger from init regardless of producer output. Empty enumerated_steps
+# is on the run-record from init regardless of producer output. Empty enumerated_steps
 # returns [] from the producer; transition_and_emit appends no builders then
 # advances loop_phase to "work". So:
 #   loop_phase=work, work_ids="compare" (the structural step; no builders),

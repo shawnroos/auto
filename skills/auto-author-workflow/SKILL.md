@@ -16,7 +16,7 @@ description: >
 
 A **workflow** is a named JSON declaration of a **loop topology** (an ordered
 graph of steps) — the initial
-ledger `/auto` builds a run from (steps, their `depends_on` graph, the phase
+run-record `/auto` builds a run from (steps, their `depends_on` graph, the phase
 each runs in, and which producer produces work steps at a phase boundary). The
 user should NOT write that JSON by hand. This skill is the compiler: the user
 describes the workflow in plain language, and this skill produces a validated
@@ -52,10 +52,10 @@ writing. Never invent a workflow shape that wouldn't pass `validate`.
 
 **Entry B — reverse-derive from a completed run** ("save the run that just
 finished"):
-1. Read the run's ledger **through the CLI**, not with the Read tool:
+1. Read the run's run-record **through the CLI**, not with the Read tool:
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/lib/ledger.py" read <repo> <run-id>
+   python3 "${CLAUDE_PLUGIN_ROOT}/lib/run_record.py" read <repo> <run-id>
    ```
 
    Do **not** `Read` `<repo>/.claude/auto/<run-id>.json` directly. A completed or
@@ -82,7 +82,7 @@ finished"):
    description-spoofing, etc.) are surfaced but don't block; let the user decide.
 3. Write the file ATOMICALLY — mkstemp in the target dir + `os.rename` (NOT a
    plain open-write; a concurrent `/auto` reading mid-write must never see a torn
-   file). Same discipline as `lib/ledger.py::_atomic_write`.
+   file). Same discipline as `lib/run_record.py::_atomic_write`.
 4. **Verify after write** (memory `feedback_subagent_write_verification`): read
    the file back, run `load_and_validate` on it, and confirm it renders to the
    same topology you showed. Only THEN report "saved `<name>` to <tier>". If the

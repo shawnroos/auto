@@ -6,18 +6,18 @@ redirect the driving agent to the advisor ONLY when a LIVE self-driven /auto run
 owns this very session — otherwise emit nothing (allow).
 
 OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
-    a question belongs to a live auto run iff, for SOME ledger under
+    a question belongs to a live auto run iff, for SOME run-record under
     <repo>/.claude/auto/*.json:
       * current phase != "done"                         (run not finished)
       * loop.driver == "self"                           (a live pulse chain, not
                                                           a handoff/manual pause)
       * loop.last_beat_at fresher than
-        ledger.DRIVER_SELF_STALE_SECONDS (3900s)        (not a dead chain)
-      * ledger.driving_session_id == stdin session_id   (THIS session drives it)
+        run_record.DRIVER_SELF_STALE_SECONDS (3900s)        (not a dead chain)
+      * run_record.driving_session_id == stdin session_id   (THIS session drives it)
 
     The session_id equality (not mere presence) is what cleanly rejects a
     concurrent STANDALONE /ce-plan in the same worktree: it has a different
-    session_id, so no ledger matches and the gate allows. `driving_session_id`
+    session_id, so no run-record matches and the gate allows. `driving_session_id`
     is recorded at arm time by U5; we read it DEFENSIVELY — absent => no match
     => allow (the gate never fires on the pre-U5 tree).
 
@@ -26,18 +26,18 @@ OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     predicate so the gate is not coupled to whether the run is done-eligible.
 
 LOCK-FREE READ: the atomic-rename invariant gives a consistent snapshot; we
-read via the shared `_bootstrap.load_ledger_safe` / `iter_worktree_ledgers`
+read via the shared `_bootstrap.load_run_record_safe` / `iter_worktree_run_records`
 model (plain open + json.load, no flock).
 
 FAIL-OPEN (KTD-4 asymmetry): the question gate degrades to allow on ANY
-uncertainty — a malformed ledger, an absent driving_session_id, an internal
+uncertainty — a malformed run-record, an absent driving_session_id, an internal
 error. Worst case the operator is asked directly (no harm). When the PreToolUse
 deny contract itself is unavailable (test hatch CLAUDE_AUTO_TEST_DENY_UNSUPPORTED,
 fenced via test_hatch_enabled), it still allows the question through but surfaces
 a loud systemMessage — never a pause. The DESTRUCTIVE backstop
 (on-pretooluse-action.py) is the one that fails CLOSED.
 
-rel-001: ALWAYS exit 0; never let a bad ledger break the tool flow.
+rel-001: ALWAYS exit 0; never let a bad run-record break the tool flow.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402
-    iter_worktree_ledgers,
-    load_ledger,
+    iter_worktree_run_records,
+    load_run_record,
     load_lib_module,
     session_membership,
     test_hatch_enabled,
@@ -76,8 +76,8 @@ def _read_session_id(raw: str):
     return sid if isinstance(sid, str) and sid else None
 
 
-def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, now):
-    """True iff this ledger is a LIVE self-driven run owned by ``session_id``.
+def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshold, now):
+    """True iff this run-record is a LIVE self-driven run owned by ``session_id``.
 
     The dedicated ownership predicate (NOT on-stop's `_is_blocking`): no
     met-state coupling. See the module docstring for the four conjuncts.
@@ -92,7 +92,7 @@ def _owns_session(led, *, ledger, session_id, skip_staleness, stale_threshold, n
     # Dead-chain guard (mirrors on-stop.py): a self-driven run whose beat is
     # older than the stale threshold is a dead chain, not a live owner.
     if not skip_staleness:
-        last_beat = ledger.parse_iso(loop.get("last_beat_at"))
+        last_beat = run_record.parse_iso(loop.get("last_beat_at"))
         if last_beat is None:
             return False
         if (now - last_beat).total_seconds() > stale_threshold:
@@ -125,14 +125,14 @@ def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
     """
     if not session_id:
         return False
-    ledger = load_ledger()
+    run_record = load_run_record()
     skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
-    stale_threshold = ledger.DRIVER_SELF_STALE_SECONDS
+    stale_threshold = run_record.DRIVER_SELF_STALE_SECONDS
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
-    for _run_id, led in iter_worktree_ledgers(repo_root):
+    for _run_id, led in iter_worktree_run_records(repo_root):
         if _owns_session(
-            led, ledger=ledger, session_id=session_id,
+            led, run_record=run_record, session_id=session_id,
             skip_staleness=skip_staleness, stale_threshold=stale_threshold, now=now,
         ):
             return True

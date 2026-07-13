@@ -1,6 +1,6 @@
 <!--
 Adapted from ksimback/looper (references/control-rubric.md), MIT License.
-Rewritten in auto's vocabulary (workflow / ledger / driver / exit-predicate);
+Rewritten in auto's vocabulary (workflow / run-record / driver / exit-predicate);
 looper's execution + council framing stripped. Original © the looper authors.
 -->
 
@@ -8,7 +8,7 @@ looper's execution + council framing stripped. Original © the looper authors.
 
 Use this when setting the loop's stop conditions — the bounds that keep a run
 from grinding forever. In auto these map onto the workflow's `iteration.bound`
-and the ledger's existing staleness gates; the design skill coaches the user to
+and the run-record's existing staleness gates; the design skill coaches the user to
 set them deliberately rather than inherit silent defaults.
 
 ## What every loop must have

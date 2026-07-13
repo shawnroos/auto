@@ -9,7 +9,7 @@
 #
 # SELF-CONTAINED: minimal inline it/pass/fail/assert_eq harness, python pinned
 # via CLAUDE_AUTO_PYTHON3, module loaded via importlib from an absolute path
-# (matching tests/unit/ledger.test.sh + one-shot-verdict.test.sh).
+# (matching tests/unit/run-record.test.sh + one-shot-verdict.test.sh).
 #
 # Scenarios (U3 plan, AE1/AE2 pre-bake validation):
 #   1. a well-formed criteria list (all four types) validates ok.

@@ -32,9 +32,9 @@ drive how the doc is written:
    rationale or authoring commentary — the judge reads it but won't mistake a
    release instruction for a criterion.
 2. **It's an independent, model-judged gate.** Auto's own deliberate-stop is a
-   deterministic ledger read (`lib/on-stop.py`); a native `/goal` is
+   deterministic run-record read (`lib/on-stop.py`); a native `/goal` is
    model-judged and shares NO verdict with it. They can DIVERGE — a goal judged
-   stricter than the ledger keeps re-prompting "Goal not yet met… continuing"
+   stricter than the run-record keeps re-prompting "Goal not yet met… continuing"
    even after auto reaches `done` (the spam class the Stop-hook fix addressed,
    now self-inflicted via the goal). We can't guarantee agreement; we write the
    doc to TRACK auto's predicate to minimize divergence. `/goal clear` is the
@@ -75,7 +75,7 @@ The criteria the model judges should each be:
    acceptance examples / tests-green as what it ENTAILS ("which means AE1–AE4 are
    satisfied and `tests/run.sh` is green"), NOT as separate bullets ANDed on top.
    Any independent gate ANDed onto the predicate can only make the goal STRICTER
-   than the ledger — re-introducing the divergence (re-prompt-after-`done`) from
+   than the run-record — re-introducing the divergence (re-prompt-after-`done`) from
    the binding model above. **If you DO want a stricter gate deliberately** (e.g.
    keep the session going until tests pass, beyond auto's review-loop), that is a
    valid choice — but say so explicitly, because the extra "continuing" prompts

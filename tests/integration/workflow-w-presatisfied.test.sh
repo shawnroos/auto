@@ -12,7 +12,7 @@
 # plan→work, with NO plan/deepen/review pass.
 #
 # STRUCTURE: create a real W run via `/auto <plan> --workflow w`, assert the
-# pre-satisfied ledger state, stash the model-enumerated work steps (what the
+# pre-satisfied run-record state, stash the model-enumerated work steps (what the
 # model does when it executes the enumerate_plan_steps prepare op), pulse once in
 # auto mode, and assert the run is now in `work` with those steps — proving the
 # plan-loop was skipped entirely.
@@ -56,7 +56,7 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
@@ -90,7 +90,7 @@ guidance1 = intent1.get("operator_guidance", "")
 enumerate_surfaced = "ENUMERATE" in guidance1 or "enumerate" in guidance1
 
 # The model executes the enumerate_plan_steps prepare op → stashes work steps.
-ledger.set_enumerated_steps(repo, run_id, plan_steps[0]["id"], [
+run_record.set_enumerated_steps(repo, run_id, plan_steps[0]["id"], [
     {"id": "u-a", "invokes": {"backend_op": "do_step"}},
     {"id": "u-b", "invokes": {"backend_op": "do_step"}},
 ])

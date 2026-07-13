@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # auto U4 (verification-gate-hardening) e2e: the advisor-judge COMMIT/AUDIT path
-# on a REAL on-disk ledger.
+# on a REAL on-disk run-record.
 #
 # The pure-aggregate signal math is covered by tests/integration/verification-
 # gate.test.sh's in-memory `led_from` harness. That harness NEVER touches the
 # mutators, so it cannot cover the write leg. This test drives the actual §4.7
-# plumbing on a real sandbox ledger:
+# plumbing on a real sandbox run-record:
 #
-#   init_ledger (verification carried through by U3's feeder)
-#     -> read_ledger -> resolve_gate_verification(dict, gate, judge_verdicts=...)
+#   init_run_record (verification carried through by U3's feeder)
+#     -> read_run_record -> resolve_gate_verification(dict, gate, judge_verdicts=...)
 #     -> on a non-None signal: set_verdict_decision(repo, run, gate, signal)
 #     -> ONLY when a judge criterion resolved the gate: append_advisor_audit(...)
 #
-# Assertions read back via read_ledger + iteration.read_decision.
+# Assertions read back via read_run_record + iteration.read_decision.
 #
 # The advisor verdict is INJECTED as data (no live `advisor`) — exactly the
 # fake-verdict handoff (resolve_gate_verification's judge_verdicts arg + persisted
@@ -69,7 +69,7 @@ mkdir -p "${REPO}/.claude/auto"
 echo "verification-gate-commit.test.sh"
 
 # ════════════════════════════════════════════════════════════════════════════
-# One Python driver runs all scenarios against the REAL ledger facade, each on
+# One Python driver runs all scenarios against the REAL run-record facade, each on
 # its own run_id. `drive()` mirrors skills/auto/SKILL.md §4.7 steps 3-5:
 # resolve -> (signal non-None) commit -> (judge resolved) audit-per-judge-crit.
 # Emits a "tag=value" line per assertion; bash asserts on each.
@@ -78,8 +78,8 @@ out="$("$PY" - "$AUTO_ROOT" "$REPO" <<'PYEOF'
 import sys, os
 auto_root, repo = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-from _bootstrap import load_ledger, load_lib_module
-ledger = load_ledger()
+from _bootstrap import load_run_record, load_lib_module
+run_record = load_run_record()
 iteration = load_lib_module("iteration")
 
 def emit(tag, val):
@@ -88,30 +88,30 @@ def emit(tag, val):
 JUDGE_TYPES = ("advisor_judge", "model_judge", "human")
 
 def init(run, verification, dispatch_context=None):
-    """Arm a real on-disk ledger with a verification gate step (carried through
+    """Arm a real on-disk run_record with a verification gate step (carried through
     by U3's feeder) + a minimal iteration block naming it the gate."""
     step = {"id": "gate", "state": "verdict-returned", "verification": verification}
     if dispatch_context is not None:
         step["dispatch_context"] = dispatch_context
-    ledger.init_ledger(repo, run, backend="ce", loop_phase="work",
+    run_record.init_run_record(repo, run, backend="ce", loop_phase="work",
                        steps=[step], iteration={"gate_step": "gate"})
 
 def drive(run, caller_verdicts=None):
-    """Mirror §4.7 steps 3-5 against the on-disk ledger. Returns the signal."""
-    L = ledger.read_ledger(repo, run)                       # real on-disk read
+    """Mirror §4.7 steps 3-5 against the on-disk run_record. Returns the signal."""
+    L = run_record.read_run_record(repo, run)                       # real on-disk read
     res = iteration.resolve_gate_verification(
         L, "gate", judge_verdicts=caller_verdicts)
     signal = res["signal"]
     if signal is None:                                      # judges pending
         return res                                          # commit/audit nothing
     # step 4: the single, centralized decision write.
-    ledger.set_verdict_decision(repo, run, "gate", signal)
+    run_record.set_verdict_decision(repo, run, "gate", signal)
     # step 5: audit ONLY when a judge criterion resolved the gate. signal is
     # non-None => pending_judges empty => every judge crit contributed a verdict.
     gate = next(u for u in L["steps"] if u["id"] == "gate")
     for c in (gate.get("verification") or []):
         if c.get("type") in JUDGE_TYPES:
-            ledger.append_advisor_audit(
+            run_record.append_advisor_audit(
                 repo, run, kind="advisor",
                 subject=f"gate: {c['id']}",
                 classification=c["type"],
@@ -119,11 +119,11 @@ def drive(run, caller_verdicts=None):
     return res
 
 def decision_of(run):
-    gate = next(u for u in ledger.read_ledger(repo, run)["steps"] if u["id"] == "gate")
+    gate = next(u for u in run_record.read_run_record(repo, run)["steps"] if u["id"] == "gate")
     return iteration.read_decision(gate)
 
 def audits(run):
-    return ledger.read_ledger(repo, run).get("advisor_audit", [])
+    return run_record.read_run_record(repo, run).get("advisor_audit", [])
 
 PROG_PASS = {"id": "tests", "type": "programmatic", "argv": ["true"], "check": "exit_zero"}
 PROG_FAIL = {"id": "tests", "type": "programmatic", "argv": ["false"], "check": "exit_zero"}

@@ -62,7 +62,7 @@ assert_true "printf '%s' \"$OUT\" | grep -qF 'docs/plans/nope.md'"
 it "detector: emits a non-empty parseable envelope on a degraded repo"
 BADREPO="${SANDBOX}/badrepo"
 mkdir -p "$BADREPO"
-printf 'not a dir' > "${BADREPO}/.claude"   # .claude is a file → ledger scan degrades
+printf 'not a dir' > "${BADREPO}/.claude"   # .claude is a file → run_record scan degrades
 RAW="$(CLAUDE_AUTO_REPO="$BADREPO" bash "$DET" 2>/dev/null)"
 # Pipe RAW directly (never re-eval a string full of JSON quotes) and require the
 # envelope be both non-empty AND valid JSON.

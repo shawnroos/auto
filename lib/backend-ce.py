@@ -3,24 +3,24 @@
 
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-ce.py`, prefers a module-level ``Backend`` factory if present,
-and calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_step(step) / review(step)``.
+and calls the six ops on it: ``next_plan_step(run-record) / plan(run-record) /
+deepen(run-record) / review_plan(run-record) / do_step(step) / review(step)``.
 
 The pure, contract-load-bearing logic (severity mapping + the plan-step state
 machine) is implemented HERE in Python so pulse.py can import it directly. The
 bash sibling ``backend-ce.sh`` exposes the same logic as a CLI for direct
 testing / scripting; the two are intentional mirrors.
 
-A backend is a PURE PROVIDER OF OPERATIONS — it NEVER writes the ledger
-(contract §1). Ops return data; the engine persists it through ledger.py.
+A backend is a PURE PROVIDER OF OPERATIONS — it NEVER writes the run-record
+(contract §1). Ops return data; the engine persists it through run_record.py.
 
-PLAN-STEP STATE: `next_plan_step` reads `ledger["plan_step"]` (the plan-phase
+PLAN-STEP STATE: `next_plan_step` reads `run_record["plan_step"]` (the plan-phase
 sub-state, schema §3.1) to compute the next step. The pulse persists the executed
 step via `set_loop(plan_step=step)` after each plan-loop advance
 (pulse_advance.py), so a fresh-process pulse reads the real sub-state — the loop
 advances plan → deepen → review_plan → done and does not livelock. (Historical
 note: an earlier U6b/U3 handoff had no schema field for this; the gap was closed
-when `plan_step` became a validated field — see ledger_core.py's PLAN_STEPS.)
+when `plan_step` became a validated field — see run_record_core.py's PLAN_STEPS.)
 
 DECLARED SEVERITY MAPPING (contract §3.1, fixed property):
     P0 -> blocker;  P1 -> major;  P2 -> major;  P3 -> minor
@@ -72,20 +72,20 @@ def map_findings(ce_findings):
     ]
 
 
-def _bound_plan_path(ledger):
+def _bound_plan_path(run_record):
     """The plan doc path bound to the run's plan step (plan_presatisfied / W).
 
     lib/auto.py binds the reviewed plan's path to the single plan-phase step's
     dispatch_context.plan_path at init (the schema has no top-level slot for it).
     Returns it, or None for a1-style runs where the plan was produced in-session.
     """
-    for u in ledger.get("steps", []):
+    for u in run_record.get("steps", []):
         if u.get("phase") == "plan":
             return iteration.read_plan_path(u)
     return None
 
 
-def _next_plan_step(ledger):
+def _next_plan_step(run_record):
     """Thin CE wrapper over the shared ``plan_step_sequencer`` (U10).
 
     CE's plan loop runs plan -> deepen -> review_plan and, while gaps remain,
@@ -93,17 +93,17 @@ def _next_plan_step(ledger):
     §4.1 coherence guard returns "done" (else livelock). All that per-backend
     logic is now the injected ``_PLAN_SEQUENCE``; the guard + ``plan_step is
     None`` first-step logic live once in ``_bootstrap``. ``plan_step`` is a real
-    validated ledger field (``ledger_core.PLAN_STEPS``) the pulse persists.
+    validated run-record field (``run_record_core.PLAN_STEPS``) the pulse persists.
     """
-    return plan_step_sequencer(ledger, sequence=_PLAN_SEQUENCE)
+    return plan_step_sequencer(run_record, sequence=_PLAN_SEQUENCE)
 
 
 class Backend:
     """The object pulse.py's ``resolve_backend`` instantiates (it prefers a
     module-level ``Backend`` factory). Exposes the six ops as methods.
 
-    The four plan-loop ops receive the ledger dict (pulse.py:347 calls
-    ``op(ledger_dict)``). `next_plan_step` is fully pure. `plan / deepen /
+    The four plan-loop ops receive the run-record dict (pulse.py:347 calls
+    ``op(run_record_dict)``). `next_plan_step` is fully pure. `plan / deepen /
     review_plan` and the work-loop `do_step / review` are the live-invocation
     handoff: a CLI/model cannot *run* /ce-plan etc., so each prepares an invocation
     envelope the model executes and parses the structured result back onto the
@@ -115,17 +115,17 @@ class Backend:
     backend_scale = BACKEND_SCALE
 
     # ── plan-loop ops ──────────────────────────────────────────────────────
-    def next_plan_step(self, ledger):
-        return _next_plan_step(ledger)
+    def next_plan_step(self, run_record):
+        return _next_plan_step(run_record)
 
-    def enumerate_plan_steps(self, ledger):
+    def enumerate_plan_steps(self, run_record):
         """PREPARE the plan→work-steps enumeration (v0.2.0 re-lock, KTD-4).
 
         The producer the producers read. At plan-done the engine calls this to turn
         the reviewed plan into a work-step list. Prepare-only: returns an envelope
         the MODEL executes (reads the plan, returns `[{id, invokes, ...}]`); the
         engine persists it onto the plan step's `dispatch_context.enumerated_steps`
-        (U6) and the producers (U5b) shape it into ledger steps. v0.4.3 (KTD-15):
+        (U6) and the producers (U5b) shape it into run-record steps. v0.4.3 (KTD-15):
         for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
         is surfaced so the envelope names WHICH plan; omitted for a1.
 
@@ -144,7 +144,7 @@ class Backend:
             "op": "enumerate_plan_steps",
             "invocation": "enumerate the reviewed plan's work steps" + edge_clause,
         }
-        plan_path = _bound_plan_path(ledger)
+        plan_path = _bound_plan_path(run_record)
         if plan_path:
             envelope["plan_path"] = plan_path
             envelope["invocation"] = (
@@ -153,7 +153,7 @@ class Backend:
             )
         return envelope
 
-    def plan(self, ledger):
+    def plan(self, run_record):
         """PREPARE /ce-plan. Returns an opaque invocation envelope the engine
         round-trips into deepen/review_plan; the model runs the command."""
         return {"backend": BACKEND_NAME, "op": "plan", "invocation": "/ce-plan"}

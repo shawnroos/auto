@@ -8,8 +8,8 @@
 # bound_exit sub-bullet.
 #
 # Scenarios:
-#   1. Iteration section OMITTED on a plain non-iteration ledger.
-#   2. Iteration section RENDERED when the ledger declares an iteration
+#   1. Iteration section OMITTED on a plain non-iteration run-record.
+#   2. Iteration section RENDERED when the run-record declares an iteration
 #      block + bound + counters + emit_count, including:
 #         gate_step, attempts, wall_time, emit_count, last_active,
 #         iteration_pending, but NOT kill_switch (env not set).
@@ -26,8 +26,8 @@
 #      _bootstrap.test_hatch_enabled).
 #
 # Test fixture pattern: auto-status reads <repo>/.claude/auto/<run>.json
-# lock-free via ledger.read_ledger, so we write the JSON directly with
-# python json.dump — bypasses ledger.init_ledger so this test stays
+# lock-free via run_record.read_run_record, so we write the JSON directly with
+# python json.dump — bypasses run_record.init_run_record so this test stays
 # decoupled from F3's eventual schema-validator surface. (Advisor advice:
 # direct-write keeps the fixture surface narrow.)
 
@@ -85,19 +85,19 @@ trap cleanup EXIT
 REPO="${SANDBOX}/repo"
 mkdir -p "$REPO/.claude/auto"
 
-# write_ledger <run-id> <python-dict-expr>
-#   Build the ledger dict via the given python expression and write it to
+# write_run_record <run-id> <python-dict-expr>
+#   Build the run-record dict via the given python expression and write it to
 #   <repo>/.claude/auto/<run-id>.json via json.dump.
-write_ledger() {
+write_run_record() {
   local run="$1" expr="$2"
   "$PY" - "$REPO" "$run" "$expr" <<'PYEOF'
 import json, os, sys
 repo, run, expr = sys.argv[1], sys.argv[2], sys.argv[3]
-ledger = eval(expr, {"__builtins__": __builtins__})
-ledger.setdefault("run_id", run)
+run_record = eval(expr, {"__builtins__": __builtins__})
+run_record.setdefault("run_id", run)
 path = os.path.join(repo, ".claude", "auto", f"{run}.json")
 with open(path, "w") as fh:
-    json.dump(ledger, fh)
+    json.dump(run_record, fh)
 PYEOF
 }
 
@@ -108,7 +108,7 @@ run_status() {
 }
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
-# Plain non-iteration ledger (a1/W shape — iteration=None, no counters).
+# Plain non-iteration run-record (a1/W shape — iteration=None, no counters).
 PLAIN_RUN="plain-run"
 PLAIN_EXPR='{
   "run_id": "plain-run",
@@ -124,7 +124,7 @@ PLAIN_EXPR='{
   "last_active_at": None
 }'
 
-# Full iteration-aware ledger (a2-iter shape — gate + bound + counters).
+# Full iteration-aware run-record (a2-iter shape — gate + bound + counters).
 ITER_RUN="iter-run"
 ITER_EXPR='{
   "run_id": "iter-run",
@@ -143,7 +143,7 @@ ITER_EXPR='{
   "last_active_at": "2026-05-26T10:23:00Z"
 }'
 
-# No-wall-bound iteration ledger — exercises the "—" denominator.
+# No-wall-bound iteration run-record — exercises the "—" denominator.
 NOWALL_RUN="nowall-run"
 NOWALL_EXPR='{
   "run_id": "nowall-run",
@@ -159,7 +159,7 @@ NOWALL_EXPR='{
   "last_active_at": None
 }'
 
-# Bound-override-only ledger: iteration block None, counters zero, but a
+# Bound-override-only run-record: iteration block None, counters zero, but a
 # step carries a bound_override. Section must still render because the
 # bound_override is a v0.3.0 iteration signal.
 BO_RUN="bound-override-run"
@@ -180,27 +180,27 @@ BO_EXPR='{
   "last_active_at": None
 }'
 
-write_ledger "$PLAIN_RUN" "$PLAIN_EXPR"
-write_ledger "$ITER_RUN" "$ITER_EXPR"
-write_ledger "$NOWALL_RUN" "$NOWALL_EXPR"
-write_ledger "$BO_RUN" "$BO_EXPR"
+write_run_record "$PLAIN_RUN" "$PLAIN_EXPR"
+write_run_record "$ITER_RUN" "$ITER_EXPR"
+write_run_record "$NOWALL_RUN" "$NOWALL_EXPR"
+write_run_record "$BO_RUN" "$BO_EXPR"
 
-# ─── Scenario 1: section OMITTED on plain ledger ────────────────────────────
+# ─── Scenario 1: section OMITTED on plain run-record ────────────────────────────
 PLAIN_OUT="$(run_status "$PLAIN_RUN")"
 
-it "iteration section OMITTED on non-iteration ledger (a1/W shape)"
+it "iteration section OMITTED on non-iteration run_record (a1/W shape)"
 assert_not_contains "$PLAIN_OUT" "  iteration:" "iteration: heading"
 
-it "no iteration sub-fields leak on non-iteration ledger"
+it "no iteration sub-fields leak on non-iteration run_record"
 assert_not_contains "$PLAIN_OUT" "    gate_step:" "gate_step"
 
-it "no bound_exit sub-bullet on non-iteration ledger"
+it "no bound_exit sub-bullet on non-iteration run_record"
 assert_not_contains "$PLAIN_OUT" "        bound_exit:" "bound_exit"
 
-# ─── Scenario 2: section RENDERED on iteration-aware ledger ────────────────
+# ─── Scenario 2: section RENDERED on iteration-aware run-record ────────────────
 ITER_OUT="$(run_status "$ITER_RUN")"
 
-it "iteration: heading rendered when ledger has iteration block"
+it "iteration: heading rendered when run_record has iteration block"
 assert_contains "$ITER_OUT" "  iteration:" "heading"
 
 it "gate_step rendered with the configured gate id"
@@ -302,7 +302,7 @@ CORRUPT_ITER_EXPR='{
   "active_wall_seconds": 0,
   "last_active_at": None
 }'
-write_ledger "$CORRUPT_ITER_RUN" "$CORRUPT_ITER_EXPR"
+write_run_record "$CORRUPT_ITER_RUN" "$CORRUPT_ITER_EXPR"
 CORRUPT_ITER_OUT="$(run_status "$CORRUPT_ITER_RUN")"
 
 it "G7 DF1: corrupt iteration block renders shape-error line, not crash"
@@ -323,7 +323,7 @@ STRING_ATTEMPTS_EXPR='{
   "active_wall_seconds": 0,
   "last_active_at": None
 }'
-write_ledger "$STRING_ATTEMPTS_RUN" "$STRING_ATTEMPTS_EXPR"
+write_run_record "$STRING_ATTEMPTS_RUN" "$STRING_ATTEMPTS_EXPR"
 STRING_ATTEMPTS_OUT="$(run_status "$STRING_ATTEMPTS_RUN")"
 
 it "G7 DF2: stringified iteration_attempts triggers render (not crash)"

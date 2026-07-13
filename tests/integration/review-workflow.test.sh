@@ -42,7 +42,7 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Staleness off so the freshly-written ledger isn't read as a dead chain; the
+# Staleness off so the freshly-written run-record isn't read as a dead chain; the
 # pulse-lock hatch fence needs the harness sentinel too.
 export CLAUDE_AUTO_TEST_HARNESS=1
 export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
@@ -64,7 +64,7 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
@@ -94,9 +94,9 @@ phase_order = ",".join(entry.get("phase_order") or [])
 # Step 2: dispatch the review step, then the agent self-writes its verdict. A
 # clean verdict (P3-only — modelled as empty findings) makes the step terminal;
 # a blocker keeps it gating.
-ledger.transition(repo, run_id, "review", "dispatched")
+run_record.transition(repo, run_id, "review", "dispatched")
 findings = [] if clean else [{"severity": "blocker", "note": "flaw"}]
-ledger.record_verdict(repo, run_id, "review", findings)
+run_record.record_verdict(repo, run_id, "review", findings)
 
 # Step 3: pulse once. Single-phase work loop — a clean verdict drives it to done;
 # a blocker leaves it at work (all_steps_terminal == false). No auto-advance to
