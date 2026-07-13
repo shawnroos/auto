@@ -4,7 +4,7 @@
 # The skill's prose elicitation is model-driven (a conversation) — not
 # deterministically unit-testable end-to-end. What IS testable is the contract
 # the skill leans on, so AE3 is verified at that boundary:
-#   AE3: a recipe shaped like what the skill produces for the prompt "two
+#   AE3: a workflow shaped like what the skill produces for the prompt "two
 #        builders, same plan, one clarity one perf, then a comparator picks"
 #        (i.e. A4's topology) VALIDATES and RENDERS as the paired-builders shape.
 #   + the write-path the skill MUST use: validate_and_lint gates the write;
@@ -37,11 +37,11 @@ import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 tr = load_lib_module("topology-render")
 op = sys.argv[2]
 
-# The recipe the skill should produce for the AE3 prompt (A4's topology): one
+# The workflow the skill should produce for the AE3 prompt (A4's topology): one
 # plan step + the paired-builders producer at the (plan, work) boundary.
 A4_SHAPED = {
     "name": "my-pair", "version": "1",
@@ -55,19 +55,19 @@ A4_SHAPED = {
 
 if op == "ae3-validates":
     try:
-        recipes.validate(A4_SHAPED)
+        workflows.validate(A4_SHAPED)
         # render shows the paired-builders producer (the A4 signature).
         card = tr.render(A4_SHAPED, 60)
         print("valid" if "plan_output_to_paired_builders" in card else "valid-no-producer")
-    except recipes.RecipeError as e:
+    except workflows.WorkflowError as e:
         print("rejected:" + str(e))
 
 elif op == "write-roundtrip":
     # The skill's write-path: validate, write atomically, read back, re-validate.
     repo = tempfile.mkdtemp()
-    d = os.path.join(repo, ".claude", "auto", "recipes")
+    d = os.path.join(repo, ".claude", "auto", "workflows")
     os.makedirs(d)
-    recipes.validate(A4_SHAPED)  # gate
+    workflows.validate(A4_SHAPED)  # gate
     # atomic write (mkstemp + rename), as the skill must do.
     import tempfile as tf
     fd, tmp = tf.mkstemp(dir=d, suffix=".json")
@@ -76,7 +76,7 @@ elif op == "write-roundtrip":
     target = os.path.join(d, "my-pair.json")
     os.rename(tmp, target)
     # read back + re-validate (verify-after-write).
-    back, tier = recipes.load_and_validate("my-pair", repo)
+    back, tier = workflows.load_and_validate("my-pair", repo)
     print("%s,%s,%s" % (tier, back["name"], back == A4_SHAPED))
 
 elif op == "invalid-not-written":
@@ -85,14 +85,14 @@ elif op == "invalid-not-written":
            "steps": [{"id": "u", "phase": "plan",
                       "invokes": {"prompt_template": "../../etc/passwd"}}]}
     try:
-        recipes.validate(bad)
+        workflows.validate(bad)
         print("WRONGLY-VALID")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("rejected-not-written")
 PYEOF
 }
 
-it "AE3: A4-shaped recipe (skill output for the pair prompt) validates + renders"
+it "AE3: A4-shaped workflow (skill output for the pair prompt) validates + renders"
 assert_eq "valid" "$(auth ae3-validates)"
 
 it "skill write-path: validate→atomic-write→read-back→re-validate round-trips"
@@ -102,8 +102,8 @@ it "skill write-path: a draft failing validation is NOT written (traversal)"
 assert_eq "rejected-not-written" "$(auth invalid-not-written)"
 
 it "skill ships: SKILL.md + visual-vocabulary.md present (manifest auto-loads)"
-if [ -f "${AUTO_ROOT}/skills/auto-author-recipe/SKILL.md" ] && \
-   [ -f "${AUTO_ROOT}/skills/auto-author-recipe/references/visual-vocabulary.md" ]; then
+if [ -f "${AUTO_ROOT}/skills/auto-author-workflow/SKILL.md" ] && \
+   [ -f "${AUTO_ROOT}/skills/auto-author-workflow/references/visual-vocabulary.md" ]; then
   pass
 else
   fail "skill files missing"
@@ -111,5 +111,5 @@ fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "recipe-authoring.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "workflow-authoring.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

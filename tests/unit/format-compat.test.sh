@@ -33,7 +33,7 @@
 #   9  order-independence (property-style, randomized key subsets)
 #   10 phase_transitions[] per-item .emitter / .producer semantics
 #   11 downgrade round-trip: downgrade(upgrade(v1)) == v1 (modulo the marker)
-#   12 upgrade_workflow over every builtin recipe in v1 form
+#   12 upgrade_workflow over every builtin workflow in v1 form
 #   13 downgrade_run_record strips the `format` marker
 #   14 upgrade_workflow never stamps `format` (the schema is additionalProperties:false)
 
@@ -328,7 +328,7 @@ elif probe == "roundtrip":
             res[name + ":diff"] = [k for k in set(back) ^ set(v1)]
     out = res
 
-# ── 12: upgrade_workflow over every builtin recipe in v1 form ──────────────
+# ── 12: upgrade_workflow over every builtin workflow in v1 form ────────────
 elif probe == "workflows":
     res = {}
     for name in BUILTINS:
@@ -415,7 +415,7 @@ elif probe == "marker":
     out = {
         "upgrade_stamps": v2.get("format"),
         "downgrade_strips": "format" not in down,
-        # a workflow must NEVER be stamped: recipes/schema.json is
+        # a workflow must NEVER be stamped: workflows/schema.json is
         # additionalProperties:false, so a stray `format` key fails validate().
         "workflow_unstamped": "format" not in wf,
     }
@@ -515,17 +515,17 @@ expected='{"idempotent": true, "invokes": {"backend_op": "do_step", "prompt_temp
 assert_eq "$expected" "$r"
 
 echo ""
-echo "── upgrade_workflow over the builtin recipes in v1 form ──"
+echo "── upgrade_workflow over the builtin workflows in v1 form ──"
 
-it "every builtin v1 recipe upgrades: steps/backend_op/producer/handoff, no stale key"
+it "every builtin v1 workflow upgrades: steps/backend_op/producer/handoff, no stale key"
 r="$(fc workflows 2>&1)"
 expected='{"a1.json": {"backend_ops": ["next_plan_step"], "default_backend": "ce", "no_stale": true, "phase_order": ["plan", "handoff", "work"], "steps": true}, "a2.json": {"backend_ops": ["next_plan_step", "review"], "default_backend": "ce", "no_stale": true, "phase_order": ["plan", "handoff", "work"], "steps": true}, "a4.json": {"backend_ops": ["next_plan_step", "review"], "default_backend": "ce", "no_stale": true, "phase_order": ["plan", "handoff", "work"], "steps": true}, "pipeline.json": {"backend_ops": ["brainstorm"], "default_backend": "ce", "no_stale": true, "phase_order": ["brainstorm", "plan", "handoff", "work"], "steps": true}, "review.json": {"backend_ops": ["review"], "default_backend": "ce", "no_stale": true, "phase_order": ["work"], "steps": true}, "w.json": {"backend_ops": ["next_plan_step"], "default_backend": "ce", "no_stale": true, "phase_order": ["plan", "handoff", "work"], "steps": true}}'
 assert_eq "$expected" "$r"
 
-# NB: no builtin recipe DECLARES a `do_unit`/`do_step` step — work steps are
+# NB: no builtin workflow DECLARES a `do_unit`/`do_step` step — work steps are
 # materialized at runtime by the phase-boundary producers (lib/step_producers.py),
 # which is why the op appears in the run-record fixtures (scenario 2) but in no
-# recipe file. `w`/`pipeline` each declare a single plan/brainstorm step.
+# workflow file. `w`/`pipeline` each declare a single plan/brainstorm step.
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

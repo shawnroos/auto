@@ -57,13 +57,13 @@ def _should_render_iteration(led: dict) -> bool:
     iteration signal.
 
     Per F1 task: render WHEN any of:
-      • ``iteration`` block is non-null (recipe declared a gate),
+      • ``iteration`` block is non-null (workflow declared a gate),
       • ``iteration_attempts`` > 0 (the loop has actually iterated),
       • ``active_wall_seconds`` > 0 (the wall-time accumulator has pulsed),
       • any step carries a ``dispatch_context.bound_override`` (a bound was
         breached at exit).
 
-    Otherwise the section is OMITTED — non-iteration recipes (a1, W, legacy
+    Otherwise the section is OMITTED — non-iteration workflows (a1, W, legacy
     v0.2.x a2/a4) stay quiet. ``init_ledger`` always sets ``iteration``=None
     by default, so the check is ``bool(ledger.get("iteration"))``, NOT
     ``"iteration" in ledger`` — the key is always present.
@@ -289,7 +289,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     # v0.3.0 F1: iteration-awareness. Rendered between the predicate line and
     # the steps block so iteration_pending sits next to its predicate-modifier
     # context. Omitted entirely when the run has no iteration signal at all
-    # (legacy a1 / W / v0.2.x a2/a4) — keeps non-iteration recipes quiet.
+    # (legacy a1 / W / v0.2.x a2/a4) — keeps non-iteration workflows quiet.
     if _should_render_iteration(led):
         _render_iteration_section(led)
 

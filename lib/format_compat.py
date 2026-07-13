@@ -12,8 +12,8 @@ chokepoint, so every other module in the tree speaks ONLY the new vocabulary.
 DAG ROOT. Pure stdlib; imports no sibling. Wired into:
   * ``ledger_core._read_json``        — read_ledger + the locked RMW path
   * ``_bootstrap.load_ledger_safe``   — every hook and scan consumer
-  * ``recipes.resolve``               — workflow-file reads, before validate()
-  * ``recipe_validate.validate_and_lint`` — the authoring WRITE gate
+  * ``workflows.resolve``             — workflow-file reads, before validate()
+  * ``workflow_validate.validate_and_lint`` — the authoring WRITE gate
 
 The three properties everything else rests on:
 
@@ -135,8 +135,10 @@ _OP_MAP = {"do_unit": "do_step"}
 # brainstorm / next_plan_step / review carry neither term — unchanged.
 
 _EXIT_REASON_MAP = {"recipe-bug": "workflow-bug"}
-# The exit-reason VALUE flips here; the SYMBOL `ExitReason.RECIPE_BUG` renames
-# with the `recipe` term (U8).
+# The exit-reason VALUE flipped here in U6; the SYMBOL that carries it is
+# `ExitReason.WORKFLOW_BUG` as of U8 (it was `ExitReason.RECIPE_BUG`). The v1
+# spelling `recipe-bug` on the LEFT is a retired on-disk value and must stay —
+# a completed pre-rename run keeps it forever.
 
 # Scalar values rewritten by the POST-rename key that holds them.
 _VALUE_RULES_UP = {

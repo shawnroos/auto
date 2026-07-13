@@ -8,7 +8,7 @@ auto's `advisor` tool replaces it (see "advisor_judge" below).
 # Verification taxonomy
 
 This file pins the **exact shape** of a typed verification criterion. It is the
-contract the recipe validator (`lib/recipes.py::validate()`) enforces and the
+contract the workflow validator (`lib/workflows.py::validate()`) enforces and the
 shape the verification engine (`lib/verification.py`) consumes. The design skill
 coaches users to express a gate's done-condition as a list of these criteria
 instead of a vibe.
@@ -23,7 +23,7 @@ entry is a criterion object:
 ```
 
 `type` must be one of exactly four values. An unknown `type`, an unknown key
-inside a criterion, or an array longer than 16 is a validation error at recipe
+inside a criterion, or an array longer than 16 is a validation error at workflow
 **load** time (not only write time).
 
 ### 1. programmatic

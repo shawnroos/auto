@@ -687,7 +687,7 @@ REPO="$(mkrepo resume-handoff)"
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# Legacy ledger (recipe=None) so advance_to_phase falls through to the raw
+# Legacy ledger (workflow=None) so advance_to_phase falls through to the raw
 # set_loop branch; a handoff pause is the precondition for the handoff->work flip.
 L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",steps=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"handoffrun",driver="manual",handoff_paused=True)

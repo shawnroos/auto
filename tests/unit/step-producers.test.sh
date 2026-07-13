@@ -9,7 +9,7 @@
 # SELF-CONTAINED inline harness.
 #
 # Scenarios:
-#   1. registry ↔ validator consistency: producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES
+#   1. registry ↔ validator consistency: producers.REGISTRY keys == workflows.V1_PRODUCER_NAMES
 #   2. plan_output_to_work_steps: 1 plan step's enumerated_steps → N work steps
 #   3. plan_output_to_work_steps: empty enumerated_steps → [] (vacuous, no crash)
 #   4. judge_winner_to_work_steps: emits the WINNER's enumerated_steps
@@ -60,7 +60,7 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module, load_ledger
 producers = load_lib_module("step_producers")
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 ledger = load_ledger()
 op = sys.argv[2]
 
@@ -92,7 +92,7 @@ def _ledger_for_iter(steps, *, gate_step="judge", template_name="plan-candidate"
 
 
 if op == "registry-consistency":
-    print("match" if set(producers.REGISTRY) == set(recipes.V1_PRODUCER_NAMES) else "MISMATCH")
+    print("match" if set(producers.REGISTRY) == set(workflows.V1_PRODUCER_NAMES) else "MISMATCH")
 
 elif op == "a1-emit":
     led = {"steps": [{"id": "plan", "phase": "plan",
@@ -133,20 +133,20 @@ elif op == "brainstorm-pure":
     print("unchanged" if before == after else "MUTATED")
 
 elif op == "brainstorm-no-step":
-    # No brainstorm step at all → RecipeError (not a silent empty emit).
+    # No brainstorm step at all → WorkflowError (not a silent empty emit).
     led = {"steps": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
     try:
         producers.brainstorm_output_to_plan_step(led, "plan"); print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "brainstorm-no-output":
-    # brainstorm step exists but carries no requirements_doc → RecipeError
+    # brainstorm step exists but carries no requirements_doc → WorkflowError
     # (mirrors A2/A4 producer failure; silent empty emit would leave plan vacuous).
     led = {"steps": [{"id": "brainstorm", "phase": "brainstorm", "dispatch_context": {}}]}
     try:
         producers.brainstorm_output_to_plan_step(led, "plan"); print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "judge-winner":
@@ -170,12 +170,12 @@ elif op == "judge-no-winner":
         # are ignored by the new contract (the producer only reads dispatch_context).
         {"id": "judge", "phase": "work", "dispatch_context": {}, "findings": [{"note": "undecided"}]},
     ]}
-    # P2-7: producer raises RecipeError (the recipe-shape error class) on a
-    # malformed judge verdict — keeps the engine's "recipe-contract violation"
+    # P2-7: producer raises WorkflowError (the workflow-shape error class) on a
+    # malformed judge verdict — keeps the engine's "workflow-contract violation"
     # surface uniform whether validate() or a producer raises.
     try:
         producers.judge_winner_to_work_steps(led, "work"); print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "a4-pair":
@@ -196,7 +196,7 @@ elif op == "atomic-emit":
     # a consistent (predicate-recomputed-post-emit) snapshot.
     repo = tempfile.mkdtemp(); run = "ae"
     ledger.init_ledger(repo, run, backend="ce",
-        recipe={"name": "a1", "source_tier": "built-in"},
+        workflow={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
         steps=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
@@ -298,11 +298,11 @@ elif op == "judge-backcompat":
     print(",".join(u["id"] for u in out))
 
 elif op == "iter-tpl-no-iteration":
-    # Ledger has no iteration field → iterate_template raises RecipeError.
+    # Ledger has no iteration field → iterate_template raises WorkflowError.
     led = {"steps": [], "iteration_emit_count": 0}
     try:
         producers.iterate_template(led, "plan"); print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "iter-tpl-missing-counter":
@@ -327,7 +327,7 @@ elif op == "iter-tpl-missing-counter":
     print(",".join(u["id"] for u in out))
 
 elif op == "iter-tpl-emit-count-validation":
-    # All out-of-range or wrong-type values must raise RecipeError.
+    # All out-of-range or wrong-type values must raise WorkflowError.
     base_steps = [
         {"id": "plan-1", "phase": "plan"},
         {"id": "judge", "phase": "work",
@@ -340,7 +340,7 @@ elif op == "iter-tpl-emit-count-validation":
         try:
             producers.iterate_template(led, "plan")
             results.append(f"{bad!r}:NO-RAISE")
-        except recipes.RecipeError:
+        except workflows.WorkflowError:
             results.append(f"{bad!r}:raised")
     print(";".join(results))
 
@@ -363,7 +363,7 @@ elif op == "iter-tpl-bad-template-ref":
     }
     try:
         producers.iterate_template(led, "plan"); print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "iter-tpl-integration":
@@ -373,7 +373,7 @@ elif op == "iter-tpl-integration":
     # bump) could be individually correct but the composition broken.
     repo = tempfile.mkdtemp(); run = "iter-integration"
     ledger.init_ledger(repo, run, backend="ce",
-        recipe={"name": "a2", "source_tier": "built-in"},
+        workflow={"name": "a2", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="plan",
         steps=[
@@ -420,7 +420,7 @@ elif op == "a1-passthrough":
     # CURRENT code Site 1 hardcodes [], so w2's edge is dropped -> "|" (RED).
     repo = tempfile.mkdtemp(); run = "pt"
     ledger.init_ledger(repo, run, backend="ce",
-        recipe={"name": "a1", "source_tier": "built-in"},
+        workflow={"name": "a1", "source_tier": "built-in"},
         phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="handoff",
         steps=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
@@ -478,7 +478,7 @@ PYEOF
 }
 
 # ─── Scenario 1: registry ↔ validator consistency ───────────────────────────
-it "producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES (no drift)"
+it "producers.REGISTRY keys == workflows.V1_PRODUCER_NAMES (no drift)"
 assert_eq "match" "$(em registry-consistency)"
 
 # ─── Scenario 2-3: plan_output_to_work_steps ────────────────────────────────
@@ -500,10 +500,10 @@ assert_eq "1|plan|plan|next_plan_step|docs/brainstorms/x-requirements.md|depends
 it "U8: brainstorm_output_to_plan_step is pure (no ledger mutation)"
 assert_eq "unchanged" "$(em brainstorm-pure)"
 
-it "U8: no brainstorm step → RecipeError (not a silent empty emit)"
+it "U8: no brainstorm step → WorkflowError (not a silent empty emit)"
 assert_eq "raised" "$(em brainstorm-no-step)"
 
-it "U8: brainstorm step with missing requirements_doc → RecipeError"
+it "U8: brainstorm step with missing requirements_doc → WorkflowError"
 assert_eq "raised" "$(em brainstorm-no-output)"
 
 # ─── Scenario 4-5: judge_winner_to_work_steps ───────────────────────────────
@@ -552,7 +552,7 @@ it "judge_winner_to_work_steps: no iteration field → falls back to literal 'ju
 assert_eq "wA" "$(em judge-backcompat)"
 
 # ─── Scenario 14: iterate_template with no iteration field → raises ─────────
-it "iterate_template: ledger has no iteration block → raises RecipeError"
+it "iterate_template: ledger has no iteration block → raises WorkflowError"
 assert_eq "raised" "$(em iter-tpl-no-iteration)"
 
 # ─── Scenario 15: missing iteration_emit_count → defaults to 0 ──────────────
@@ -564,7 +564,7 @@ it "iterate_template: emit_count validation (0, 11, 'five', -1, 1.5, True all ra
 assert_eq "0:raised;11:raised;'five':raised;-1:raised;1.5:raised;True:raised" "$(em iter-tpl-emit-count-validation)"
 
 # ─── Scenario 17: bad emit_template reference ───────────────────────────────
-it "iterate_template: emit_template names unknown key → raises RecipeError"
+it "iterate_template: emit_template names unknown key → raises WorkflowError"
 assert_eq "raised" "$(em iter-tpl-bad-template-ref)"
 
 # ─── Scenario 18: integration through emit_within_phase (counter atomicity) ─

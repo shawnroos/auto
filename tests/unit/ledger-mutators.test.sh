@@ -163,7 +163,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
                   steps=steps)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
-    # ships in U5/recipes).
+    # ships in U5/workflows).
     def seed(L):
         if iteration:
             bound = {"max_attempts": max_attempts}

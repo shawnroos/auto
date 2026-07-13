@@ -259,8 +259,8 @@ def _emit_reviewed_plan(plan_path):
     """Emit the reviewed-plan envelope for a single unambiguous plan."""
     _emit(_safe_envelope(
         "reviewed-plan",
-        "starting `%s` (recipe w, work-only — reviewed plan goes straight "
-        "to the work-loop; pass `--recipe a1` to re-plan from scratch)"
+        "starting `%s` (workflow w, work-only — reviewed plan goes straight "
+        "to the work-loop; pass `--workflow a1` to re-plan from scratch)"
         % plan_path,
         single_plan={"path": plan_path, "run_id_hint": None},
     ))
@@ -506,7 +506,7 @@ def _route_plans_or_raw(repo):
     #
     # The branch emits an EMPTY (null) recommendation + ambiguity null: the
     # driver computes the recommendation via lib/recommender.py (U2) and either
-    # dispatches the entry recipe or pre-dispatch escalates (U3). When the signal
+    # dispatches the entry workflow or pre-dispatch escalates (U3). When the signal
     # is UNSET, this branch is skipped and the engine falls through to `raw` (and
     # an all-stale plan set was already emitted as a multi-plan ask above).
     if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):

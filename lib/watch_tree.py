@@ -67,8 +67,8 @@ def _seconds_between(start_iso, now_dt) -> int:
 
 def _backend_op(step) -> str:
     """The step's backend_op — read from `dispatch_context` (the materialized
-    on-disk shape, where recipes.step_for merged `invokes`) or from a raw
-    `invokes` (a recipe-shaped step). '' when neither carries one."""
+    on-disk shape, where workflows.step_for merged `invokes`) or from a raw
+    `invokes` (a workflow-shaped step). '' when neither carries one."""
     for holder_key in ("dispatch_context", "invokes"):
         holder = step.get(holder_key)
         if isinstance(holder, dict) and holder.get("backend_op"):

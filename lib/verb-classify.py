@@ -14,7 +14,7 @@
 #   * plan  — carries plan-creation intent (plan/design/…, or a creation verb +
 #             the noun "plan") and no work verb → route to /ce-plan.
 #   * both  — carries BOTH ("develop and implement a plan", "plan and ship X") →
-#             plan-then-work (recipe a1).
+#             plan-then-work (workflow a1).
 #   * ambiguous — neither (bare topics, improvement verbs, greetings) → the
 #             auto-driver (the model) decides; its safe default stays /ce-plan.
 #

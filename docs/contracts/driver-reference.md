@@ -69,7 +69,7 @@ context runs out, the routine continuation is a normal `/auto-resume`
 
 ## 2. Outcomes-gated emission (v0.3.0)
 
-A recipe may declare an `iteration` block letting a designated gate
+A workflow may declare an `iteration` block letting a designated gate
 step's `verdict.decision` drive the loop directly.
 
 ### How it routes
@@ -78,7 +78,7 @@ step's `verdict.decision` drive the loop directly.
 short-circuit at the top of `_pulse_body`:
 
 - **No `iteration` block on the ledger → no-op.** A1, W, and every
-  v0.2.x recipe early-return through this path with zero side effects.
+  v0.2.x workflow early-return through this path with zero side effects.
 - **Gate verdict `decision == "advance"`** → falls through to standard
   predicate-met flow; loop advances to `done`.
 - **`decision == "iterate"` under bound** → engine calls
@@ -110,7 +110,7 @@ A misbehaving gate agent cannot loop forever.
 
 A gate step may carry a typed `verification` block (criteria of kind
 `programmatic` / `model_judge` / `advisor_judge` / `human` — see
-`recipe-format.md` and `skills/auto-design/references/verification-taxonomy.md`).
+`workflow-format.md` and `skills/auto-design/references/verification-taxonomy.md`).
 `lib/iteration.py::resolve_gate_verification` runs the `programmatic` criteria
 in-process (`lib/verification.py`) and folds them with any driver-supplied
 `dispatch_context.judge_verdicts` into an advance/iterate **signal** via the
@@ -125,9 +125,9 @@ judge.
 ### Operator kill-switch
 
 `CLAUDE_AUTO_DISABLE_ITERATION=1` makes `advance_iteration_loop`
-return None — every pulse proceeds as if the recipe had no `iteration`
+return None — every pulse proceeds as if the workflow had no `iteration`
 block. Emergency rollback knob without redeploying or editing the
-recipe. The decision on disk is UNTOUCHED — unsetting resumes
+workflow. The decision on disk is UNTOUCHED — unsetting resumes
 outcomes-gating on the next pulse.
 
 ### Reading the decision
@@ -141,7 +141,7 @@ literal anywhere in `lib/*.py` except `lib/iteration.py` +
 because that's how the "plan documents a behavior the code never
 wires" build-bug class keeps happening.
 
-See `docs/contracts/recipe-format.md` §6 + §7 (recipe shape) and
+See `docs/contracts/workflow-format.md` §6 + §7 (workflow shape) and
 `docs/contracts/ledger-schema.md` §2.1 + §2.3 (ledger fields).
 
 ---
@@ -384,7 +384,7 @@ advance/iterate SIGNAL to a terminal `pass`/`fail` (all resolved pass →
 criteria: it does NOT import `lib/iteration.py`, does NOT commit an
 iteration `decision`, and writes no `decision` field. This is
 distinct from §2's *Reading the decision* path — that is the looping
-recipe's gate-decision commit (`iteration.resolve_gate_verification` →
+workflow's gate-decision commit (`iteration.resolve_gate_verification` →
 `set_verdict_decision`); the one-shot verdict is a terminal report that
 touches neither the §11 gate-steering semantics nor the ledger's
 `decision` channel. `tests/unit/import-topology.test.sh` pins the
@@ -447,7 +447,7 @@ the exit report. Two `kind` values exist (`lib/ledger.py::ExitReason.KINDS`):
 - `workflow-bug` — a `LedgerError` subclass (`UnknownStep`,
   `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
   Surface `error.type` + `error.message`; recommend inspecting the
-  recipe JSON against `docs/contracts/recipe-format.md`.
+  workflow JSON against `docs/contracts/workflow-format.md`.
 
 `exit_reason` is the durable on-ledger record. Do not invent
 additional `kind` values; the constant tuple is the contract.
@@ -592,7 +592,7 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
    bug / what-to-improve / perf), with a confidence in [0,1].
 2. **Recommend** — call the recommender:
    `python "${CLAUDE_PLUGIN_ROOT}/lib/recommender.py" <state> <confidence>`.
-   It returns one JSON line: `{state, ce_step, recipe_or_entry, entry, is_spine,
+   It returns one JSON line: `{state, ce_step, workflow_or_entry, entry, is_spine,
    kind, confidence, escalate}`.
 3. **Escalate-or-dispatch (PRE-DISPATCH GATE):** if `escalate` is true OR the
    state is ambiguous, escalate to the operator via the **pause handoff** BEFORE
@@ -604,18 +604,18 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
 4. **kind == "skill"** (bug→`/ce-debug`, what-to-improve→`/ce-ideate`,
    perf→`/ce-optimize`): recommend the skill command — NO auto-wrap, no run
    created (the `ce-ideate` precedent; the CE backend has no debug/optimize op).
-5. **kind == "recipe"** (vague→`pipeline`@brainstorm, clear-intent-no-plan→`a1`@plan,
+5. **kind == "workflow"** (vague→`pipeline`@brainstorm, clear-intent-no-plan→`a1`@plan,
    reviewed-plan→`w`@work, code-unreviewed→`review`@work):
    a. **Author a phase goal** by performing the `auto-author-goal` procedure
       (skills/auto-author-goal) — draft `.claude/auto/goals/<slug>.md` whose
       PRIMARY criterion is auto's own exit predicate (all steps terminal, only
       P3 findings remain). The authored doc is also the run's spec file.
-   b. **Dispatch** the entry recipe and bind auto's OWN deterministic predicate:
-      `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<goal-doc-path> --recipe <recipe_or_entry>"`.
-      The recipe's `phase_order[0]` IS the entry phase (`pipeline`→brainstorm,
+   b. **Dispatch** the entry workflow and bind auto's OWN deterministic predicate:
+      `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<goal-doc-path> --workflow <workflow_or_entry>"`.
+      The workflow's `phase_order[0]` IS the entry phase (`pipeline`→brainstorm,
       `a1`→plan, `w`/`review`→work). The vague→`pipeline` dispatch enters at the
       `brainstorm` phase and auto-advances brainstorm→plan→work (the spine ships
-      in this same v0.6.0 diff — §13, recipes/pipeline.json).
+      in this same v0.6.0 diff — §13, workflows/pipeline.json).
    c. **NEVER run native `/goal`.** Auto can neither arm nor clear a native
       model-judged goal (never-met-loop risk); the deterministic Stop-hook
       predicate armed by the run is the single source of truth (§1, §3).
@@ -875,7 +875,7 @@ short-circuits the detector entirely (auto-driver SKILL.md, "before loading the
 hypothesis"), so `$ARGUMENTS` never reaches the situation enum:
 
 - **Args tree** (driver, pre-detector): a plan-file path → run it
-  (`auto.sh "<path> --recipe w"`); otherwise classify the string with
+  (`auto.sh "<path> --workflow w"`); otherwise classify the string with
   `lib/verb-classify.py`.
 - **Bare tree** (detector envelope): in-flight → ambiguous-runs → ranked-plans /
   conversation (§9) → raw.
@@ -888,14 +888,14 @@ returns one of `{work | plan | both | ambiguous}`:
 
 - `work` — a work verb (execute/run/implement/verify/review/…/open a PR) and no
   plan-creation intent → route to WORK on a discovered plan (`auto.sh "<plan>
-  --recipe w"`). The args path short-circuits the detector, so the driver picks
+  --workflow w"`). The args path short-circuits the detector, so the driver picks
   the plan itself — run `python lib/plan-rank.py <repo>` and take the freshest
   entry. If no plan exists, the driver (the model) decides — nothing to execute yet.
 - `plan` — plan-creation intent (`plan`/`design`/…, or a creation verb + the
   noun "plan") and no work verb → `/ce-plan <ARGUMENTS>`.
 - `both` — both a work verb AND plan-creation intent ("develop and implement a
   plan", "plan and ship X") → `/ce-plan <ARGUMENTS>` to create the plan, then work
-  it (`--recipe w`). (NOT `auto.sh "<ARGUMENTS> --recipe a1"` — `auto.sh` needs a
+  it (`--workflow w`). (NOT `auto.sh "<ARGUMENTS> --workflow a1"` — `auto.sh` needs a
   plan/spec *file*, and freeform args are not one; a1 is the bare-tree /
   conversation-context entry, where a goal doc exists.)
 - `ambiguous` — no verb signal (bare topics, "make it better") → the driver
@@ -932,7 +932,7 @@ splits classification: the **fuzzy** half (how sure am I of the shape, and of th
 gates) stays in the launch agent; the **crisp** half — which tier that maps to —
 is `lib/launch-gate.py::classify_launch(...)`, a pure, IO-free function. The agent
 emits two self-assessed confidences in `[0,1]` (`shape_confidence`,
-`gates_confidence`) plus structural facts (`recipe_kind ∈ {builtin, custom}`, the
+`gates_confidence`) plus structural facts (`workflow_kind ∈ {builtin, custom}`, the
 proposed `gate_types`, and a precomputed `router_agrees` boolean);
 `classify_launch` returns `skip` / `confirm` / `two_step`. The three tiers:
 
@@ -952,24 +952,24 @@ on both dimensions, `CONFIRM_BAR = 0.70` for the settled-but-soft dimension). Do
 not restate the thresholds as independent assertions elsewhere — read them from
 that module. The rules, evaluated in order, are what the code enforces:
 
-1. `recipe_kind == "custom"` → **`two_step`**. A composed loop is always drawn and
+1. `workflow_kind == "custom"` → **`two_step`**. A composed loop is always drawn and
    confirmed (R4); it never skips and never single-confirms.
 2. Any `gate_type ∈ {advisor_judge, human, model_judge}` → **never `skip`** (a
    non-deterministic gate is by definition not "obvious"). Note this forbids skip
    *only* — with a settled shape such a launch may still **single-confirm** (rule 4
    does not re-check for a blocking gate), and otherwise falls to `two_step`. It is
    not forced to the two-step chooser.
-3. `skip` iff both confidences `≥ SKIP_BAR` **and** `recipe_kind == "builtin"`
+3. `skip` iff both confidences `≥ SKIP_BAR` **and** `workflow_kind == "builtin"`
    **and** `gate_types ⊆ {programmatic}` (empty is allowed — a1/w emit no typed
    gate) **and** `router_agrees`.
-4. else `confirm` iff `recipe_kind == "builtin"` **and** exactly one dimension
+4. else `confirm` iff `workflow_kind == "builtin"` **and** exactly one dimension
    clears `SKIP_BAR` while the other clears `CONFIRM_BAR` but stays below
    `SKIP_BAR`. (If both clear `SKIP_BAR` but the skip envelope failed for some
    other reason, this does not fire — it falls through.)
 5. otherwise → **`two_step`** (the bias-to-show default).
 
 Bad inputs degrade toward safety, never toward an accidental skip: a non-numeric
-or out-of-range confidence coerces to `0.0`, an unknown `recipe_kind` is treated as
+or out-of-range confidence coerces to `0.0`, an unknown `workflow_kind` is treated as
 `custom` (→ `two_step`), malformed `gate_types` block the rule-3 subset check, and
 only the literal boolean `True` counts as `router_agrees`.
 
@@ -998,7 +998,7 @@ skip is possible.
 The chooser fires for interactive `/auto` exactly where the driver today picks a
 *loop shape* and dispatches it — wired in `skills/auto-driver/SKILL.md`:
 
-- **`reviewed-plan`** (was: silent `auto.sh "<path> --recipe w"`) → routes through
+- **`reviewed-plan`** (was: silent `auto.sh "<path> --workflow w"`) → routes through
   `auto-launch`, which classifies the state, runs the ladder, and dispatches.
 - **Freeform-not-a-plan** (`$ARGUMENTS` is a sentence, not a plan file) → was
   `/ce-plan <ARGUMENTS>`-and-end; now classifies to `clear-intent-no-plan`
@@ -1007,7 +1007,7 @@ The chooser fires for interactive `/auto` exactly where the driver today picks a
 
 It does **not** fire for `in-flight` / `ambiguous-runs` / `multi-plan` (those
 select a *run*, not a loop shape — run-selection, deferred), for
-`conversation-context` (self-applied silently, R11), or for `--recipe`
+`conversation-context` (self-applied silently, R11), or for `--workflow`
 (`commands/auto.md` branch 2, bypassed entirely, R12).
 
 **Interactive-only by construction (R11 / AE6).** The chooser must never reach an
@@ -1022,7 +1022,7 @@ construction.
 ### Gate attachment: a1/w vs a2/a4/custom (KTD-4 — the load-bearing wiring split)
 
 The v0.7.0 typed `verification` array rides on `iteration.gate_step`, which must
-name a **declared** step (`recipe-format.md` §6, §11). `a2`/`a4` declare structural
+name a **declared** step (`workflow-format.md` §6, §11). `a2`/`a4` declare structural
 gate steps (`judge` / `compare`); `a1`/`w` do not — their work steps are emitted at
 runtime by `plan_output_to_work_steps` with dynamic ids that can't be enumerated.
 Adding an iteration block + gate step to a1/w would be a new built-in topology,
@@ -1036,10 +1036,10 @@ which is out of scope. So gating attaches differently by shape:
   programmatic check.
 - **`a2` / `a4` / custom** — a declared gate step exists, so typed `verification`
   attaches via the existing mechanism. When the operator's confirmed gates differ
-  from the built-in default (or it is a custom recipe), the launch agent compiles a
-  **run-scoped workspace recipe** through `auto-author-recipe`'s validation gate
+  from the built-in default (or it is a custom workflow), the launch agent compiles a
+  **run-scoped workspace workflow** through `auto-author-workflow`'s validation gate
   carrying the `verification` array on the gate step, then dispatches
-  `--recipe <run-scoped-name>` (see `recipe-format.md` §5, and KTD-6 below). When the
+  `--workflow <run-scoped-name>` (see `workflow-format.md` §5, and KTD-6 below). When the
   gates are the built-in default, it dispatches the built-in directly.
 
 This keeps the feature clear of the "plan documents a behavior the code never wires"
@@ -1051,7 +1051,7 @@ On a `skip` the run dispatches without a prompt but prints one non-blocking line
 the decision stays visible and auditable:
 
 ```
--> <recipe> · gate: <summary>
+-> <workflow> · gate: <summary>
 ```
 
 `<summary>` is shape-specific (KTD-4):
@@ -1176,5 +1176,5 @@ dispatch and never changes the detector's verdict.
 Classify the session (transcript + ~2-day `ce-sessions` lookback, NOT raw
 compaction) → `python lib/recommender.py <state> <confidence>`.
 `escalate`/ambiguous → one `AskUserQuestion`, no run. `kind=skill` → recommend the
-ce command. `kind=recipe` → `auto-author-goal` (bind auto's OWN predicate, NEVER
-native `/goal`) → `bash lib/auto.sh "<goal-doc> --recipe <name>"`.
+ce command. `kind=workflow` → `auto-author-goal` (bind auto's OWN predicate, NEVER
+native `/goal`) → `bash lib/auto.sh "<goal-doc> --workflow <name>"`.

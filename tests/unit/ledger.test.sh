@@ -889,15 +889,15 @@ else
   fail "production files enable a test hatch: $offenders"
 fi
 
-# ─── Scenario 11 (U1, v0.2.0): additive recipe schema fields ────────────────
-# The recipe work adds top-level recipe/phase_order/terminal_phase and per-step
+# ─── Scenario 11 (U1, v0.2.0): additive workflow schema fields ────────────────
+# The workflow work adds top-level workflow/phase_order/terminal_phase and per-step
 # phase/plan_step/gaps_open/dispatch_context/last_advanced_at. ALL must be
 # additive: a v0.1.x ledger with none of them reads + predicates identically
 # (the attempt-field precedent). New ledgers carrying them round-trip cleanly.
 
 it "U1: a v0.1.x on-disk ledger (no new keys) reads back + predicates unchanged"
 # The REAL backward-compat property: a ledger FILE written in the old shape
-# (no recipe/phase_order/terminal_phase keys, no per-step phase/etc.) must load
+# (no workflow/phase_order/terminal_phase keys, no per-step phase/etc.) must load
 # via the additive defaults and predicate IDENTICALLY to v0.1.1. We write such a
 # file by hand (NOT via the new init_ledger, which adds the keys) and read it.
 v01x="$("$PY" - "$LEDGER_PY" <<'PYEOF'
@@ -950,7 +950,7 @@ PYEOF
 # plan_step None, dispatch_context {} , last_advanced_at None.
 assert_eq "plan,None,{},None" "$defaults"
 
-it "U1: new top-level recipe/phase_order/terminal_phase round-trip"
+it "U1: new top-level workflow/phase_order/terminal_phase round-trip"
 toplevel="$("$PY" - "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
@@ -958,7 +958,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 import tempfile
 repo = tempfile.mkdtemp(); run = "rcp"
 m.init_ledger(repo, run, backend="ce",
-              recipe={"name": "a1", "source_tier": "built-in"},
+              workflow={"name": "a1", "source_tier": "built-in"},
               phase_order=["plan", "handoff", "work"], terminal_phase="work",
               steps=[{"id": "U1"}])
 led = m.read_ledger(repo, run)
@@ -987,7 +987,7 @@ PYEOF
 assert_eq "rejected" "$rej"
 
 # ─── Scenario 18 (U3, v0.7.0): _normalize_step preserves `verification` ───────
-# KTD-1: a recipe gate step's `verification` block must survive normalization so
+# KTD-1: a workflow gate step's `verification` block must survive normalization so
 # resolve_gate_verification sees it on a real run. CONDITIONAL preservation —
 # present iff the source carried it; a step WITHOUT it gets NO key (not None/[]),
 # so legacy ledger step shapes are unchanged (the regression guard).

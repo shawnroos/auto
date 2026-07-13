@@ -171,11 +171,11 @@ def _compute_terminality(ledger: dict) -> dict:
     exit predicate's terminal check is scoped to the steps in the CURRENT phase,
     not the global step set. Pre-v0.2.0 (steps=[] in the plan phase, the handoff
     synthesized work steps), the global all() was equivalent. v0.2.0 declares
-    plan steps explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
+    plan steps explicitly in the workflow (a1's "plan", a2's "plan-1/2/3"); those
     plan steps stay `pending` after plan-done is reached (the plan-loop's
     advance is recorded in plan_step, not via a step state transition). A global
     all_steps_terminal would block work-met forever. Scoping by phase makes each
-    phase have its own terminality. terminal_phase from the recipe gates which
+    phase have its own terminality. terminal_phase from the workflow gates which
     phase's steps count for run-exit (AC-2 — the doc promised this but the code
     didn't honor it). Global all_steps_terminal is retained for the
     exit_predicate_result reporting field (downstream consumers may want it).
@@ -266,12 +266,12 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # phase flip with ZERO steps dispatched would declare met before the
         # dispatcher fans out work. The phase-scoped check
         # (all_terminal_in_eval_phase + has_steps_in_phase) addresses both this AND
-        # the v0.2.0 fix-pass A.1 (plan steps in declared recipes shouldn't gate
+        # the v0.2.0 fix-pass A.1 (plan steps in declared workflows shouldn't gate
         # the work-loop's terminal check).
         # AC-2 fix: `met` requires loop_phase == terminal_phase (the run doesn't
         # exit until the terminal phase is reached AND its own steps are terminal).
         # Post-terminal: "done" is the exit sentinel set BY a met-triggered pulse
-        # (the LAST member of LOOP_PHASES, never a member of any recipe's
+        # (the LAST member of LOOP_PHASES, never a member of any workflow's
         # phase_order). At "done", phase-scoped steps would be empty (no step
         # declares phase=done), so we'd vacuously flip met→false on the recompute
         # that fires when set_loop writes "done". Treat "done" as
@@ -279,7 +279,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         # terminal_phase; "done" preserves that state. Any FUTURE post-terminal
         # sentinel (aborted/error/…) added to LOOP_PHASES would need the same
         # treatment here; today "done" is the only post-terminal value.
-        # For v0.2.0's recipes terminal_phase is always "work"; v0.2.1's A3 will
+        # For v0.2.0's workflows terminal_phase is always "work"; v0.2.1's A3 will
         # have non-work terminal phases and this gate becomes load-bearing.
         eval_phase = terminal_phase if current_phase == "done" else current_phase
         eval_phase_steps = (
@@ -316,7 +316,7 @@ def recompute_predicate(ledger: dict) -> dict:
     ``iteration`` block AND the gate step's verdict.decision is ``"iterate"``
     AND the bound is unbreached (``iteration_attempts < max_attempts`` AND
     ``active_wall_seconds < max_wall_seconds``). Without the AND-NOT clause, a
-    recipe that emits new plan-N steps while ``loop_phase == "work"`` would see
+    workflow that emits new plan-N steps while ``loop_phase == "work"`` would see
     work-met fire spuriously (the work-loop branch above scopes terminality to
     current-phase steps; pending plan-N steps are phase=plan, invisible) — see
     KTD §A. The gate-decision read routes through ``iteration.read_decision`` to

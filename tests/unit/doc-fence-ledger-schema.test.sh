@@ -6,7 +6,7 @@
 # "code adds a public ledger field or mutator without documenting it in
 # docs/contracts/ledger-schema.md" — same shape as the prose-vs-code mismatch
 # pattern, but applied to docs/code drift. G3 closed the round-2 instance for
-# the recipe-format.md side (the F4-added expected_emit_outputs field); G2
+# the workflow-format.md side (the F4-added expected_emit_outputs field); G2
 # reproduced the SAME class on the ledger side by adding `exit_reason` +
 # `set_exit_reason` without touching ledger-schema.md. H (this fix-pass) closes
 # the instance AND adds this mechanical defense so the class can't quietly

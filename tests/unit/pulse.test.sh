@@ -794,16 +794,16 @@ assert_eq "ok" "$guidance_work"
 
 # ─── U5: both terminal-phase guards route through phase_grammar.is_terminal_phase ─
 # The two hand-rolled terminal-phase guards in pulse.py agreed ONLY because every
-# shipped recipe's terminal_phase == "work":
+# shipped workflow's terminal_phase == "work":
 #   Guard A (_try_predicate_met_shortcircuit): a DENYLIST — `phase != "plan" and
 #            phase != "handoff"` — which stops at ANY phase that isn't plan/handoff.
 #   Guard B (_try_post_advance_predicate_met): an ALLOWLIST — `phase == "work"` —
 #            which stops ONLY at work.
-# For a non-work terminal recipe (e.g. terminal_phase == "brainstorm") they
+# For a non-work terminal workflow (e.g. terminal_phase == "brainstorm") they
 # DIVERGE: Guard A over-fires (stops at any non-plan/handoff phase, even non-terminal
 # ones) while Guard B under-fires (never stops at the real terminal). Routing both
 # through phase_grammar.is_terminal_phase(led, phase) makes them agree on the
-# recipe's ACTUAL terminal phase. This is behavior-changing for non-work recipes
+# workflow's ACTUAL terminal phase. This is behavior-changing for non-work workflows
 # and behavior-preserving for the shipped work-terminal ones (the regression case).
 #
 # Verify-RED (against pre-fix pulse.py): the main-fixture Guard B assertion goes RED
@@ -866,7 +866,7 @@ assert_eq "True" "$bs_met"
 # Main fixture — Guard A at the real terminal (brainstorm) stops -> done.
 # (Guard A's denylist already stopped here pre-fix; the fix keeps it stopping,
 #  now for the RIGHT reason: is_terminal_phase(brainstorm)==True.)
-it "U5 Guard A: predicate-met at the recipe's terminal phase (brainstorm) -> stop, loop_phase=done"
+it "U5 Guard A: predicate-met at the workflow's terminal phase (brainstorm) -> stop, loop_phase=done"
 assert_eq "stop,done" "$(u5_guard u5a-main "$BS_STEPS" "$BS_ORDER" brainstorm brainstorm brainstorm A 0)"
 
 # Main fixture — Guard B at the real terminal (brainstorm) stops -> done.
@@ -885,14 +885,14 @@ it "U5 converse: stale met at a NON-terminal phase (brainstorm, terminal=work) -
 assert_eq "none,brainstorm" \
   "$(u5_guard u5-conv '[{"id":"U1","phase":"brainstorm","state":"dispatched"}]' '["plan","handoff","brainstorm","work"]' work brainstorm brainstorm A 1)"
 
-# Regression — a shipped work-terminal recipe still stops exactly as before at the
+# Regression — a shipped work-terminal workflow still stops exactly as before at the
 # work phase, through BOTH guards. is_terminal_phase(work)==True keeps the default
 # grammar's behavior byte-for-byte.
-it "U5 regression: work-terminal recipe -> Guard A stops at work (unchanged) -> done"
+it "U5 regression: work-terminal workflow -> Guard A stops at work (unchanged) -> done"
 assert_eq "stop,done" \
   "$(u5_guard u5-reg-a '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","handoff","work"]' work work work A 0)"
 
-it "U5 regression: work-terminal recipe -> Guard B stops at work (unchanged) -> done"
+it "U5 regression: work-terminal workflow -> Guard B stops at work (unchanged) -> done"
 assert_eq "stop,done" \
   "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","handoff","work"]' work work work B 0)"
 

@@ -2,12 +2,12 @@
 # auto launch-chooser U2: deterministic launch confidence ladder.
 #
 # lib/launch-gate.py::classify_launch maps the launch agent's two self-assessed
-# confidences (shape, gates) + the structural facts (recipe_kind, gate_types,
+# confidences (shape, gates) + the structural facts (workflow_kind, gate_types,
 # router_agrees) to one of skip / confirm / two_step (plan KTD-1). The fuzzy
 # step (how confident am I?) is the model's; the crisp tier mapping is code —
 # `feedback_deterministic_over_probabilistic_v1`. This file pins the full
 # KTD-1 truth table, with the load-bearing focus on the SAFETY rows that must
-# never return `skip` (a judge/human gate, a custom recipe, or a router
+# never return `skip` (a judge/human gate, a custom workflow, or a router
 # disagreement). Those rows are the dead-UI-regression guard (R10).
 #
 # Test-first target (U2 Execution note): the router-disagrees-but-confident row
@@ -45,7 +45,7 @@ assert_in() {
 }
 
 # ── Helper: drive the launch-gate CLI, print just the tier. ────────────────
-# tier <shape> <gates> <recipe_kind> <gate_types_csv> <router_agrees>
+# tier <shape> <gates> <workflow_kind> <gate_types_csv> <router_agrees>
 #   gate_types_csv: comma-separated (use "" for an empty list).
 #   router_agrees: true|false
 tier() {
@@ -87,7 +87,7 @@ assert_eq "two_step" "$(tier 0.99 0.99 builtin human true)"
 it "safety: (0.99,0.99,builtin,[model_judge],True) -> two_step (never skip)"
 assert_eq "two_step" "$(tier 0.99 0.99 builtin model_judge true)"
 
-# ── custom recipe always two_step (rule 1, R4) ───────────────────────────────
+# ── custom workflow always two_step (rule 1, R4) ───────────────────────────────
 it "safety: (0.99,0.99,custom,[],True) -> two_step"
 assert_eq "two_step" "$(tier 0.99 0.99 custom "" true)"
 
@@ -116,7 +116,7 @@ assert_eq "two_step" "$(tier abc def builtin "" true)"
 it "robustness: out-of-range (negative) confidence -> two_step"
 assert_eq "two_step" "$(tier -0.5 -0.5 builtin "" true)"
 
-it "robustness: unknown recipe_kind -> treated as custom -> two_step"
+it "robustness: unknown workflow_kind -> treated as custom -> two_step"
 assert_eq "two_step" "$(tier 0.99 0.99 weird "" true)"
 
 # ── direct Python API smoke (the function is the real contract, not the CLI) ─

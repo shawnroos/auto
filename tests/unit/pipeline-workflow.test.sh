@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# auto v0.6.0 U7 unit test: recipes/pipeline.json (the brainstorm-rooted spine)
+# auto v0.6.0 U7 unit test: workflows/pipeline.json (the brainstorm-rooted spine)
 # + brainstorm entry-phase wiring through the init path.
 #
-# SELF-CONTAINED inline harness (same style as producers.test.sh / recipes.test.sh).
+# SELF-CONTAINED inline harness (same style as producers.test.sh / workflows.test.sh).
 #
 # Scenarios:
 #   1. pipeline.json validates and resolves through the three-tier registry.
 #   2. Init at `brainstorm` bakes loop_phase="brainstorm" + the full phase_order
-#      (the recipe-generic `loop_phase=phase_order[0]` init line threads it; no
+#      (the workflow-generic `loop_phase=phase_order[0]` init line threads it; no
 #      auto.py change needed — init_ledger validates membership, line ~808).
 #   3. Forward advance brainstorm→plan emits the plan step via the PRODUCER path
 #      (transition_and_emit / direct-dict-mutation), not predicate-met.
@@ -39,29 +39,29 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Driver: load recipes/ledger/producers via _bootstrap, run an op, print result.
+# Driver: load workflows/ledger/producers via _bootstrap, run an op, print result.
 pl() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 ledger = load_lib_module("ledger")
 producers = load_lib_module("step_producers")
 op = sys.argv[2]
 
 
-def _init_from_recipe(repo, run, name):
-    """Init a ledger from a built-in recipe exactly as lib/auto.py does (the
-    recipe-generic init call: loop_phase=phase_order[0])."""
-    r, tier = recipes.load_and_validate(name, repo)
-    init_steps = [recipes.step_for(u, r) for u in r.get("steps", [])]
+def _init_from_workflow(repo, run, name):
+    """Init a ledger from a built-in workflow exactly as lib/auto.py does (the
+    workflow-generic init call: loop_phase=phase_order[0])."""
+    r, tier = workflows.load_and_validate(name, repo)
+    init_steps = [workflows.step_for(u, r) for u in r.get("steps", [])]
     po = r.get("phase_order", ["plan", "handoff", "work"])
     ledger.init_ledger(
         repo, run, backend="ce", steps=init_steps,
         loop_phase=po[0],
-        recipe={"name": r["name"], "source_tier": tier},
+        workflow={"name": r["name"], "source_tier": tier},
         phase_order=po, terminal_phase=r.get("terminal_phase", "work"),
         phase_transitions=r.get("phase_transitions", []))
     return r
@@ -69,13 +69,13 @@ def _init_from_recipe(repo, run, name):
 
 if op == "validate-resolve":
     repo = tempfile.mkdtemp()
-    r, tier = recipes.load_and_validate("pipeline", repo)
+    r, tier = workflows.load_and_validate("pipeline", repo)
     print("%s:%s:%s:%s" % (
         r["name"], tier, ",".join(r["phase_order"]), r["terminal_phase"]))
 
 elif op == "init-brainstorm":
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "pl", "pipeline")
+    _init_from_workflow(repo, "pl", "pipeline")
     led = ledger.read_ledger(repo, "pl")
     print("%s|%s|%s" % (
         led["loop_phase"], ",".join(led["phase_order"]),
@@ -87,7 +87,7 @@ elif op == "forward-advance":
     # step is PRODUCER-driven (appended), loop_phase moved to plan, and the
     # requirements-doc rode through onto the plan step's dispatch_context.
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "pl", "pipeline")
+    _init_from_workflow(repo, "pl", "pipeline")
     path = ledger.ledger_path(repo, "pl")
     with open(path) as f:
         d = json.load(f)
@@ -111,7 +111,7 @@ elif op == "set-loop-rejects-brainstorm":
     # exercised in forward-advance) is the sanctioned route. Here we prove the
     # set_loop rejection so the constraint is covered.
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "pl", "pipeline")
+    _init_from_workflow(repo, "pl", "pipeline")
     try:
         ledger.set_loop(repo, "pl", loop_phase="brainstorm")
         print("NO-RAISE")
@@ -123,19 +123,19 @@ elif op == "predicate-not-met-at-brainstorm":
     # predicate must NOT be met — the run leaves brainstorm only via forward
     # advance, never via predicate-met.
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "pl", "pipeline")
+    _init_from_workflow(repo, "pl", "pipeline")
     led = ledger.read_ledger(repo, "pl")
     print("%s|%s" % (led["terminal_phase"], led["exit_predicate_result"]["met"]))
 
 elif op == "plan-entry-a1":
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "r", "a1")
+    _init_from_workflow(repo, "r", "a1")
     led = ledger.read_ledger(repo, "r")
     print("%s|%s" % (led["loop_phase"], ",".join(led["phase_order"])))
 
 elif op == "work-entry-w":
     repo = tempfile.mkdtemp()
-    _init_from_recipe(repo, "r", "w")
+    _init_from_workflow(repo, "r", "w")
     led = ledger.read_ledger(repo, "r")
     print("%s|%s" % (led["loop_phase"], ",".join(led["phase_order"])))
 PYEOF
@@ -174,5 +174,5 @@ assert_eq "plan|plan,handoff,work" "$(pl work-entry-w)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "pipeline-recipe.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "pipeline-workflow.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -5,7 +5,7 @@
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # Round-1 review's P0 #1: the v0.1.x handoff handler did raw set_loop(loop_phase="work")
-# and never called the new transition_and_emit primitive — the recipe topology
+# and never called the new transition_and_emit primitive — the workflow topology
 # was built INTO the initial ledger but the runtime ignored it. A unit test on
 # transition_and_emit in isolation passes; a unit test on producers.resolve()
 # passes; but neither proves that the engine ACTUALLY CALLS THEM on a real
@@ -49,17 +49,17 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 # Drive a1 to plan-done, then call dispatch_pulse once and read back. Returns CSV:
 #   loop_phase | work_step_ids (comma-joined, sorted)
 # producer_off=1 monkey-patches transition_and_emit to a no-op (deliberate-fail
-# control); legacy_no_recipe=1 strips the recipe field to exercise the v0.1.x
+# control); legacy_no_workflow=1 strips the workflow field to exercise the v0.1.x
 # fallback path.
 drive_plan_to_work() {
   producer_off="${1:-0}"
-  legacy_no_recipe="${2:-0}"
+  legacy_no_workflow="${2:-0}"
   no_stash="${3:-0}"
-  "$PY" - "$AUTO_ROOT" "$producer_off" "$legacy_no_recipe" "$no_stash" <<'PYEOF'
+  "$PY" - "$AUTO_ROOT" "$producer_off" "$legacy_no_workflow" "$no_stash" <<'PYEOF'
 import sys, os, importlib.util, tempfile, glob, json, io, contextlib
 auto_root = sys.argv[1]
 producer_off = sys.argv[2] == "1"
-legacy_no_recipe = sys.argv[3] == "1"
+legacy_no_workflow = sys.argv[3] == "1"
 no_stash = sys.argv[4] == "1"
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 
@@ -76,7 +76,7 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: /auto plan.md (default recipe a1). This creates the ledger with one
+# Step 1: /auto plan.md (default workflow a1). This creates the ledger with one
 # plan step `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan])
@@ -102,11 +102,11 @@ ledger.set_gaps_open(repo, run_id, 0)
 # Force plan_step=review_plan so plan-met fires (the predicate requires it).
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
-# Step 2b (legacy branch): strip the recipe field on disk to simulate a v0.1.x
+# Step 2b (legacy branch): strip the workflow field on disk to simulate a v0.1.x
 # ledger resumed under v0.2.0. The advance_to_phase helper MUST take the
 # raw-set_loop fallback (no producer, no new steps), so the test asserts the
 # legacy contract is honored.
-if legacy_no_recipe:
+if legacy_no_workflow:
     path = os.path.join(repo, ".claude", "auto", f"{run_id}.json")
     with open(path) as f:
         led_raw = json.load(f)
@@ -118,7 +118,7 @@ if legacy_no_recipe:
 # Step 3 (deliberate-fail control): monkey-patch transition_and_emit to a no-op
 # BEFORE the pulse fires. If the engine routes through this primitive (it does
 # in the green branch), the no-op will produce zero new steps even though the
-# recipe declares one.
+# workflow declares one.
 if producer_off:
     def _noop(*a, **kw): pass
     ledger.transition_and_emit = _noop
@@ -150,16 +150,16 @@ it "fix-pass A.2 DELIBERATE-FAIL: with transition_and_emit no-op'd, no work step
 res_off="$(drive_plan_to_work 1 0)"
 # With the primitive no-op'd, the green-path assertion above MUST NOT hold —
 # the proof this test isn't passing vacuously. The legacy fallback also doesn't
-# emit, but we're on the recipe path, so the helper would have RAISED if it
+# emit, but we're on the workflow path, so the helper would have RAISED if it
 # couldn't find the producer — only the no-op produces zero new steps silently.
 case "$res_off" in
   "work|u-alpha,u-beta") fail "deliberate-fail FAILED: producer ran despite the no-op patch" ;;
   *) pass ;;
 esac
 
-it "fix-pass A.2 LEGACY: a v0.1.x ledger (no recipe) falls back to set_loop, no emission"
+it "fix-pass A.2 LEGACY: a v0.1.x ledger (no workflow) falls back to set_loop, no emission"
 res_legacy="$(drive_plan_to_work 0 1)"
-# Legacy ledger: no recipe → advance_to_phase uses raw set_loop, no work steps
+# Legacy ledger: no workflow → advance_to_phase uses raw set_loop, no work steps
 # emitted. The plan-loop's `plan` step stays but no new steps appear at work.
 case "$res_legacy" in
   "work|") pass ;;

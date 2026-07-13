@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/ce/auto/recipes/schema.json",
-  "title": "auto recipe",
-  "description": "Documentation schema for an auto recipe (the named, file-backed JSON declaration of a workflow topology). The hand-rolled validator lib/recipes.py::validate() is the ENFORCER — it is pure-stdlib (no jsonschema dependency, install-anywhere) and applies cross-field integrity rules this schema only sketches (depends_on integrity, the iteration<->emit_templates pairing rule, phase membership). See docs/contracts/recipe-format.md for the LOCKED prose contract. If this schema and validate() ever disagree, validate() wins.",
+  "$id": "https://github.com/ce/auto/workflows/schema.json",
+  "title": "auto workflow",
+  "description": "Documentation schema for an auto workflow (the named, file-backed JSON declaration of a loop topology \u2014 an ordered graph of steps). The hand-rolled validator lib/workflows.py::validate() is the ENFORCER — it is pure-stdlib (no jsonschema dependency, install-anywhere) and applies cross-field integrity rules this schema only sketches (depends_on integrity, the iteration<->emit_templates pairing rule, phase membership). See docs/contracts/workflow-format.md for the LOCKED prose contract. If this schema and validate() ever disagree, validate() wins.",
   "type": "object",
   "required": ["name", "version", "steps"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "name": {
       "type": "string",
       "minLength": 1,
-      "description": "Recipe id; non-empty, matches the filename stem."
+      "description": "Workflow id; non-empty, matches the filename stem."
     },
     "version": {
       "type": "string",
@@ -56,12 +56,12 @@
     },
     "steps": {
       "type": "array",
-      "description": "The declared steps. MUST be non-empty for a work-only ([\"work\"]) recipe.",
+      "description": "The declared steps. MUST be non-empty for a work-only ([\"work\"]) workflow.",
       "items": { "$ref": "#/$defs/step" }
     },
     "iteration": {
       "type": "object",
-      "description": "(v0.3.0, additive) Outcomes-gated iteration block — see recipe-format.md §6.",
+      "description": "(v0.3.0, additive) Outcomes-gated iteration block — see workflow-format.md §6.",
       "required": ["gate_step", "bound"],
       "additionalProperties": false,
       "properties": {
@@ -80,7 +80,7 @@
     },
     "emit_templates": {
       "type": "object",
-      "description": "(v0.3.0, additive) Map of <template_name> -> partial step shape materialized by iterate_template — see recipe-format.md §7.",
+      "description": "(v0.3.0, additive) Map of <template_name> -> partial step shape materialized by iterate_template — see workflow-format.md §7.",
       "additionalProperties": {
         "type": "object",
         "required": ["phase", "invokes", "id_prefix"],
@@ -95,7 +95,7 @@
     "expected_emit_outputs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "(v0.3.0, additive — F4) Step ids materialized by a phase-boundary producer, declared so depends_on integrity accepts them — see recipe-format.md §8."
+      "description": "(v0.3.0, additive — F4) Step ids materialized by a phase-boundary producer, declared so depends_on integrity accepts them — see workflow-format.md §8."
     },
     "plan_presatisfied": {
       "type": "boolean",
@@ -111,16 +111,16 @@
       "required": ["id", "phase"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "minLength": 1, "description": "Unique within the recipe, non-empty." },
+        "id": { "type": "string", "minLength": 1, "description": "Unique within the workflow, non-empty." },
         "phase": { "type": "string", "description": "MUST be a member of phase_order." },
         "depends_on": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Step ids this step waits for. Each member must be in steps[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
+          "description": "Step ids this step waits for. Each member must be in steps[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see workflow-format.md §3/§8."
         },
         "invokes": {
           "type": "object",
-          "description": "What the step invokes — backend_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
+          "description": "What the step invokes — backend_op plus optional workflow-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
         },
         "verification": {
           "type": "array",

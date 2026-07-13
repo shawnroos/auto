@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # auto U6 (R9) unit test: legible names alias the a1/a2/a4/w shorthand.
 #
-# A pure ALIAS layer — a legible name resolves to the SAME recipe as its
+# A pure ALIAS layer — a legible name resolves to the SAME workflow as its
 # shorthand stem; the stems and the A1_BUILTIN fallback constant are NEVER
 # renamed (KTD-6). SELF-CONTAINED inline harness (same style as
-# recipes.test.sh / ledger.test.sh).
+# workflows.test.sh / ledger.test.sh).
 #
 # Legible name → stem aliases under test:
 #   plan-build-review → a1      parallel-theories → a2
 #   adversarial-pair  → a4      work-only         → w
 #
 # Scenarios:
-#   1. Resolving a legible name returns the SAME recipe dict as its stem (R9).
+#   1. Resolving a legible name returns the SAME workflow dict as its stem (R9).
 #   2. Bare /auto still falls back to A1_BUILTIN when no a1.json resolves
 #      (KTD-6 — the fallback path is intact; the alias inherits it too).
-#   3. recommender routing still produces a resolvable recipe; the alias
-#      round-trips (legible name resolves to the same recipe as the stem).
+#   3. recommender routing still produces a resolvable workflow; the alias
+#      round-trips (legible name resolves to the same workflow as the stem).
 #   4. `recommender.py --check-agrees` agrees END TO END on an ALIAS-form
 #      recommendation (not just set membership): the agent may pass the legible
 #      name (skills/auto-launch §2 promotes it as primary); it must canonicalize
 #      to its stem and reach the skip tier exactly where the bare stem does.
 #   5. Every existing a1/a2/a4/w reference still resolves (no rename regression).
-#   6. A recipe AUTHORED under a reserved alias name is rejected by validate()
+#   6. A workflow AUTHORED under a reserved alias name is rejected by validate()
 #      (fail fast, not silently shadowed); the bare stems stay valid.
-#   7. Drift guard: recipes._ALIASES == recipe_validate._RESERVED_ALIAS_STEMS
+#   7. Drift guard: workflows._ALIASES == workflow_validate._RESERVED_ALIAS_STEMS
 #      (the two copies of the reserved map can never diverge).
 
 set -uo pipefail
@@ -34,9 +34,9 @@ PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 REC="${AUTO_ROOT}/lib/recommender.py"
 
 # Hermeticity (CodeRabbit): isolate HOME to a throwaway sandbox so resolve()'s
-# GLOBAL tier (~/.claude/auto/recipes) can never read the developer's real
-# recipes. The workspace tier already uses per-test tempdirs; the built-in tier
-# reads the repo's own recipes/ (deterministic). Cleaned up on exit.
+# GLOBAL tier (~/.claude/auto/workflows) can never read the developer's real
+# workflows. The workspace tier already uses per-test tempdirs; the built-in tier
+# reads the repo's own workflows/ (deterministic). Cleaned up on exit.
 _HOME_SANDBOX="$(mktemp -d)"
 export HOME="$_HOME_SANDBOX"
 trap 'rm -rf "$_HOME_SANDBOX"' EXIT
@@ -61,7 +61,7 @@ import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 op = sys.argv[2]
 
 # The alias → stem pairs under test (legible name, shorthand stem).
@@ -74,13 +74,13 @@ PAIRS = [
 
 def _resolve(name, repo):
     try:
-        d, tier = recipes.resolve(name, repo)
+        d, tier = workflows.resolve(name, repo)
         return d, tier, None
-    except recipes.RecipeError as e:
+    except workflows.WorkflowError as e:
         return None, None, str(e)
 
 if op == "alias-parity":
-    # Each legible name resolves to the SAME recipe dict (and tier) as its stem.
+    # Each legible name resolves to the SAME workflow dict (and tier) as its stem.
     repo = tempfile.mkdtemp()
     out = []
     for alias, stem in PAIRS:
@@ -102,20 +102,20 @@ elif op == "fallback-intact":
     repo = tempfile.mkdtemp()
     sd, st, _ = _resolve("a1", repo)
     ad, at, _ = _resolve("plan-build-review", repo)
-    stem_ok = (sd == recipes.A1_BUILTIN and st == "built-in")
-    alias_ok = (ad == recipes.A1_BUILTIN and at == "built-in")
+    stem_ok = (sd == workflows.A1_BUILTIN and st == "built-in")
+    alias_ok = (ad == workflows.A1_BUILTIN and at == "built-in")
     print("stem:%s,alias:%s" % (stem_ok, alias_ok))
 
 elif op == "recommender-roundtrip":
     # The recommender's spine picks (a1 for clear-intent-no-plan, w for
     # reviewed-plan) still resolve; each stem's legible alias round-trips to the
-    # SAME recipe name. Proves both stem and alias route after the change.
+    # SAME workflow name. Proves both stem and alias route after the change.
     recommender = load_lib_module("recommender")
     repo = tempfile.mkdtemp()
     alias_for = {stem: alias for alias, stem in PAIRS}
     out = []
     for state in ("clear-intent-no-plan", "reviewed-plan"):
-        stem = recommender.recommend(state)["recipe_or_entry"]
+        stem = recommender.recommend(state)["workflow_or_entry"]
         sd, _, serr = _resolve(stem, repo)
         alias = alias_for.get(stem)
         ad, _, aerr = _resolve(alias, repo) if alias else (None, None, "no-alias")
@@ -125,30 +125,30 @@ elif op == "recommender-roundtrip":
     print(",".join(out))
 
 elif op == "reserved-reject":
-    # Finding 2: a recipe AUTHORED under a reserved alias name must be rejected by
+    # Finding 2: a workflow AUTHORED under a reserved alias name must be rejected by
     # validate() (fail fast) — resolve() would otherwise silently shadow it with
-    # the stem's recipe. The bare stems (a1/w) are NOT reserved and stay valid.
+    # the stem's workflow. The bare stems (a1/w) are NOT reserved and stay valid.
     def vresult(name):
         try:
-            recipes.validate({"name": name, "version": "1", "steps": []})
+            workflows.validate({"name": name, "version": "1", "steps": []})
             return "%s:valid" % name
-        except recipes.RecipeError:
+        except workflows.WorkflowError:
             return "%s:rejected" % name
     checks = ["plan-build-review", "parallel-theories", "adversarial-pair",
               "work-only", "a1", "w"]
     print(",".join(vresult(n) for n in checks))
 
 elif op == "reserved-drift":
-    # Drift guard: the reserved-alias map copied into recipe_validate (the DAG
-    # root, which can't import recipes without a cycle) MUST equal recipes._ALIASES
+    # Drift guard: the reserved-alias map copied into workflow_validate (the DAG
+    # root, which can't import workflows without a cycle) MUST equal workflows._ALIASES
     # (the alias→stem SSOT). If a future edit adds/renames an alias in one place
     # only, this flips to "differ".
-    rv = load_lib_module("recipe_validate")
-    print("same" if recipes._ALIASES == rv._RESERVED_ALIAS_STEMS else "differ")
+    rv = load_lib_module("workflow_validate")
+    print("same" if workflows._ALIASES == rv._RESERVED_ALIAS_STEMS else "differ")
 
 elif op == "stems-resolve":
     # No rename regression: every existing shorthand stem still resolves to a
-    # recipe whose name is the stem, at the built-in tier.
+    # workflow whose name is the stem, at the built-in tier.
     repo = tempfile.mkdtemp()
     out = []
     for stem in ("a1", "a2", "a4", "w"):
@@ -162,7 +162,7 @@ PYEOF
 }
 
 # ─── Scenario 1: alias↔stem parity ──────────────────────────────────────────
-it "each legible name resolves to the SAME recipe dict as its shorthand stem (R9)"
+it "each legible name resolves to the SAME workflow dict as its shorthand stem (R9)"
 assert_eq "plan-build-review=a1:same,parallel-theories=a2:same,adversarial-pair=a4:same,work-only=w:same" \
   "$(drv alias-parity)"
 
@@ -171,7 +171,7 @@ it "bare /auto falls back to A1_BUILTIN with no a1.json; alias inherits the fall
 assert_eq "stem:True,alias:True" "$(drv fallback-intact)"
 
 # ─── Scenario 3: recommender routing round-trips through the alias ──────────
-it "recommender picks still resolve; each stem's alias round-trips to the same recipe"
+it "recommender picks still resolve; each stem's alias round-trips to the same workflow"
 assert_eq "clear-intent-no-plan->a1/plan-build-review:ok,reviewed-plan->w/work-only:ok" \
   "$(drv recommender-roundtrip)"
 
@@ -207,18 +207,18 @@ it "every existing a1/a2/a4/w reference still resolves at the built-in tier"
 assert_eq "a1:a1:built-in,a2:a2:built-in,a4:a4:built-in,w:w:built-in" "$(drv stems-resolve)"
 
 # ─── Scenario 6: reserved-name enforcement (Finding 2) ─────────────────────
-# A recipe authored under a reserved legible-alias name is rejected by validate()
+# A workflow authored under a reserved legible-alias name is rejected by validate()
 # (fail fast) instead of being silently shadowed by resolve()'s alias→stem
 # rewrite. The bare stems (a1/w) are NOT reserved and must stay valid.
-it "validate() rejects a recipe named after a reserved alias; bare stems stay valid"
+it "validate() rejects a workflow named after a reserved alias; bare stems stay valid"
 assert_eq "plan-build-review:rejected,parallel-theories:rejected,adversarial-pair:rejected,work-only:rejected,a1:valid,w:valid" \
   "$(drv reserved-reject)"
 
 # ─── Scenario 7: drift guard between the two copies of the reserved map ─────
-it "recipes._ALIASES == recipe_validate._RESERVED_ALIAS_STEMS (no drift)"
+it "workflows._ALIASES == workflow_validate._RESERVED_ALIAS_STEMS (no drift)"
 assert_eq "same" "$(drv reserved-drift)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "recipe-aliases.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "workflow-aliases.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

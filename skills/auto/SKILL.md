@@ -315,9 +315,9 @@ destructive backstop) can reach them. When you construct a fan-out step prompt
 
 ### 4.7 Gate advisor-judging — typed verification (v0.7.0, U5)
 
-A recipe gate step may carry a typed `verification` block (kinds
+A workflow gate step may carry a typed `verification` block (kinds
 `programmatic` / `model_judge` / `advisor_judge` / `human` — see
-`docs/contracts/recipe-format.md` and
+`docs/contracts/workflow-format.md` and
 `skills/auto-design/references/verification-taxonomy.md`). At convergence,
 resolve such a gate via `lib/iteration.py::resolve_gate_verification`, which runs
 the `programmatic` criteria in-process and returns a `{signal, pending_judges}`.

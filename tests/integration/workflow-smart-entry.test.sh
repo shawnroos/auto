@@ -125,14 +125,14 @@ assert_eq "raw" "$(detect_situation setup_raw)"
 it "smart-entry detect: one plan + no run → situation=reviewed-plan"
 assert_eq "reviewed-plan" "$(detect_situation setup_plan)"
 
-# v0.4.3 KTD-15: a reviewed plan routes to the W (work-only) recipe, not a1 —
-# the summary must name recipe w so the driver dispatches `--recipe w` (skips
+# v0.4.3 KTD-15: a reviewed plan routes to the W (work-only) workflow, not a1 —
+# the summary must name workflow w so the driver dispatches `--workflow w` (skips
 # re-planning a finished plan; project_auto_v042_stuck_root_causes ③).
-it "smart-entry reviewed-plan summary routes to recipe w (not a1)"
+it "smart-entry reviewed-plan summary routes to workflow w (not a1)"
 summary="$(detect_summary setup_plan)"
 case "$summary" in
-  *"recipe w"*) pass ;;
-  *) fail "reviewed-plan summary should name 'recipe w', got: ${summary}" ;;
+  *"workflow w"*) pass ;;
+  *) fail "reviewed-plan summary should name 'workflow w', got: ${summary}" ;;
 esac
 
 it "smart-entry detect: one not-met run → situation=in-flight"
@@ -157,5 +157,5 @@ assert_eq "raw" "$(detect_situation setup_dirty_tree)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "recipe-smart-entry.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "workflow-smart-entry.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -348,7 +348,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
 
     An edge ``step -> dep`` is VALID only if ``dep`` names EITHER a sibling
     enumerated step in THIS batch (forward-refs allowed — mirrors
-    ``recipes._validate_depends_on`` tolerating producer-output forward-refs) OR an
+    ``workflows._validate_depends_on`` tolerating producer-output forward-refs) OR an
     id already present in the ledger. Three failure classes are dropped, because
     each leaves ``dispatcher._is_ready`` unable to ever return True:
       * ``dangling`` — dep names no known id → ``_is_ready`` sees ``dep is None``
@@ -453,8 +453,8 @@ def set_enumerated_steps(repo_root, run_id, step_id, enumerated):
     work step permanently un-``_is_ready`` (``dep is None -> False``, or a
     mutually-unsatisfiable cycle): never ready, never dispatched, dispatch-timeout
     never fires, ``all_steps_terminal`` false FOREVER → a silent full-run
-    livelock. The recipe-authored path already rejects unknown-id references at
-    author time (``recipes._validate_depends_on``).
+    livelock. The workflow-authored path already rejects unknown-id references at
+    author time (``workflows._validate_depends_on``).
 
     DROP, don't raise (deliberate divergence from ``set_winner_step_id``, which
     raises on a bad single reference): this validates a whole BATCH of runtime
@@ -788,7 +788,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
     v0.3.1 B11: ``kind`` MUST be a member of ``ledger_core.ExitReason``.
     Validating at the write boundary closes the convention-only gap H left
     (the named-constants tuple was advisory; this is mechanism). Accepts the
-    enum member directly (e.g. ``ExitReason.RECIPE_BUG``) or its string
+    enum member directly (e.g. ``ExitReason.WORKFLOW_BUG``) or its string
     value (e.g. ``"workflow-bug"``) — StrEnum membership matches both.
     """
     try:
@@ -802,7 +802,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
     # Persist as the raw string value so the on-disk JSON shape stays
     # backwards-compatible with v0.3.0 (where kind was a plain string).
     # Use `.value` explicitly: `str(member)` on the pre-3.11 `(str, Enum)`
-    # mixin returns the repr ("ExitReason.RECIPE_BUG"), not the value.
+    # mixin returns the repr ("ExitReason.WORKFLOW_BUG"), not the value.
     kind_value = kind_enum.value
 
     def mutate(ledger):

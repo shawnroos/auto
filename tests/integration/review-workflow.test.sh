@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# auto v0.6.0 U11 integration test: the off-spine review recipe
-# (recipes/review.json) drives a SINGLE review/fix loop to a P3-only terminal
+# auto v0.6.0 U11 integration test: the off-spine review workflow
+# (workflows/review.json) drives a SINGLE review/fix loop to a P3-only terminal
 # verdict and stops at `done` — it never auto-advances and never rebounds.
 #
 # WHY THIS TEST EXISTS (round-2 P2, lib/backend-ce.py):
-# recipes.test.sh already pins that review.json validates / resolves / is
+# workflows.test.sh already pins that review.json validates / resolves / is
 # distinct from w. But the DISPATCH path was never driven: review.json's work
 # step carries `dispatch_context.backend_op == "review"` (NOT "do_step"), and the
 # DRIVER — not the backend, not the dispatcher — maps that backend_op to the
 # skill it launches (`review` → /ce-code-review; `do_step` → /ce-work). This test
 # drives the real engine end-to-end so the off-spine review path is locked, not
 # inferred:
-#   * init via `--recipe review` enters at `work` with one `review` step whose
+#   * init via `--workflow review` enters at `work` with one `review` step whose
 #     dispatch_context.backend_op is "review" (the model-facing dispatch label —
 #     driver-reference.md §7, SKILL.md §4);
 #   * a clean (P3-only) verdict drives the single phase to `loop_phase == "done"`;
@@ -21,7 +21,7 @@
 # the SECOND scenario records a GATING (blocker) verdict instead of a clean one.
 # The work-loop MUST then NOT reach `done` (all_steps_terminal == false) — proving
 # the `done` in scenario 1 is caused by the clean verdict, not an artifact of the
-# single-step recipe.
+# single-step workflow.
 
 set -uo pipefail
 
@@ -71,9 +71,9 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# x\n")
 
-# Step 1: /auto --recipe review → off-spine run, entry at `work` (U11 wiring).
+# Step 1: /auto --workflow review → off-spine run, entry at `work` (U11 wiring).
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run(["--recipe", "review", plan])
+    a.run(["--workflow", "review", plan])
 run_id = [os.path.basename(f).rsplit(".json", 1)[0]
           for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))
           if not f.endswith(".lock")][0]
@@ -111,7 +111,7 @@ print("%s|%s|%s|%s|%s" % (
 PYEOF
 }
 
-echo "review-recipe.test.sh"
+echo "review-workflow.test.sh"
 
 # ─── Scenario 1: clean verdict → single phase drives to done ──────────────────
 res="$(drive_review 1)"
@@ -147,5 +147,5 @@ esac
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "review-recipe.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "review-workflow.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

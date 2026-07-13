@@ -75,17 +75,17 @@ LOOP_PHASES = ("plan", "handoff", "work", "done")
 PLAN_STEPS = ("plan", "deepen", "review_plan")
 # v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
 # set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; pulse.py
-# spells intent as `ledger.ExitReason.RECIPE_BUG` rather than a string literal
+# spells intent as `ledger.ExitReason.WORKFLOW_BUG` rather than a string literal
 # (which would create a divergent-literal class the prose claims is a fixed enum
 # but the code only enforces by convention). StrEnum: members ARE strings, so
-# `ExitReason.RECIPE_BUG == "workflow-bug"` is True and JSON-serialization round-
+# `ExitReason.WORKFLOW_BUG == "workflow-bug"` is True and JSON-serialization round-
 # trips. Membership check (`kind in ExitReason`) replaces H's manual KINDS tuple
 # — one canonical surface instead of three top-level names + a tuple.
 #
 #   ITERATION_CHECK_FAILED → an unexpected raise from advance_iteration_loop
 #     (typically a malformed iteration block or gate verdict).
-#   RECIPE_BUG → a LedgerError subclass (UnknownStep, InvalidTransition,
-#     StaleVerdict) escaping the iteration check, which signals the recipe's
+#   WORKFLOW_BUG → a LedgerError subclass (UnknownStep, InvalidTransition,
+#     StaleVerdict) escaping the iteration check, which signals the workflow's
 #     steps[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
 #
@@ -97,15 +97,15 @@ from enum import Enum
 # `str, Enum` (the pre-3.11 portable equivalent of StrEnum — Python 3.9 is the
 # auto runtime's actual floor, per `#!/usr/bin/env python3` on macOS which
 # resolves to 3.9). Members ARE strings via the str mixin:
-# `ExitReason.RECIPE_BUG == "workflow-bug"` is True; JSON-serializes as the
+# `ExitReason.WORKFLOW_BUG == "workflow-bug"` is True; JSON-serializes as the
 # value when `default=str` or via explicit `.value`. The one wrinkle vs
-# native StrEnum: `str(ExitReason.RECIPE_BUG)` gives `"ExitReason.RECIPE_BUG"`
+# native StrEnum: `str(ExitReason.WORKFLOW_BUG)` gives `"ExitReason.WORKFLOW_BUG"`
 # (the repr), so set_exit_reason persists `kind.value` explicitly to keep
 # the on-disk shape backwards-compatible with v0.3.0 (where kind was a
 # plain string like "workflow-bug").
 class ExitReason(str, Enum):
     ITERATION_CHECK_FAILED = "iteration-check-failed"
-    RECIPE_BUG = "workflow-bug"
+    WORKFLOW_BUG = "workflow-bug"
 STEP_STATES = (
     "pending",
     "dispatched",
@@ -455,7 +455,7 @@ def init_ledger(
     steps=None,
     loop_phase: str = "plan",
     plan_step=None,
-    recipe=None,
+    workflow=None,
     phase_order=None,
     terminal_phase=None,
     phase_transitions=None,
@@ -471,19 +471,19 @@ def init_ledger(
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
 
-    v0.2.0 recipe fields (all additive / backward-compatible — a v0.1.x ledger
+    v0.2.0 workflow fields (all additive / backward-compatible — a v0.1.x ledger
     with none of them reads identically; see _normalize_step and §2 of the
     ledger-schema contract):
-      ``recipe``         — optional dict {name, source_tier}; the recipe this run
-                           was built from. None on a recipe-blind (v0.1.x) ledger.
+      ``workflow``         — optional dict {name, source_tier}; the workflow this run
+                           was built from. None on a workflow-blind (v0.1.x) ledger.
       ``phase_order``    — optional list; the run's phase sequence. Defaults to
                            ["plan", "handoff", "work"] (the v0.1.x grammar).
       ``terminal_phase`` — optional str; the phase whose completion ends the run.
                            Defaults to "work". MUST be a member of phase_order.
       ``phase_transitions`` — optional list of {from, to, producer} dicts; the
-                           recipe's producer declarations. Persisted on the ledger
+                           workflow's producer declarations. Persisted on the ledger
                            so handoff-handlers can resolve the producer for a given
-                           arrival phase without re-loading the recipe file
+                           arrival phase without re-loading the workflow file
                            (which could drift mid-run). Defaults to [] (no
                            producers declared — legacy v0.1.x behavior, the run
                            emits nothing at phase boundaries).
@@ -532,7 +532,7 @@ def init_ledger(
             f"driving_session_id must be a string or None: {driving_session_id!r}"
         )
 
-    # phase_transitions defaults to []; basic shape check (the recipe validator
+    # phase_transitions defaults to []; basic shape check (the workflow validator
     # does the full check, but we don't trust that the caller already validated).
     if phase_transitions is None:
         phase_transitions = []
@@ -566,10 +566,10 @@ def init_ledger(
         # v0.3.0 fix-pass F0: seed iteration_emit_count from max numeric
         # suffix of step ids that already match any emit_templates[*].id_prefix.
         # iterate_template (lib/step_producers.py) computes the next id as
-        # `f"{id_prefix}{seed + i + 1}"`. If a recipe declares both
+        # `f"{id_prefix}{seed + i + 1}"`. If a workflow declares both
         # `steps: [plan-1, plan-2, plan-3]` AND `emit_templates.<x>.id_prefix =
         # "plan-"`, seeding to 0 makes the first iterate emit `plan-1` — which
-        # collides with the recipe-declared step and livelocks the run until
+        # collides with the workflow-declared step and livelocks the run until
         # max_wall_seconds. Pre-seeding to max-existing-suffix produces
         # `plan-4` on the first iterate, matching what the integration test
         # always asserted. Cross-reviewer P0 (ADV-1 + testing + correctness).
@@ -588,7 +588,7 @@ def init_ledger(
                     # ``'²'.isdigit()`` is True but ``int('²')`` raises
                     # ValueError. ``isdecimal()`` returns True ONLY for the
                     # base-10 digits ``int()`` actually accepts, so a
-                    # Unicode superscript suffix on a recipe-declared id is
+                    # Unicode superscript suffix on a workflow-declared id is
                     # treated as "not iterate-shaped" and falls through —
                     # the original isdigit-guard intent, hardened against
                     # the Unicode class-int() mismatch.
@@ -602,10 +602,10 @@ def init_ledger(
             "handoff_paused": loop_phase == "handoff",
             "backend": backend,
             "backend_scale": backend_scale,
-            # v0.2.0 recipe fields (additive). recipe is None on a recipe-blind
+            # v0.2.0 workflow fields (additive). workflow is None on a workflow-blind
             # v0.1.x ledger; phase_order/terminal_phase default to the legacy
             # grammar so the predicate + phase routing behave identically.
-            "workflow": recipe,
+            "workflow": workflow,
             "phase_order": phase_order,
             "terminal_phase": terminal_phase,
             "phase_transitions": phase_transitions,
@@ -643,19 +643,19 @@ def init_ledger(
             # alongside loop_phase=done so the operator can distinguish a clean
             # finish from a wedge that was force-marked done.
             "exit_reason": None,
-            # v0.3.0 U6: recipe-declared iteration + emit_templates land on the
+            # v0.3.0 U6: workflow-declared iteration + emit_templates land on the
             # ledger at init so the engine's iteration check (advance_iteration_loop)
             # and the iterate_template producer find them at every pulse. None on a
-            # legacy or non-iteration recipe (a1, W, v0.2.x a2/a4); the validators
+            # legacy or non-iteration workflow (a1, W, v0.2.x a2/a4); the validators
             # at U5 ensure shape is OK if non-None. Routed through here (not seeded
-            # post-init) so the recipe→ledger flow is the production path — the
+            # post-init) so the workflow→ledger flow is the production path — the
             # plumbing gap U1-U5 left for U6 to close.
             "iteration": iteration,
             "emit_templates": emit_templates,
             # v0.4.0 KTD-2 (additive): the one-line user-facing intent sentence
             # frozen at init time. Derived by the caller — plan title for
             # /auto <plan>, hypothesis summary for bare /auto, the input for
-            # freeform. None on a legacy or recipe-unaware init. The
+            # freeform. None on a legacy or workflow-unaware init. The
             # ambiguous-runs hypothesis surfaces this verbatim when listing
             # in-flight runs so an operator picking between two runs sees what
             # each was started for, not just a slug.
@@ -684,7 +684,7 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
     # v0.2.0 per-step `phase` (additive). A step with no explicit phase inherits
     # the run's start phase when that is a plan phase, else defaults to "work" —
     # matching the v0.1.x reality where plan-phase runs have no work steps yet and
-    # any pre-declared step is a work step. Recipes set `phase` explicitly.
+    # any pre-declared step is a work step. Workflows set `phase` explicitly.
     default_phase = "plan" if loop_phase == "plan" else "work"
     phase = u.get("phase", default_phase)
     nu = {
@@ -719,7 +719,7 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
         #                     scalar, so this stays None there. None = no step yet.
         #   gaps_open       — per-step open-gap count for N>1 plan-loops. None until
         #                     a review feeds one back.
-        #   dispatch_context— recipe-side metadata merged from `invokes` (e.g.
+        #   dispatch_context— workflow-side metadata merged from `invokes` (e.g.
         #                     prompt_template, bias) + engine-written keys like
         #                     enumerated_steps. {} when absent.
         #   last_advanced_at— round-robin tiebreaker for serialized N>1 plan
@@ -729,7 +729,7 @@ def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
         "dispatch_context": dict(u.get("dispatch_context") or {}),
         "last_advanced_at": u.get("last_advanced_at"),
     }
-    # v0.7.0 (verification-gate-hardening, KTD-1): preserve a recipe gate step's
+    # v0.7.0 (verification-gate-hardening, KTD-1): preserve a workflow gate step's
     # `verification` block — CONDITIONALLY, only when the source carries it. NOT
     # defaulted like `dispatch_context`/`attempt`: an unconditional copy would
     # stamp `[]` onto every legacy step and change their on-disk shape. This is

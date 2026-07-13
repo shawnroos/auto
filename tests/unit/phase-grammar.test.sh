@@ -5,8 +5,8 @@
 # coupling, no shared helpers yet).
 #
 # Scenarios:
-#   1. recipe-blind ledger (no phase_order/terminal_phase) → legacy defaults
-#   2. recipe ledger (default grammar) → current_phase/next/terminal correct
+#   1. workflow-blind ledger (no phase_order/terminal_phase) → legacy defaults
+#   2. workflow ledger (default grammar) → current_phase/next/terminal correct
 #   3. work-only ledger (phase_order ["work"]) → work is terminal, no next
 #   4. current_phase reads loop_phase, NOT phase_order[0] (resume invariant)
 #   5. is_terminal_phase only true at the terminal phase
@@ -55,15 +55,15 @@ elif op == "next":
 PYEOF
 }
 
-# ─── Scenario 1: recipe-blind → legacy defaults ─────────────────────────────
-it "recipe-blind ledger → phase_order defaults to legacy [plan,handoff,work]"
+# ─── Scenario 1: workflow-blind → legacy defaults ─────────────────────────────
+it "workflow-blind ledger → phase_order defaults to legacy [plan,handoff,work]"
 assert_eq "plan,handoff,work" "$(pg '{"loop_phase":"plan"}' order)"
 
-it "recipe-blind ledger → terminal_phase defaults to work"
+it "workflow-blind ledger → terminal_phase defaults to work"
 assert_eq "work" "$(pg '{"loop_phase":"plan"}' terminal)"
 
-# ─── Scenario 2: recipe ledger, default grammar ─────────────────────────────
-it "default-grammar recipe: current_phase reads loop_phase"
+# ─── Scenario 2: workflow ledger, default grammar ─────────────────────────────
+it "default-grammar workflow: current_phase reads loop_phase"
 assert_eq "handoff" "$(pg '{"loop_phase":"handoff","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' current)"
 
 it "default-grammar: next_phase_after_met(plan) → handoff"
@@ -90,10 +90,10 @@ assert_eq "False" "$(pg '{"loop_phase":"plan","phase_order":["plan","handoff","w
 it "is_terminal_phase: work (terminal) → True"
 assert_eq "True" "$(pg '{"loop_phase":"work","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' is_terminal work)"
 
-# Non-work terminal recipe (the shape pulse.py's two guards now route through):
-# is_terminal_phase must key on the recipe's DECLARED terminal, not the literal
+# Non-work terminal workflow (the shape pulse.py's two guards now route through):
+# is_terminal_phase must key on the workflow's DECLARED terminal, not the literal
 # "work". brainstorm IS terminal here; work is not even in the order.
-it "is_terminal_phase: brainstorm IS terminal for a brainstorm-terminal recipe"
+it "is_terminal_phase: brainstorm IS terminal for a brainstorm-terminal workflow"
 assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","handoff","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal brainstorm)"
 
 it "is_terminal_phase: a mid-run non-terminal phase (brainstorm, terminal=work) → False"

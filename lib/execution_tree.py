@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""auto U6: loop/recipe → execution tree with sized parallelism (KTD6 / KTD6b).
+"""auto U6: loop/workflow → execution tree with sized parallelism (KTD6 / KTD6b).
 
-`derive_execution_tree(recipe, cap)` turns a validated recipe dict (from
-`auto-author-recipe` / `auto-design`) into an EXECUTION TREE: ordered parallel
+`derive_execution_tree(workflow, cap)` turns a validated workflow dict (from
+`auto-author-workflow` / `auto-design`) into an EXECUTION TREE: ordered parallel
 waves derived from the `depends_on` DAG, fan-out `do_step` children nested under
 their producer parent, and a substrate ROUTING DECISION. It is PURE and
 deterministic — it plans a topology, it never dispatches (`skills/auto-translate`
@@ -10,13 +10,13 @@ wraps it; `lib/dispatcher.py::dispatch_batch` is the executor).
 
 Four steps (mirroring KTD6 / KTD6b):
 
-  1. EXPAND producer-produced steps. Recipes like `recipes/a4.json` declare their
+  1. EXPAND producer-produced steps. Workflows like `workflows/a4.json` declare their
      paired builders in `expected_emit_outputs` (materialized at RUN time by a
      phase-boundary producer), NOT in `steps[]`. `dispatcher._is_ready` treats an
      absent dependency as unsatisfied, so a raw frontier walk over a4 yields only
      `{plan}` and `compare` is never ready. We synthesize placeholder nodes for
      those declared ids FIRST so the dependents can become ready.
-     `recipes/a2.json`'s parallel steps are STATIC (already in `steps[]`) — no
+     `workflows/a2.json`'s parallel steps are STATIC (already in `steps[]`) — no
      expansion.
 
   2. FRONTIER WALK the (expanded) DAG, reusing the readiness logic in
@@ -77,14 +77,14 @@ _CE_DISPATCH_OPS = frozenset({"do_step", "review"})
 
 
 class ExecutionTreeError(Exception):
-    """Raised on an underivable recipe (a dependency cycle, or a bad cap)."""
+    """Raised on an underivable workflow (a dependency cycle, or a bad cap)."""
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 1 — expand producer-produced steps.
 
 
-def _emit_template_for(emit_id: str, recipe: dict):
+def _emit_template_for(emit_id: str, workflow: dict):
     """The `emit_templates` entry whose `id_prefix` prefixes ``emit_id``, or None.
 
     A declared `expected_emit_outputs` id (e.g. a4's ``build-clarity``) is
@@ -95,14 +95,14 @@ def _emit_template_for(emit_id: str, recipe: dict):
     """
     best = None
     best_len = -1
-    for tmpl in (recipe.get("emit_templates") or {}).values():
+    for tmpl in (workflow.get("emit_templates") or {}).values():
         prefix = tmpl.get("id_prefix")
         if prefix and emit_id.startswith(prefix) and len(prefix) > best_len:
             best, best_len = tmpl, len(prefix)
     return best
 
 
-def _phase_boundary_source(to_phase: str, recipe: dict, steps: list):
+def _phase_boundary_source(to_phase: str, workflow: dict, steps: list):
     """The (from_phase, source_step_ids) a producer produces its `to_phase` steps
     from — the structural dependency of an emitted node.
 
@@ -115,12 +115,12 @@ def _phase_boundary_source(to_phase: str, recipe: dict, steps: list):
     names it.
     """
     from_phase = None
-    for pt in recipe.get("phase_transitions") or []:
+    for pt in workflow.get("phase_transitions") or []:
         if pt.get("to") == to_phase:
             from_phase = pt.get("from")
             break
     if from_phase is None:
-        phase_order = recipe.get("phase_order") or []
+        phase_order = workflow.get("phase_order") or []
         if to_phase in phase_order:
             idx = phase_order.index(to_phase)
             # Nearest declared phase that actually has steps, scanning backwards.
@@ -132,7 +132,7 @@ def _phase_boundary_source(to_phase: str, recipe: dict, steps: list):
     return from_phase, src_ids
 
 
-def _expand_producer_steps(recipe: dict):
+def _expand_producer_steps(workflow: dict):
     """Synthesize placeholder nodes for `expected_emit_outputs` ids not in `steps[]`.
 
     Returns ``(steps, emitted_meta)`` where ``steps`` is the expanded in-memory
@@ -142,7 +142,7 @@ def _expand_producer_steps(recipe: dict):
     nesting step. a2 (no `expected_emit_outputs`) expands to itself unchanged.
     """
     steps = []
-    for u in recipe.get("steps") or []:
+    for u in workflow.get("steps") or []:
         node = {
             "id": u["id"],
             "phase": u.get("phase", "work"),
@@ -154,13 +154,13 @@ def _expand_producer_steps(recipe: dict):
 
     known = {u["id"] for u in steps}
     emitted_meta = {}
-    for emit_id in recipe.get("expected_emit_outputs") or []:
+    for emit_id in workflow.get("expected_emit_outputs") or []:
         if emit_id in known:
             continue  # already a static step — nothing to synthesize.
-        tmpl = _emit_template_for(emit_id, recipe)
-        phase = (tmpl or {}).get("phase") or recipe.get("terminal_phase", "work")
+        tmpl = _emit_template_for(emit_id, workflow)
+        phase = (tmpl or {}).get("phase") or workflow.get("terminal_phase", "work")
         backend_op = ((tmpl or {}).get("invokes") or {}).get("backend_op")
-        _from_phase, src_ids = _phase_boundary_source(phase, recipe, steps)
+        _from_phase, src_ids = _phase_boundary_source(phase, workflow, steps)
         # Producer-produced work steps are fan-out children when their template
         # dispatches `do_step`; the parent is the (single) producer-source step.
         parent = src_ids[0] if len(src_ids) == 1 else None
@@ -206,7 +206,7 @@ def _frontier_waves(steps: list, cap: int):
     pending_left = [u["id"] for u in steps if u.get("state") == "pending"]
     if pending_left:
         raise ExecutionTreeError(
-            f"underivable recipe: steps never became ready (cycle or unknown "
+            f"underivable workflow: steps never became ready (cycle or unknown "
             f"dependency): {sorted(pending_left)}"
         )
     return waves
@@ -233,7 +233,7 @@ def _build_nesting(emitted_meta: dict) -> dict:
 # Step 4 — substrate routing decision (KTD6b — a label, not a compile).
 
 
-def _select_substrate(recipe: dict, steps: list) -> str:
+def _select_substrate(workflow: dict, steps: list) -> str:
     """`"workflow-script"` (inert routing label) or `"subagent-tree"` (executable).
 
     A CONCRETE predicate (testable, not vague):
@@ -255,7 +255,7 @@ def _select_substrate(recipe: dict, steps: list) -> str:
     has_ce_dispatch = any(
         _step_backend_op(u) in _CE_DISPATCH_OPS for u in steps
     )
-    bounded = bool((recipe.get("iteration") or {}).get("bound"))
+    bounded = bool((workflow.get("iteration") or {}).get("bound"))
     if single_phase and not has_ce_dispatch and bounded:
         return "workflow-script"
     return "subagent-tree"
@@ -265,7 +265,7 @@ def _select_substrate(recipe: dict, steps: list) -> str:
 # Preview — a topology-render-style card over the derived waves.
 
 
-def _render_preview(recipe: dict, waves: list, nesting: dict, substrate: str) -> str:
+def _render_preview(workflow: dict, waves: list, nesting: dict, substrate: str) -> str:
     """A deterministic ASCII card of the derived execution tree.
 
     Mirrors `lib/topology-render.py`'s card idiom (KTD-10 — the same visual family
@@ -273,7 +273,7 @@ def _render_preview(recipe: dict, waves: list, nesting: dict, substrate: str) ->
     numbered parallel row, fan-out children indented under their parent, and the
     substrate routing footer. Pure/stable so tests can assert byte-identity.
     """
-    name = recipe.get("name", "?")
+    name = workflow.get("name", "?")
     lines = [f"execution-tree: {name}", f"  substrate: {substrate}", ""]
     for i, wave in enumerate(waves, start=1):
         lines.append(f"  ┌─ wave {i}  (parallel ≤ cap)")
@@ -291,17 +291,17 @@ def _render_preview(recipe: dict, waves: list, nesting: dict, substrate: str) ->
 # Public entry point.
 
 
-def derive_execution_tree(recipe: dict, cap: int) -> dict:
-    """Derive an execution tree from a validated ``recipe`` dict, bounded by ``cap``.
+def derive_execution_tree(workflow: dict, cap: int) -> dict:
+    """Derive an execution tree from a validated ``workflow`` dict, bounded by ``cap``.
 
-    ``recipe`` — a validated recipe dict (the shape `recipes.load_and_validate`
-    returns / `auto-author-recipe` writes). ``cap`` — the fan-out cap bounding each
+    ``workflow`` — a validated workflow dict (the shape `workflows.load_and_validate`
+    returns / `auto-author-workflow` writes). ``cap`` — the fan-out cap bounding each
     parallel wave (a positive int; the active work-loop cap).
 
     Returns a structured, deterministic dict::
 
         {
-          "recipe":    <recipe name>,
+          "workflow":    <workflow name>,
           "cap":       <int cap>,
           "waves":     [[step_id, ...], ...],   # ordered; within a wave = parallel
           "nesting":   {parent_id: [child_id]}, # fan-out do_step children
@@ -317,14 +317,14 @@ def derive_execution_tree(recipe: dict, cap: int) -> dict:
         raise ExecutionTreeError(f"cap must be a positive int, got {cap!r}")
     cap = int(cap)
 
-    steps, emitted_meta = _expand_producer_steps(recipe)
+    steps, emitted_meta = _expand_producer_steps(workflow)
     waves = _frontier_waves(steps, cap)
     nesting = _build_nesting(emitted_meta)
-    substrate = _select_substrate(recipe, steps)
-    preview = _render_preview(recipe, waves, nesting, substrate)
+    substrate = _select_substrate(workflow, steps)
+    preview = _render_preview(workflow, waves, nesting, substrate)
 
     return {
-        "recipe": recipe.get("name", "?"),
+        "workflow": workflow.get("name", "?"),
         "cap": cap,
         "waves": waves,
         "nesting": nesting,

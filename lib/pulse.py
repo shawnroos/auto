@@ -488,7 +488,7 @@ def _try_iteration_check(
 
     v0.3.0 F2 (rel-1): wrap the iteration check in try/except so a raise
     inside iteration.evaluate_decision / atomic_iterate_step (ValueError on a
-    malformed gate decision, KeyError on a missing gate step, RecipeError on
+    malformed gate decision, KeyError on a missing gate step, WorkflowError on
     a misshapen emit_template) DOES NOT propagate to _cli — which catches
     only (PulseError, LedgerError) and exits with no JSON intent (the harness
     never sees a rearm and the run wedges). Instead, we mark the loop done +
@@ -514,8 +514,8 @@ def _try_iteration_check(
         # LedgerError; Python matches the first parent in source order).
         return _wedge_done_stop(
             repo_root, run_id, exc,
-            exit_reason=ledger.ExitReason.RECIPE_BUG,
-            reason_value=ledger.ExitReason.RECIPE_BUG.value,
+            exit_reason=ledger.ExitReason.WORKFLOW_BUG,
+            reason_value=ledger.ExitReason.WORKFLOW_BUG.value,
             message=f"workflow-bug: {type(exc).__name__}: {exc}",
             now_iso=now_iso,
         ), led
@@ -607,9 +607,9 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
             and phase_grammar.is_terminal_phase(led, phase):
         # Terminal-phase predicate met: mark the run done + manual; finished, not
         # orphaned. Route the phase decision through phase_grammar (KTD-3) so a
-        # non-work-terminal recipe stops at ITS terminal phase — the old denylist
+        # non-work-terminal workflow stops at ITS terminal phase — the old denylist
         # (`phase != "plan" and phase != "handoff"`) over-fired at any non-plan/handoff
-        # phase, which only matched the terminal for work-terminal recipes.
+        # phase, which only matched the terminal for work-terminal workflows.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
         )
@@ -720,7 +720,7 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
     (memory feedback_loop_monitor_terminal_state_field — read the cached
     field, never re-derive). PHASE-AWARE (gap #4): only a TERMINAL-phase
     predicate routes to `done`, decided by phase_grammar.is_terminal_phase
-    (KTD-3) so a non-work-terminal recipe stops at ITS terminal phase (the old
+    (KTD-3) so a non-work-terminal workflow stops at ITS terminal phase (the old
     `phase == "work"` allowlist never stopped a non-work terminal). A plan pulse
     already routed through `_maybe_handoff` (handoff/auto-flip); never let the
     post-advance met-check turn a met PLAN predicate into `done` (that would

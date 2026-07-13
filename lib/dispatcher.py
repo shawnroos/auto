@@ -284,10 +284,10 @@ def pick_next_plan_step_to_advance(ledger: dict):
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
 # The closed set of backend ops a step may declare via ``invokes.backend_op``
-# (recipe-compiled steps carry it on ``dispatch_context`` — ``recipes.step_for``
+# (workflow-compiled steps carry it on ``dispatch_context`` — ``workflows.step_for``
 # merges ``invokes`` into ``dispatch_context``, and ``_normalize_step`` drops the
 # raw ``invokes`` key but preserves ``dispatch_context`` verbatim). Every shipped
-# recipe's op is one of these four (``tests/unit/recipes.test.sh`` asserts the
+# workflow's op is one of these four (``tests/unit/workflows.test.sh`` asserts the
 # subset). ``dispatch_batch`` rejects any OTHER value at dispatch instead of
 # launching an agent against a misspelled/unknown op — the guard closes the gap
 # where an unknown op previously flowed straight to ``launch_fn``.
@@ -304,7 +304,7 @@ def _step_backend_op(step: dict):
     """Resolve a step's declared ``backend_op``, or None if it declares none.
 
     Reads ``dispatch_context.backend_op`` FIRST (the durable home on a
-    recipe-compiled ledger step — ``_normalize_step`` preserves dispatch_context
+    workflow-compiled ledger step — ``_normalize_step`` preserves dispatch_context
     but drops the raw ``invokes`` bag), falling back to ``invokes.backend_op``
     for any pre-normalize/raw step shape. Returns None when neither is present;
     a None op is NOT rejected (steps may legitimately carry no op).
@@ -395,7 +395,7 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
             continue
         op = _step_backend_op(step)
         if op is not None and op not in VALID_BACKEND_OPS:
-            # A declared-but-unknown backend_op (typo in a recipe, or a hand-
+            # A declared-but-unknown backend_op (typo in a workflow, or a hand-
             # crafted step) must NOT flow to launch — reject it per-step,
             # mirroring the not-pending path. Checked BEFORE the cap so a bad op
             # surfaces eagerly rather than being deferred as "over-cap".

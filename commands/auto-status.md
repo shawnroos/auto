@@ -44,7 +44,7 @@ steps list. Fields:
   `CLAUDE_AUTO_DISABLE_ITERATION=1` (post-F5 unfence; the test-harness
   sentinel is no longer required). Printed as `DISABLED via
   CLAUDE_AUTO_DISABLE_ITERATION`. Indicates the iteration check is
-  short-circuited at every pulse — the recipe behaves as v0.2.x for the
+  short-circuited at every pulse — the workflow behaves as v0.2.x for the
   duration the env var is set.
 
 Each step's listing also gains a `bound_exit:` sub-bullet (alongside
@@ -69,9 +69,9 @@ diagnostic). The line carries `kind: <error-type>: <message>`. Two
   ledger's `iteration` block + the gate step's `dispatch_context`.
 - `workflow-bug` — `advance_iteration_loop` raised a `LedgerError`
   subclass (`UnknownStep`, `InvalidTransition`, `StaleVerdict`) — the
-  recipe's `steps[]` / `phase_transitions` don't match what the engine
-  reached for. Investigate the recipe JSON against the schema in
-  `docs/contracts/recipe-format.md`.
+  workflow's `steps[]` / `phase_transitions` don't match what the engine
+  reached for. Investigate the workflow JSON against the schema in
+  `docs/contracts/workflow-format.md`.
 
 `exit_reason` is persisted on the ledger BEFORE the forced
 `loop_phase=done` write, so the operator surface can distinguish a

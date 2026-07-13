@@ -19,7 +19,7 @@ Read `skills/auto-design/references/verification-taxonomy.md` first — it pins 
 exact field shape of each criterion (`programmatic` / `model_judge` /
 `advisor_judge` / `human`). Nothing here changes those shapes; the ratified list
 is validated against that same taxonomy (via `preset_oneshot.validate_oneshot_criteria`,
-which reuses the recipe validator) before anything is baked.
+which reuses the workflow validator) before anything is baked.
 
 ## Deriving criteria from the target — seed, don't interview
 

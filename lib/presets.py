@@ -11,26 +11,26 @@ The container concerns `phase` and `depends_on` are NOT a preset's business
 either (those live on the flow that hosts it); this validator rejects all three
 keys so the preset/container boundary stays clean.
 
-RESOLUTION (a deliberate SUBSET of `recipes.py`'s registry — Phase 1 ships no
+RESOLUTION (a deliberate SUBSET of `workflows.py`'s registry — Phase 1 ships no
 tri-tier catalog / `list_available`, which is R3/Phase 2). Two tiers, first-wins:
 
     1. workspace:  <repo>/.claude/auto/presets/<name>.json   (override)
     2. built-in:   <auto_root>/presets/<name>.json           (shipped seed)
 
 A workspace file of the same name OVERRIDES the built-in (first-wins, workspace
-first — mirrors `recipes.resolve`). An unknown name raises `PresetError` with a
+first — mirrors `workflows.resolve`). An unknown name raises `PresetError` with a
 clear, operator-facing message that lists what was searched — never a traceback.
 
-DAG DISCIPLINE (KTD-2): this module reuses `recipe_validate`'s primitives
-(`_check_prompt_template` for path-bounding, `_validate_recipe_name` for the
+DAG DISCIPLINE (KTD-2): this module reuses `workflow_validate`'s primitives
+(`_check_prompt_template` for path-bounding, `_validate_workflow_name` for the
 filename-safe name check) and imports `VALID_BACKEND_OPS` from the pure-stdlib
 leaf `backend_ops`. It MUST NOT import `dispatcher.py` — that module pulls in
 the ledger and the whole dispatch surface; the validator stays a light leaf.
-`recipe_validate` and `backend_ops` are themselves DAG roots (no sibling
+`workflow_validate` and `backend_ops` are themselves DAG roots (no sibling
 imports), so this stays a shallow, cycle-free layer.
 
 VALIDATION IS HAND-ROLLED (no `jsonschema` — same install-anywhere constraint as
-`recipe_validate`; the plugin ships pure stdlib + bash to arbitrary repos). The
+`workflow_validate`; the plugin ships pure stdlib + bash to arbitrary repos). The
 written contract is `docs/contracts/preset-format.md` (marked PROVISIONAL until
 a Phase-2 `preset_ref` consumer validates the container/preset boundary); there
 is deliberately no `presets/schema.json` — code is the enforcement.
@@ -43,29 +43,29 @@ import os
 import sys
 
 # Standard bootstrap: prepend lib/ and route sibling loads through _bootstrap,
-# exactly as recipes.py does (the harness loads this file by path via
+# exactly as workflows.py does (the harness loads this file by path via
 # spec_from_file_location, which does NOT add lib/ to sys.path).
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
-# Reused validation primitives (KTD-2). `recipe_validate` is the pure-stdlib
+# Reused validation primitives (KTD-2). `workflow_validate` is the pure-stdlib
 # validation DAG root; `backend_ops` is the pure-stdlib op-set leaf. Neither
 # imports a heavy sibling, so this module stays light.
-_recipe_validate = load_lib_module("recipe_validate")
+_workflow_validate = load_lib_module("workflow_validate")
 _backend_ops = load_lib_module("backend_ops")
 # U6 (KTD-1): the format-v1 → v2 read shim. DAG root, pure stdlib, imports no
 # sibling — so this edge closes no cycle.
 _format_compat = load_lib_module("format_compat")
 
-_check_prompt_template = _recipe_validate._check_prompt_template
-_validate_recipe_name = _recipe_validate._validate_recipe_name
-RecipeError = _recipe_validate.RecipeError
+_check_prompt_template = _workflow_validate._check_prompt_template
+_validate_workflow_name = _workflow_validate._validate_workflow_name
+WorkflowError = _workflow_validate.WorkflowError
 VALID_BACKEND_OPS = _backend_ops.VALID_BACKEND_OPS
 
 # The built-in seed directory: <auto_root>/presets (auto_root is lib/'s parent),
-# computed the same way recipe_validate._BUILTIN_DIR resolves <auto_root>/recipes.
+# computed the same way workflow_validate._BUILTIN_DIR resolves <auto_root>/workflows.
 _BUILTIN_DIR = os.path.join(os.path.dirname(_LIB_DIR), "presets")
 
 # A preset is a closed object: exactly these top-level keys are known. `invokes`
@@ -85,7 +85,7 @@ class PresetError(Exception):
 def _tier_dirs(repo_root: str):
     """The preset directories in resolution order: (tier_name, dir). Workspace
     first (override), built-in last (shipped seed). A deliberate two-tier SUBSET
-    of `recipes._tier_dirs` — no global tier, no catalog (R3/Phase 2)."""
+    of `workflows._tier_dirs` — no global tier, no catalog (R3/Phase 2)."""
     return [
         ("workspace", os.path.join(repo_root, ".claude", "auto", "presets")),
         ("built-in", _BUILTIN_DIR),
@@ -101,14 +101,14 @@ def load_preset(name: str, repo: str) -> dict:
     (the message lists exactly what was searched).
 
     Note: this only RESOLVES + parses; call ``validate_preset`` on the result to
-    check its shape (mirrors `recipes.resolve` vs `recipes.validate`).
+    check its shape (mirrors `workflows.resolve` vs `workflows.validate`).
     """
-    # The name is interpolated into a file path — reuse the recipe name guard so
+    # The name is interpolated into a file path — reuse the workflow name guard so
     # "../../etc/passwd" can't traverse out of the presets dir (fail closed
     # before touching the filesystem).
     try:
-        _validate_recipe_name(name, source="preset name")
-    except RecipeError as e:
+        _validate_workflow_name(name, source="preset name")
+    except WorkflowError as e:
         raise PresetError(str(e)) from None
 
     for _tier, d in _tier_dirs(repo):
@@ -147,12 +147,12 @@ def validate_preset(obj) -> tuple:
       - object shape; only {name, version, description, invokes} top-level keys
       - a `verification` / `phase` / `depends_on` key is a HARD error, named
         explicitly (R2 + the preset-vs-container boundary)
-      - name is a non-empty, filename-safe string (reuses the recipe name guard)
+      - name is a non-empty, filename-safe string (reuses the workflow name guard)
       - version / description are non-empty strings
       - invokes is an object of {backend_op, prompt_template?}
       - backend_op is required and ∈ VALID_BACKEND_OPS (the shared leaf)
       - prompt_template, when present, is path-bounded via `_check_prompt_template`
-        (relative, no `..`, no leading `/`) — the SAME check recipes use
+        (relative, no `..`, no leading `/`) — the SAME check workflows use
     """
     errors: list = []
 
@@ -179,8 +179,8 @@ def validate_preset(obj) -> tuple:
         errors.append("name must be a non-empty string")
     else:
         try:
-            _validate_recipe_name(name, source="preset.name")
-        except RecipeError as e:
+            _validate_workflow_name(name, source="preset.name")
+        except WorkflowError as e:
             errors.append(str(e))
 
     for req in ("version", "description"):
@@ -212,7 +212,7 @@ def validate_preset(obj) -> tuple:
             if "prompt_template" in inv:
                 try:
                     _check_prompt_template(inv["prompt_template"], "invokes")
-                except RecipeError as e:
+                except WorkflowError as e:
                     errors.append(str(e))
 
     return (len(errors) == 0), errors

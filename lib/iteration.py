@@ -12,7 +12,7 @@ re-introduce a divergent literal access without tripping the lint.
 WHY centralize (memory `feedback_plan_documents_transition_code_doesnt_wire_it`):
 the dominant v0.2.0 build-bug class was "a rule the prose describes that the
 code enforces in some sites but not its siblings." The iteration `decision`
-field is exactly that kind of rule once recipes can declare an `iteration`
+field is exactly that kind of rule once workflows can declare an `iteration`
 block. One helper = one place the decision lives.
 
 WHY the field lives on `dispatch_context` (memory v0.2.0 round-2 P0 fix at
@@ -163,7 +163,7 @@ def _find_gate_step(ledger: dict, gate_step_id: str) -> dict:
     """Find the gate step in the ledger; raise on not-found.
 
     Mirrors `lib/ledger.py::_find_step` shape — a missing gate_step_id is a
-    recipe bug (validator should have caught it) and must surface loudly, not
+    workflow bug (validator should have caught it) and must surface loudly, not
     return None which would let the iteration check silently no-op.
     """
     for u in ledger.get("steps", []):
@@ -284,7 +284,7 @@ def evaluate_decision(ledger: dict, gate_step_id: str, now_monotonic=None) -> di
             "attempts_made": attempts_made,
         }
 
-    # iterate: read the recipe's bound and check.
+    # iterate: read the workflow's bound and check.
     iteration = ledger.get("iteration") or {}
     bound = iteration.get("bound") or {}
     max_attempts = int(bound.get("max_attempts", 0)) if bound.get("max_attempts") is not None else 0

@@ -9,14 +9,14 @@ through THIS module instead of comparing `ledger["loop_phase"]` to a literal.
 WHY centralize (memory `feedback_plan_documents_transition_code_doesnt_wire_it`):
 the dominant v0.1.x build-bug class was "a rule the prose describes that the code
 enforces in some sites but not its siblings." Phase ordering is exactly that kind
-of rule once recipes can declare non-default `phase_order`. One helper = one place
+of rule once workflows can declare non-default `phase_order`. One helper = one place
 the decision lives; the AST lint (tests/unit/phase-grammar-ast-lint.test.sh)
 forbids the string literal "loop_phase" anywhere ELSE in lib/, so a new consumer
 physically cannot re-introduce a divergent literal comparison.
 
-RECIPE-BLIND DEFAULTS: a v0.1.x ledger has no `phase_order`/`terminal_phase`.
+WORKFLOW-BLIND DEFAULTS: a v0.1.x ledger has no `phase_order`/`terminal_phase`.
 Every accessor here falls back to the legacy grammar (`["plan","handoff","work"]`,
-terminal `"work"`) so a recipe-blind ledger routes phases EXACTLY as v0.1.1 did.
+terminal `"work"`) so a workflow-blind ledger routes phases EXACTLY as v0.1.1 did.
 
 Loaded via `_bootstrap.load_lib_module("phase-grammar")` (the file name is
 hyphenated per repo convention; the registered module name is `phase_grammar`).
@@ -41,20 +41,20 @@ def current_phase(ledger: dict) -> str:
     Load-bearing for resume: a paused run carries its CURRENT phase in
     `loop_phase`; `phase_order[0]` is the START phase and would be wrong for a
     mid-run resume. Defaults to "plan" for a malformed/absent value (a
-    recipe-blind v0.1.x ledger always has `loop_phase`, so the default is only a
+    workflow-blind v0.1.x ledger always has `loop_phase`, so the default is only a
     last-resort guard).
     """
     return ledger.get("loop_phase") or "plan"
 
 
 def phase_order(ledger: dict) -> list:
-    """The run's ordered phase sequence; the legacy grammar if recipe-blind."""
+    """The run's ordered phase sequence; the legacy grammar if workflow-blind."""
     po = ledger.get("phase_order")
     return list(po) if po else list(_DEFAULT_PHASE_ORDER)
 
 
 def terminal_phase(ledger: dict) -> str:
-    """The phase whose completion ends the run; "work" if recipe-blind."""
+    """The phase whose completion ends the run; "work" if workflow-blind."""
     return ledger.get("terminal_phase") or _DEFAULT_TERMINAL_PHASE
 
 
@@ -93,18 +93,18 @@ def producer_name_for_arrival(ledger: dict, to_phase: str) -> str | None:
     ledger's persisted ``phase_transitions``. Returns None when no transition
     declares a producer for this arrival.
 
-    Per recipe-format §4, producer firing is keyed on the ``to`` phase (not the
+    Per workflow-format §4, producer firing is keyed on the ``to`` phase (not the
     ``from``): a transition ``{from: plan, to: work}`` fires the producer when
     the run reaches work, even if it routes through handoff. The handoff-handler
     looks up the producer for its DESTINATION phase via this helper.
 
     Returns None in two distinct shapes:
-      * legacy ledger (recipe is None or phase_transitions is empty/absent) —
+      * legacy ledger (workflow is None or phase_transitions is empty/absent) —
         callers should fall back to a raw ``set_loop`` for backward-compat
         with v0.1.x ledgers resumed under v0.2.0.
-      * v0.2.0 ledger with a recipe but no matching ``to_phase`` transition —
-        the recipe declares no producer for this arrival; the caller decides
-        whether that's a misconfigured recipe (raise) or a legitimate
+      * v0.2.0 ledger with a workflow but no matching ``to_phase`` transition —
+        the workflow declares no producer for this arrival; the caller decides
+        whether that's a misconfigured workflow (raise) or a legitimate
         pass-through (proceed without emission).
 
     The caller distinguishes these via ``ledger.get("workflow") is None``.

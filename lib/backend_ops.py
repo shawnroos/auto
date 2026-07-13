@@ -10,7 +10,7 @@ can check a preset's op against the SAME set without importing the dispatcher
 (which pulls in the ledger and the whole dispatch surface).
 
 This module is a pure-stdlib DAG LEAF: it imports NO sibling lib module (exactly
-like ``recipe_validate`` and ``ledger_core`` are DAG roots). Both
+like ``workflow_validate`` and ``ledger_core`` are DAG roots). Both
 ``dispatcher.py`` and ``presets.py`` import THIS, so there is ONE definition;
 ``tests/unit/presets.test.sh`` asserts ``backend_ops.VALID_BACKEND_OPS ==
 dispatcher.VALID_BACKEND_OPS`` (the symmetry test that proves the lift did not
@@ -19,7 +19,7 @@ drift the dispatch guard).
 
 from __future__ import annotations
 
-# The four ops a V1 recipe/preset step may declare. Kept as a frozenset so
+# The four ops a V1 workflow/preset step may declare. Kept as a frozenset so
 # membership is O(1) and the set is immutable (a consumer can't mutate the shared
-# source of truth). Every shipped recipe's op is one of these four.
+# source of truth). Every shipped workflow's op is one of these four.
 VALID_BACKEND_OPS = frozenset({"brainstorm", "do_step", "next_plan_step", "review"})

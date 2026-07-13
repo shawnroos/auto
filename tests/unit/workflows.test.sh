@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# auto U2/U3/U7 unit test: lib/recipes.py (validator + registry + A1_BUILTIN)
+# auto U2/U3/U7 unit test: lib/workflows.py (validator + registry + A1_BUILTIN)
 # and lib/topology-render.py.
 #
 # SELF-CONTAINED inline harness (same style as ledger.test.sh).
 #
 # Scenarios (U2 validate + U7 built-ins/constant/renderer; U3 resolver scenarios
 # are added when U3 lands):
-#   1. each built-in recipe (a1/a2/a4/w) validates
+#   1. each built-in workflow (a1/a2/a4/w) validates
 #   2. A1_BUILTIN equals the resolved a1.json topology (no drift) + validates
 #   3. validate rejections: unknown field, bad producer, traversal, non-default
 #      phase_order (A3), missing required, depends_on integrity
@@ -32,79 +32,79 @@ fail() {
 }
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
-# Driver: load recipes + topology-render via _bootstrap, run an op, print result.
+# Driver: load workflows + topology-render via _bootstrap, run an op, print result.
 rec() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 op = sys.argv[2]
 
 def vresult(d):
     try:
-        recipes.validate(d); return "valid"
-    except recipes.RecipeError as e:
+        workflows.validate(d); return "valid"
+    except workflows.WorkflowError as e:
         return "rejected"
 
 if op == "validate-builtins":
     out = []
     for name in ("a1", "a2", "a4", "w"):
-        with open(os.path.join(auto_root, "recipes", name + ".json")) as f:
+        with open(os.path.join(auto_root, "workflows", name + ".json")) as f:
             out.append(name + ":" + vresult(json.load(f)))
     print(",".join(out))
 elif op == "a1-no-drift":
-    with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
+    with open(os.path.join(auto_root, "workflows", "a1.json")) as f:
         disk = json.load(f)
-    same = recipes.A1_BUILTIN == disk
-    valid = vresult(recipes.A1_BUILTIN)
+    same = workflows.A1_BUILTIN == disk
+    valid = vresult(workflows.A1_BUILTIN)
     print("%s,%s" % (same, valid))
 elif op == "validate-json":
     print(vresult(json.loads(sys.argv[3])))
 elif op == "render-builtin":
     tr = load_lib_module("topology-render")
-    with open(os.path.join(auto_root, "recipes", sys.argv[3] + ".json")) as f:
+    with open(os.path.join(auto_root, "workflows", sys.argv[3] + ".json")) as f:
         card = tr.render(json.load(f), 60)
-    # print a few stable signals: contains the recipe name, the producer, phase labels
+    # print a few stable signals: contains the workflow name, the producer, phase labels
     sigs = []
-    sigs.append("name" if ("recipe: " + sys.argv[3]) in card else "NONAME")
+    sigs.append("name" if ("workflow: " + sys.argv[3]) in card else "NONAME")
     sigs.append("PLAN" if "PLAN" in card.upper() else "noplan")
     sigs.append("emit" if "emit:" in card else "noemit")
     print(",".join(sigs))
 elif op == "render-deterministic":
     tr = load_lib_module("topology-render")
-    with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
+    with open(os.path.join(auto_root, "workflows", "a1.json")) as f:
         d = json.load(f)
     print("same" if tr.render(d, 60) == tr.render(d, 60) else "differs")
 
-# ─── v0.6.0 U6 / U7 / U11: structural phase_order validator + new recipes ────
-elif op == "validate-recipe-file":
-    # Validate a built-in recipe FILE by name (generalizes validate-builtins
-    # to the v0.6.0 recipes pipeline.json / review.json which the fixed
+# ─── v0.6.0 U6 / U7 / U11: structural phase_order validator + new workflows ────
+elif op == "validate-workflow-file":
+    # Validate a built-in workflow FILE by name (generalizes validate-builtins
+    # to the v0.6.0 workflows pipeline.json / review.json which the fixed
     # ("a1","a2","a4","w") loop above does not cover).
-    with open(os.path.join(auto_root, "recipes", sys.argv[3] + ".json")) as f:
+    with open(os.path.join(auto_root, "workflows", sys.argv[3] + ".json")) as f:
         print(vresult(json.load(f)))
-elif op == "resolve-recipe-file":
-    # Resolve a recipe through the three-tier registry in a fresh repo (proves
+elif op == "resolve-workflow-file":
+    # Resolve a workflow through the three-tier registry in a fresh repo (proves
     # it lands at the built-in tier and loads+validates).
     import tempfile
     repo = tempfile.mkdtemp()
     try:
-        r, tier = recipes.load_and_validate(sys.argv[3], repo)
+        r, tier = workflows.load_and_validate(sys.argv[3], repo)
         print("%s:%s:%s" % (r["name"], tier, vresult(r)))
-    except recipes.RecipeError as e:
+    except workflows.WorkflowError as e:
         print("ERROR:%s" % e)
 elif op == "review-vs-w-distinct":
     # U11: review.json must be MEANINGFULLY distinct from w.json. review is a
-    # genuine work-only ["work"] recipe whose single step invokes the `review`
+    # genuine work-only ["work"] workflow whose single step invokes the `review`
     # backend op (one review/fix loop to P3). w (v0.4.3 KTD-15) is no longer its
     # work-only twin — it's plan_presatisfied, so its plan step invokes
     # `next_plan_step` (the plan-loop sequencer) and it enumerates a reviewed plan
     # into work. Surface both ops so a silent convergence still trips this.
-    with open(os.path.join(auto_root, "recipes", "review.json")) as f:
+    with open(os.path.join(auto_root, "workflows", "review.json")) as f:
         rev = json.load(f)
-    with open(os.path.join(auto_root, "recipes", "w.json")) as f:
+    with open(os.path.join(auto_root, "workflows", "w.json")) as f:
         w = json.load(f)
     rev_op = rev["steps"][0]["invokes"].get("backend_op")
     w_op = w["steps"][0]["invokes"].get("backend_op")
@@ -112,13 +112,13 @@ elif op == "review-vs-w-distinct":
 elif op == "validate-firsterr":
     # Pin the LOAD-BEARING first-error-wins order across the validate()
     # decomposition (was one 324-LOC function, now a ~30-line ordered
-    # dispatcher over per-concern sub-validators). A doubly-malformed recipe
-    # must surface the EARLIER block's error. Classify the first RecipeError
+    # dispatcher over per-concern sub-validators). A doubly-malformed workflow
+    # must surface the EARLIER block's error. Classify the first WorkflowError
     # message into a stable token so the order is assertable.
     try:
-        recipes.validate(json.loads(sys.argv[3]))
+        workflows.validate(json.loads(sys.argv[3]))
         print("valid")
-    except recipes.RecipeError as e:
+    except workflows.WorkflowError as e:
         m = str(e)
         if "unknown top-level field" in m:
             print("toplevel-unknown")
@@ -138,15 +138,15 @@ elif op == "verification-cap":
     # — proves the cap fires independent of per-criterion validity. Inlining 17
     # criteria as a shell JSON string is unwieldy, so build it here.
     crits = [{"id": "c%d" % i, "type": "human"} for i in range(17)]
-    recipe = {"name": "x", "version": "1",
+    workflow = {"name": "x", "version": "1",
               "steps": [{"id": "g", "phase": "plan", "invokes": {},
                          "verification": crits}]}
-    print(vresult(recipe))
+    print(vresult(workflow))
 PYEOF
 }
 
 # ─── Scenario 1: built-ins validate ─────────────────────────────────────────
-it "all four built-in recipes (a1/a2/a4/w) validate"
+it "all four built-in workflows (a1/a2/a4/w) validate"
 assert_eq "a1:valid,a2:valid,a4:valid,w:valid" "$(rec validate-builtins)"
 
 # ─── Scenario 2: A1_BUILTIN no-drift + validates ────────────────────────────
@@ -157,7 +157,7 @@ assert_eq "True,valid" "$(rec a1-no-drift)"
 it "unknown top-level field rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[],"bogus":1}')"
 
-# Order-preserving decomposition (M-? regression): a doubly-malformed recipe
+# Order-preserving decomposition (M-? regression): a doubly-malformed workflow
 # must surface the EARLIER sub-validator's error. validate() runs
 # _validate_toplevel → _validate_phase_order → _validate_steps → … in a fixed
 # order; the 58 single-violation tests below cannot catch a transposition, so
@@ -173,7 +173,7 @@ assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[],"py
 
 # v0.6.0 U6: the literal allow-list gate is gone — a multi-phase grammar that
 # is STRUCTURALLY sound (non-empty-string phases, terminal_phase ∈ phase_order)
-# now validates. Pre-U6 this exact recipe was REJECTED (the A3 grammar was not
+# now validates. Pre-U6 this exact workflow was REJECTED (the A3 grammar was not
 # in _V1_ALLOWED_PHASE_ORDERS); U6 deliberately unlocks it. Steps list is
 # non-empty here (each step's phase ∈ phase_order) so the work-only empty-steps
 # guard is not in play.
@@ -183,7 +183,7 @@ assert_eq "valid" "$(rec validate-json '{"name":"a3","version":"1","phase_order"
 it "work-only phase_order [work] accepted when steps are pre-declared (KTD-15)"
 assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[{"id":"u1","phase":"work","invokes":{}}]}')"
 
-# Fix-pass D (P1 #6): a work-only recipe with NO pre-declared steps is
+# Fix-pass D (P1 #6): a work-only workflow with NO pre-declared steps is
 # unrunnable in v0.2.0 — init-time enumeration ships in v0.2.1 (KTD-15).
 # validate() must hard-reject this shape so the engine never creates a
 # zero-step ledger that re-arms forever without dispatching.
@@ -214,7 +214,7 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
 # conditions (programmatic | model_judge | advisor_judge | human), validated at
 # LOAD time in validate() — the SAME gate the skill's write-time
 # validate_and_lint runs (KTD-3). Shape per
-# skills/auto-design/references/verification-taxonomy.md. The base recipe is the
+# skills/auto-design/references/verification-taxonomy.md. The base workflow is the
 # minimal valid shape (one plan-phase step, default phase_order); only the
 # `verification` array varies, so a valid/rejected verdict isolates the criterion
 # validator. Covers AE1 (schema half).
@@ -288,23 +288,23 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_orde
 
 # ─── v0.6.0 U7: pipeline.json (the brainstorm-rooted spine) validates+resolves ─
 it "U7: pipeline.json validates"
-assert_eq "valid" "$(rec validate-recipe-file pipeline)"
+assert_eq "valid" "$(rec validate-workflow-file pipeline)"
 
 it "U7: pipeline.json resolves through the three-tier registry (built-in)"
-assert_eq "pipeline:built-in:valid" "$(rec resolve-recipe-file pipeline)"
+assert_eq "pipeline:built-in:valid" "$(rec resolve-workflow-file pipeline)"
 
 # ─── v0.6.0 U11: review.json (off-spine single-phase) validates + distinct ───
 it "U11: review.json validates"
-assert_eq "valid" "$(rec validate-recipe-file review)"
+assert_eq "valid" "$(rec validate-workflow-file review)"
 
 it "U11: review.json resolves through the three-tier registry (built-in)"
-assert_eq "review:built-in:valid" "$(rec resolve-recipe-file review)"
+assert_eq "review:built-in:valid" "$(rec resolve-workflow-file review)"
 
 it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_step)"
 assert_eq "review:review|w:next_plan_step|distinct:True" "$(rec review-vs-w-distinct)"
 
 # ─── Scenario 5: topology-render ────────────────────────────────────────────
-it "topology-render: a1 card names recipe + has PLAN + names producer"
+it "topology-render: a1 card names workflow + has PLAN + names producer"
 assert_eq "name,PLAN,emit" "$(rec render-builtin a1)"
 
 it "topology-render: deterministic (same input → same output)"
@@ -317,52 +317,52 @@ import sys, os, json, tempfile
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 op = sys.argv[2]
 
-def mk_workspace_repo(recipe_dicts):
-    """A temp repo with given workspace recipes; returns repo root."""
+def mk_workspace_repo(workflow_dicts):
+    """A temp repo with given workspace workflows; returns repo root."""
     repo = tempfile.mkdtemp()
-    d = os.path.join(repo, ".claude", "auto", "recipes")
+    d = os.path.join(repo, ".claude", "auto", "workflows")
     os.makedirs(d)
-    for r in recipe_dicts:
+    for r in workflow_dicts:
         with open(os.path.join(d, r["name"] + ".json"), "w") as f:
             json.dump(r, f)
     return repo
 
 if op == "list-fresh":
-    # A fresh repo (no workspace recipes) → exactly the built-ins.
+    # A fresh repo (no workspace workflows) → exactly the built-ins.
     repo = tempfile.mkdtemp()
-    names = [n for n, t in recipes.list_available(repo) if t == "built-in"]
+    names = [n for n, t in workflows.list_available(repo) if t == "built-in"]
     print(",".join(sorted(names)))
 
 elif op == "shadow":
-    # AE2: a workspace recipe named "a1" SHADOWS the built-in.
+    # AE2: a workspace workflow named "a1" SHADOWS the built-in.
     repo = mk_workspace_repo([{"name": "a1", "version": "1",
         "phase_order": ["plan","handoff","work"], "terminal_phase": "work",
         "steps": [{"id":"plan","phase":"plan","invokes":{}}], "description": "WS"}])
-    recipe, tier = recipes.resolve("a1", repo)
+    workflow, tier = workflows.resolve("a1", repo)
     # workspace wins; and a1 appears ONCE in list_available, tagged workspace.
-    a1_entries = [(n, t) for n, t in recipes.list_available(repo) if n == "a1"]
-    print("%s,%s,%d" % (tier, recipe.get("description"), len(a1_entries)))
+    a1_entries = [(n, t) for n, t in workflows.list_available(repo) if n == "a1"]
+    print("%s,%s,%d" % (tier, workflow.get("description"), len(a1_entries)))
 
 elif op == "a1-fallback":
     # No a1.json anywhere (empty repo + we can't delete built-in, so test the
     # CONSTANT fallback path by resolving in a repo and checking a missing name
     # uses the constant only for 'a1'): resolve a1 in fresh repo → built-in/constant.
     repo = tempfile.mkdtemp()
-    recipe, tier = recipes.resolve("a1", repo)
-    print("%s,%s" % (recipe["name"], tier))
+    workflow, tier = workflows.resolve("a1", repo)
+    print("%s,%s" % (workflow["name"], tier))
 
 elif op == "missing":
     repo = tempfile.mkdtemp()
     try:
-        recipes.resolve("does-not-exist", repo); print("NO-RAISE")
-    except recipes.RecipeError:
+        workflows.resolve("does-not-exist", repo); print("NO-RAISE")
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "resolve-traversal":
-    # P0 #4 fix-pass B: layer 2 — resolve() must reject a CLI-supplied recipe
+    # P0 #4 fix-pass B: layer 2 — resolve() must reject a CLI-supplied workflow
     # name with traversal segments BEFORE touching the filesystem. We feed each
     # malicious name and assert all raise; if ANY one returns without raising,
     # the attack would succeed in production.
@@ -382,27 +382,27 @@ elif op == "resolve-traversal":
     raised = 0
     for n in bad_names:
         try:
-            recipes.resolve(n, repo)
-        except recipes.RecipeError:
+            workflows.resolve(n, repo)
+        except workflows.WorkflowError:
             raised += 1
     print(f"{raised}/{len(bad_names)}")
 
 elif op == "resolve-valid-names":
-    # The regex must NOT reject legitimately-named recipes. Built-in names
+    # The regex must NOT reject legitimately-named workflows. Built-in names
     # (a1, a2, a4, w) are the conformance corpus; resolve() should accept them
     # (return either a built-in or raise "not found" — never a "name invalid"
-    # RecipeError). We surface the error MESSAGE for the not-found case so a
+    # WorkflowError). We surface the error MESSAGE for the not-found case so a
     # false-positive name-rejection would be visible.
     import tempfile
     repo = tempfile.mkdtemp()
     out = []
-    for n in ["a1", "a2", "my-recipe", "team_foo", "v2.1"]:
+    for n in ["a1", "a2", "my-workflow", "team_foo", "v2.1"]:
         try:
-            _, tier = recipes.resolve(n, repo)
+            _, tier = workflows.resolve(n, repo)
             out.append(f"{n}:{tier}")
-        except recipes.RecipeError as e:
+        except workflows.WorkflowError as e:
             msg = str(e)
-            if "invalid recipe name" in msg:
+            if "invalid workflow name" in msg:
                 out.append(f"{n}:NAME-REJECTED")
             else:
                 out.append(f"{n}:not-found")
@@ -410,32 +410,32 @@ elif op == "resolve-valid-names":
 
 elif op == "validate-traversal-name":
     # P0 #4 layer 1: validate() also rejects an unsafe `name:` field on a
-    # recipe-file dict. Defense in depth — a recipe with the right shape but a
+    # workflow-file dict. Defense in depth — a workflow with the right shape but a
     # malicious name should fail validation.
     try:
-        recipes.validate({"name": "../evil", "version": "1", "steps": []})
+        workflows.validate({"name": "../evil", "version": "1", "steps": []})
         print("NO-RAISE")
-    except recipes.RecipeError as e:
-        print("raised" if "invalid recipe name" in str(e) else "raised-wrong-message")
+    except workflows.WorkflowError as e:
+        print("raised" if "invalid workflow name" in str(e) else "raised-wrong-message")
 
 elif op == "step-for-traversal":
     # step_for re-validates the prompt_template path bound (2nd enforcement point).
     try:
-        recipes.step_for({"id": "u", "phase": "work",
+        workflows.step_for({"id": "u", "phase": "work",
             "invokes": {"prompt_template": "../../etc/passwd"}}, {})
         print("NO-RAISE")
-    except recipes.RecipeError:
+    except workflows.WorkflowError:
         print("raised")
 
 elif op == "step-for-merge":
-    u = recipes.step_for({"id": "u", "phase": "work",
+    u = workflows.step_for({"id": "u", "phase": "work",
         "invokes": {"backend_op": "do_step", "prompt_template": "p/x.md"}}, {})
     print("%s,%s,%s" % (u["id"], u["dispatch_context"]["backend_op"],
                         u["dispatch_context"]["prompt_template"]))
 
 elif op == "lint-empty-phase":
     # validate_and_lint warns on a phase with no steps + no producer targeting it.
-    warns = recipes.validate_and_lint({"name": "x", "version": "1",
+    warns = workflows.validate_and_lint({"name": "x", "version": "1",
         "phase_order": ["plan","handoff","work"], "terminal_phase": "work",
         "steps": [{"id":"plan","phase":"plan","invokes":{}}]})
     # work phase has no steps and (no phase_transitions) no producer → a warning.
@@ -443,33 +443,33 @@ elif op == "lint-empty-phase":
 PYEOF
 }
 
-# v0.6.0 U7/U11 added two built-in recipes: pipeline (brainstorm-rooted spine)
+# v0.6.0 U7/U11 added two built-in workflows: pipeline (brainstorm-rooted spine)
 # and review (off-spine single-phase). list_available is sorted by name.
 it "list_available in a fresh repo → exactly the built-ins (a1/a2/a4/pipeline/review/w)"
 assert_eq "a1,a2,a4,pipeline,review,w" "$(reg list-fresh)"
 
-it "AE2: workspace recipe shadows built-in (workspace wins, appears once)"
+it "AE2: workspace workflow shadows built-in (workspace wins, appears once)"
 assert_eq "workspace,WS,1" "$(reg shadow)"
 
 it "resolve a1 with no a1.json → built-in (A1_BUILTIN fallback path)"
 assert_eq "a1,built-in" "$(reg a1-fallback)"
 
-it "resolve unknown recipe → raises with searched paths"
+it "resolve unknown workflow → raises with searched paths"
 assert_eq "raised" "$(reg missing)"
 
 # P0 #4 fix-pass B: layer-2 path-traversal defense at the CLI entry to resolve().
-it "fix-pass B: resolve() rejects all path-traversal recipe names (9/9 raise)"
+it "fix-pass B: resolve() rejects all path-traversal workflow names (9/9 raise)"
 assert_eq "9/9" "$(reg resolve-traversal)"
 
 # Deliberate-fail proof that the GREEN path isn't over-rejecting valid names.
 # A regex tightened too far would fail this case — surfaces a false-positive
-# that would block legitimate workspace/global recipes from resolving.
-it "fix-pass B: resolve() accepts legitimate recipe names (built-ins + dashes/dots)"
-assert_eq "a1:built-in,a2:built-in,my-recipe:not-found,team_foo:not-found,v2.1:not-found" \
+# that would block legitimate workspace/global workflows from resolving.
+it "fix-pass B: resolve() accepts legitimate workflow names (built-ins + dashes/dots)"
+assert_eq "a1:built-in,a2:built-in,my-workflow:not-found,team_foo:not-found,v2.1:not-found" \
   "$(reg resolve-valid-names)"
 
-# P0 #4 layer 1: validate() also rejects an unsafe `name:` on the recipe dict.
-it "fix-pass B: validate() rejects an unsafe recipe.name field"
+# P0 #4 layer 1: validate() also rejects an unsafe `name:` on the workflow dict.
+it "fix-pass B: validate() rejects an unsafe workflow.name field"
 assert_eq "raised" "$(reg validate-traversal-name)"
 
 it "step_for re-validates prompt_template traversal (2nd enforcement point)"
@@ -493,16 +493,16 @@ import sys, os, json
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 from _bootstrap import load_lib_module
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 op = sys.argv[2]
 
 def vresult(d):
     try:
-        recipes.validate(d); return "valid"
-    except recipes.RecipeError:
+        workflows.validate(d); return "valid"
+    except workflows.WorkflowError:
         return "rejected"
 
-# Full v0.3.0 A2 recipe shape — the GREEN reference. Per the plan's
+# Full v0.3.0 A2 workflow shape — the GREEN reference. Per the plan's
 # High-Level Technical Design block (lines 158-187). Every error-case test
 # below mutates a single field off this base.
 def a2_v030():
@@ -543,14 +543,14 @@ def lint_verif(r):
     # validate_and_lint's internal validate() raised). The "valid:" prefix proves
     # validate() passed (R3: load must still succeed); N isolates the U2 warning.
     try:
-        warns = recipes.validate_and_lint(r)
-    except recipes.RecipeError:
+        warns = workflows.validate_and_lint(r)
+    except workflows.WorkflowError:
         return "rejected"
     return "valid:%d" % sum(1 for w in warns if "verification" in w)
 
 def _builtin_desc(name):
-    # The verbatim description of a built-in recipe (read from disk).
-    with open(os.path.join(auto_root, "recipes", name + ".json")) as f:
+    # The verbatim description of a built-in workflow (read from disk).
+    with open(os.path.join(auto_root, "workflows", name + ".json")) as f:
         return (json.load(f).get("description") or "").strip()
 
 def spoof_result(r):
@@ -558,8 +558,8 @@ def spoof_result(r):
     # validate_and_lint's internal validate() raised — the "spoof:" prefix keeps a
     # validate() rejection from silently reading as spoof:0, mirroring lint_verif).
     try:
-        warns = recipes.validate_and_lint(r)
-    except recipes.RecipeError:
+        warns = workflows.validate_and_lint(r)
+    except workflows.WorkflowError:
         return "rejected"
     return "spoof:%d" % sum(1 for w in warns if "spoofing" in w)
 
@@ -568,12 +568,12 @@ if op == "a2-v030-happy":
 
 elif op == "a1-still-valid":
     # R7: v0.2.0 a1 shape (no iteration, no emit_templates) still validates.
-    with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
+    with open(os.path.join(auto_root, "workflows", "a1.json")) as f:
         print(vresult(json.load(f)))
 
 elif op == "w-still-valid":
-    # R7: W recipe (no iteration, no emit_templates) still validates.
-    with open(os.path.join(auto_root, "recipes", "w.json")) as f:
+    # R7: W workflow (no iteration, no emit_templates) still validates.
+    with open(os.path.join(auto_root, "workflows", "w.json")) as f:
         print(vresult(json.load(f)))
 
 elif op == "gate-step-ghost":
@@ -628,25 +628,25 @@ elif op == "lint-max-attempts-loud":
     # Editorial — max_attempts = 15 > 10 → warning surface.
     r = a2_v030()
     r["iteration"]["bound"]["max_attempts"] = 15
-    warns = recipes.validate_and_lint(r)
+    warns = workflows.validate_and_lint(r)
     print("warned" if any("max_attempts" in w for w in warns) else "no-warning")
 
 elif op == "lint-max-wall-short":
     # Editorial — max_wall_seconds < 60 → warning surface.
     r = a2_v030()
     r["iteration"]["bound"]["max_wall_seconds"] = 30
-    warns = recipes.validate_and_lint(r)
+    warns = workflows.validate_and_lint(r)
     print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
 
 elif op == "u6-depends-on-id-prefix-valid":
     # v0.3.0 U6 (F4-tightened): a structural step may forward-reference steps
-    # produced by an emit_template. With F4 SCHEMA TIGHTENING the recipe must
+    # produced by an emit_template. With F4 SCHEMA TIGHTENING the workflow must
     # DECLARE the producer-produced ids via `expected_emit_outputs` — they are
     # no longer accepted on prefix-match alone. A4's `compare` is the canonical
     # example: its depends_on names "build-clarity" and "build-perf"
     # (materialized by the bias-builder emit_template + the
     # plan_output_to_paired_builders phase-transition producer). The validator
-    # MUST accept this AFTER the recipe declares them in expected_emit_outputs.
+    # MUST accept this AFTER the workflow declares them in expected_emit_outputs.
     r = {
         "name": "u6-fwdref", "version": "1",
         "phase_order": ["plan", "handoff", "work"],
@@ -774,9 +774,9 @@ elif op == "f4-eeo-rejects-non-list":
 
 elif op == "g3-doc-claim-parity-without-eeo":
     # G3 (API-R2-1): doc-claim ↔ validator-behavior parity check (§8 of
-    # docs/contracts/recipe-format.md). The doc says depends_on members are
+    # docs/contracts/workflow-format.md). The doc says depends_on members are
     # accepted iff (a) in steps[], (b) iterate-shape, OR (c) in
-    # expected_emit_outputs. Toggle pair: same recipe, depends_on names
+    # expected_emit_outputs. Toggle pair: same workflow, depends_on names
     # `unicorn` (not in steps[], not iterate-shape, NOT in EEO) → must reject.
     r = {
         "name": "g3-no-eeo", "version": "1",
@@ -799,7 +799,7 @@ elif op == "g3-doc-claim-parity-without-eeo":
     print(vresult(r))
 
 elif op == "g3-doc-claim-parity-with-eeo":
-    # G3 (API-R2-1): same recipe as g3-doc-claim-parity-without-eeo BUT with
+    # G3 (API-R2-1): same workflow as g3-doc-claim-parity-without-eeo BUT with
     # `unicorn` declared in expected_emit_outputs → must validate. Together
     # these two prove the third branch of the documented contract (§8) is
     # exactly what the validator enforces.
@@ -832,7 +832,7 @@ elif op == "g1-isdigit-unicode-superscript":
     # validator rejects it via the existing unknown-step path — same final
     # verdict the author intended.
     #
-    # The DF revert (Edit isdecimal→isdigit in lib/recipes.py) shows the
+    # The DF revert (Edit isdecimal→isdigit in lib/workflows.py) shows the
     # un-fixed validator RAISES on this input (test goes RED with a
     # `raised:ValueError` shape instead of `rejected`).
     r = {
@@ -884,11 +884,11 @@ elif op == "verif-two-off-gate":
 
 elif op == "verif-none":
     # R3 control: no verification anywhere → no new warning. Proves the U2 block
-    # is silent on the common (verification-free) recipe.
+    # is silent on the common (verification-free) workflow.
     print(lint_verif(a2_v030()))
 
 elif op == "spoof-a1":
-    # Regression guard: a workspace recipe copying a1's description verbatim is
+    # Regression guard: a workspace workflow copying a1's description verbatim is
     # flagged (a1 was in the old hardcoded tuple — must stay flagged).
     r = a2_v030()
     r["name"] = "a2-run-abc123"
@@ -913,7 +913,7 @@ elif op == "spoof-review":
     print(spoof_result(r))
 
 elif op == "spoof-self-match":
-    # Self-match exemption preserved: a recipe whose name equals the built-in whose
+    # Self-match exemption preserved: a workflow whose name equals the built-in whose
     # description it carries is NOT flagged (it IS that built-in, not a spoof).
     # Uses a newly-covered built-in (pipeline) to exercise the exemption on the
     # new scan path.
@@ -928,7 +928,7 @@ elif op == "spoof-builtins-clean":
     # distinct). Each built-in validated against itself → spoof:0.
     bad = []
     for nm in ("a1", "a2", "a4", "w", "pipeline", "review"):
-        with open(os.path.join(auto_root, "recipes", nm + ".json")) as f:
+        with open(os.path.join(auto_root, "workflows", nm + ".json")) as f:
             res = spoof_result(json.load(f))
         if res != "spoof:0":
             bad.append(nm + "=" + res)
@@ -936,7 +936,7 @@ elif op == "spoof-builtins-clean":
 PYEOF
 }
 
-it "U5 happy path: full A2 v0.3.0 recipe (iteration + emit_templates) validates"
+it "U5 happy path: full A2 v0.3.0 workflow (iteration + emit_templates) validates"
 assert_eq "valid" "$(itr a2-v030-happy)"
 
 it "U5 R7: a1 (no iteration, no emit_templates) still validates"
@@ -1010,16 +1010,16 @@ it "F4 shape: expected_emit_outputs must be a list of non-empty strings"
 assert_eq "rejected" "$(itr f4-eeo-rejects-non-list)"
 
 # ── G3 (API-R2-1): doc-claim ↔ validator-behavior parity check ─────────────
-# docs/contracts/recipe-format.md §8 documents `expected_emit_outputs`. The
+# docs/contracts/workflow-format.md §8 documents `expected_emit_outputs`. The
 # doc claims depends_on members are accepted iff (a) in steps[], (b)
 # iterate-shape, OR (c) in expected_emit_outputs. These two tests are a
-# toggle pair on branch (c) — same recipe, only `expected_emit_outputs`
+# toggle pair on branch (c) — same workflow, only `expected_emit_outputs`
 # differs. If the doc and validator ever drift on this contract, one of
 # these will flip.
 #
 # DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
 # we proved this test is real by commenting out the `if d in
-# expected_emit_outputs_set: continue` lines in lib/recipes.py via Edit and
+# expected_emit_outputs_set: continue` lines in lib/workflows.py via Edit and
 # observing the g3-doc-claim-parity-with-eeo case flip from valid → rejected
 # (red), then restoring. Without the DF the green here proves nothing.
 it "G3 doc-parity (§8): depends_on='unicorn' without expected_emit_outputs → rejected"
@@ -1035,12 +1035,12 @@ assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 # (unhandled ValueError escapes through `validate` → caller). G1 uses
 # `isdecimal()` which matches exactly the chars `int()` accepts, so
 # "build-²" is treated as not-iterate-shaped and rejected via the standard
-# unknown-step path (i.e. with a RecipeError, not a ValueError).
+# unknown-step path (i.e. with a WorkflowError, not a ValueError).
 #
 # DF-verified (commit message): with the production fix reverted
 # (isdecimal → isdigit), this test fails RED — vresult returns a
 # non-"rejected" value because the underlying `int(suffix)` raises
-# ValueError, which vresult only handles for RecipeError.
+# ValueError, which vresult only handles for WorkflowError.
 it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
 assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
 
@@ -1067,30 +1067,30 @@ assert_eq "valid:0" "$(itr verif-none)"
 
 # ── U2 (this step): description-spoofing guard scans ALL built-ins ────────────
 # The guard used to loop a stale ("a1","a2","a4","w") tuple, silently missing the
-# pipeline/review built-ins. It now scans recipes/ dynamically. The pipeline and
+# pipeline/review built-ins. It now scans workflows/ dynamically. The pipeline and
 # review cases below are the deliberate-fail proof: they return spoof:0 (✗) on the
 # pre-change tuple and spoof:1 (✓) after the fix, while spoof-a1 stays ✓ on both.
-it "U2: workspace recipe copying a1's description verbatim → flagged (regression)"
+it "U2: workspace workflow copying a1's description verbatim → flagged (regression)"
 assert_eq "spoof:1" "$(itr spoof-a1)"
 
-it "U2: workspace recipe copying pipeline's description verbatim → flagged (new)"
+it "U2: workspace workflow copying pipeline's description verbatim → flagged (new)"
 assert_eq "spoof:1" "$(itr spoof-pipeline)"
 
-it "U2: workspace recipe copying review's description verbatim → flagged (new)"
+it "U2: workspace workflow copying review's description verbatim → flagged (new)"
 assert_eq "spoof:1" "$(itr spoof-review)"
 
-it "U2: recipe whose name equals the matched built-in → not flagged (self-match)"
+it "U2: workflow whose name equals the matched built-in → not flagged (self-match)"
 assert_eq "spoof:0" "$(itr spoof-self-match)"
 
 it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan"
 assert_eq "clean" "$(itr spoof-builtins-clean)"
 
-# ── U12: every shipped recipe's declared backend_op ∈ VALID_BACKEND_OPS ───────
+# ── U12: every shipped workflow's declared backend_op ∈ VALID_BACKEND_OPS ───────
 # The build-time counterpart to dispatcher.dispatch_batch's runtime guard: a
-# typo in a shipped recipe JSON is caught here, before it can ship. Enumerates
-# EVERY `backend_op` across recipes/*.json (exhaustive, not a sample) and asserts
+# typo in a shipped workflow JSON is caught here, before it can ship. Enumerates
+# EVERY `backend_op` across workflows/*.json (exhaustive, not a sample) and asserts
 # the set is a subset of dispatcher.VALID_BACKEND_OPS.
-it "U12: every shipped recipe backend_op is in dispatcher.VALID_BACKEND_OPS"
+it "U12: every shipped workflow backend_op is in dispatcher.VALID_BACKEND_OPS"
 opcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, json, glob, importlib.util
 auto_root = sys.argv[1]
@@ -1110,7 +1110,7 @@ def walk_ops(node):
             yield from walk_ops(v)
 
 found, unknown = set(), set()
-for path in glob.glob(os.path.join(auto_root, "recipes", "*.json")):
+for path in glob.glob(os.path.join(auto_root, "workflows", "*.json")):
     if os.path.basename(path) == "schema.json":
         continue
     with open(path) as f:
@@ -1125,7 +1125,100 @@ PYEOF
 )"
 assert_eq "ok" "$opcheck"
 
+# ─── U8 / KTD-7: the legacy tier-dir fallback (first-wins across FIVE dirs) ──
+# The rename moved the workspace/global tier dirs. Users have files in the OLD
+# ones, so `_tier_dirs` probes each user-writable tier at its new dir and then at
+# its legacy dir. Three properties, all load-bearing:
+#   (a) a file that exists ONLY in the legacy dir still resolves (the compat path);
+#   (b) the NEW dir SHADOWS the legacy dir at the same tier (first-wins — a user
+#       who migrated one file must not be fighting their own stale copy);
+#   (c) the legacy dir is READ-ONLY — the write path targets the new dir only, so
+#       a run-scoped variant can never be written into (or torn down from) it.
+#
+# NB the legacy dir NAME is read off `workflows._LEGACY_TIER_DIRNAME`, not spelled
+# here: that keeps this file clean for the vocabulary audit, and the retired
+# literal is PINNED (against exactly this kind of tautology) by the whitelisted
+# tests/integration/format-v1-compat.test.sh, which spells it.
+echo ""
+echo "── U8 KTD-7: legacy tier-dir fallback ──"
+
+tier_probe="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json, tempfile
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+workflows = load_lib_module("workflows")
+
+LEGACY = workflows._LEGACY_TIER_DIRNAME   # the retired dir name, from the module
+
+def wf(name, desc):
+    return {
+        "name": name, "version": "1", "description": desc,
+        "default_backend": "ce",
+        "phase_order": ["plan", "handoff", "work"], "terminal_phase": "work",
+        "phase_transitions": [
+            {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
+        ],
+        "steps": [{"id": "plan", "phase": "plan", "depends_on": [],
+                   "invokes": {"backend_op": "next_plan_step"}}],
+    }
+
+out = {}
+with tempfile.TemporaryDirectory() as repo:
+    newdir = os.path.join(repo, ".claude", "auto", "workflows")
+    olddir = os.path.join(repo, ".claude", "auto", LEGACY)
+    os.makedirs(newdir); os.makedirs(olddir)
+
+    # (a) ONLY in the legacy dir → still resolves, reports the `workspace` tier.
+    with open(os.path.join(olddir, "onlylegacy.json"), "w") as f:
+        json.dump(wf("onlylegacy", "lives in the legacy dir"), f)
+    doc, tier = workflows.resolve("onlylegacy", repo)
+    out["legacy_only_resolves"] = doc["description"]
+    out["legacy_only_tier"] = tier
+
+    # (b) SAME NAME in both dirs → the NEW dir wins (first-wins preserved).
+    with open(os.path.join(olddir, "both.json"), "w") as f:
+        json.dump(wf("both", "OLD-legacy-dir copy"), f)
+    with open(os.path.join(newdir, "both.json"), "w") as f:
+        json.dump(wf("both", "NEW-workflows-dir copy"), f)
+    doc, tier = workflows.resolve("both", repo)
+    out["shadowed_by_new_dir"] = doc["description"]
+
+    # ...and list_available dedups it to ONE entry (the picker must not show both).
+    listed = [(n, t) for (n, t) in workflows.list_available(repo) if n == "both"]
+    out["listed_once"] = listed
+
+    # (c) the WRITE path targets the new dir ONLY — never the legacy one.
+    wpath = workflows.workspace_workflow_path(repo, "written")
+    out["write_path_is_new_dir"] = os.path.dirname(wpath) == newdir
+    out["write_path_not_legacy"] = os.path.dirname(wpath) != olddir
+
+    # and the five dirs come back in the documented order (contract §1).
+    out["tier_names"] = [t for t, _ in workflows._tier_dirs(repo)]
+
+print(json.dumps(out, sort_keys=True))
+PYEOF
+)"
+
+it "a workflow that exists ONLY in the legacy tier dir still resolves (the user-compat path)"
+assert_eq "lives in the legacy dir" "$("$PY" -c 'import sys,json;print(json.loads(sys.argv[1])["legacy_only_resolves"])' "$tier_probe")"
+
+it "a legacy-dir file reports the tier NAME of its modern sibling (workspace)"
+assert_eq "workspace" "$("$PY" -c 'import sys,json;print(json.loads(sys.argv[1])["legacy_only_tier"])' "$tier_probe")"
+
+it "same name in BOTH dirs → the new workflows/ dir wins (first-wins preserved)"
+assert_eq "NEW-workflows-dir copy" "$("$PY" -c 'import sys,json;print(json.loads(sys.argv[1])["shadowed_by_new_dir"])' "$tier_probe")"
+
+it "list_available dedups the shadowed pair to ONE workspace entry (the picker shows one)"
+assert_eq '[["both", "workspace"]]' "$("$PY" -c 'import sys,json;print(json.dumps(json.loads(sys.argv[1])["listed_once"]))' "$tier_probe")"
+
+it "the WRITE path (workspace_workflow_path) targets the new dir, never the legacy one"
+assert_eq "True True" "$("$PY" -c 'import sys,json;d=json.loads(sys.argv[1]);print(d["write_path_is_new_dir"], d["write_path_not_legacy"])' "$tier_probe")"
+
+it "_tier_dirs returns five dirs: workspace, workspace(legacy), global, global(legacy), built-in"
+assert_eq '["workspace", "workspace", "global", "global", "built-in"]' "$("$PY" -c 'import sys,json;print(json.dumps(json.loads(sys.argv[1])["tier_names"]))' "$tier_probe")"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "recipes.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "workflows.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

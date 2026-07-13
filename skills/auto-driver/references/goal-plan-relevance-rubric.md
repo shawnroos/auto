@@ -2,7 +2,7 @@
 Companion to skills/auto-design/references/goal-rubric.md (the "sharp goal"
 rubric). That rubric shapes a goal at design time; this one judges, at /auto
 entry time, WHICH discovered plan a recovered goal points at. Same vocabulary
-(recipe / ledger / driver), same deterministic-envelope stance.
+(workflow / ledger / driver), same deterministic-envelope stance.
 -->
 
 # Goal ↔ plan relevance rubric

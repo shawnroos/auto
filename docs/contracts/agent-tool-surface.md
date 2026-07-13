@@ -63,7 +63,7 @@ is not named here. The set-equality test in `tests/unit/ledger.test.sh` binds
 `describe` ↔ `_VERBS`; the fence extends that binding to this prose, so a renamed
 or added verb cannot silently leave the contract stale.
 
-**Not in this surface:** `lib/recipes.py migrate` (and its revert) are *operator*
+**Not in this surface:** `lib/workflows.py migrate` (and its revert) are *operator*
 utilities for upgrading a workflow file on disk — deliberately kept out of
 `_VERBS`/`describe` so the locked, set-equality-enforced agent verb surface stays
 the set of verbs an agent actually drives a run with.

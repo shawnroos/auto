@@ -61,14 +61,14 @@ adapter=done
 tick=done
 seam=done
 unit=done
-recipe=pending
+recipe=done
 ledger=pending"
 
 # ─── SCAN SCOPE ─────────────────────────────────────────────────────────────
 # The shipped trees that must speak only the new vocabulary once a term is
 # done. Historical docs (docs/plans, docs/brainstorms, docs/research) and the
 # top-level CONCEPTS.md are deliberately OUT of scope (never scanned).
-SCAN_ROOTS=(lib skills commands docs/contracts tests recipes presets .claude/hooks)
+SCAN_ROOTS=(lib skills commands docs/contracts tests workflows presets .claude/hooks)
 
 # ─── PERMANENT GLOBAL PATH WHITELIST ────────────────────────────────────────
 # Files that legitimately keep an old identifier for EVERY term. Anchored on
@@ -97,6 +97,13 @@ SCAN_ROOTS=(lib skills commands docs/contracts tests recipes presets .claude/hoo
 # defines the term's entire CLI surface. Both are clean for every currently-`done`
 # term, so they scan like any other file. **U9 re-adds `lib/ledger.py`** (and
 # `lib/ledger.sh`) here at the moment they actually become stubs.
+#
+# U8 NOTE — `lib/recipes-list.sh` was on this list from U1 in ANTICIPATION (the same
+# mistake U7 found with `lib/ledger.py`): until U8 it was the REAL picker data layer,
+# and whitelisting it blinded the audit to a live file. As of U8 it IS the KTD-4
+# forwarding stub (2 lines, execs `lib/workflows-list.sh`), so the entry is now
+# earned rather than premature. `lib/ledger.py` / `lib/ledger.sh` are still ABSENT
+# here — they remain the real facade until U9.
 GLOBAL_PATH_WHITELIST=(
   'lib/format_compat.py'
   'lib/tick.sh'
@@ -307,22 +314,107 @@ audit_term_hits() {
         }' || true)"
       ;;
     adapter)
-      # PERMANENT: the KTD-4 flag-alias branch in lib/auto.py::_parse_args keeps
-      # `--adapter` as a deprecated alias plus its one-line deprecation string.
-      raw="$(printf '%s\n' "$raw" \
-             | grep -vE '^lib/auto\.py:[0-9]+:.*(--adapter|[Dd]eprecat)' || true)"
+      # PERMANENT: the KTD-4 flag-alias layer in lib/auto.py keeps `--adapter` as a
+      # deprecated alias (the `_DEPRECATED_FLAGS` map entry + its comment block).
+      # TOKEN-SCRUBBED in BOTH homes: the `_DEPRECATED_FLAGS` map in lib/auto.py, and
+      # the test that PINS the alias (which must NAME the retired flag to invoke it).
+      # Only the `--adapter` TOKEN is exempt — a stale `adapter` IDENTIFIER in either
+      # file (an `adapter_ops` import, an `ExitReason.ADAPTER_BUG`) still FAILS.
+      #
+      # The old form here was `grep -vE '^lib/auto\.py:.*(--adapter|[Dd]eprecat)'` — a
+      # WHOLE-LINE drop keyed on the word "deprecat", sitting in the one file where a
+      # deprecation comment is most likely to sit beside a stale identifier. Same U7
+      # lesson as every other branch in this case block. Drop both scrubs when the
+      # alias is removed next minor.
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          if ($0 ~ /^(lib\/auto\.py|tests\/unit\/flag-aliases\.test\.sh):/) {
+            gsub(/--adapter/, "@ALIAS@", p)
+          }
+          if (tolower(p) ~ /(^|[^a-z0-9])adapter/) print $0
+        }' || true)"
       # (U6 REMOVED the TEMP persisted-key exemptions here — `adapter`,
       # `adapter_scale`, `adapter_op`, `default_adapter` are now flipped ON DISK
       # to backend/backend_scale/backend_op/default_backend. The only module that
       # may still spell them is lib/format_compat.py, which is path-whitelisted.)
       ;;
     recipe)
-      # The KTD-4 flag-alias branches in lib/auto.py::_parse_args keep the old
+      # The KTD-4 flag-alias layer in lib/auto.py::_parse_args keeps the old
       # spellings (--recipe / --teardown-recipe-after-init) as deprecated aliases
-      # plus their one-line deprecation strings.
-      raw="$(printf '%s\n' "$raw" \
-             | grep -vE '^lib/auto\.py:[0-9]+:.*(--recipe|--teardown-recipe-after-init|[Dd]eprecat)' \
-             || true)"
+      # (the `_DEPRECATED_FLAGS` map entries + their comment block).
+      # TOKEN-SCRUBBED in all three homes: the `_DEPRECATED_FLAGS` map in lib/auto.py,
+      # the routing branch in commands/auto.md (which must match the retired spelling
+      # or the alias never reaches the parser), and the test that PINS the aliases.
+      # Only the two retired FLAG spellings are exempt — a stale `recipe` IDENTIFIER in
+      # any of them (a `recipes.py` import, a `RecipeError`) still FAILS the audit.
+      # Whole-line drops were the previous form; see the `adapter` branch above for why
+      # they are the wrong shape. Drop these when the aliases are removed next minor.
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          if ($0 ~ /^(lib\/auto\.py|commands\/auto\.md|tests\/unit\/flag-aliases\.test\.sh):/) {
+            gsub(/--teardown-recipe-after-init|--recipe/, "@ALIAS@", p)
+          }
+          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
+        }' || true)"
+
+      # PERMANENT (one minor version): the KTD-4 forwarding stub `lib/recipes-list.sh`
+      # is globally path-whitelisted above — which means the audit structurally CANNOT
+      # fail on it, so nothing would notice if it broke. workflow-picker.test.sh pins
+      # that it still forwards; to do so it must NAME the retired path. Only the
+      # `recipes-list.sh` TOKEN is scrubbed, and only in that test: a stale `recipe`
+      # IDENTIFIER there still fails. (Same shape as the `tick` branch, which exempts
+      # the tests that pin `tick.sh` / `auto-tick`.) Drop with the stub next minor.
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          if ($0 ~ /^tests\/integration\/workflow-picker\.test\.sh:/) {
+            gsub(/recipes-list\.sh/, "@STUB@", p)
+          }
+          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
+        }' || true)"
+
+      # PERMANENT (KTD-7 — the LEGACY TIER DIR). `lib/workflows.py::_tier_dirs`
+      # appends the pre-rename user dirs as READ-ONLY legacy tiers so a user's
+      # existing files still resolve after the rename. That code MUST literally
+      # spell the old dir name — a legacy fallback that doesn't name the legacy dir
+      # is not a fallback.
+      #
+      # TOKEN-SCRUBBED, NOT LINE-DROPPED (and NOT file-dropped). An earlier draft of
+      # this exemption anchored on the WORD "legacy" and dropped the whole line — which
+      # meant any stale identifier that happened to share a line with the word "legacy"
+      # (`from recipes import resolve  # legacy`) rode through GREEN. That is the exact
+      # defect class U7 documented two branches down and this file keeps re-learning.
+      # So: strip the retired dir LITERAL and the constant that holds it, then keep the
+      # line if any `recipe` identifier SURVIVES the strip.
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          if ($0 ~ /^lib\/workflows\.py:/) {
+            gsub(/_LEGACY_TIER_DIRNAME/,   "@LEGACYDIR@", p)
+            gsub(/\.claude\/auto\/recipes/, ".claude/auto/@LEGACYDIR@", p)
+            gsub(/"recipes"/,              "\"@LEGACYDIR@\"", p)
+          }
+          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
+        }' || true)"
+
+      # PERMANENT: an EXTERNAL artifact's NAME. `lib/upstream-cluster.py` and
+      # `tests/integration/spine-forward.test.sh` both cite the memory
+      # `feedback_a1_recipe_cant_rebound_to_brainstorm` as the provenance of the
+      # role-diversity weighting (KTD-6). That is a real file in a system this repo
+      # does not own; rewriting the citation to spell `workflow` would point at
+      # nothing. Same class as the "(formerly auto-author-recipe)" skill breadcrumb:
+      # a retired name that must stay spelled to remain useful. Scoped to that ONE
+      # exact token — any other stale `recipe` on the line, or in those files, still
+      # fails. NB scrubbed (not line-dropped), so a stale identifier sharing the line
+      # with the citation cannot ride through on its coat-tails (the U7 lesson).
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          gsub(/feedback_a1_recipe_cant_rebound_to_brainstorm/, "@MEMORY_ID@", p)
+          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
+        }' || true)"
       ;;
     tick)
       # PERMANENT (KTD-4, one minor version): the kept forwarding stub `lib/tick.sh`
@@ -360,7 +452,19 @@ audit_term_hits() {
       # matched `ledger_emitters` at all. So this exemption is load-bearing; it is
       # scoped to the `[_-]emitters` token so any un-renamed emitter ROLE prose or
       # symbol still fails. This branch drops out entirely at U9.
-      raw="$(printf '%s\n' "$raw" | grep -vE '[_-]emitters' || true)"
+      #
+      # TOKEN-SCRUBBED + PATH-ANCHORED (U8 hardening). The old form was an UNANCHORED
+      # whole-line `grep -vE '[_-]emitters'` — it dropped ANY line ANYWHERE in the tree
+      # that merely contained the substring `_emitters`, so a stale `emitter` symbol
+      # sharing a line with `ledger_emitters` was invisible. Now: only the two-term
+      # module-family TOKENS are scrubbed, only in the files that legitimately carry
+      # them, and any surviving `emitter` still fails. This branch disappears at U9.
+      raw="$(printf '%s\n' "$raw" | awk '
+        {
+          p = $0
+          gsub(/ledger_emitters|ledger-emitters/, "@FAMILY@", p)
+          if (tolower(p) ~ /(^|[^a-z0-9])emitter/) print $0
+        }' || true)"
       ;;
   esac
 
@@ -420,12 +524,11 @@ while IFS= read -r hit; do
   rest="${hit#*:}"
   lineno="${rest%%:*}"
   row="${rest#*:}"
-  # table rows only; skip the header (its v1 cell is the words "legacy (v1) key")
+  # table rows only.
   case "$row" in
     \|*) ;;
     *) continue ;;
   esac
-  case "$row" in *"legacy (v1) key"*) continue ;; esac
   # `| <v1> | <v2> | …` → strip the leading pipe, take the first two cells.
   body="${row#|}"
   c1="${body%%|*}"
@@ -438,6 +541,11 @@ while IFS= read -r hit; do
   n1="$(norm "$c1")"
   n2="$(norm "$c2")"
   [ -z "$n1" ] && continue
+  # Skip the HEADER row — identified by its FIRST CELL, not by a substring anywhere
+  # on the line (a data row must never be able to opt out of this check by quoting
+  # the header's wording in a later column). `key` heads the key map; `location`
+  # heads the U8 tier-dir map.
+  case "$n1" in "legacy (v1) key"|"legacy (v1) location") continue ;; esac
   # (a) the v1 cell must name one of the 8 retired terms
   if ! printf '%s' "$n1" \
        | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger)'; then
@@ -467,9 +575,11 @@ fi
 # renamed it no longer produces non-whitelisted hits, so the control would go
 # vacuous itself; each rename unit re-points this to the next still-pending term.
 # U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`;
-# U5 renamed `tick`; U6 renamed `seam`; U7 renamed `unit`, so it now probes
-# `recipe` (pending until U8).
-DF_TERM="recipe"
+# U5 renamed `tick`; U6 renamed `seam`; U7 renamed `unit`; U8 renamed `recipe`, so
+# it now probes `ledger` — the LAST pending term (U9). When U9 lands there is no
+# pending term left to probe: the control must then be re-pointed at a synthetic
+# probe (or the file's anti-vacuity proof re-grounded), NOT silently deleted.
+DF_TERM="ledger"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then

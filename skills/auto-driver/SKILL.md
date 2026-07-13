@@ -4,7 +4,7 @@ description: >
   Orient before /auto starts. Loads the hypothesis JSON from
   lib/auto-detect.sh, surfaces one action line, dispatches when
   ambiguity is null, or asks one blocking question when it isn't.
-  No verdict-tree enumeration, no recipe-picker prose. Hands off to
+  No verdict-tree enumeration, no workflow-picker prose. Hands off to
   lib/auto.sh (single plan) or lib/auto-spawn.py (multi-plan batch).
   Distinct from the `auto` skill (the loop driver): auto-driver runs
   BEFORE the run starts; `auto` takes over AFTER it's armed.
@@ -30,9 +30,9 @@ Returns one JSON object (`situation`, `summary`, `ambiguity`, `single_plan`, `mu
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
 | `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
-| `reviewed-plan`   | run the **goal-aware pre-step** below first; if it does not reshape, load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --recipe w"` | (n/a — single plan unambiguous)      |
+| `reviewed-plan`   | run the **goal-aware pre-step** below first; if it does not reshape, load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --workflow w"` | (n/a — single plan unambiguous)      |
 | `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9). Run the **goal-aware pre-step** below first | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
-| `conversation-context` | classify state → recommend → author goal → dispatch entry recipe (see below) | (n/a — pre-dispatch escalate if unsure) |
+| `conversation-context` | classify state → recommend → author goal → dispatch entry workflow (see below) | (n/a — pre-dispatch escalate if unsure) |
 | `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
 
 ## Goal-aware plan routing (pre-step)
@@ -53,7 +53,7 @@ python "${CLAUDE_PLUGIN_ROOT}/lib/goal-route.py" \
 
 Reason markers (§17): `explicit-suppress`, `inferred-re-rank`, `no-match-unchanged`, `no-goal-unchanged`.
 
-**Argument-aware freeform**: a plan path → `auto-launch` → `auto.sh "<path> --recipe
+**Argument-aware freeform**: a plan path → `auto-launch` → `auto.sh "<path> --workflow
 w"`; else classify with `lib/verb-classify.py` → the `auto-launch` chooser —
 freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
 
@@ -62,7 +62,7 @@ freshest plan / `clear-intent-no-plan`→`a1`@plan / `/ce-plan`.
 ## Dispatch grammar (reference)
 
 - Single plan: `bash lib/auto.sh "<plan-path> [auto] [--review-plan]
-  [--backend ce|native] [--goal <text>] [--recipe <name>]"`
+  [--backend ce|native] [--goal <text>] [--workflow <name>]"`
 - Batch fanout: `python lib/auto-spawn.py fanout <plan> [<plan>...]
   [--intent "<text>"]` — the spawner owns worktrees/ports/sidecar +
   dispatch; the driver never shells out per sub-run.

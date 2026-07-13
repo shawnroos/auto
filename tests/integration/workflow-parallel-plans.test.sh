@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto v0.2.0 fix-pass C integration test (T2): drive recipe a2 end-to-end
+# auto v0.2.0 fix-pass C integration test (T2): drive workflow a2 end-to-end
 # from plan-done → auto-flip → judge_winner_to_work_steps emission.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
@@ -21,7 +21,7 @@
 #   carries the routing data. The round-1 design (winner on findings) was
 #   unreachable because record_verdict stripped the key before disk.
 #
-# STRUCTURE: init via auto.run with --recipe a2; the recipe declares 3 plan
+# STRUCTURE: init via auto.run with --workflow a2; the workflow declares 3 plan
 # steps + a judge work step. Prime each plan step with stashed enumerated_steps,
 # set gaps_open=0 + plan_step=review_plan so plan-met fires, dispatch the judge
 # and write its verdict via the PRODUCTION path (record_verdict + set_winner_step_id —
@@ -33,7 +33,7 @@
 #      enumerated steps (production path proof).
 #   2. deliberate-fail (no winner): judge records a verdict WITHOUT calling
 #      set_winner_step_id → dispatch_context.winner_step_id is absent →
-#      producer raises RecipeError; pulse catches it, ledger stays at loop_phase=plan
+#      producer raises WorkflowError; pulse catches it, ledger stays at loop_phase=plan
 #      with NO new work steps.
 #   3. malformed message: a judge dict with no winner_step_id on dispatch_context
 #      raises a clear message naming dispatch_context AND set_winner_step_id so
@@ -91,11 +91,11 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --recipe a2. Creates a ledger with 3 plan steps
+# Step 1: init via /auto plan.md --workflow a2. Creates a ledger with 3 plan steps
 # (plan-1, plan-2, plan-3) + a judge work step depending on all three +
 # phase_transitions=[{from:plan,to:work,producer:judge_winner_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", "a2"])
+    a.run([plan, "--workflow", "a2"])
 run_id = None
 for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
     if not f.endswith(".lock"):
@@ -175,7 +175,7 @@ it "fix-pass C T2 DELIBERATE-FAIL: judge findings have no winner_step_id → pro
 res_nowin="$(drive_a2 no-winner)"
 # producers.py raises ValueError. pulse.py:614 catches it and records a stall,
 # but the atomic transition_and_emit body raised BEFORE writing — so the ledger
-# stays at loop_phase=plan with no new work steps. (Recipe-declared judge work
+# stays at loop_phase=plan with no new work steps. (Workflow-declared judge work
 # step stays in the ledger but we exclude it from the emitted set above.)
 case "$res_nowin" in
   "plan|") pass ;;
@@ -203,12 +203,12 @@ msg="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, importlib.util
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
-# Use _bootstrap.load_lib_module so producers and recipes share the SAME
+# Use _bootstrap.load_lib_module so producers and workflows share the SAME
 # sys.modules cache → producers.judge_winner_to_work_steps raises the SAME
-# RecipeError class that this test catches.
+# WorkflowError class that this test catches.
 from _bootstrap import load_lib_module
 producers = load_lib_module("step_producers")
-recipes = load_lib_module("recipes")
+workflows = load_lib_module("workflows")
 # Judge without dispatch_context.winner_step_id → the producer raises with a
 # message pointing the operator at the right fix.
 led = {"steps": [
@@ -217,7 +217,7 @@ led = {"steps": [
 ]}
 try:
     producers.judge_winner_to_work_steps(led, "work"); print("NO-RAISE")
-except recipes.RecipeError as e:
+except workflows.WorkflowError as e:
     s = str(e)
     print("dispatch_context.winner_step_id" in s and "set_winner_step_id" in s)
 PYEOF

@@ -1,5 +1,5 @@
 ---
-argument-hint: "[<plan-or-spec> [--review-plan] [--backend ce|native] [--goal \"...\"] [--recipe <name>]] | freeform sentence"
+argument-hint: "[<plan-or-spec> [--review-plan] [--backend ce|native] [--goal \"...\"] [--workflow <name>]] | freeform sentence"
 allowed-tools: Bash, Skill, AskUserQuestion, advisor
 ---
 
@@ -9,8 +9,9 @@ Start a new auto run — the workflow-agnostic pulsed loop engine.
 
 Two branches.
 
-1. **Argument string does NOT contain the literal `--recipe`** (covers
-   bare `/auto`, freeform sentences, and plan-only flag-form). Load
+1. **Argument string contains NEITHER `--workflow` NOR its deprecated alias
+   `--recipe`** (covers bare `/auto`, freeform sentences, and plan-only
+   flag-form). Load
    the `auto-driver` skill via the Skill tool. The skill loads the
    hypothesis JSON from `lib/auto-detect.sh`, surfaces one action
    line, dispatches when ambiguity is null, or asks one blocking
@@ -21,11 +22,20 @@ Two branches.
    recommendation the operator confirms, or a silent-apply by
    construction on self-driven / headless runs (the `driving_session_id`
    ownership gate). Run-selection and `conversation-context` paths are
-   unchanged; branch 2 (`--recipe`) is unchanged.
+   unchanged; branch 2 (`--workflow`) is unchanged.
 
-2. **Argument string contains `--recipe`** (explicit power-user form
-   — the operator already chose a recipe). Pass straight to the
-   dispatch line below:
+2. **Argument string contains `--workflow`** (explicit power-user form
+   — the operator already chose a workflow). Pass straight to the
+   dispatch line below.
+
+   **The deprecated alias `--recipe` routes HERE TOO** (KTD-4). It must,
+   and this is load-bearing: `lib/auto.py` accepts `--recipe` and emits
+   the deprecation notice, but it only ever sees the argument string if
+   this branch forwards it. If the alias fell into branch 1 instead, the
+   driver would treat the run as "no workflow chosen", re-derive a shape,
+   and **silently run a different workflow than the operator named** —
+   with no notice, because the parser was never reached. Match both
+   spellings here; `lib/auto.py` normalizes.
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "$ARGUMENTS"`
 
@@ -39,7 +49,7 @@ lives in the `auto-driver` skill; theory + edge cases live in
 - `CLAUDE_AUTO_DISABLE_ITERATION=1` — kill-switch for outcomes-gated
   iteration. When set, `advance_iteration_loop` short-circuits and
   the run exits through the standard predicate-met path. Use for
-  emergency rollback of a misbehaving recipe without redeploying.
+  emergency rollback of a misbehaving workflow without redeploying.
 - `CLAUDE_AUTO_PROVISIONAL_TTL=<seconds>` — TTL for provisional batch
   sidecars during fanout (default 600s). Discovery-time sweep drops
   older ones, recovering ports leaked by a crash between worktree
@@ -65,7 +75,7 @@ plan set that is entirely STALE (old `docs/plans/` clutter) — but a FRESH plan
 still wins over the conversation. The driver classifies the
 session (its own transcript plus a ~2-day `ce-sessions` lookback — never raw
 compaction text), calls `lib/recommender.py` for a ce-family recommendation, and
-either dispatches the entry recipe with an `auto-author-goal` phase goal or, when
+either dispatches the entry workflow with an `auto-author-goal` phase goal or, when
 the recommendation is low-confidence or ambiguous, escalates to the operator with
 one question BEFORE dispatching (no run is created). See `auto-driver` /
 `driver-reference.md` §11 for the full procedure.

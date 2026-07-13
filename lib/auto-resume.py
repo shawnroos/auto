@@ -61,7 +61,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
 # v0.2.0 fix-pass A.2: the manual handoff→work resume routes through pulse.py's
-# centralized advance helper so it fires the recipe's producer the same way the
+# centralized advance helper so it fires the workflow's producer the same way the
 # auto-flip does. pulse.py uses a hyphenless name so plain import works.
 import pulse  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
 
@@ -195,11 +195,11 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     if rc != 0:
         return rc
     if phase == "handoff":
-        # handoff -> work: route through pulse.advance_to_phase so the recipe's
+        # handoff -> work: route through pulse.advance_to_phase so the workflow's
         # producer fires the same way it does on the auto-flip path (P0 #1
         # fix-pass A.2 — without this the manual resume would silently skip
         # emission and the work-loop would start with empty steps). Legacy
-        # ledgers (no recipe) fall through to set_loop inside the helper,
+        # ledgers (no workflow) fall through to set_loop inside the helper,
         # preserving v0.1.x behavior. handoff_paused=False is written by both
         # paths inside the helper.
         pulse.advance_to_phase(repo_root, run_id, led, to_phase="work")

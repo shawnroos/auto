@@ -436,7 +436,7 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     spine phase (role-diversity-weighted). If so, escalate to the operator via
     the pause handoff and return — do NOT ratchet a fix pass against a flaw the
     current phase cannot close (KTD-6). The check is read-only + degrade-safe;
-    on a recipe-blind / non-spine run upstream_phases is empty so it never fires.
+    on a workflow-blind / non-spine run upstream_phases is empty so it never fires.
     """
     cluster = detect_upstream_cluster(ledger_dict)
     if cluster.get("detected"):
@@ -617,7 +617,7 @@ def advance_iteration_loop(repo_root, run_id, led):
          (CLAUDE_AUTO_DISABLE_ITERATION=1) → return None. A REAL operator
          knob, not a test-only hatch: set the env var at runtime to skip the
          iteration check without redeploying — useful for emergency rollback
-         of an outcomes-gated recipe. v0.3.0 F5 unfenced this (CRIT-2 + rel-3);
+         of an outcomes-gated workflow. v0.3.0 F5 unfenced this (CRIT-2 + rel-3);
          it used to require the CLAUDE_AUTO_TEST_HARNESS=1 sentinel as well.
 
     The `new_depends_on` argument to `atomic_iterate_step` is passed as `None`:
@@ -632,7 +632,7 @@ def advance_iteration_loop(repo_root, run_id, led):
         return None
     # Gate 2: kill-switch. Operators can set CLAUDE_AUTO_DISABLE_ITERATION=1
     # to skip the iteration check at runtime — useful for emergency rollback
-    # of an outcomes-gated recipe without redeploying. Unfenced in v0.3.0 F5;
+    # of an outcomes-gated workflow without redeploying. Unfenced in v0.3.0 F5;
     # see _bootstrap.is_iteration_disabled.
     if is_iteration_disabled():
         return None
@@ -659,11 +659,11 @@ def advance_iteration_loop(repo_root, run_id, led):
         # atomic_iterate_step to compute the union of gate.depends_on +
         # appended ids inside its own locked body.
         #
-        # v0.3.0 F2 (correctness-emit-template): the recipe validator at
-        # lib/recipes.py:380-393 makes `iteration.emit_template` OPTIONAL
+        # v0.3.0 F2 (correctness-emit-template): the workflow validator at
+        # lib/workflows.py:380-393 makes `iteration.emit_template` OPTIONAL
         # ("re-engage the gate without spawning new siblings" — e.g. A4's
         # comparator re-comparing the same builders after a clarifying
-        # signal). When the recipe omits emit_template, the iterate path
+        # signal). When the workflow omits emit_template, the iterate path
         # must still advance the loop (increment iteration_attempts + reset
         # the gate) WITHOUT emitting new steps; the existing steps re-
         # engage. We honor that by passing a no-op producer to
@@ -764,20 +764,20 @@ def _is_auto(auto_flag) -> bool:
 
 def advance_to_phase(repo_root, run_id, led, *, to_phase):
     """Advance loop_phase to ``to_phase``, emitting that phase's steps if the
-    recipe declares a producer for arrival there.
+    workflow declares a producer for arrival there.
 
     v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
-    the recipe's {to: to_phase} producer via phase_grammar.producer_name_for_arrival
+    the workflow's {to: to_phase} producer via phase_grammar.producer_name_for_arrival
     and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
     no producer is declared we still need to fall back to a raw set_loop:
 
-    * Legacy ledger (recipe is None, e.g. a v0.1.x run resumed under v0.2.0) —
-      no recipe means no phase_transitions; use set_loop to preserve byte-
+    * Legacy ledger (workflow is None, e.g. a v0.1.x run resumed under v0.2.0) —
+      no workflow means no phase_transitions; use set_loop to preserve byte-
       identical R13 behavior.
-    * v0.2.0 ledger with no matching transition — the recipe declares no
-      producer for arrival at to_phase; this is a RECIPE BUG (the validator
+    * v0.2.0 ledger with no matching transition — the workflow declares no
+      producer for arrival at to_phase; this is a WORKFLOW BUG (the validator
       should have rejected it earlier, but defense in depth: raise here so a
-      misconfigured workspace recipe can't silently no-op).
+      misconfigured workspace workflow can't silently no-op).
 
     `feedback_plan_documents_transition_code_doesnt_wire_it`: this helper IS
     the wire — every phase advance that crosses a transition boundary goes
@@ -788,11 +788,11 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
     if producer_name is None:
         if not legacy_ledger:
             raise ledger.LedgerError(
-                f"recipe {led.get('recipe',{}).get('name')!r} declares no producer "
+                f"workflow {led.get('workflow',{}).get('name')!r} declares no producer "
                 f"for arrival at {to_phase!r}; either add a phase_transitions entry "
-                f"or fix the recipe"
+                f"or fix the workflow"
             )
-        # legacy: no recipe declared, behave like v0.1.x — raw advance.
+        # legacy: no workflow declared, behave like v0.1.x — raw advance.
         # transition_and_emit's v0.2.0 path writes handoff_paused=(to_phase=="handoff");
         # we mirror that here so manual handoff→work via auto-resume clears the
         # pause flag on legacy ledgers too. The auto-flip path (called with
@@ -817,7 +817,7 @@ def _brainstorm_step_ready(led) -> bool:
     ``brainstorm_output_to_plan_step`` producer.
 
     Gating on BOTH conditions is load-bearing: if we advanced to plan before the
-    doc path is recorded, the U8 producer raises ``RecipeError``, which
+    doc path is recorded, the U8 producer raises ``WorkflowError``, which
     ``_dispatch_phase_advance``'s try/except would mis-record as a step stall
     (feedback_plan_documents_transition_code_doesnt_wire_it — the producer must
     only fire when its input is present). Until both hold the brainstorm pulse
@@ -833,7 +833,7 @@ def _brainstorm_step_ready(led) -> bool:
 
 
 def advance_brainstorm_loop(repo_root, run_id, led):
-    """Brainstorm-phase advance for the spine recipe (v0.6.0 / U7 — the forward
+    """Brainstorm-phase advance for the spine workflow (v0.6.0 / U7 — the forward
     brainstorm→plan trigger that mirrors ``_maybe_handoff``'s plan→work auto-flip).
 
     The brainstorm phase has NO predicate-met exit (KTD-3 / U7 technical design:
@@ -846,7 +846,7 @@ def advance_brainstorm_loop(repo_root, run_id, led):
 
     When the brainstorm step is complete + has its requirements-doc, advance to
     ``plan`` through ``advance_to_phase`` (the single phase-advance chokepoint),
-    which resolves the recipe's {to: plan} transition and fires the registered
+    which resolves the workflow's {to: plan} transition and fires the registered
     ``brainstorm_output_to_plan_step`` producer atomically. Otherwise return
     ``{"advanced":"none"}`` so the pulse re-arms while the model still works the
     brainstorm step. Pairs with the plan→work producer exactly as plan→work pairs
@@ -870,16 +870,16 @@ def _maybe_handoff(repo_root, run_id, led, *, auto, advance_result):
 
     Manual (not auto): write loop_phase="handoff", handoff_paused=true,
     loop.driver="manual"; do NOT re-arm (signal handoff_pause to the caller).
-    Auto: flip plan → work directly via the recipe's producer (v0.2.0; P0 #1
-    fix-pass A.2 — the load-bearing rewire). Reads the recipe's
+    Auto: flip plan → work directly via the workflow's producer (v0.2.0; P0 #1
+    fix-pass A.2 — the load-bearing rewire). Reads the workflow's
     phase_transitions for the {to: work} producer, resolves it, and calls
     ledger.transition_and_emit atomically (advance + emit + recompute in ONE
-    locked snapshot — the G3/F2 invariant). Legacy ledgers (no recipe) fall
+    locked snapshot — the G3/F2 invariant). Legacy ledgers (no workflow) fall
     back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep
-    working. A v0.2.0 ledger missing the {to: work} declaration is a recipe
+    working. A v0.2.0 ledger missing the {to: work} declaration is a workflow
     bug; we raise rather than silently no-op (per
     feedback_plan_documents_transition_code_doesnt_wire_it — silent fallback
-    on configured recipes IS the build-bug class).
+    on configured workflows IS the build-bug class).
     """
     pred = led.get("exit_predicate_result") or {}
     plan_done = (

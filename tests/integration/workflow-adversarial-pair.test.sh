@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto v0.2.0 fix-pass C integration test (T3): drive recipe a4 end-to-end
+# auto v0.2.0 fix-pass C integration test (T3): drive workflow a4 end-to-end
 # from plan-done → auto-flip → plan_output_to_paired_builders emission.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
@@ -11,7 +11,7 @@
 # emitted builder ids, so a routing bug that drops one builder makes the
 # comparator unsatisfiable).
 #
-# STRUCTURE: init via auto.run with --recipe a4; the recipe declares one plan
+# STRUCTURE: init via auto.run with --workflow a4; the workflow declares one plan
 # step + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
 # Prime the plan step's enumerated_steps (2 items so the bias-applied builders
 # carry real plan_items), set gaps_open=0 + plan_step=review_plan,
@@ -74,10 +74,10 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --recipe a4. Creates a ledger with one plan
+# Step 1: init via /auto plan.md --workflow a4. Creates a ledger with one plan
 # step (`plan`) + phase_transitions=[{from:plan,to:work,producer:plan_output_to_paired_builders}].
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", "a4"])
+    a.run([plan, "--workflow", "a4"])
 run_id = None
 for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
     if not f.endswith(".lock"):
@@ -105,7 +105,7 @@ ledger.set_loop(repo, run_id, plan_step="review_plan")
 # Step 2b (deliberate-fail control parity with a1): monkey-patch
 # transition_and_emit to a no-op BEFORE the pulse fires. If the engine routes
 # through this primitive (it does in the green branch), the no-op produces
-# zero new steps even though the recipe declares a producer for {to:work}.
+# zero new steps even though the workflow declares a producer for {to:work}.
 if producer_off:
     def _noop(*a, **kw): pass
     ledger.transition_and_emit = _noop
@@ -154,7 +154,7 @@ res_empty="$(drive_a4 1 0)"
 # returns [] from the producer; transition_and_emit appends no builders then
 # advances loop_phase to "work". So:
 #   loop_phase=work, work_ids="compare" (the structural step; no builders),
-#   compare_deps="build-clarity,build-perf" (declared in the recipe),
+#   compare_deps="build-clarity,build-perf" (declared in the workflow),
 #   biases="" (no builders emitted).
 # This is the DELIBERATE-FAIL CONTROL per memory
 # feedback_new_tests_need_deliberate_fail_smoke_check: if the producer wire were

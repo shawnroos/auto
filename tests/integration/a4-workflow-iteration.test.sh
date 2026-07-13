@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# auto v0.3.0 U6 integration test: a4 recipe with iteration block + structural
-# compare — three scenarios (GREEN/ITERATE/BOUND) driving the full recipe→
+# auto v0.3.0 U6 integration test: a4 workflow with iteration block + structural
+# compare — three scenarios (GREEN/ITERATE/BOUND) driving the full workflow→
 # ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
@@ -9,7 +9,7 @@
 # emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
 # proves the structural+producer split survives the production init→pulse path:
-# the recipe→ledger→pulse wire materializes builders AND honors compare as
+# the workflow→ledger→pulse wire materializes builders AND honors compare as
 # the iteration gate.
 #
 # CONTRACT (KTD §A+§C+§D — v0.3.0 U6):
@@ -24,7 +24,7 @@
 #   build-clarity + build-perf (NOT compare — structural already on ledger).
 #   Then compare verdicts per scenario.
 #
-# STRUCTURE: init via auto.run with --recipe a4; prime the plan step's
+# STRUCTURE: init via auto.run with --workflow a4; prime the plan step's
 # enumerated_steps (2 items so builders carry plan_items); pulse auto=True →
 # auto-flips to work emitting builders; mark builders fixed; record_verdict +
 # set_verdict_decision on compare per scenario; pulse again.
@@ -77,10 +77,10 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --recipe a4 — PRODUCTION path. U6 plumbing
-# carries recipe.iteration + recipe.emit_templates onto the ledger.
+# Step 1: init via /auto plan.md --workflow a4 — PRODUCTION path. U6 plumbing
+# carries workflow.iteration + workflow.emit_templates onto the ledger.
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", "a4"])
+    a.run([plan, "--workflow", "a4"])
 run_id = None
 for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
     if not f.endswith(".lock"):

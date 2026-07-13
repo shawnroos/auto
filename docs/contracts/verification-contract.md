@@ -2,7 +2,7 @@
 
 Status: **LOCKED** (v0.7.0, U8). Changes here are breaking — bump and migrate.
 
-Typed verification lets a recipe gate step carry checkable done-conditions that
+Typed verification lets a workflow gate step carry checkable done-conditions that
 steer the gate's advance/iterate decision. It is **additive**: a step without a
 `verification` block behaves exactly as pre-v0.7.0 (a1/a2/a4/w unaffected). It
 never replaces auto's deterministic exit predicate — verification only steers a
@@ -17,7 +17,7 @@ A step MAY carry `verification`: an array of **≤ 16** criteria. Each criterion
 { "id": "<unique non-empty string>", "type": "<one of four>", ... }
 ```
 
-Validated at recipe **load** time by `lib/recipes.py::validate()` (hand-rolled,
+Validated at workflow **load** time by `lib/workflows.py::validate()` (hand-rolled,
 no pip — install-anywhere). Rejected: an unknown `type`, an unknown key for the
 criterion's type (per-type key sets, not a flat union), a duplicate `id`, an
 array over the cap.

@@ -1,10 +1,21 @@
-# Recipe Format (LOCKED — v0.4.0 contract)
+# Workflow Format (LOCKED — v0.5.0 contract)
 
-> **Status: LOCKED v0.4.0 — format-v2 key cutover; supersedes the v0.3.0
-> contract.** (KTD-6: the normative key table below is now v2. The file is
-> renamed to `workflow-format.md` and fully re-locked in U8, which carries a
-> second, rename-only version bump — this bump exists so no version label ever
-> denotes two different normative texts.)
+> **Status: LOCKED v0.5.0 — vocabulary rename; supersedes `recipe-format.md`
+> v0.4.0.** (KTD-5 re-lock. The normative key table was already cut over to v2 in
+> U6 — this bump is the rename half: the file, the module names it pins, and every
+> identifier in its prose. NO normative content change beyond the spelling; a
+> workflow file that validated against the superseded contract validates against
+> this one byte-for-byte.)
+>
+> **Changelog — v0.5.0 (concept-vocabulary rename, U8 — file rename + re-lock):**
+> the topology term is now `workflow` as an IDENTIFIER, not just as a word — this
+> file, the modules it pins (`lib/workflows.py`, `lib/workflow_validate.py`), the
+> built-in directory (`workflows/`), the workspace/global tier directories, the
+> `WorkflowError` exception, the `--workflow` flag, and the authoring skill
+> (`skills/auto-author-workflow/`). **Two compat surfaces, both indefinite:** the
+> pre-rename tier directories stay readable as legacy tiers (**§1**), and the
+> pre-rename flag spelling is accepted for one more minor as a deprecated alias.
+> The full retired-name map is the read-compat **Appendix**.
 >
 > **Changelog — v0.4.0 (concept-vocabulary rename, U6 — content re-lock):** EVERY
 > persisted key and value in this format flipped ON DISK to format v2 — the step
@@ -16,20 +27,20 @@
 > working, indefinitely.**
 >
 > This is the source-of-truth spec for the
-> `auto` **recipe format** — the named, file-backed JSON declaration of a workflow
-> topology that `/auto` builds a run from. The validator (`lib/recipes.py::validate`)
+> `auto` **workflow format** — the named, file-backed JSON declaration of a loop
+> topology that `/auto` builds a run from. The validator (`lib/workflows.py::validate`)
 > enforces it mechanically; the picker (`commands/auto.md`), the authoring skill
-> (`skills/auto-author-recipe/`), and the engine loader all consume it. Do not
+> (`skills/auto-author-workflow/`), and the engine loader all consume it. Do not
 > change the field set, the validation rules, or the V1 acceptance boundary without
 > re-locking with those consumers.
 >
 > **v0.3.0 additions** (purely additive over v0.2.0 — see §6 for the iteration
 > block, §7 for `emit_templates`): the optional `iteration` and `emit_templates`
-> top-level fields let a recipe declare an **outcomes-gated** workflow where a
+> top-level fields let a workflow declare an **outcomes-gated** loop where a
 > designated gate step's `verdict.decision` (advance / iterate / exit) drives
 > whether the loop advances to the terminal phase, emits another round of work
-> within the same phase, or stops with an audit trail. A recipe that declares
-> neither validates exactly as a v0.2.0 recipe (R7 backward compatibility).
+> within the same phase, or stops with an audit trail. A workflow that declares
+> neither validates exactly as a v0.2.0 workflow (R7 backward compatibility).
 >
 > **v0.7.0 additions** (purely additive — see §11 for the typed `verification`
 > block): a `steps[]` entry MAY carry an optional `verification` array — typed,
@@ -37,55 +48,80 @@
 > layered onto the existing gate decision. A step that omits it validates exactly
 > as before.
 >
-> **Reading test:** a recipe author (human or the authoring skill) should be able
-> to write a valid recipe from THIS file alone. If `validate` rejects something
+> **Reading test:** a workflow author (human or the authoring skill) should be able
+> to write a valid workflow from THIS file alone. If `validate` rejects something
 > this doc says is valid (or vice versa), that is a contract bug — fix the
 > disagreement, don't paper over it.
 
 ---
 
-## 1. What a recipe is
+## 1. What a workflow is
 
-A recipe declares the **initial ledger topology** of an `auto` run: the steps,
+A workflow declares the **initial ledger topology** of an `auto` run: the steps,
 their `depends_on` graph, the phase each runs in, the phase ordering, and which
-producer produces work steps at a phase boundary. The engine reads the recipe at
+producer produces work steps at a phase boundary. The engine reads the workflow at
 `init_ledger` time and builds the run from it; everything downstream (pulse,
-dispatch, predicate, resume) is recipe-blind once the ledger exists.
+dispatch, predicate, resume) is workflow-blind once the ledger exists.
 
-Recipes resolve from a three-tier registry (first-wins): **workspace**
-(`<repo>/.claude/auto/recipes/<name>.json`) → **global**
-(`~/.claude/auto/recipes/<name>.json`) → **built-in** (`<plugin>/recipes/<name>.json`).
+Workflows resolve from a three-tier registry (first-wins): **workspace**
+(`<repo>/.claude/auto/workflows/<name>.json`) → **global**
+(`~/.claude/auto/workflows/<name>.json`) → **built-in** (`<plugin>/workflows/<name>.json`).
+
+**Legacy tier dirs (v0.5.0, KTD-7 — normative).** The vocabulary rename also
+renamed the two user-writable tier directories, and real user files still live
+under the old name. Each user-writable tier is therefore probed at its **new**
+directory first and then at its **legacy** directory, giving five directories.
+**Resolution order is top to bottom:**
+
+| directory | tier | |
+|---|---|---|
+| `<repo>/.claude/auto/workflows/` | workspace | |
+| `<repo>/.claude/auto/recipes/` | workspace | legacy — read-only <!--legacy--> |
+| `~/.claude/auto/workflows/` | global | |
+| `~/.claude/auto/recipes/` | global | legacy — read-only <!--legacy--> |
+| `<plugin>/workflows/` | built-in | ships with the plugin |
+
+First-wins is unchanged: the new directory shadows the legacy one at the same
+tier, and any workspace file still shadows every global one. A legacy file reports
+the tier NAME of its modern sibling (`workspace` / `global`) — the tier badge is a
+**precedence** fact, not a statement about which directory the bytes came from.
+The legacy directories are **read-only**: `/auto` never writes to them, and the
+run-scoped-variant write path (§5) targets the new directory only. They compose
+with the v1 key shim (Appendix), so a **pre-rename file in a pre-rename
+directory** — the actual state of an upgrading user's disk — resolves, validates,
+and arms a run untouched. Support is indefinite; the legacy directories are
+removed only with a breaking release.
 
 ## 2. Top-level fields
 
 | field | req | type | meaning |
 |-------|-----|------|---------|
-| `name` | yes | string | recipe id, non-empty. Matches the filename stem. |
+| `name` | yes | string | workflow id, non-empty. Matches the filename stem. |
 | `version` | yes | string | format version (currently `"1"`). |
-| `steps` | yes | array | the declared steps (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_steps` ships in v0.2.1 (KTD-15). |
+| `steps` | yes | array | the declared steps (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) workflows — init-time enumeration from `enumerate_plan_steps` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
 | `default_backend` | no | `"ce"`\|`"native"` | the backend to use when `--backend` is not passed. |
-| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every step/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","handoff","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","handoff","work"]` (the `pipeline` recipe) validate. |
+| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every step/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","handoff","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","handoff","work"]` (the `pipeline` workflow) validate. |
 | `terminal_phase` | no | string | the phase whose completion ends the run. Default `"work"`. MUST be a member of `phase_order`. |
 | `phase_transitions` | no | array | producer declarations (§4). |
-| `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate step, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
+| `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate step, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x workflows — they validate unchanged. |
 | `emit_templates` | no | object | **(v0.3.0, additive)** map of `<template_name> → {phase, invokes, id_prefix}` consumed by the `iterate_template` producer at iteration time (§7). MUST be present (and contain the named template) when `iteration.emit_template` is set; MAY be absent when `iteration` is absent or when `iteration.emit_template` is omitted (the "re-engage the gate without spawning new siblings" shape, round-3 P2 #21). |
-| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of step ids the recipe declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `steps[]` and NOT iterate-shape (§8). Default `[]`. |
+| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of step ids the workflow declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `steps[]` and NOT iterate-shape (§8). Default `[]`. |
 | `python_hook` | no | (reserved) | RESERVED — parses but the V1 engine ignores it. The ONLY unknown-ish key tolerated; every OTHER unknown top-level field is rejected. |
 
 ## 3. `steps[]` entries
 
 | field | req | type | meaning |
 |-------|-----|------|---------|
-| `id` | yes | string | unique within the recipe, non-empty. |
+| `id` | yes | string | unique within the workflow, non-empty. |
 | `phase` | yes | string | MUST be a member of `phase_order`. |
 | `depends_on` | no | string[] | step ids this step waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `steps[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
-| `invokes` | no | object | what the step invokes — `backend_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger step's `dispatch_context` at load (after path-bounding). |
-| `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x recipes — they validate unchanged. |
+| `invokes` | no | object | what the step invokes — `backend_op` (one of the locked ops) plus optional workflow-side metadata like `prompt_template`. Merged into the ledger step's `dispatch_context` at load (after path-bounding). |
+| `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x workflows — they validate unchanged. |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
 path with no `..` segments and no leading `/`. A traversal or absolute value is
-rejected — workspace recipes ship in committed code, so an unbounded path could
+rejected — workspace workflows ship in committed code, so an unbounded path could
 exfiltrate files into LLM context.
 
 ## 4. `phase_transitions[]` — producers
@@ -98,7 +134,7 @@ Each entry declares which **producer** fires at a phase boundary:
 
 - `from` / `to` MUST be members of `phase_order`.
 - `producer` MUST be one of the **V1-registered names** (the validator rejects any
-  other — a recipe can't name a non-existent producer):
+  other — a workflow can't name a non-existent producer):
   - `plan_output_to_work_steps` — one plan's output → work steps (A1).
   - `judge_winner_to_work_steps` — the winning plan's output, after a judge (A2).
   - `plan_output_to_paired_builders` — two bias-differentiated builders + a
@@ -107,13 +143,13 @@ Each entry declares which **producer** fires at a phase boundary:
   `{from: plan, to: work}` producer fires entering `work` even though the run
   routes through `handoff`.
 
-> **Note.** `iterate_template` is also registered in `lib/producers.py::REGISTRY`
+> **Note.** `iterate_template` is also registered in `lib/step_producers.py::REGISTRY`
 > but is a **within-phase** producer — it never appears in `phase_transitions[]`.
 > The engine calls it directly through `ledger.emit_within_phase` when the gate
-> step verdicts `iterate` under bound (§6). It is not a recipe-selectable
+> step verdicts `iterate` under bound (§6). It is not a workflow-selectable
 > phase-boundary producer.
 
-## 5. The built-in recipes (the conformance corpus)
+## 5. The built-in workflows (the conformance corpus)
 
 - **a1** — Classic CE Stack. One plan step; `plan_output_to_work_steps` at
   plan→work. The v0.1.x-equivalent default. Also a Python constant
@@ -123,11 +159,11 @@ Each entry declares which **producer** fires at a phase boundary:
 - **a4** — Adversarial Pair + Comparator. One plan step;
   `plan_output_to_paired_builders`.
 - **w** — Work-only. `phase_order: ["work"]`, no producer; steps must be
-  pre-declared in v0.2.0 (the shipped `recipes/w.json` carries a single stub
+  pre-declared in v0.2.0 (the shipped `workflows/w.json` carries a single stub
   step). For an already-reviewed plan (skip the plan-loop). **v0.2.1 (KTD-15)**
   adds init-time enumeration so the backend's `enumerate_plan_steps` op can
   load work steps from an operator-supplied plan at `init_ledger` time; until
-  then, a work-only recipe with `steps: []` is REJECTED by `validate()` (it
+  then, a work-only workflow with `steps: []` is REJECTED by `validate()` (it
   would create a zero-step ledger that re-arms forever).
 - **pipeline** — **(v0.6.0, U7)** Brainstorm-rooted creative spine.
   `phase_order: ["brainstorm","plan","handoff","work"]`, terminal `work`. One
@@ -144,8 +180,8 @@ Each entry declares which **producer** fires at a phase boundary:
 
 > **Launch run-scoped variants (v0.7.0).** The interactive launch chooser
 > (`skills/auto-launch`, `driver-reference.md` §14) may compile a **run-scoped
-> variant** when the operator edits a gated recipe's gates or composes a custom
-> loop: it is a plain **workspace-tier** recipe (`<repo>/.claude/auto/recipes/`)
+> variant** when the operator edits a gated workflow's gates or composes a custom
+> loop: it is a plain **workspace-tier** workflow (`<repo>/.claude/auto/workflows/`)
 > carrying the typed `verification` array on its `iteration.gate_step` (§11), so
 > the ordinary first-wins resolver and `validate()` apply to it unchanged — it is
 > **not** a new built-in and not part of the conformance corpus above. Its only
@@ -153,14 +189,14 @@ Each entry declares which **producer** fires at a phase boundary:
 > `a2-fix-checkout`), which is the anti-shadow guard: a distinct name (not a
 > description check) keeps `resolve("a2", repo)` returning the built-in unshadowed
 > while the variant resolves at the workspace tier. Because the engine reads the
-> recipe only at `init_ledger` time and is recipe-blind thereafter (§1), the
+> workflow only at `init_ledger` time and is workflow-blind thereafter (§1), the
 > variant is **torn down once the run's ledger is initialized** — nothing
 > accumulates in the workspace tier across runs (the "inline compile-and-run"
-> scope boundary; persistent saves stay with `auto-author-recipe`).
+> scope boundary; persistent saves stay with `auto-author-workflow`).
 
 ## 6. `iteration` — outcomes-gated emission (v0.3.0+)
 
-A recipe MAY declare an `iteration` block to make the loop **outcomes-gated**:
+A workflow MAY declare an `iteration` block to make the loop **outcomes-gated**:
 a designated **gate step**'s `verdict.decision` drives whether the run advances
 to its terminal phase (`advance`), emits another round of steps within the
 gate's current phase and re-engages the gate (`iterate`), or stops with an
@@ -260,7 +296,7 @@ emit_templates:
                             #   (`iteration_emit_count` is the monotonic
                             #   ledger counter; `iterate_template` NEVER
                             #   recounts existing steps — see
-                            #   `lib/producers.py::iterate_template`).
+                            #   `lib/step_producers.py::iterate_template`).
     phase: "<loop_phase>"   # required — MUST be a member of `phase_order`.
                             #   The phase the new sibling steps land in.
     invokes:                # required — object, same depth/shape as
@@ -272,7 +308,7 @@ emit_templates:
 
 The `iteration.emit_template` field's value MUST name a key in this map; the
 validator rejects any mismatch. The producer NAME is implicit — `iterate_template`
-is the within-phase producer the engine calls; recipes do not choose it.
+is the within-phase producer the engine calls; workflows do not choose it.
 
 `emit_count` (the number of siblings emitted per iterate step) is read from the
 gate step's `dispatch_context.decision_payload.emit_count` at iteration time,
@@ -282,8 +318,8 @@ one pulse).
 
 ## 8. `expected_emit_outputs` — declared phase-boundary emit ids (v0.3.0+)
 
-A recipe MAY declare a top-level `expected_emit_outputs: [<step-id-str>, ...]`
-list. It names step ids the recipe asserts will be **materialized at run time
+A workflow MAY declare a top-level `expected_emit_outputs: [<step-id-str>, ...]`
+list. It names step ids the workflow asserts will be **materialized at run time
 by a phase-boundary producer** (one of the `phase_transitions[]` producers listed
 in §4 — `plan_output_to_work_steps`, `judge_winner_to_work_steps`, or
 `plan_output_to_paired_builders`). The validator consults this list when
@@ -295,7 +331,7 @@ accepted iff it is listed here.
 expected_emit_outputs: ["<step_id>", "<step_id>", ...]    # optional; default []
 ```
 
-**Why this exists.** Two producer classes produce work steps the recipe author
+**Why this exists.** Two producer classes produce work steps the workflow author
 declares structurally:
 
 - **`iterate_template`** (within-phase, §7) emits ids of the form
@@ -306,7 +342,7 @@ declares structurally:
   these are concrete strings without an iterate-shape suffix, so the validator
   cannot infer them from any id-prefix coincidence (F4 closed the prior loose
   prefix-match — `"build-typo"` no longer passes against id_prefix `"build-"`
-  by accident). The recipe author declares the producer-output contract here.
+  by accident). The workflow author declares the producer-output contract here.
 
 **When to use.** Declare a member in `expected_emit_outputs` when a `steps[]`
 step's `depends_on` names an id that:
@@ -317,7 +353,7 @@ step's `depends_on` names an id that:
 3. WILL be produced at run time by a `phase_transitions[]` producer.
 
 If none of those apply, you don't need this field. A4 is the only built-in
-that uses it (see §5); a v0.2.x recipe never needed it because the prior
+that uses it (see §5); a v0.2.x workflow never needed it because the prior
 carve-out accepted any prefix-matching string — F4 tightened that to require
 an explicit declaration, and A4 was updated atomically.
 
@@ -341,13 +377,13 @@ step in `steps[]` whose `depends_on` names `build-clarity` and `build-perf`:
 
 The `plan_output_to_paired_builders` producer (§4) fires at plan→work and
 materializes the two builder steps; `compare` waits on both. Because neither
-id is in `steps[]` and neither is iterate-shape, the recipe declares them in
+id is in `steps[]` and neither is iterate-shape, the workflow declares them in
 `expected_emit_outputs` so `depends_on` integrity passes. (A4 also declares an
 `iteration` block with an `iterate_template` named `bias-builder`; that's the
 RE-EMIT path on `iterate` verdicts, distinct from the initial plan-output
 emission — see §6 + §7.)
 
-**Validator cross-reference.** `lib/recipes.py::validate`:
+**Validator cross-reference.** `lib/workflows.py::validate`:
 
 - shape check (~line 269-280): each entry must be a non-empty string; the
   field itself must be a list.
@@ -359,7 +395,7 @@ emission — see §6 + §7.)
 The validator REJECTS: a `phase_order` with a non-string or empty element (the
 v0.6.0/U6 structural rule); a `terminal_phase`, step `phase`, or
 `phase_transitions` from/to not a member of `phase_order`; unregistered producer
-names; a loaded `python_hook` (parsed but ignored); AND a work-only recipe
+names; a loaded `python_hook` (parsed but ignored); AND a work-only workflow
 (`phase_order: ["work"]`) with an empty `steps` list (the init-time enumeration
 path ships in v0.2.1 — KTD-15). **v0.6.0 (U6)** dropped the earlier literal
 allow-list, so a structurally-sound multi-phase `phase_order` (e.g. the
@@ -368,20 +404,20 @@ path), so no malformed topology can ship.
 
 ## 10. Cross-references
 
-- `lib/recipes.py` — the validator + registry (`validate`, `validate_and_lint`,
+- `lib/workflows.py` — the validator + registry (`validate`, `validate_and_lint`,
   `resolve`, `list_available`, `load_and_validate`, `step_for`).
-- `lib/producers.py` — the producer registry (`V1_PRODUCER_NAMES` mirrors `validate`'s
+- `lib/step_producers.py` — the producer registry (`V1_PRODUCER_NAMES` mirrors `validate`'s
   phase-boundary producers; `iterate_template` is registered but within-phase only).
 - `lib/iteration.py` — the ONE iteration-decision module (`DECISIONS`,
   `read_decision`, `evaluate_decision`); AST-lint-enforced single source of truth.
-- `docs/contracts/ledger-schema.md` — the ledger fields a recipe populates
+- `docs/contracts/ledger-schema.md` — the ledger fields a workflow populates
   (including the v0.3.0 iteration fields + `dispatch_context.decision` /
   `bound_override` sub-keys).
 - `docs/contracts/backend-contract.md` — the ops a step's `invokes` references.
   **Unchanged for v0.3.0** — the iteration primitive lives entirely on the
   engine side; no new backend ops are introduced.
 - `skills/auto-design/references/verification-taxonomy.md` — the canonical shape
-  of a typed `verification` criterion (§11); `recipes/schema.json` documents the
+  of a typed `verification` criterion (§11); `workflows/schema.json` documents the
   same shape as a JSON Schema. `validate()` is the enforcer of both.
 
 ## 11. `verification` — typed gate criteria (v0.7.0+)
@@ -393,13 +429,13 @@ is **not** a new producer and does **not** add topology grammar. It is also **no
 a second exit judge — the deterministic Stop predicate
 (`blockers==0 ∧ majors==0 ∧ all_steps_terminal`) stays the run's exit spine;
 criteria only steer the gate decision (R11). A step that omits `verification`
-validates exactly as a pre-v0.7.0 recipe (additive — R7).
+validates exactly as a pre-v0.7.0 workflow (additive — R7).
 
 The array is capped at **16 criteria** (bounds gate-evaluation cost). Each entry
 is a criterion object `{ "id": <unique non-empty str>, "type": <one of four>, … }`.
 Criterion `id`s MUST be unique within the step. `type` MUST be one of exactly
 four values; an unknown `type`, an unknown key for the criterion's type, a
-duplicate `id`, or an array longer than 16 is a validation error at recipe
+duplicate `id`, or an array longer than 16 is a validation error at workflow
 **load** time (the same `validate()` the skill's write-time `validate_and_lint`
 runs — KTD-3), not only at write time.
 
@@ -450,8 +486,8 @@ so a programmatic criterion carrying `prompt`, or a human criterion carrying
 
 The criterion shape is pinned in
 `skills/auto-design/references/verification-taxonomy.md` (the design skill's
-canonical reference) and mirrored as a JSON Schema in `recipes/schema.json`. The
-hand-rolled `lib/recipes.py::validate()` is the enforcer of all three; if the
+canonical reference) and mirrored as a JSON Schema in `workflows/schema.json`. The
+hand-rolled `lib/workflows.py::validate()` is the enforcer of all three; if the
 doc, the schema, and the validator ever disagree, that is a contract bug —
 `validate()` wins.
 
@@ -480,6 +516,15 @@ flow writes may itself persist v1-keyed and still resolve cleanly forever.
 | `plan_output_to_work_units` (value) | `plan_output_to_work_steps` | producer name; likewise `judge_winner_to_work_units`, `brainstorm_output_to_plan_unit`. `plan_output_to_paired_builders` is unchanged | <!--legacy--> |
 | `iteration.gate_unit` | `iteration.gate_step` | the iteration block | <!--legacy--> |
 | `"seam"` (value) | `"handoff"` | the phase VALUE in `phase_order`, `terminal_phase`, `phase_transitions[].from`/`.to`, and a step's `phase` | <!--legacy--> |
+
+**Legacy LOCATION (v0.5.0, U8 — not a key).** The rename also moved the directory a
+workflow file lives in. This is read-compat of the same kind, resolved by the tier
+fallback in §1 rather than by the key shim, and it COMPOSES with the key map above
+(a v1-keyed file in a legacy dir is the normal state of an upgrading user's disk):
+
+| legacy (v1) location | current (v2) location | where | <!--legacy--> |
+|---|---|---|---|
+| `.claude/auto/recipes/` | `.claude/auto/workflows/` | the workspace + global tier dirs; the old dirs stay as READ-ONLY legacy tiers (§1). Never written to | <!--legacy--> |
 
 **Shim guarantee:** old keys are accepted on READ indefinitely; the map is applied
 unconditionally, is pure, and is idempotent, so a mixed old/new file resolves to

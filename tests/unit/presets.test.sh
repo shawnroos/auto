@@ -11,7 +11,7 @@
 # shared-leaf symmetry that proves the VALID_BACKEND_OPS refactor preserved
 # dispatcher's dispatch guard.
 #
-# SELF-CONTAINED inline harness (same style as recipes.test.sh / ledger.test.sh).
+# SELF-CONTAINED inline harness (same style as workflows.test.sh / ledger.test.sh).
 #
 # Scenarios (U1):
 #   1. a valid built-in preset (tuned-review) loads and validates
@@ -57,7 +57,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 # Driver: load presets / backend_ops / dispatcher via _bootstrap, run an op,
 # print a stable one-line result. Modules are imported via importlib through the
-# _bootstrap loader from an absolute lib/ path (same strategy as recipes.test.sh).
+# _bootstrap loader from an absolute lib/ path (same strategy as workflows.test.sh).
 con() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json

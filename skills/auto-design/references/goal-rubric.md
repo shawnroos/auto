@@ -1,6 +1,6 @@
 <!--
 Adapted from ksimback/looper (references/goal-rubric.md), MIT License.
-Rewritten in auto's vocabulary (recipe / ledger / driver / exit-predicate);
+Rewritten in auto's vocabulary (workflow / ledger / driver / exit-predicate);
 looper's execution + council framing stripped. Original © the looper authors.
 -->
 
@@ -17,7 +17,7 @@ attempts."
 - Defines the artifact or end-state that *proves* the loop finished — the thing
   the goal doc points at and the exit predicate can be read against.
 - Sets scope boundaries: included work, excluded work, and maximum depth (this
-  feeds the recipe's iteration bounds, not just prose).
+  feeds the workflow's iteration bounds, not just prose).
 - Names the context sources the driver should gather (the `auto-detect`
   hypothesis, specific files, a plan doc) instead of assumptions it may invent.
 - Identifies who consumes the result — the user, a reviewer, a downstream system.
@@ -28,7 +28,7 @@ attempts."
   fuzzy, it can't be a typed verification criterion yet — see the verification
   rubric.)
 - Which terms are subjective and need a measurable proxy?
-- What context must be read before the driver drafts a recipe + goal doc?
+- What context must be read before the driver drafts a workflow + goal doc?
 - What is explicitly out of scope for this loop?
 - Can the goal be split into plan, delivery, and verification artifacts?
 

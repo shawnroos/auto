@@ -58,6 +58,21 @@ driver_session = load_lib_module("driver_session")
 _DEFAULT_BACKEND = "ce"
 _VALID_BACKENDS = ("ce", "native")
 
+# KTD-4 — DEPRECATED FLAG ALIASES: retired spelling → canonical spelling. The SSOT
+# for the alias layer; `_parse_args` rewrites the token and falls through, so the
+# canonical branch stays the only implementation of each flag's behavior.
+#
+# Why alias rather than hard-cut: these are the flags a MODEL composes from skill
+# prose, and an in-flight run can be holding an older spelling inside a persisted
+# ScheduleWakeup / rearm prompt. A hard cut would fail those runs at re-arm.
+# Removed next minor; drop the entry and the branch keeps working for the
+# canonical flag. (`--adapter` U4; `--recipe` / `--teardown-recipe-after-init` U8.)
+_DEPRECATED_FLAGS = {
+    "--adapter": "--backend",
+    "--recipe": "--workflow",
+    "--teardown-recipe-after-init": "--teardown-workflow-after-init",
+}
+
 
 # Repo root resolution is shared with auto-resume.py and auto-status.py; lives
 # in _bootstrap.resolve_repo (P2-8 — was three identical copies).
@@ -65,15 +80,18 @@ _resolve_repo = resolve_repo
 
 
 def _parse_args(argv):
-    """Split the /auto arg string into (plan, auto, backend, goal, recipe).
+    """Split the /auto arg string into (plan, auto, backend, goal, workflow).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
     positional keyword (v0.3.x; redundant under v0.4.0's handoff-flip default but
     accepted for back-compat). Flags: --backend <ce|native> (deprecated alias
     --adapter), --goal <text>,
-    --recipe <name>, --review-plan. Returns a dict; raises ValueError on a
-    malformed flag. ``recipe`` defaults to ``"a1"`` (the classic stack —
-    v0.1.x-equivalent default, KTD-1) when no --recipe is given, so bare
+    --workflow <name> (deprecated alias --recipe),
+    --teardown-workflow-after-init (deprecated alias
+    --teardown-recipe-after-init), --review-plan. Returns a dict; raises
+    ValueError on a
+    malformed flag. ``workflow`` defaults to ``"a1"`` (the classic stack —
+    v0.1.x-equivalent default, KTD-1) when no --workflow is given, so bare
     ``/auto <plan>`` keeps working unchanged.
 
     v0.4.0 KTD-4 — handoff-default FLIP:
@@ -93,35 +111,34 @@ def _parse_args(argv):
     auto = True
     backend = _DEFAULT_BACKEND
     goal = None
-    recipe = None
+    workflow = None
     # Launch-chooser U5 / agent-native Gap 3: when set, delete the run-scoped
-    # workspace recipe file once the ledger is initialized (engine is recipe-blind
+    # workspace workflow file once the ledger is initialized (engine is workflow-blind
     # thereafter). Owning teardown HERE makes it atomic with init — the chooser no
     # longer infers "ledger initialized" from this process's stdout.
-    teardown_recipe = False
+    teardown_workflow = False
 
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "--teardown-recipe-after-init":
-            teardown_recipe = True
+        # KTD-4 deprecated-alias layer. ONE site, driven by _DEPRECATED_FLAGS:
+        # rewrite the retired spelling to its canonical one, emit exactly one
+        # stderr notice, and fall through to the canonical branch below — which
+        # then owns arity and validation. (U8 replaced three near-identical
+        # copy-pasted alias branches with this; each new alias is now one map
+        # entry, not a block, and there is no second place for the canonical
+        # flag's behavior to drift away from its alias's.)
+        canon = _DEPRECATED_FLAGS.get(tok)
+        if canon is not None:
+            sys.stderr.write(f"auto: {tok} is deprecated; use {canon}\n")
+            tok = canon
+        if tok == "--teardown-workflow-after-init":
+            teardown_workflow = True
             i += 1
             continue
         if tok == "--backend":
             if i + 1 >= len(argv):
                 raise ValueError("--backend requires a value (ce|native)")
-            backend = argv[i + 1]
-            i += 2
-            continue
-        if tok == "--adapter":
-            # DEPRECATED alias for --backend (concept-vocabulary rename U4).
-            # Accepted one minor version; emits a single stderr notice. Removed
-            # next minor.
-            if i + 1 >= len(argv):
-                raise ValueError("--adapter requires a value (ce|native)")
-            sys.stderr.write(
-                "auto: --adapter is deprecated; use --backend (adapter→backend rename)\n"
-            )
             backend = argv[i + 1]
             i += 2
             continue
@@ -131,10 +148,10 @@ def _parse_args(argv):
             goal = argv[i + 1]
             i += 2
             continue
-        if tok == "--recipe":
+        if tok == "--workflow":
             if i + 1 >= len(argv):
-                raise ValueError("--recipe requires a value (recipe name)")
-            recipe = argv[i + 1]
+                raise ValueError("--workflow requires a value (workflow name)")
+            workflow = argv[i + 1]
             i += 2
             continue
         if tok == "--review-plan":
@@ -157,10 +174,10 @@ def _parse_args(argv):
         # Extra positionals are ignored (the .md hint is single-plan).
         i += 1
 
-    # Default recipe is a1 (classic) — bare /auto <plan> is byte-identical to
+    # Default workflow is a1 (classic) — bare /auto <plan> is byte-identical to
     # v0.1.x because a1 IS the encoding of the v0.1.x topology (KTD-1).
     return {"plan": plan, "auto": auto, "backend": backend, "goal": goal,
-            "recipe": recipe or "a1", "teardown_recipe": teardown_recipe}
+            "workflow": workflow or "a1", "teardown_workflow": teardown_workflow}
 
 
 def _handoff_default_notice():
@@ -294,7 +311,7 @@ def _bind_presatisfied_plan(presatisfied: bool, init_steps: list, plan: str):
     """v0.4.3 KTD-15: wire a plan_presatisfied run's init state. Returns the
     plan_step to pass to init_ledger ("review_plan" when presatisfied, else None).
 
-    A plan_presatisfied recipe (W) declares its plan phase already done. The
+    A plan_presatisfied workflow (W) declares its plan phase already done. The
     engine inits plan_step="review_plan" (here) and gaps_open=0 (post-init, in
     run()) so the FIRST pulse's next_plan_step returns "done" → enumerate_plan_steps
     → plan→work, instead of re-running /ce-plan on an already-reviewed plan (the
@@ -319,7 +336,7 @@ def _emit_arm(
     """Emit the arm-first-pulse INTENT — the model fires /goal + ScheduleWakeup.
 
     ``loop_phase`` is the run's ENTRY phase (``phase_order[0]``); it surfaces in
-    the note so a non-default-entry recipe (e.g. the v0.6.0 ``pipeline`` spine,
+    the note so a non-default-entry workflow (e.g. the v0.6.0 ``pipeline`` spine,
     which enters at ``brainstorm``) reports the true starting phase rather than a
     hardcoded ``plan``.
     """
@@ -347,28 +364,28 @@ def _emit_arm(
     return 0
 
 
-def _teardown_run_scoped_recipe(recipes, repo_root: str, name: str) -> None:
-    """Delete the run-scoped WORKSPACE recipe ``name`` after a successful init.
+def _teardown_run_scoped_workflow(workflows, repo_root: str, name: str) -> None:
+    """Delete the run-scoped WORKSPACE workflow ``name`` after a successful init.
 
-    Launch-chooser / agent-native Gap 3: with ``--teardown-recipe-after-init`` the
+    Launch-chooser / agent-native Gap 3: with ``--teardown-workflow-after-init`` the
     chooser hands auto.py ownership of teardown, so the delete is atomic with init
     and the chooser never infers "ledger initialized" from this process's stdout.
-    The engine is recipe-blind post-init (``recipe-format.md`` §1: pulse / dispatch
-    / predicate / resume all read the ledger, never the recipe file), so the file
+    The engine is workflow-blind post-init (``workflow-format.md`` §1: pulse / dispatch
+    / predicate / resume all read the ledger, never the workflow file), so the file
     is dead weight here. Targets ONLY the workspace-tier path for this name (never
     a built-in / global), and is best-effort — ENOENT (a built-in resolved, or the
     file already cleaned) is fine; the chooser keeps its own exit-code-keyed
     cleanup for the case auto.sh fails BEFORE this point.
     """
     try:
-        os.remove(recipes.workspace_recipe_path(repo_root, name))
+        os.remove(workflows.workspace_workflow_path(repo_root, name))
     except OSError:
         pass
 
 
 def run(argv) -> int:
     ledger = load_ledger()
-    recipes = load_lib_module("recipes")
+    workflows = load_lib_module("workflows")
     repo_root = _resolve_repo()
 
     # v0.4.0 KTD-4: surface the handoff-default flip once per host repo, before
@@ -388,7 +405,7 @@ def run(argv) -> int:
         sys.stdout.write(
             "auto: usage: /auto <plan-or-spec> [auto] "
             "[--backend ce|native] [--goal \"<text>\"] "
-            "[--recipe <name>]\n"
+            "[--workflow <name>]\n"
         )
         return 0
 
@@ -403,31 +420,31 @@ def run(argv) -> int:
         sys.stderr.write(f"auto: plan/spec file not found: {plan}\n")
         return 1
 
-    # Resolve the recipe (KTD-1: a1 falls back to the A1_BUILTIN constant if no
+    # Resolve the workflow (KTD-1: a1 falls back to the A1_BUILTIN constant if no
     # a1.json resolves anywhere, so bare /auto can't be broken by a corrupt
-    # built-in). load_and_validate raises RecipeError on an unknown/invalid name.
+    # built-in). load_and_validate raises WorkflowError on an unknown/invalid name.
     try:
-        recipe, source_tier = recipes.load_and_validate(args["recipe"], repo_root)
-    except recipes.RecipeError as exc:
+        workflow, source_tier = workflows.load_and_validate(args["workflow"], repo_root)
+    except workflows.WorkflowError as exc:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
     # Surface a non-built-in tier to stderr (KTD-13 — supply-chain visibility: a
-    # workspace recipe shadowing a built-in shouldn't load silently).
+    # workspace workflow shadowing a built-in shouldn't load silently).
     if source_tier != "built-in":
         sys.stderr.write(
-            f"[auto] resolving recipe {recipe['name']!r} from {source_tier}\n"
+            f"[auto] resolving workflow {workflow['name']!r} from {source_tier}\n"
         )
 
-    # Build the initial ledger topology FROM the recipe (KTD-4). The recipe's
+    # Build the initial ledger topology FROM the workflow (KTD-4). The workflow's
     # declared steps become the initial ledger steps; phase_order / terminal_phase
     # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan step,
     # default grammar — R13 regression).
-    init_steps = [recipes.step_for(u, recipe) for u in recipe.get("steps", [])]
-    phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
+    init_steps = [workflows.step_for(u, workflow) for u in workflow.get("steps", [])]
+    phase_order = workflow.get("phase_order", ["plan", "handoff", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
     # v0.4.3 KTD-15: plan_presatisfied (W) — init the plan phase already-done.
-    presatisfied = bool(recipe.get("plan_presatisfied"))
+    presatisfied = bool(workflow.get("plan_presatisfied"))
     init_plan_step = _bind_presatisfied_plan(presatisfied, init_steps, plan)
 
     # v0.4.0 KTD-2: derive a one-line goal_intent at init from the plan title.
@@ -450,15 +467,15 @@ def run(argv) -> int:
             backend=backend,
             steps=init_steps,
             loop_phase=phase_order[0],
-            recipe={"name": recipe["name"], "source_tier": source_tier},
+            workflow={"name": workflow["name"], "source_tier": source_tier},
             phase_order=phase_order,
-            terminal_phase=recipe.get("terminal_phase", "work"),
-            phase_transitions=recipe.get("phase_transitions", []),
-            # v0.3.0 U6: recipe-declared iteration / emit_templates flow to the
-            # ledger here. None on v0.2.x recipes; U5's validator has already
+            terminal_phase=workflow.get("terminal_phase", "work"),
+            phase_transitions=workflow.get("phase_transitions", []),
+            # v0.3.0 U6: workflow-declared iteration / emit_templates flow to the
+            # ledger here. None on v0.2.x workflows; U5's validator has already
             # checked shape if non-None.
-            iteration=recipe.get("iteration"),
-            emit_templates=recipe.get("emit_templates"),
+            iteration=workflow.get("iteration"),
+            emit_templates=workflow.get("emit_templates"),
             goal_intent=goal_intent,
             # v0.6.0 U5 (KTD-5): record the driving session at arm time so the
             # advisor-gate PreToolUse hooks can own this run by session_id equality.
@@ -474,8 +491,8 @@ def run(argv) -> int:
         sys.stderr.write(f"auto: {exc}\n")
         return 1
 
-    if args["teardown_recipe"]:
-        _teardown_run_scoped_recipe(recipes, repo_root, args["recipe"])
+    if args["teardown_workflow"]:
+        _teardown_run_scoped_workflow(workflows, repo_root, args["workflow"])
 
     # v0.4.3 KTD-15: finish the pre-satisfied state — plan-met also needs a
     # non-null gaps_open=0 (init_ledger set plan_step; see _bind_presatisfied_plan).

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # auto U1 unit test: lib/topology-render.py::render_comparison + the
-# lib/recipes-list.sh --compare shell surface (the launch chooser's contrast
+# lib/workflows-list.sh --compare shell surface (the launch chooser's contrast
 # block, KTD-2/KTD-3).
 #
-# SELF-CONTAINED inline harness (same style as recipes.test.sh).
+# SELF-CONTAINED inline harness (same style as workflows.test.sh).
 #
 # Scenarios:
 #   1. Happy path: two built-ins (a1, a4) → both cards present, in input order,
 #      separated, neither marked when highlight=None.
 #   2. (Covers AE3) highlight="a2" among [a2, a4] → only the a2 card carries the
 #      ► recommended marker; a4 does not.
-#   3. Edge: single-recipe list → one card, no separator artifacts.
-#   4. Edge: highlight names a recipe not in the list → no marker, no crash.
+#   3. Edge: single-workflow list → one card, no separator artifacts.
+#   4. Edge: highlight names a workflow not in the list → no marker, no crash.
 #   5. Determinism: identical inputs → byte-identical output across two calls.
-#   6. Shell: recipes-list.sh --compare a1 w --highlight w exits 0 and prints
+#   6. Shell: workflows-list.sh --compare a1 w --highlight w exits 0 and prints
 #      both cards with w marked.
 
 set -uo pipefail
@@ -36,7 +36,7 @@ fail() {
 assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # Driver: load topology-render via _bootstrap, render_comparison over named
-# built-in recipe files, emit a stable signal token per op.
+# built-in workflow files, emit a stable signal token per op.
 cmp_op() {
   "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
 import sys, os, json
@@ -49,15 +49,15 @@ op = sys.argv[2]
 MARK = "► recommended"
 
 def load(name):
-    with open(os.path.join(auto_root, "recipes", name + ".json")) as f:
+    with open(os.path.join(auto_root, "workflows", name + ".json")) as f:
         return json.load(f)
 
 def card_order(out):
-    # Names in the order their "recipe: <name>" header appears in the output.
+    # Names in the order their "workflow: <name>" header appears in the output.
     order = []
     for line in out.splitlines():
-        if line.startswith("recipe: "):
-            order.append(line[len("recipe: "):].strip())
+        if line.startswith("workflow: "):
+            order.append(line[len("workflow: "):].strip())
     return order
 
 if op == "two-no-highlight":
@@ -82,16 +82,16 @@ elif op == "highlight-a2":
 
 elif op == "single":
     out = tr.render_comparison([load("a1")])
-    headers = sum(1 for ln in out.splitlines() if ln.startswith("recipe: "))
+    headers = sum(1 for ln in out.splitlines() if ln.startswith("workflow: "))
     sep = ("─" * 60) in out
     markers = out.count(MARK)
-    # Must equal a bare render() of the same recipe (no wrapping artifacts).
+    # Must equal a bare render() of the same workflow (no wrapping artifacts).
     same_as_render = (out == tr.render(load("a1"), 60))
     print("headers=%d,sep=%s,markers=%d,bare=%s"
           % (headers, sep, markers, same_as_render))
 
 elif op == "highlight-absent":
-    # highlight names a recipe not among the candidates → no marker, no crash.
+    # highlight names a workflow not among the candidates → no marker, no crash.
     out = tr.render_comparison([load("a1"), load("a4")], highlight="zzz-nope")
     print("markers=%d,order=%s" % (out.count(MARK), "+".join(card_order(out))))
 
@@ -108,14 +108,14 @@ assert_eq "markers=0,order=a1+a4,sep=True" "$(cmp_op two-no-highlight)"
 
 # ─── Scenario 2 (Covers AE3): highlight marks exactly the named card ────────
 it "highlight=a2 among [a2,a4] → one marker, immediately before a2's card, a4 unmarked"
-assert_eq "markers=1,after=recipe: a2,a4marked=False" "$(cmp_op highlight-a2)"
+assert_eq "markers=1,after=workflow: a2,a4marked=False" "$(cmp_op highlight-a2)"
 
-# ─── Scenario 3: single recipe → one card, no separator artifacts ───────────
-it "single-recipe list → one card, no separator, no marker, identical to bare render()"
+# ─── Scenario 3: single workflow → one card, no separator artifacts ───────────
+it "single-workflow list → one card, no separator, no marker, identical to bare render()"
 assert_eq "headers=1,sep=False,markers=0,bare=True" "$(cmp_op single)"
 
 # ─── Scenario 4: highlight not in list → no marker, no crash ────────────────
-it "highlight names absent recipe → no marker emitted, still renders both cards"
+it "highlight names absent workflow → no marker emitted, still renders both cards"
 assert_eq "markers=0,order=a1+a4" "$(cmp_op highlight-absent)"
 
 # ─── Scenario 5: determinism ────────────────────────────────────────────────
@@ -123,25 +123,25 @@ it "identical inputs → byte-identical output across two calls"
 assert_eq "same" "$(cmp_op determinism)"
 
 # ─── Scenario 6: shell --compare surface ────────────────────────────────────
-SHELL_OUT="$(bash "${AUTO_ROOT}/lib/recipes-list.sh" --compare a1 w --highlight w 2>/dev/null)"
+SHELL_OUT="$(bash "${AUTO_ROOT}/lib/workflows-list.sh" --compare a1 w --highlight w 2>/dev/null)"
 SHELL_RC=$?
 
 it "shell --compare a1 w --highlight w exits 0"
 assert_eq "0" "$SHELL_RC"
 
 it "shell --compare prints both cards (a1 and w headers present)"
-A1_PRESENT=$(printf '%s\n' "$SHELL_OUT" | grep -c "^recipe: a1$")
-W_PRESENT=$(printf '%s\n' "$SHELL_OUT" | grep -c "^recipe: w$")
+A1_PRESENT=$(printf '%s\n' "$SHELL_OUT" | grep -c "^workflow: a1$")
+W_PRESENT=$(printf '%s\n' "$SHELL_OUT" | grep -c "^workflow: w$")
 assert_eq "1 1" "$A1_PRESENT $W_PRESENT"
 
-it "shell --compare marks the highlighted recipe (w) exactly once"
+it "shell --compare marks the highlighted workflow (w) exactly once"
 MARK_COUNT=$(printf '%s\n' "$SHELL_OUT" | grep -c "► recommended")
 assert_eq "1" "$MARK_COUNT"
 
 it "shell --compare: the marker precedes the w card (w is the highlighted one)"
-# Line number of the marker is exactly one above the 'recipe: w' header.
+# Line number of the marker is exactly one above the 'workflow: w' header.
 MARK_LINE=$(printf '%s\n' "$SHELL_OUT" | grep -n "► recommended" | head -1 | cut -d: -f1)
-W_LINE=$(printf '%s\n' "$SHELL_OUT" | grep -n "^recipe: w$" | head -1 | cut -d: -f1)
+W_LINE=$(printf '%s\n' "$SHELL_OUT" | grep -n "^workflow: w$" | head -1 | cut -d: -f1)
 assert_eq "1" "$((W_LINE - MARK_LINE))"
 
 # ── summary ─────────────────────────────────────────────────────────────────

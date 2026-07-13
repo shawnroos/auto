@@ -57,9 +57,9 @@ def load_lib_module(name: str):
 
     Caches the loaded module in ``sys.modules`` under ``spec_name`` so repeat
     calls return the SAME instance — important for classes (e.g.
-    ``recipes.RecipeError``): without caching, two callers that both
-    ``load_lib_module("recipes")`` would each get a fresh ``RecipeError`` class
-    and ``except recipes.RecipeError`` in one wouldn't catch a raise from the
+    ``workflows.WorkflowError``): without caching, two callers that both
+    ``load_lib_module("workflows")`` would each get a fresh ``WorkflowError`` class
+    and ``except workflows.WorkflowError`` in one wouldn't catch a raise from the
     other. The cache mirrors ordinary Python import semantics; the file-path
     load strategy is unchanged.
     """
@@ -473,7 +473,7 @@ def is_iteration_disabled() -> bool:
     hatch. When set, ``pulse.advance_iteration_loop`` short-circuits and the
     standard predicate-met flow takes over (the run exits as if no iteration
     block existed on the ledger). Useful for emergency rollback of an
-    outcomes-gated recipe without redeploying.
+    outcomes-gated workflow without redeploying.
 
     Originally (v0.3.0 U4) this routed through ``test_hatch_enabled`` and
     therefore ALSO required ``CLAUDE_AUTO_TEST_HARNESS=1`` — making it inert

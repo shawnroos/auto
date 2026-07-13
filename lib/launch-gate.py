@@ -14,7 +14,7 @@ grep-checkable — `feedback_deterministic_over_probabilistic_v1`.
 
 THE SKIP INPUTS ARE MODEL-SELF-ASSESSED — that is the safety risk. `classify_
 launch` is pure and cannot verify `shape_confidence`, `gates_confidence`,
-`recipe_kind`, or `gate_types`. LLM self-confidence is uncalibrated and biased
+`workflow_kind`, or `gate_types`. LLM self-confidence is uncalibrated and biased
 high, so the structural guards (builtin ∧ programmatic-or-no-typed-gates ∧ not
 custom) are NECESSARY, NOT SUFFICIENT — they cannot catch a confidently-wrong
 shape inside the builtin+programmatic envelope. So `skip` carries a fourth,
@@ -42,11 +42,11 @@ v1 risk. So `router_agrees` is a hard gate against skipping the WRONG-KIND of
 shape, not a proof that a1/w was the RIGHT call.
 
 RULES (plan KTD-1), evaluated IN ORDER:
-  1. recipe_kind == "custom"                        -> two_step  (R4; never skips)
+  1. workflow_kind == "custom"                        -> two_step  (R4; never skips)
   2. any gate type in {advisor_judge, human,
      model_judge}                                   -> never skip (may confirm)
   3. skip iff shape >= SKIP_BAR AND gates >= SKIP_BAR
-     AND recipe_kind == "builtin" AND gate_types is
+     AND workflow_kind == "builtin" AND gate_types is
      a subset of {programmatic} (empty allowed) AND
      router_agrees                                  -> skip
   4. (not skip) AND builtin AND exactly one dim
@@ -84,13 +84,13 @@ TIER_SKIP = "skip"
 TIER_CONFIRM = "confirm"
 TIER_TWO_STEP = "two_step"
 
-# Recipe-kind facts. A built-in (a1/a2/a4/w) can skip or single-confirm; a
+# Workflow-kind facts. A built-in (a1/a2/a4/w) can skip or single-confirm; a
 # composed custom loop is always drawn and confirmed (rule 1 / R4). An UNKNOWN
 # kind degrades to "custom" — the safe direction (two_step), never skip.
 KIND_BUILTIN = "builtin"
 KIND_CUSTOM = "custom"
 
-# The ONLY recipe stems a `skip` may land on. The ladder collapses skip to the
+# The ONLY workflow stems a `skip` may land on. The ladder collapses skip to the
 # two no-typed-gate built-ins — `a1` (plan-loop) and `w` (work-only); a2/a4 carry
 # judge/compare gates (non-programmatic → blocked by rule 3 anyway), and the
 # router's other picks (`pipeline` for a vague state, `review` for code-unreviewed)
@@ -103,13 +103,13 @@ KIND_CUSTOM = "custom"
 # (`plan-build-review`/`work-only`) are skip-eligible wherever their stems are,
 # but that equivalence is realized UPSTREAM of this check, not by extra entries
 # here: `recommender.py --check-agrees` canonicalizes the agent's recommended
-# value to its shorthand stem (recipes.canonical_name / lib/recipes.py::_ALIASES)
+# value to its shorthand stem (workflows.canonical_name / lib/workflows.py::_ALIASES)
 # BEFORE testing `pick in eligible`. So an alias-form recommendation folds to
 # `a1`/`w` and lands in this set as its stem, while the set stays free of alias
 # entries that would otherwise be dead code (the router's `pick` — from
 # recommender._TAXONOMY — is always a bare stem, so an alias key here could never
 # match `pick == stem` and never be consulted).
-SKIP_ELIGIBLE_RECIPES = frozenset({"a1", "w"})
+SKIP_ELIGIBLE_WORKFLOWS = frozenset({"a1", "w"})
 
 # Gate-type taxonomy (v0.7.0). Only `programmatic` is deterministic enough to be
 # "obvious"; the judge/human types are non-deterministic (and `human` needs
@@ -145,12 +145,12 @@ def _normalize_gate_types(gate_types):
     return [t if isinstance(t, str) else _UNKNOWN_GATE for t in items]
 
 
-def classify_launch(shape_confidence, gates_confidence, recipe_kind,
+def classify_launch(shape_confidence, gates_confidence, workflow_kind,
                     gate_types, router_agrees):
     """Map two confidences + structural facts to skip / confirm / two_step.
 
     Pure: no IO, never raises on any input. Bad confidences coerce to 0.0
-    (bias-to-show), an unknown `recipe_kind` is treated as custom (two_step),
+    (bias-to-show), an unknown `workflow_kind` is treated as custom (two_step),
     and malformed `gate_types` block skip. Rules are evaluated in KTD-1 order;
     the structural guard plus `router_agrees` is the skip safety property (R10).
     """
@@ -160,7 +160,7 @@ def classify_launch(shape_confidence, gates_confidence, recipe_kind,
     # the load-bearing skip-safety property; do not let a bad value read as high.
     shape = coerce_confidence(shape_confidence)
     gates = coerce_confidence(gates_confidence)
-    kind = recipe_kind if recipe_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
+    kind = workflow_kind if workflow_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
     types = _normalize_gate_types(gate_types)
     # router_agrees is a precomputed boolean; only the literal True counts as
     # agreement. Anything else (None, a truthy non-bool, a parse miss) is
@@ -202,7 +202,7 @@ def classify_launch(shape_confidence, gates_confidence, recipe_kind,
 def _cli(argv):
     """Tiny CLI mirroring recommender.py: one JSON line on stdout.
 
-    Usage: launch-gate.py <shape> <gates> <recipe_kind> <gate_types_csv> <router_agrees>
+    Usage: launch-gate.py <shape> <gates> <workflow_kind> <gate_types_csv> <router_agrees>
       gate_types_csv : comma-separated criterion types; "" for an empty list.
       router_agrees  : true|1 -> True; anything else -> False.
 
@@ -221,23 +221,23 @@ def _cli(argv):
 
     shape = _num(argv[0]) if len(argv) > 0 else -1.0
     gates = _num(argv[1]) if len(argv) > 1 else -1.0
-    recipe_kind = argv[2] if len(argv) > 2 else KIND_CUSTOM
+    workflow_kind = argv[2] if len(argv) > 2 else KIND_CUSTOM
     gate_types = argv[3] if len(argv) > 3 else ""
     router_raw = argv[4].strip().lower() if len(argv) > 4 else ""
     router_agrees = router_raw in ("true", "1")
 
-    tier = classify_launch(shape, gates, recipe_kind, gate_types, router_agrees)
+    tier = classify_launch(shape, gates, workflow_kind, gate_types, router_agrees)
     # Echo the NORMALIZED kind (the value classify_launch actually classified on),
     # so an unknown kind reads back as "custom" rather than the raw arg — a reader
     # of this line sees the kind that drove the tier, not the unvalidated input.
-    recipe_kind_norm = recipe_kind if recipe_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
+    workflow_kind_norm = workflow_kind if workflow_kind in (KIND_BUILTIN, KIND_CUSTOM) else KIND_CUSTOM
     json.dump({
         "tier": tier,
         # Echo the SAFETY-clamped confidences (shared coerce_confidence): a bad
         # arg reads back as 0.0 (low), never as a value that could green-light a skip.
         "shape_confidence": coerce_confidence(shape),
         "gates_confidence": coerce_confidence(gates),
-        "recipe_kind": recipe_kind_norm,
+        "workflow_kind": workflow_kind_norm,
         "gate_types": _normalize_gate_types(gate_types),
         "router_agrees": router_agrees,
     }, sys.stdout)

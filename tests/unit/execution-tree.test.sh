@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # auto U6 unit test: lib/execution_tree.py::derive_execution_tree.
 #
-# SELF-CONTAINED inline harness (same style as recipes.test.sh): a python-
+# SELF-CONTAINED inline harness (same style as workflows.test.sh): a python-
 # invocation helper loads execution_tree via _bootstrap.load_lib_module and runs
-# an op against the built-in recipe fixtures (recipes/a2.json, recipes/a4.json)
-# or a small inline recipe dict.
+# an op against the built-in workflow fixtures (workflows/a2.json, workflows/a4.json)
+# or a small inline workflow dict.
 #
 # Scenarios (write, see FAIL, implement):
 #   1. derive_execution_tree(a2, cap=16) → wave1 {plan-1,plan-2,plan-3}, wave2 {judge}
@@ -46,8 +46,8 @@ from _bootstrap import load_lib_module
 xt = load_lib_module("execution_tree")
 op = sys.argv[2]
 
-def load_recipe(name):
-    with open(os.path.join(auto_root, "recipes", name + ".json")) as f:
+def load_workflow(name):
+    with open(os.path.join(auto_root, "workflows", name + ".json")) as f:
         return json.load(f)
 
 def fmt_waves(res):
@@ -57,7 +57,7 @@ def fmt_waves(res):
 # A minimal bounded parallel-fan-in loop with NO ce-work/review backend op —
 # the branch a2/a4 don't exercise (both carry review/do_step). Single-phase +
 # bounded + no ce-dispatch → workflow-script routing label.
-def wfs_recipe():
+def wfs_workflow():
     return {
         "name": "wfs", "version": "1",
         "phase_order": ["work"], "terminal_phase": "work",
@@ -71,22 +71,22 @@ def wfs_recipe():
     }
 
 if op == "a2-waves":
-    print(fmt_waves(xt.derive_execution_tree(load_recipe("a2"), 16)))
+    print(fmt_waves(xt.derive_execution_tree(load_workflow("a2"), 16)))
 elif op == "a4-waves":
-    print(fmt_waves(xt.derive_execution_tree(load_recipe("a4"), 16)))
+    print(fmt_waves(xt.derive_execution_tree(load_workflow("a4"), 16)))
 elif op == "a2-cap1":
-    print(fmt_waves(xt.derive_execution_tree(load_recipe("a2"), 1)))
+    print(fmt_waves(xt.derive_execution_tree(load_workflow("a2"), 1)))
 elif op == "a4-nesting":
-    res = xt.derive_execution_tree(load_recipe("a4"), 16)
+    res = xt.derive_execution_tree(load_workflow("a4"), 16)
     nest = res["nesting"]
     print(";".join("%s:%s" % (p, ",".join(sorted(c)))
                    for p, c in sorted(nest.items())))
 elif op == "substrate":
-    print(xt.derive_execution_tree(load_recipe(sys.argv[3]), 16)["substrate"])
+    print(xt.derive_execution_tree(load_workflow(sys.argv[3]), 16)["substrate"])
 elif op == "substrate-wfs":
-    print(xt.derive_execution_tree(wfs_recipe(), 16)["substrate"])
+    print(xt.derive_execution_tree(wfs_workflow(), 16)["substrate"])
 elif op == "preview-deterministic":
-    r = load_recipe("a4")
+    r = load_workflow("a4")
     a = xt.derive_execution_tree(r, 16)["preview"]
     b = xt.derive_execution_tree(r, 16)["preview"]
     print("same" if (a == b and a) else "differs")
@@ -123,7 +123,7 @@ it "substrate: bounded parallel-fan-in loop, no ce-work/review op → workflow-s
 assert_eq "workflow-script" "$(et substrate-wfs)"
 
 # ─── Determinism: the topology-render preview is stable ─────────────────────
-it "topology preview is deterministic (same recipe → byte-identical preview)"
+it "topology preview is deterministic (same workflow → byte-identical preview)"
 assert_eq "same" "$(et preview-deterministic)"
 
 # ── summary ─────────────────────────────────────────────────────────────────

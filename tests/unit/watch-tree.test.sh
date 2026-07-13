@@ -7,7 +7,7 @@
 # producer parent. It is PURE (now is passed in as an ISO-8601 string, never
 # datetime.now()) so a fixed ledger + fixed now yields byte-identical output.
 #
-# SELF-CONTAINED inline harness (same style as recipes.test.sh): fixtures are
+# SELF-CONTAINED inline harness (same style as workflows.test.sh): fixtures are
 # built as minimal ledger dicts with a PINNED `now`, so age/over-age/determinism
 # are fully controlled (no wall-clock).
 #
@@ -59,7 +59,7 @@ def step(uid, **kw):
         u["dispatched_at"] = kw["dispatched_at"]
     if kw.get("do_step"):
         # Materialized do_step steps carry backend_op on dispatch_context (the
-        # invokes->dispatch_context merge in recipes.step_for). The renderer also
+        # invokes->dispatch_context merge in workflows.step_for). The renderer also
         # honors a raw `invokes.backend_op`, but dispatch_context is the on-disk
         # shape (init_ledger's _normalize_step drops a bare `invokes`).
         u["dispatch_context"] = {"backend_op": "do_step"}

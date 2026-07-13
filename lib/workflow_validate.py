@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""auto recipe VALIDATION layer (U17 split from recipes.py).
+"""auto workflow VALIDATION layer (U17 split from workflows.py).
 
-A *recipe* is a named, file-backed JSON declaration of a workflow topology — the
+A *workflow* is a named, file-backed JSON declaration of a LOOP topology — an
+ordered graph of steps (CONCEPTS.md) — the
 initial-ledger shape `/auto` builds a run from. This module is the SINGLE place
-recipes are VALIDATED; both the engine loader (at run start) and the authoring
+workflows are VALIDATED; both the engine loader (at run start) and the authoring
 skill (at write time) reach `validate()` / `validate_and_lint()` here (via the
-`recipes` facade re-export), so a recipe the skill writes is exactly what the
+`workflows` facade re-export), so a workflow the skill writes is exactly what the
 engine will accept (one validator, two callers — KTD-2).
 
 VALIDATION IS HAND-ROLLED (no `jsonschema` dependency). The plugin ships pure
 stdlib + bash to arbitrary repos via a marketplace; adding a pip dependency would
-break install-anywhere. `recipes/schema.json` documents the shape; `validate()`
+break install-anywhere. `workflows/schema.json` documents the shape; `validate()`
 enforces the specific load-bearing rules mechanically below.
 
-U17 (v0.9.0) split lib/recipes.py (~981 LOC) BY CONCERN: this file holds the
+U17 (v0.9.0) split lib/workflows.py (~981 LOC) BY CONCERN: this file holds the
 validation family (the `_validate_*` helpers + `_bad`, `_check_prompt_template`,
-`validate`, `_lint_verification_placement`, `validate_and_lint`), and lib/recipes.py
+`validate`, `_lint_verification_placement`, `validate_and_lint`), and lib/workflows.py
 keeps the thin three-tier REGISTRY facade (resolve / list_available /
-load_and_validate / step_for / workspace_recipe_path). This module is a DAG
-ROOT — so `RecipeError` lives HERE and the facade re-exports it, giving
-`RecipeError` importable from both modules with no cycle.
+load_and_validate / step_for / workspace_workflow_path). This module is a DAG
+ROOT — so `WorkflowError` lives HERE and the facade re-exports it, giving
+`WorkflowError` importable from both modules with no cycle.
 `_BUILTIN_DIR` / `_builtin_names` live here too because `validate_and_lint`'s
 description-spoofing guard needs them; the facade re-imports `_BUILTIN_DIR` for
 its `_tier_dirs`.
@@ -41,7 +42,7 @@ import sys
 from typing import NoReturn
 
 # Sibling load via the standard bootstrap loader (the house idiom — see
-# lib/recipes.py): this module is loaded by file path from several sites
+# lib/workflows.py): this module is loaded by file path from several sites
 # (spec_from_file_location does NOT add lib/ to sys.path), so a plain
 # `import format_compat` is not guaranteed to resolve.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,21 +52,21 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 format_compat = load_lib_module("format_compat")
 
-# Recipe-name regex (v0.2.0 fix-pass B / P0 #4 — round-1 security+correctness+
-# adversarial all flagged the same path-traversal fingerprint). The recipe NAME
+# Workflow-name regex (v0.2.0 fix-pass B / P0 #4 — round-1 security+correctness+
+# adversarial all flagged the same path-traversal fingerprint). The workflow NAME
 # is interpolated into `os.path.join(<tier_dir>, f"{name}.json")` in resolve(),
 # so an unbounded name like "../../../../etc/passwd" would happily traverse out
-# of the recipes dir. Constrain to a conservative POSIX-filename shape:
+# of the workflows dir. Constrain to a conservative POSIX-filename shape:
 #   - first char must be lowercase letter or digit (rejects ".." and leading dot)
 #   - body: letters, digits, dot, underscore, dash (rejects "/", "\", "..")
-# Layered defense: validate() enforces it on the recipe's declared name (so the
+# Layered defense: validate() enforces it on the workflow's declared name (so the
 # file-on-disk's `name:` matches the filename it'd resolve under), AND resolve()
-# enforces it on the CLI-supplied --recipe argument (the actual attack surface).
-# The helper itself is defined below RecipeError (forward-ref guard).
-_RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# enforces it on the CLI-supplied --workflow argument (the actual attack surface).
+# The helper itself is defined below WorkflowError (forward-ref guard).
+_WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
-# The producer NAMES the V1 engine ships (KTD-5). A recipe's phase_transitions may
-# only reference these — the validator rejects any other name so a recipe can't
+# The producer NAMES the V1 engine ships (KTD-5). A workflow's phase_transitions may
+# only reference these — the validator rejects any other name so a workflow can't
 # point at a v0.3.0 producer that doesn't exist yet. Kept here (not imported from
 # step_producers.py) so validation has no runtime dependency on the producer module; the
 # two are cross-checked by a U5b test that asserts this set equals the registry.
@@ -74,13 +75,13 @@ V1_PRODUCER_NAMES = frozenset(
         "plan_output_to_work_steps",
         "judge_winner_to_work_steps",
         "plan_output_to_paired_builders",
-        # v0.3.0 (U3): iterate_template materializes new steps from a recipe-
+        # v0.3.0 (U3): iterate_template materializes new steps from a workflow-
         # declared emit_templates entry when the gate step verdicts "iterate".
         # Added atomically with the REGISTRY entry in lib/step_producers.py so the
         # symmetry test stays green; U5 reserved this name but deferred the add.
         "iterate_template",
         # v0.6.0 (U8): brainstorm_output_to_plan_step fires on arrival at `plan`
-        # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
+        # from `brainstorm` in the spine workflow (workflows/pipeline.json), reading
         # the brainstorm step's requirements-doc output and emitting the single
         # plan step. Added atomically with the step_producers.REGISTRY entry so the
         # symmetry test (set(REGISTRY) == V1_PRODUCER_NAMES) stays green.
@@ -93,7 +94,7 @@ V1_PRODUCER_NAMES = frozenset(
 # now validated structurally (every element a non-empty string, members cross-
 # checked downstream), so arbitrary spines like
 # ["brainstorm","plan","handoff","work"] validate. These two constants survive:
-# `_DEFAULT_PHASE_ORDER` is the recipe-blind default, `_WORK_ONLY_PHASE_ORDER`
+# `_DEFAULT_PHASE_ORDER` is the workflow-blind default, `_WORK_ONLY_PHASE_ORDER`
 # still anchors the work-only empty-steps guard below.
 _DEFAULT_PHASE_ORDER = ["plan", "handoff", "work"]
 _WORK_ONLY_PHASE_ORDER = ["work"]
@@ -103,14 +104,14 @@ _WORK_ONLY_PHASE_ORDER = ["work"]
 _RESERVED_TOPLEVEL = frozenset({"python_hook"})
 
 # The reserved legible-alias names (→ the stem each shadows) at author time. A
-# recipe authored under one of these names would be silently shadowed by
+# workflow authored under one of these names would be silently shadowed by
 # resolve()'s alias→stem rewrite (a file literally named work-only.json resolves
 # to `w`, never itself). validate() rejects them so authoring fails FAST, naming
-# the stem the name would shadow. This is a COPY of lib/recipes.py::_ALIASES (the
+# the stem the name would shadow. This is a COPY of lib/workflows.py::_ALIASES (the
 # alias→stem SSOT), not an import, because this module is the validation DAG root
-# and imports no sibling — recipes.py imports THIS module, so importing recipes
-# back would cycle. recipes.py re-exports this map and a drift-guard test asserts
-# `recipes._ALIASES == _RESERVED_ALIAS_STEMS`, so the two copies never diverge
+# and imports no sibling — workflows.py imports THIS module, so importing workflows
+# back would cycle. workflows.py re-exports this map and a drift-guard test asserts
+# `workflows._ALIASES == _RESERVED_ALIAS_STEMS`, so the two copies never diverge
 # (the "keep the literal in sync" pattern ledger_core uses for PULSE_COMMAND).
 _RESERVED_ALIAS_STEMS = {
     "plan-build-review": "a1",
@@ -129,13 +130,13 @@ _KNOWN_TOPLEVEL = frozenset(
         "phase_transitions",
         "steps",
         # v0.3.0 (U5): outcomes-gated iteration. Both fields are ADDITIVE — a
-        # v0.2.x recipe that declares neither still validates (R7). The
+        # v0.2.x workflow that declares neither still validates (R7). The
         # validator block below cross-checks shape, gate_step references, the
         # bound block, and the iteration↔emit_templates pairing rule.
         "iteration",
         "emit_templates",
         # v0.3.0 fix-pass F4: ADV-2 + maint-4 (depends_on carve-out is too
-        # loose). Recipes that use a non-iterate producer to produce concrete
+        # loose). Workflows that use a non-iterate producer to produce concrete
         # step ids consumed by a structural step's depends_on must DECLARE
         # those ids here. The validator then accepts depends_on members that
         # are EITHER in steps[], OR in expected_emit_outputs, OR plausibly
@@ -144,12 +145,12 @@ _KNOWN_TOPLEVEL = frozenset(
         # emit_template id_prefix — `"build-typo"` would pass against
         # id_prefix `"build-"` even though no producer would ever produce it.
         "expected_emit_outputs",
-        # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A recipe for
+        # v0.4.3 (KTD-15): the plan phase starts ALREADY SATISFIED. A workflow for
         # "I have a reviewed plan — skip /ce-plan + /ce-doc-review and go straight
         # to enumerating its work steps" sets this true. The engine inits
         # plan_step="review_plan" + gaps_open=0 so the first pulse's next_plan_step
         # returns "done" → enumerate_plan_steps → plan→work, never re-deriving the
-        # finished plan. W is the shipped recipe that uses it. ADDITIVE — absent/
+        # finished plan. W is the shipped workflow that uses it. ADDITIVE — absent/
         # false validates as before. Coherence checked by _validate_plan_presatisfied.
         "plan_presatisfied",
     }
@@ -181,24 +182,24 @@ _KNOWN_ITERATION_KEYS = frozenset({"gate_step", "emit_template", "bound"})
 _KNOWN_ITERATION_BOUND_KEYS = frozenset({"max_attempts", "max_wall_seconds"})
 
 
-class RecipeError(Exception):
-    """A recipe failed validation. Message is operator-facing."""
+class WorkflowError(Exception):
+    """A workflow failed validation. Message is operator-facing."""
 
 
 def _bad(msg: str) -> NoReturn:
-    raise RecipeError(msg)
+    raise WorkflowError(msg)
 
 
-def _validate_recipe_name(name, *, source: str) -> None:
-    """Reject an unsafe recipe name (see _RECIPE_NAME_RE above for rationale).
+def _validate_workflow_name(name, *, source: str) -> None:
+    """Reject an unsafe workflow name (see _WORKFLOW_NAME_RE above for rationale).
 
     ``source`` names the caller in the error so a misconfigured workspace
-    recipe vs a malformed --recipe arg is distinguishable.
+    workflow vs a malformed --workflow arg is distinguishable.
     """
-    if not isinstance(name, str) or not _RECIPE_NAME_RE.match(name):
+    if not isinstance(name, str) or not _WORKFLOW_NAME_RE.match(name):
         _bad(
-            f"invalid recipe name {name!r} ({source}); names must match "
-            f"{_RECIPE_NAME_RE.pattern} (lowercase alphanumeric, with "
+            f"invalid workflow name {name!r} ({source}); names must match "
+            f"{_WORKFLOW_NAME_RE.pattern} (lowercase alphanumeric, with "
             f"'.', '_', '-' allowed inside)"
         )
 
@@ -206,8 +207,8 @@ def _validate_recipe_name(name, *, source: str) -> None:
 def _check_prompt_template(value, where: str):
     """Path-bounding for `prompt_template` (security-lens Finding 1).
 
-    Workspace recipes ship in committed code; an unbounded path would let a
-    malicious recipe set `prompt_template: "../../../etc/passwd"` and the backend
+    Workspace workflows ship in committed code; an unbounded path would let a
+    malicious workflow set `prompt_template: "../../../etc/passwd"` and the backend
     would forward that file's contents into LLM context. Reject `..` segments,
     absolute paths, and empty strings. Enforced HERE (not only in the schema doc)
     so it is the load-bearing check, and re-checked in `step_for` before the value
@@ -222,10 +223,10 @@ def _check_prompt_template(value, where: str):
         _bad(f"{where}: prompt_template must not contain '..' (path traversal): {value!r}")
 
 
-def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> None:
+def _validate_plan_presatisfied(workflow: dict, phase_order: list, pts: list) -> None:
     """v0.4.3 (KTD-15): validate the optional ``plan_presatisfied`` flag.
 
-    When a recipe declares its plan phase already-satisfied (W), the engine must
+    When a workflow declares its plan phase already-satisfied (W), the engine must
     have a coherent path FROM the plan phase TO work — otherwise "skip the
     plan-loop" would strand the run with no way to enumerate steps. So if the
     flag is true we require:
@@ -233,10 +234,10 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
       (b) exactly one plan-phase step (the enumerate carrier — the producers read
           enumerated_steps off the single plan step, lib/step_producers.py), and
       (c) a phase_transition {from: plan, to: work} (the enumerate→emit edge).
-    Mechanical so a malformed work-only recipe can't ship a dead end. Absent or
+    Mechanical so a malformed work-only workflow can't ship a dead end. Absent or
     false validates as before (a1, a2, a4).
     """
-    presat = recipe.get("plan_presatisfied")
+    presat = workflow.get("plan_presatisfied")
     if presat is None:
         return
     if not isinstance(presat, bool):
@@ -248,7 +249,7 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
             "plan_presatisfied requires a 'plan' phase in phase_order "
             f"(the satisfied state lives there); got {phase_order!r}"
         )
-    plan_step_count = sum(1 for u in recipe["steps"] if u.get("phase") == "plan")
+    plan_step_count = sum(1 for u in workflow["steps"] if u.get("phase") == "plan")
     if plan_step_count != 1:
         _bad(
             "plan_presatisfied requires exactly one plan-phase step (the "
@@ -261,51 +262,51 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
         )
 
 
-def _validate_toplevel(recipe: dict) -> None:
+def _validate_toplevel(workflow: dict) -> None:
     """Top-level shape: object, no unknown fields, required name/version/steps,
     a safe filename name, steps-is-list. Order-preserving extract — the
     first-violation message must not change."""
-    if not isinstance(recipe, dict):
-        _bad("recipe must be a JSON object")
+    if not isinstance(workflow, dict):
+        _bad("workflow must be a JSON object")
 
     # Unknown top-level fields: reject everything except the explicitly reserved
     # python_hook (which parses but the V1 engine ignores).
-    for k in recipe:
+    for k in workflow:
         if k not in _KNOWN_TOPLEVEL and k not in _RESERVED_TOPLEVEL:
             _bad(f"unknown top-level field: {k!r}")
 
     # Required fields.
     for req in ("name", "version", "steps"):
-        if req not in recipe:
+        if req not in workflow:
             _bad(f"missing required field: {req!r}")
-    if not isinstance(recipe["name"], str) or not recipe["name"]:
+    if not isinstance(workflow["name"], str) or not workflow["name"]:
         _bad("name must be a non-empty string")
     # P0 #4 fix-pass B: layer 1 — the file's declared name must be a safe
     # filename. validate_and_lint() additionally checks the name matches the
     # filename stem; this regex is the security floor.
-    _validate_recipe_name(recipe["name"], source="recipe.name")
-    # A recipe MUST NOT be authored under a reserved legible-alias name: resolve()
+    _validate_workflow_name(workflow["name"], source="workflow.name")
+    # A workflow MUST NOT be authored under a reserved legible-alias name: resolve()
     # rewrites that name to its stem before any file lookup, so the file would be
     # unreachable (silently shadowed). Reject it here so authoring fails fast.
-    if recipe["name"] in _RESERVED_ALIAS_STEMS:
-        stem = _RESERVED_ALIAS_STEMS[recipe["name"]]
+    if workflow["name"] in _RESERVED_ALIAS_STEMS:
+        stem = _RESERVED_ALIAS_STEMS[workflow["name"]]
         _bad(
-            f"recipe name {recipe['name']!r} is a reserved alias for {stem!r} — "
-            f"a recipe under this name would be shadowed by the alias→stem rewrite "
-            f"(lib/recipes.py::_ALIASES); rename it"
+            f"workflow name {workflow['name']!r} is a reserved alias for {stem!r} — "
+            f"a workflow under this name would be shadowed by the alias→stem rewrite "
+            f"(lib/workflows.py::_ALIASES); rename it"
         )
-    if not isinstance(recipe["steps"], list):
+    if not isinstance(workflow["steps"], list):
         _bad("steps must be a list")
 
 
-def _validate_phase_order(recipe: dict) -> list:
+def _validate_phase_order(workflow: dict) -> list:
     """phase_order (default if absent; non-empty list of non-empty strings) +
     terminal_phase membership. Returns the resolved phase_order."""
     # phase_order: default if absent. v0.6.0 (U6) replaced the literal allow-list
     # gate with a STRUCTURAL rule (every element a non-empty string); the
     # phase-membership invariants are enforced downstream, unlocking arbitrary
     # spines like ["brainstorm","plan","handoff","work"] (KTD-2/3).
-    phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
+    phase_order = workflow.get("phase_order", _DEFAULT_PHASE_ORDER)
     if not isinstance(phase_order, list) or not phase_order:
         _bad(f"phase_order must be a non-empty list: {phase_order!r}")
     for ph in phase_order:
@@ -313,7 +314,7 @@ def _validate_phase_order(recipe: dict) -> list:
             _bad(f"phase_order entries must be non-empty strings; got {ph!r}")
 
     # terminal_phase: default "work"; must be a member of phase_order.
-    terminal_phase = recipe.get("terminal_phase", "work")
+    terminal_phase = workflow.get("terminal_phase", "work")
     if terminal_phase not in phase_order:
         _bad(f"terminal_phase {terminal_phase!r} not in phase_order {phase_order!r}")
     return phase_order
@@ -485,14 +486,14 @@ def _validate_verification(u: dict) -> None:
         validator_fn(uid, cid, c)
 
 
-def _validate_steps(recipe: dict, phase_order: list) -> set:
+def _validate_steps(workflow: dict, phase_order: list) -> set:
     """Per-step shape: known keys, non-empty unique id, phase ∈ phase_order,
     depends_on/invokes shape, prompt_template path-bounded. Returns the set of
     step ids — the depends_on integrity pass needs ALL ids known first."""
     # Steps: each must have id + phase ∈ phase_order; depends_on references
     # existing step ids; invokes well-formed; prompt_template path-bounded.
     step_ids = set()
-    for u in recipe["steps"]:
+    for u in workflow["steps"]:
         if not isinstance(u, dict):
             _bad("each step must be a JSON object")
         for uk in u:
@@ -521,7 +522,7 @@ def _validate_steps(recipe: dict, phase_order: list) -> set:
 def _gather_emit_prefixes(emit_templates) -> set:
     """The id_prefix set declared by emit_templates. Computed ONCE and threaded
     to BOTH the depends_on integrity pass and the iteration gate_step check —
-    these were two byte-identical gathers (recipe-format §6 calls them
+    these were two byte-identical gathers (workflow-format §6 calls them
     symmetric), so a single shared set is behavior-preserving."""
     prefixes = set()
     if isinstance(emit_templates, dict):
@@ -531,10 +532,10 @@ def _gather_emit_prefixes(emit_templates) -> set:
     return prefixes
 
 
-def _validate_expected_emit_outputs(recipe: dict) -> set:
+def _validate_expected_emit_outputs(workflow: dict) -> set:
     """F4: validate expected_emit_outputs shape (list of non-empty strings).
     Returns the set used by the depends_on carve-out."""
-    expected_emit_outputs = recipe.get("expected_emit_outputs")
+    expected_emit_outputs = workflow.get("expected_emit_outputs")
     if expected_emit_outputs is not None:
         if not isinstance(expected_emit_outputs, list):
             _bad("expected_emit_outputs must be a list of strings")
@@ -547,7 +548,7 @@ def _validate_expected_emit_outputs(recipe: dict) -> set:
     return set(expected_emit_outputs or [])
 
 
-def _validate_depends_on(recipe: dict, step_ids: set, emit_prefixes: set,
+def _validate_depends_on(workflow: dict, step_ids: set, emit_prefixes: set,
                          expected_emit_outputs_set: set) -> None:
     """depends_on integrity — a second pass once all ids are known. Each dep is
     a known step id, an iterate-shaped emit id (`{id_prefix}{positive_int}`), or
@@ -586,13 +587,13 @@ def _validate_depends_on(recipe: dict, step_ids: set, emit_prefixes: set,
                 return True
         return False
 
-    for u in recipe["steps"]:
+    for u in workflow["steps"]:
         for d in u.get("depends_on", []):
             if d in step_ids:
                 continue
             # F4 carve-out (tightened): depends_on may forward-reference EITHER
             # (a) an iterate-shaped id (`{id_prefix}{positive_int}`) OR
-            # (b) a member of expected_emit_outputs declared by the recipe.
+            # (b) a member of expected_emit_outputs declared by the workflow.
             if _matches_iterate_shape(d):
                 continue
             if d in expected_emit_outputs_set:
@@ -600,11 +601,11 @@ def _validate_depends_on(recipe: dict, step_ids: set, emit_prefixes: set,
             _bad(f"step {u['id']!r}: depends_on references unknown step {d!r}")
 
 
-def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
+def _validate_phase_transitions(workflow: dict, phase_order: list) -> None:
     """phase_transitions: optional; each entry {from, to, producer}; producer must
     be a registered V1 producer name (Gap B disambiguation — A1 vs A4 at the
     shared (plan, work) boundary each name their own producer)."""
-    pts = recipe.get("phase_transitions", [])
+    pts = workflow.get("phase_transitions", [])
     if not isinstance(pts, list):
         _bad("phase_transitions must be a list")
     for pt in pts:
@@ -619,16 +620,16 @@ def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
             )
         if pt["producer"] not in V1_PRODUCER_NAMES:
             _bad(
-                f"unknown producer {pt['producer']!r} — V1 recipes may only name "
+                f"unknown producer {pt['producer']!r} — V1 workflows may only name "
                 f"one of {sorted(V1_PRODUCER_NAMES)}"
             )
 
 
-def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
+def _validate_emit_templates(workflow: dict, phase_order: list) -> None:
     """v0.3.0 (U5): emit_templates shape validation (OPTIONAL field — a v0.2.x
-    recipe omits it and validates unchanged, R7 backward compat). Runs BEFORE
+    workflow omits it and validates unchanged, R7 backward compat). Runs BEFORE
     iteration validation to preserve first-violation order."""
-    emit_templates = recipe.get("emit_templates")
+    emit_templates = workflow.get("emit_templates")
     if emit_templates is not None:
         if not isinstance(emit_templates, dict):
             _bad("emit_templates must be a JSON object")
@@ -664,14 +665,14 @@ def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
                 _bad(f"emit_templates[{tmpl_name!r}]: id_prefix must be a non-empty string")
 
 
-def _validate_iteration(recipe: dict, phase_order: list, step_ids: set,
+def _validate_iteration(workflow: dict, phase_order: list, step_ids: set,
                         emit_prefixes: set) -> None:
     """v0.3.0 (U5): iteration block validation (OPTIONAL field). Cross-refs
     emit_templates (the pairing rule) + emit_prefixes (the gate_step carve-out —
     the shared id_prefix set also used by depends_on integrity)."""
-    iteration = recipe.get("iteration")
+    iteration = workflow.get("iteration")
     if iteration is not None:
-        emit_templates = recipe.get("emit_templates")
+        emit_templates = workflow.get("emit_templates")
         if not isinstance(iteration, dict):
             _bad("iteration must be a JSON object")
         for ik in iteration:
@@ -683,7 +684,7 @@ def _validate_iteration(recipe: dict, phase_order: list, step_ids: set,
         # gate_step is required and must reference a step_id OR an
         # emit_templates entry's id_prefix. The latter is a defensive carve-out
         # per round-3 P2 #21 — A4's `compare` lands in `steps[]` explicitly per
-        # U6, so the carve-out is forward-looking insurance for future recipes.
+        # U6, so the carve-out is forward-looking insurance for future workflows.
         if "gate_step" not in iteration:
             _bad("iteration: missing required field 'gate_step'")
         gate = iteration["gate_step"]
@@ -698,7 +699,7 @@ def _validate_iteration(recipe: dict, phase_order: list, step_ids: set,
 
         # bound is required (max_attempts inside is required; max_wall_seconds
         # optional). Bounds are engine-enforced (deterministic over
-        # probabilistic) — they live in the recipe so the engine can't be
+        # probabilistic) — they live in the workflow so the engine can't be
         # fooled into running forever by a misbehaving gate agent.
         if "bound" not in iteration:
             _bad("iteration: missing required field 'bound'")
@@ -751,64 +752,64 @@ def _validate_iteration(recipe: dict, phase_order: list, step_ids: set,
                 )
 
 
-def _validate_work_only_gap(recipe: dict, phase_order: list) -> None:
-    """Work-only init-time gap (P1 #6, fix-pass D). A recipe with
+def _validate_work_only_gap(workflow: dict, phase_order: list) -> None:
+    """Work-only init-time gap (P1 #6, fix-pass D). A workflow with
     phase_order: ["work"] and steps: [] is UNRUNNABLE in v0.2.0 — at
     init_ledger time the engine creates a ledger with zero steps, the
     work-loop predicate's has_steps_in_phase guard is vacuous so met never
     fires, and the engine re-arms forever while the operator sees nothing.
     The intended runtime path (init-time enumeration via the backend's
     enumerate_plan_steps op) is NOT WIRED in v0.2.0; that ships in v0.2.1
-    (KTD-15). Reject mechanically here rather than ship a recipe whose only
+    (KTD-15). Reject mechanically here rather than ship a workflow whose only
     failure mode is silent re-arming."""
-    if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["steps"]:
+    if phase_order == _WORK_ONLY_PHASE_ORDER and not workflow["steps"]:
         _bad(
-            "v0.2.0 work-only recipes require pre-declared steps; init-time "
-            "enumeration ships in v0.2.1 (KTD-15). A recipe with "
+            "v0.2.0 work-only workflows require pre-declared steps; init-time "
+            "enumeration ships in v0.2.1 (KTD-15). A workflow with "
             "phase_order: ['work'] and steps: [] would create a ledger with "
             "zero steps and the engine would re-arm forever without dispatching."
         )
 
 
-def validate(recipe: dict) -> None:
-    """Validate a recipe dict against the V1 format. Raises RecipeError on any
+def validate(workflow: dict) -> None:
+    """Validate a workflow dict against the V1 format. Raises WorkflowError on any
     violation; returns None on success. The hard contract — both the engine and
     the authoring skill call this; skill output that passes here is engine-OK.
 
     An ordered dispatcher over per-concern validators (extracted from the
     former 315-line monolith). ORDER IS LOAD-BEARING: the first violation a
-    malformed recipe hits must stay the same, so these run in the original
+    malformed workflow hits must stay the same, so these run in the original
     sequence. Shared state (phase_order, step_ids, the single emit_prefixes set)
     is computed once and threaded explicitly.
     """
-    _validate_toplevel(recipe)
-    phase_order = _validate_phase_order(recipe)
-    step_ids = _validate_steps(recipe, phase_order)
+    _validate_toplevel(workflow)
+    phase_order = _validate_phase_order(workflow)
+    step_ids = _validate_steps(workflow, phase_order)
     # One id_prefix gather, shared by depends_on integrity AND the iteration
     # gate_step check (formerly computed twice, ~140 lines apart).
-    emit_prefixes = _gather_emit_prefixes(recipe.get("emit_templates") or {})
-    expected_emit_outputs_set = _validate_expected_emit_outputs(recipe)
-    _validate_depends_on(recipe, step_ids, emit_prefixes, expected_emit_outputs_set)
-    _validate_phase_transitions(recipe, phase_order)
+    emit_prefixes = _gather_emit_prefixes(workflow.get("emit_templates") or {})
+    expected_emit_outputs_set = _validate_expected_emit_outputs(workflow)
+    _validate_depends_on(workflow, step_ids, emit_prefixes, expected_emit_outputs_set)
+    _validate_phase_transitions(workflow, phase_order)
     # v0.4.3 KTD-15: plan_presatisfied coherence (needs phase_order + the
     # phase_transitions list; runs after the transitions are shape-validated).
-    _validate_plan_presatisfied(recipe, phase_order, recipe.get("phase_transitions", []))
-    _validate_emit_templates(recipe, phase_order)
-    _validate_iteration(recipe, phase_order, step_ids, emit_prefixes)
-    _validate_work_only_gap(recipe, phase_order)
+    _validate_plan_presatisfied(workflow, phase_order, workflow.get("phase_transitions", []))
+    _validate_emit_templates(workflow, phase_order)
+    _validate_iteration(workflow, phase_order, step_ids, emit_prefixes)
+    _validate_work_only_gap(workflow, phase_order)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Built-in recipe directory + name scan — kept HERE (the validation DAG root)
+# Built-in workflow directory + name scan — kept HERE (the validation DAG root)
 # because validate_and_lint's description-spoofing guard reads it. The registry
-# facade (recipes.py) re-imports _BUILTIN_DIR for its _tier_dirs resolution.
+# facade (workflows.py) re-imports _BUILTIN_DIR for its _tier_dirs resolution.
 
-_BUILTIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "recipes")
+_BUILTIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "workflows")
 
 
 def _builtin_names():
-    """Every built-in recipe name — the ``recipes/`` dir minus ``schema.json``
-    (the recipe-shape doc, not a recipe). Scanning the dir instead of a hardcoded
+    """Every built-in workflow name — the ``workflows/`` dir minus ``schema.json``
+    (the workflow-shape doc, not a workflow). Scanning the dir instead of a hardcoded
     list means a newly-added built-in (e.g. ``pipeline``/``review``) is covered
     automatically by consumers like the description-spoofing guard."""
     return sorted(
@@ -817,17 +818,17 @@ def _builtin_names():
     )
 
 
-def _lint_verification_placement(recipe: dict, steps: list) -> list:
+def _lint_verification_placement(workflow: dict, steps: list) -> list:
     """v0.7.0 (U2/R3): warn when a `verification` block can never be evaluated.
 
     validate() accepts the block on ANY step (additive, shape-checked there), but
     only the iteration.gate_step's block is ever evaluated (resolve_gate_verification
     reads the gate step). So a non-empty block on a non-gate step — or anywhere when
-    the recipe declares no iteration block at all — is dead config. Warn, don't
+    the workflow declares no iteration block at all — is dead config. Warn, don't
     reject (KTD-2): the field loads fine; this is editorial.
     """
     out = []
-    iteration = recipe.get("iteration")
+    iteration = workflow.get("iteration")
     if isinstance(iteration, dict):
         gate_step = iteration.get("gate_step")
         for u in steps:
@@ -843,26 +844,26 @@ def _lint_verification_placement(recipe: dict, steps: list) -> list:
             if u.get("verification"):
                 out.append(
                     f"step {u.get('id')!r} carries a verification block but the "
-                    f"recipe declares no 'iteration' block — verification is only "
+                    f"workflow declares no 'iteration' block — verification is only "
                     f"evaluated at the iteration gate, so these criteria never run; "
                     f"add an iteration block with gate_step {u.get('id')!r}"
                 )
     return out
 
 
-def validate_and_lint(recipe: dict, *, filename: str | None = None):
+def validate_and_lint(workflow: dict, *, filename: str | None = None):
     """``validate`` (hard errors, raises) PLUS editorial lint warnings the engine
     ignores but the authoring skill surfaces (KTD-2). Returns a list of warning
     strings (empty when clean). Call ``validate`` for the contract; this adds:
       - a phase in phase_order with no step assigned (and no producer targeting it)
       - depends_on creating an unreachable step (no path from a root)
       - terminal_phase with no steps AND no producer targeting it
-      - a workspace/global recipe whose description matches a built-in verbatim
+      - a workspace/global workflow whose description matches a built-in verbatim
         (description-spoofing defense — security observation 1)
-      - (P2-15) when ``filename`` is supplied: the recipe's declared ``name``
-        does not match the file stem. The engine resolves recipes by filename,
-        so a name/stem mismatch means a user who runs ``--recipe <stem>`` would
-        load this file while a recipe author who reads the ``name:`` field
+      - (P2-15) when ``filename`` is supplied: the workflow's declared ``name``
+        does not match the file stem. The engine resolves workflows by filename,
+        so a name/stem mismatch means a user who runs ``--workflow <stem>`` would
+        load this file while a workflow author who reads the ``name:`` field
         expects a different identifier — a UX trap, surfaced here as a warning.
 
     ``filename`` is optional: the path or basename to compare against (file
@@ -885,27 +886,27 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     on disk** — the shim never rewrites the caller's draft. That is SAFE: the
     read-compat path (``resolve()`` → ``upgrade_workflow``) is INDEFINITE, so the
     file upgrades in memory every time it is later resolved. One shim, rather than
-    chasing every authoring-skill prose example across auto-author-recipe /
+    chasing every authoring-skill prose example across auto-author-workflow /
     auto-design / auto-launch; it composes with the U8 skill-prose flip.
     """
-    recipe = format_compat.upgrade_workflow(recipe)
-    validate(recipe)  # hard errors first
+    workflow = format_compat.upgrade_workflow(workflow)
+    validate(workflow)  # hard errors first
     warnings = []
     # P2-15: name-stem mismatch warning (skill-only path; engine load doesn't
     # supply filename).
     if filename:
         stem = os.path.splitext(os.path.basename(filename))[0]
-        declared = recipe.get("name")
+        declared = workflow.get("name")
         if stem and declared and stem != declared:
             warnings.append(
-                f"recipe name {declared!r} does not match filename stem "
-                f"{stem!r} — the engine resolves recipes by filename, so "
-                f"--recipe {stem!r} would load this file but its declared "
+                f"workflow name {declared!r} does not match filename stem "
+                f"{stem!r} — the engine resolves workflows by filename, so "
+                f"--workflow {stem!r} would load this file but its declared "
                 f"name is {declared!r}; rename one to match the other"
             )
-    phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
-    steps = recipe.get("steps", [])
-    emit_targets = {pt.get("to") for pt in recipe.get("phase_transitions", [])}
+    phase_order = workflow.get("phase_order", _DEFAULT_PHASE_ORDER)
+    steps = workflow.get("steps", [])
+    emit_targets = {pt.get("to") for pt in workflow.get("phase_transitions", [])}
     steps_by_phase = {}
     for u in steps:
         steps_by_phase.setdefault(u.get("phase"), []).append(u)
@@ -917,7 +918,7 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                 f"phase {ph!r} has no steps and no producer targets it — it will "
                 f"do nothing"
             )
-    terminal = recipe.get("terminal_phase", "work")
+    terminal = workflow.get("terminal_phase", "work")
     if not steps_by_phase.get(terminal) and terminal not in emit_targets:
         warnings.append(
             f"terminal_phase {terminal!r} has no steps and no producer — the run "
@@ -927,8 +928,8 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     # a hard error — operator-defined bounds; surface as advisory only. The
     # validator above already rejects 0/negative max_attempts; this warns on
     # values that pass the hard check but look suspicious.
-    if isinstance(recipe.get("iteration"), dict):
-        bound = recipe["iteration"].get("bound")
+    if isinstance(workflow.get("iteration"), dict):
+        bound = workflow["iteration"].get("bound")
         if isinstance(bound, dict):
             ma = bound.get("max_attempts")
             if isinstance(ma, int) and not isinstance(ma, bool) and ma > 10:
@@ -946,10 +947,10 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                     f"the bound will fire before any iteration completes"
                 )
 
-    warnings.extend(_lint_verification_placement(recipe, steps))
+    warnings.extend(_lint_verification_placement(workflow, steps))
 
-    # description-spoofing: a non-built-in recipe copying a built-in's description.
-    desc = (recipe.get("description") or "").strip()
+    # description-spoofing: a non-built-in workflow copying a built-in's description.
+    desc = (workflow.get("description") or "").strip()
     if desc:
         # Scan every built-in dynamically — a hardcoded tuple silently misses
         # newer built-ins (pipeline/review) and lets them be spoofed.
@@ -960,7 +961,7 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                     bdesc = (json.load(f).get("description") or "").strip()
             except (OSError, ValueError):
                 continue
-            if desc == bdesc and recipe.get("name") != nm:
+            if desc == bdesc and workflow.get("name") != nm:
                 warnings.append(
                     f"description matches built-in {nm!r} verbatim — possible "
                     f"spoofing; consider a distinct description"

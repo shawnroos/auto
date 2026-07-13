@@ -6,8 +6,8 @@
 > by name and hands it inputs — is not built until Phase 2 (`preset_ref`, R6/R7/
 > R8). The field set here may change once a real container consumer validates the
 > boundary. Do **not** treat this as a locked contract or build external tooling
-> against it yet. (Contrast: [`recipe-format.md`](recipe-format.md) is a LOCKED
-> v0.3.0 contract.)
+> against it yet. (Contrast: [`workflow-format.md`](workflow-format.md) is a LOCKED
+> v0.5.0 contract.)
 
 ## 1. What a preset is
 
@@ -16,8 +16,8 @@ promoted to a first-class, named, addressable object. The reframe: a step is two
 things, a **container** (its flow-local slot: `id`, `phase`, `depends_on`) and a
 **preset** (the payload that runs there: one `backend_op` invocation, optionally
 tuned by a `prompt_template`). This spec covers the *preset*; the container stays
-part of the recipe/flow — see [`recipe-format.md` §3 (`steps[]`
-entries)](recipe-format.md), where a step's `invokes` is exactly the preset
+part of the workflow/flow — see [`workflow-format.md` §3 (`steps[]`
+entries)](workflow-format.md), where a step's `invokes` is exactly the preset
 embedded in a container.
 
 A preset is **pure payload**: it carries **no** verification gate (R2). When a
@@ -41,12 +41,12 @@ written back onto the preset.
 
 | Field | Required | Type | Notes |
 |-------|----------|------|-------|
-| `name` | yes | string | filename-safe (`^[a-z0-9][a-z0-9._-]*$`); the resolution key. Reuses the recipe name guard to prevent path traversal. |
+| `name` | yes | string | filename-safe (`^[a-z0-9][a-z0-9._-]*$`); the resolution key. Reuses the workflow name guard to prevent path traversal. |
 | `version` | yes | string | opaque version tag. |
 | `description` | yes | string | one-line human description — what this preset does and when to reach for it. |
 | `invokes` | yes | object | the payload: `{backend_op, prompt_template?}` and nothing else. |
-| `invokes.backend_op` | yes | string | one of the closed set `{brainstorm, do_step, next_plan_step, review}` (shared with recipes via `lib/backend_ops.py::VALID_BACKEND_OPS`). |
-| `invokes.prompt_template` | no | string | a **relative** path (no `..`, no leading `/`) to a tuning prompt. Path-bounded by the same `_check_prompt_template` recipes use. |
+| `invokes.backend_op` | yes | string | one of the closed set `{brainstorm, do_step, next_plan_step, review}` (shared with workflows via `lib/backend_ops.py::VALID_BACKEND_OPS`). |
+| `invokes.prompt_template` | no | string | a **relative** path (no `..`, no leading `/`) to a tuning prompt. Path-bounded by the same `_check_prompt_template` workflows use. |
 
 ### Forbidden keys (hard errors)
 
@@ -63,7 +63,7 @@ rejected.
 ## 3. Resolution
 
 `lib/presets.py::load_preset(name, repo)` resolves a preset by name across two
-tiers, **first-wins** (a deliberate subset of the recipe registry — Phase 1 ships
+tiers, **first-wins** (a deliberate subset of the workflow registry — Phase 1 ships
 no global tier and no browsable catalog; that is R3/Phase 2):
 
 1. **workspace** — `<repo>/.claude/auto/presets/<name>.json` (override)
@@ -75,7 +75,7 @@ bare traceback.
 
 Validation is code, not schema: `validate_preset(obj) -> (ok, errors)` enforces
 the rules above (hand-rolled, pure stdlib — same install-anywhere constraint as
-the recipe validator). There is deliberately no `presets/schema.json` — a second
+the workflow validator). There is deliberately no `presets/schema.json` — a second
 unenforced schema doc would just duplicate this one.
 
 ## 4. Built-in seeds
@@ -87,8 +87,8 @@ unenforced schema doc would just duplicate this one.
 
 ## 5. DAG discipline
 
-`lib/presets.py` reuses `lib/recipe_validate.py`'s `_check_prompt_template` and
-`_validate_recipe_name`, and imports `VALID_BACKEND_OPS` from the pure-stdlib leaf
+`lib/presets.py` reuses `lib/workflow_validate.py`'s `_check_prompt_template` and
+`_validate_workflow_name`, and imports `VALID_BACKEND_OPS` from the pure-stdlib leaf
 `lib/backend_ops.py`. It **must not** import `lib/dispatcher.py` (the heavy
 dispatch module that pulls in the ledger) — the validator stays a light DAG leaf.
 `tests/unit/import-topology.test.sh` asserts this boundary, and

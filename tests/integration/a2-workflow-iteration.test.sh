@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# auto v0.3.0 U6 integration test: a2 recipe with iteration block — three
-# scenarios (GREEN/ITERATE/BOUND) driving the full recipe→ledger→pulse path.
+# auto v0.3.0 U6 integration test: a2 workflow with iteration block — three
+# scenarios (GREEN/ITERATE/BOUND) driving the full workflow→ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
 # Unit tests on iterate_template (producers.test.sh) and advance_iteration_loop
 # (pulse.test.sh) cover the iteration primitives in isolation; this file proves
-# that a recipe DECLARING iteration in JSON actually drives the production
-# init→pulse path. Without it, the recipe→ledger→pulse wire could silently
-# regress to recipe-iteration-ignored (the dominant build-bug class — prose
+# that a workflow DECLARING iteration in JSON actually drives the production
+# init→pulse path. Without it, the workflow→ledger→pulse wire could silently
+# regress to workflow-iteration-ignored (the dominant build-bug class — prose
 # claims a transition the code doesn't enforce).
 #
 # CONTRACT (KTD §A+§B+§D — v0.3.0 U6):
-#   The a2 recipe declares iteration.gate_step="judge", iteration.emit_template
+#   The a2 workflow declares iteration.gate_step="judge", iteration.emit_template
 #   ="plan-candidate", iteration.bound={max_attempts:5, max_wall_seconds:900}.
 #   plus emit_templates.plan-candidate={phase:"plan", invokes:{backend_op:
 #   "next_plan_step"}, id_prefix:"plan-"}. auto.run + init_ledger thread these
@@ -24,7 +24,7 @@
 #       judge.dispatch_context, loop forced to "done" via set_loop (NOT
 #       advance_to_phase, per KTD §C).
 #
-# STRUCTURE: init via auto.run with --recipe a2 (carries iteration to ledger);
+# STRUCTURE: init via auto.run with --workflow a2 (carries iteration to ledger);
 # prime each plan step's enumerated_steps; set gaps_open=0; record_verdict +
 # set_verdict_decision on judge per scenario; dispatch_pulse. Assert end-state
 # (loop_phase, iteration_attempts, ids of newly-emitted plan steps, bound_override
@@ -82,11 +82,11 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
-# Step 1: init via /auto plan.md --recipe a2 — the PRODUCTION path. U6 plumbing
-# (auto.py + init_ledger) carries recipe.iteration + recipe.emit_templates onto
+# Step 1: init via /auto plan.md --workflow a2 — the PRODUCTION path. U6 plumbing
+# (auto.py + init_ledger) carries workflow.iteration + workflow.emit_templates onto
 # the ledger. This is the wire being tested.
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", "a2"])
+    a.run([plan, "--workflow", "a2"])
 run_id = None
 for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
     if not f.endswith(".lock"):
@@ -225,13 +225,13 @@ esac
 # WHY: v0.3.0 review-round-1 surfaced a cross-reviewer P0 (ADV-1 + testing +
 # correctness). When init_ledger naively seeded `iteration_emit_count = 0`,
 # iterate_template's first emit produced `plan-1` — which collides with the
-# recipe-declared `plan-1` step, raising LedgerError in _apply_emit. The
+# workflow-declared `plan-1` step, raising LedgerError in _apply_emit. The
 # previous version of THIS test rigged the counter to 3 post-init, masking
 # the bug. F0 closes it: init_ledger now scans steps[] for the max numeric
 # suffix matching any emit_templates[*].id_prefix and seeds to that.
 #
 # This DF probes BOTH directions of the contract:
-#   (a) GREEN: init_ledger of a "plan-1/2/3 + id_prefix='plan-'" recipe shape
+#   (a) GREEN: init_ledger of a "plan-1/2/3 + id_prefix='plan-'" workflow shape
 #       MUST seed iteration_emit_count=3 (proving the F0 fix is wired).
 #   (b) GREEN: init_ledger of a non-iteration shape (no emit_templates) MUST
 #       seed iteration_emit_count=0 (proving F0 doesn't over-fire).
@@ -272,7 +272,7 @@ with tempfile.TemporaryDirectory() as repo:
 
     # (c) a4-shape: word-suffixed steps (build-clarity/build-perf) + id_prefix
     # 'build-' → expect seed=0 (isdigit() filters non-numeric suffixes).
-    # NOTE: a4's actual production recipe has NO 'build-*' steps in steps[] —
+    # NOTE: a4's actual production workflow has NO 'build-*' steps in steps[] —
     # those are emitted by plan_output_to_paired_builders. This synthetic
     # scenario probes the F0 isdigit guard directly.
     led_c = ledger.init_ledger(
@@ -299,7 +299,7 @@ esac
 # `suffix.isdigit()` then `int(suffix)` on the suffix-after-prefix of every
 # step id. `'²'.isdigit()` returns True but `int('²')` raises ValueError on
 # the Unicode superscript-2 — so a step declared as `"plan-²"` (or any
-# recipe that names a step with a Unicode numeric character) would crash
+# workflow that names a step with a Unicode numeric character) would crash
 # `init_ledger` with an unhandled ValueError instead of being treated as
 # "not iterate-shaped" and seeded to 0.
 #

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# auto U4 integration test: R13 — bare `/auto <plan>` (default recipe a1) produces
+# auto U4 integration test: R13 — bare `/auto <plan>` (default workflow a1) produces
 # a run that BEHAVES identically to v0.1.x.
 #
 # HONEST framing (build-surfaced 2026-05-25): a1's ledger is NOT literally
 # byte-identical to a v0.1.x ledger. v0.1.1 init'd with steps=[] (the plan-loop
 # produced steps later, off-ledger at the handoff); a1 declares an explicit `plan`
-# step (the representational change that makes the topology a recipe). So R13
+# step (the representational change that makes the topology a workflow). So R13
 # asserts the BEHAVIORAL invariants that actually matter — the things a v0.1.x
 # operator would observe identically:
 #   1. the run is created in loop_phase "plan" with backend ce
 #   2. the plan-phase predicate is NOT met (no premature exit), gaps_open null
 #   3. the new additive fields are present as their v0.1.x-equivalent defaults
-#      (phase_order = legacy grammar, terminal_phase = work, recipe = a1)
-#   4. bare /auto with NO --recipe defaults to a1 (the v0.1.x default workflow)
+#      (phase_order = legacy grammar, terminal_phase = work, workflow = a1)
+#   4. bare /auto with NO --workflow defaults to a1 (the v0.1.x default workflow)
 # Plus the producer-side: a1's single plan step is the plan-loop driver, exactly
 # as v0.1.1's plan phase ran (one logical plan stream).
 
@@ -75,13 +75,13 @@ print("%s|%s|%s|%s|%s|%s|%s|%s" % (
 PYEOF
 }
 
-it "R13: bare /auto <plan> (default recipe) → plan phase, ce, recipe a1"
+it "R13: bare /auto <plan> (default workflow) → plan phase, ce, workflow a1"
 res="$(run_auto PLAN)"
 # rc 0 | plan | ce | a1 | legacy grammar | work | not-met | gaps null
 assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res"
 
-it "R13: explicit --recipe a1 produces the same ledger as the default"
-res_explicit="$(run_auto PLAN --recipe a1)"
+it "R13: explicit --workflow a1 produces the same ledger as the default"
+res_explicit="$(run_auto PLAN --workflow a1)"
 assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res_explicit"
 
 it "R13: a1's single plan step drives the plan-loop (one logical plan stream)"
@@ -103,7 +103,7 @@ PYEOF
 )"
 assert_eq "plan" "$steps"
 
-it "R13: --recipe a2 produces 3 plan steps + judge (distinct from a1)"
+it "R13: --workflow a2 produces 3 plan steps + judge (distinct from a1)"
 a2units="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, importlib.util, tempfile, glob, json, io, contextlib
 auto_root = sys.argv[1]
@@ -114,7 +114,7 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", "a2"])
+    a.run([plan, "--workflow", "a2"])
 led = json.load(open(glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))[0]))
 plan_steps = sorted(u["id"] for u in led["steps"] if u["phase"] == "plan")
 work_steps = sorted(u["id"] for u in led["steps"] if u["phase"] == "work")
@@ -125,5 +125,5 @@ assert_eq "plan-1,plan-2,plan-3|judge" "$a2units"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "recipe-r13-regression.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "workflow-r13-regression.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

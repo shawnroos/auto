@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """auto U5b (v0.2.0): the phase-transition producer registry (G1).
 
-Recipes declare WHAT topology to run; producers are HOW work steps come into being
+Workflows declare WHAT topology to run; producers are HOW work steps come into being
 at a phase boundary. v0.1.x produced work steps off-ledger (the handoff paused for
 manual creation); v0.2.0 makes emission a first-class, in-engine step so A2/A4
 actually spawn their steps.
@@ -21,8 +21,8 @@ re-entrant mutator would deadlock on the flock. The primitive appends + normaliz
 what they return.
 
 V1 ships exactly 3 producers (A3's `review_findings_to_plan_input` deferred with A3,
-KTD-14). The NAME registry below is what `recipes.V1_PRODUCER_NAMES` mirrors; a
-test asserts the two sets match so a recipe can't name a producer that isn't here.
+KTD-14). The NAME registry below is what `workflows.V1_PRODUCER_NAMES` mirrors; a
+test asserts the two sets match so a workflow can't name a producer that isn't here.
 """
 
 from __future__ import annotations
@@ -30,19 +30,19 @@ from __future__ import annotations
 import os
 import sys
 
-# Import recipes via the standard bootstrap so producer errors share the
-# RecipeError hierarchy: a judge that names no winner is a recipe-shape
-# violation (the recipe declared an A2 topology but the judge did not produce
+# Import workflows via the standard bootstrap so producer errors share the
+# WorkflowError hierarchy: a judge that names no winner is a workflow-shape
+# violation (the workflow declared an A2 topology but the judge did not produce
 # the verdict the topology requires). Using the same exception class as the
-# validator lets callers `except recipes.RecipeError` once and catch the
-# whole "recipe-contract violation" class regardless of which side raised.
+# validator lets callers `except workflows.WorkflowError` once and catch the
+# whole "workflow-contract violation" class regardless of which side raised.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-recipes = load_lib_module("recipes")
-RecipeError = recipes.RecipeError
+workflows = load_lib_module("workflows")
+WorkflowError = workflows.WorkflowError
 # U12: typed `dispatch_context` accessors (iteration is a `_bootstrap`-only leaf,
 # so this adds no import cycle) — reads route through named accessors so a
 # misspelled key trips a KeyError at the accessor, not a swallowed None. Aliased
@@ -78,7 +78,7 @@ def plan_output_to_work_steps(ledger: dict, to_phase: str) -> list:
     plan_steps = _plan_steps(ledger)
     if not plan_steps:
         return []
-    # A1 has exactly one plan step; if a recipe somehow has more here, take the
+    # A1 has exactly one plan step; if a workflow somehow has more here, take the
     # first (A2's multi-plan path uses judge_winner_to_work_steps instead).
     items = _enumerated_steps(plan_steps[0])
     return [
@@ -93,7 +93,7 @@ def plan_output_to_work_steps(ledger: dict, to_phase: str) -> list:
 def brainstorm_output_to_plan_step(ledger: dict, to_phase: str) -> list:
     """Spine (v0.6.0 / U8): the brainstorm step's output → ONE plan step.
 
-    The brainstorm-rooted spine (``recipes/pipeline.json``,
+    The brainstorm-rooted spine (``workflows/pipeline.json``,
     ``phase_order ["brainstorm","plan","handoff","work"]``) fires this producer on
     arrival at ``plan`` from ``brainstorm`` (KTD-2). ce-brainstorm produces a
     requirements document; the model records that doc's path on the brainstorm
@@ -108,22 +108,22 @@ def brainstorm_output_to_plan_step(ledger: dict, to_phase: str) -> list:
     requirements-doc path flows onto the plan step's ``dispatch_context`` so the
     plan backend op has the brainstorm output as input.
 
-    Raises ``RecipeError`` (the recipe-shape error class, matching the A2/A4
+    Raises ``WorkflowError`` (the workflow-shape error class, matching the A2/A4
     producer failure surface) when no brainstorm step carries an output — a
     silent empty emit would leave the plan phase with no step and the run would
     re-arm against a vacuous plan phase forever.
     """
     brainstorm_steps = _brainstorm_steps(ledger)
     if not brainstorm_steps:
-        raise RecipeError(
+        raise WorkflowError(
             "brainstorm_output_to_plan_step: no 'brainstorm' step in ledger — "
-            "the spine recipe must declare a brainstorm step whose output seeds "
+            "the spine workflow must declare a brainstorm step whose output seeds "
             "the plan phase"
         )
     # The spine has exactly one brainstorm step; read its recorded output.
     requirements_doc = _iteration.read_requirements_doc(brainstorm_steps[0])
     if not requirements_doc:
-        raise RecipeError(
+        raise WorkflowError(
             "brainstorm_output_to_plan_step: brainstorm step "
             "dispatch_context.requirements_doc is missing — the brainstorm step "
             "must record the requirements-doc path before the plan phase can be "
@@ -164,19 +164,19 @@ def judge_winner_to_work_steps(ledger: dict, to_phase: str) -> list:
     v0.3.0 generalization (KTD §D / U3): the gate step id is read from
     ``ledger.iteration.gate_step`` (defaulting to literal ``"judge"`` so
     v0.2.0 a2 ledgers without an iteration block keep working). This lets a
-    recipe rename the gate step without forking the producer.
+    workflow rename the gate step without forking the producer.
     """
     gate_step_id = (ledger.get("iteration") or {}).get("gate_step", "judge")
     judge = next(
         (u for u in ledger.get("steps", []) if u.get("id") == gate_step_id), None
     )
     if judge is None:
-        raise RecipeError(
+        raise WorkflowError(
             f"judge_winner_to_work_steps: no {gate_step_id!r} step in ledger"
         )
     winner_id = _iteration.read_winner_step_id(judge)
     if not winner_id:
-        raise RecipeError(
+        raise WorkflowError(
             "judge_winner_to_work_steps: judge dispatch_context.winner_step_id "
             "is missing — the judge must call ledger.set_winner_step_id(...) "
             "alongside record_verdict to declare the winning plan step"
@@ -185,7 +185,7 @@ def judge_winner_to_work_steps(ledger: dict, to_phase: str) -> list:
         (u for u in ledger.get("steps", []) if u.get("id") == winner_id), None
     )
     if winner is None:
-        raise RecipeError(
+        raise WorkflowError(
             f"judge_winner_to_work_steps: winner {winner_id!r} not in ledger"
         )
     items = _enumerated_steps(winner)
@@ -229,9 +229,9 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
 
 
 def iterate_template(ledger: dict, to_phase: str) -> list:
-    """v0.3.0 / KTD §D: re-emit steps from a recipe-declared emit_template.
+    """v0.3.0 / KTD §D: re-emit steps from a workflow-declared emit_template.
 
-    Materializes ``emit_count`` new steps off the recipe's named template at
+    Materializes ``emit_count`` new steps off the workflow's named template at
     iteration time. Drives the outcomes-gated loop: the gate step verdicts
     ``iterate`` with a payload, the engine calls this producer through
     ``emit_within_phase``, new sibling steps land inside the gate's current
@@ -248,8 +248,8 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
     Reads (pure, no ledger mutation):
       - ``ledger.iteration.gate_step`` → gate step id (required; the U5
-        validator enforces this on the recipe, but defense-in-depth: a
-        freshly-mutated ledger missing this field is a recipe-shape error).
+        validator enforces this on the workflow, but defense-in-depth: a
+        freshly-mutated ledger missing this field is a workflow-shape error).
       - ``ledger.iteration.emit_template`` → template name.
       - ``ledger.emit_templates[<name>]`` → ``{phase, invokes, id_prefix}``.
       - Gate step's ``dispatch_context.decision_payload.emit_count`` → N
@@ -268,42 +268,42 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
     ``dispatch_context`` (the gate's payload is per-iteration; the new
     steps are blanks for the next round of plan-work).
 
-    Raises ``RecipeError`` on any contract violation (no iteration block,
+    Raises ``WorkflowError`` on any contract violation (no iteration block,
     template name not found, emit_count out of range or wrong type, gate
     step missing from the ledger).
     """
     iteration = ledger.get("iteration")
     if not iteration:
-        raise RecipeError(
-            "iterate_template: ledger has no 'iteration' block — recipe must "
+        raise WorkflowError(
+            "iterate_template: ledger has no 'iteration' block — workflow must "
             "declare iteration.{gate_step, emit_template} to use this producer"
         )
 
     gate_step_id = iteration.get("gate_step")
     if not gate_step_id:
-        raise RecipeError(
-            "iterate_template: iteration.gate_step is missing — the recipe "
+        raise WorkflowError(
+            "iterate_template: iteration.gate_step is missing — the workflow "
             "must name the gate step (U5 validator should have rejected this)"
         )
 
     template_name = iteration.get("emit_template")
     if not template_name:
-        raise RecipeError(
-            "iterate_template: iteration.emit_template is missing — the recipe "
+        raise WorkflowError(
+            "iterate_template: iteration.emit_template is missing — the workflow "
             "must name the emit_templates entry to re-emit from"
         )
 
     emit_templates = ledger.get("emit_templates") or {}
     template = emit_templates.get(template_name)
     if template is None:
-        raise RecipeError(
+        raise WorkflowError(
             f"iterate_template: emit_templates[{template_name!r}] not in "
             f"ledger; available: {sorted(emit_templates)!r}"
         )
 
     id_prefix = template.get("id_prefix")
     if not id_prefix:
-        raise RecipeError(
+        raise WorkflowError(
             f"iterate_template: emit_templates[{template_name!r}].id_prefix "
             "is missing (U5 validator should have rejected this)"
         )
@@ -313,7 +313,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
         (u for u in ledger.get("steps", []) if u.get("id") == gate_step_id), None
     )
     if gate is None:
-        raise RecipeError(
+        raise WorkflowError(
             f"iterate_template: gate step {gate_step_id!r} not in ledger.steps"
         )
 
@@ -324,12 +324,12 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
     # in Python, and a True payload silently treated as 1 is a misshapen
     # payload, not a valid emit_count.
     if isinstance(emit_count, bool) or not isinstance(emit_count, int):
-        raise RecipeError(
+        raise WorkflowError(
             f"iterate_template: emit_count must be int in [1, 10]; "
             f"got {emit_count!r} (type {type(emit_count).__name__})"
         )
     if emit_count < 1 or emit_count > 10:
-        raise RecipeError(
+        raise WorkflowError(
             f"iterate_template: emit_count must be int in [1, 10]; got {emit_count}"
         )
 
@@ -354,7 +354,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
 
 def no_emit(ledger_dict, to_phase):
-    """v0.3.0 F2: no-op producer for the iterate path on a recipe that omits
+    """v0.3.0 F2: no-op producer for the iterate path on a workflow that omits
     ``iteration.emit_template``. Returns an empty list so ``_apply_emit``'s
     ``producer(ledger, to_phase) or []`` line treats it as "no new steps" —
     ``iteration_emit_count`` stays unchanged (the counter bumps per emitted
@@ -367,15 +367,15 @@ def no_emit(ledger_dict, to_phase):
 
     Lives here (B10, v0.3.1) — it's a producer and belongs next to the others.
     NOT in ``REGISTRY``: it's selected by ``pulse_advance.advance_iteration_loop``
-    as the internal fallback when the recipe declares no ``emit_template``;
-    promoting it to a recipe-namable producer would duplicate the "omit
-    emit_template" recipe shape with no added authoring expressiveness.
+    as the internal fallback when the workflow declares no ``emit_template``;
+    promoting it to a workflow-namable producer would duplicate the "omit
+    emit_template" workflow shape with no added authoring expressiveness.
     """
     return []
 
 
-# NAME → producer function. `recipes.V1_PRODUCER_NAMES` mirrors these keys; a U5b
-# test asserts the two sets are equal so a recipe can never name a producer that
+# NAME → producer function. `workflows.V1_PRODUCER_NAMES` mirrors these keys; a U5b
+# test asserts the two sets are equal so a workflow can never name a producer that
 # isn't registered here (and the registry can't drift from the validator).
 REGISTRY = {
     "plan_output_to_work_steps": plan_output_to_work_steps,
@@ -383,7 +383,7 @@ REGISTRY = {
     "plan_output_to_paired_builders": plan_output_to_paired_builders,
     "iterate_template": iterate_template,
     # v0.6.0 (U8): brainstorm→plan spine producer. Added atomically with the
-    # recipes.V1_PRODUCER_NAMES entry so the symmetry test stays green.
+    # workflows.V1_PRODUCER_NAMES entry so the symmetry test stays green.
     "brainstorm_output_to_plan_step": brainstorm_output_to_plan_step,
 }
 
@@ -391,7 +391,7 @@ REGISTRY = {
 def resolve(name: str):
     """Return the producer function for ``name``, or raise KeyError.
 
-    The handoff-handler resolves the recipe's declared producer name through here,
+    The handoff-handler resolves the workflow's declared producer name through here,
     then hands the function to ``ledger.transition_and_emit``.
     """
     if name not in REGISTRY:

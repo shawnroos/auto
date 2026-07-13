@@ -170,7 +170,7 @@ class Backend:
     # ── spine entry op (v0.6.0 / U7) ─────────────────────────────────────────
     def brainstorm(self, step):
         """PREPARE /ce-brainstorm for the spine's brainstorm-entry step
-        (recipes/pipeline.json declares ``invokes.backend_op: "brainstorm"``).
+        (workflows/pipeline.json declares ``invokes.backend_op: "brainstorm"``).
 
         Prepare-only, mirroring ``do_step``: the model runs /ce-brainstorm,
         records the requirements-doc path on the step's

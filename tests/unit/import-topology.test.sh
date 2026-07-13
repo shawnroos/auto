@@ -33,14 +33,14 @@
 # `loads_sibling` cannot see that edge — the existence assert near the bottom is what
 # makes a botched rename go red here instead of at runtime.
 #   _bootstrap     → format_compat           (load_ledger_safe — read chokepoint 2)
-#   recipe_validate → format_compat          (the validate_and_lint WRITE gate)
-#   recipes        → recipe_validate, format_compat   (resolve() read shim)
-#   presets        → recipe_validate, backend_ops, format_compat  (load_preset shim)
+#   workflow_validate → format_compat          (the validate_and_lint WRITE gate)
+#   workflows        → workflow_validate, format_compat   (resolve() read shim)
+#   presets        → workflow_validate, backend_ops, format_compat  (load_preset shim)
 #
 # U6 (concept-vocabulary rename / KTD-1) added the five `→ format_compat` edges.
 # format_compat is itself a DAG ROOT (pure stdlib, no sibling import), so every
 # one of them is a LEAF edge that closes no cycle — including
-# `ledger_core → format_compat` and `recipe_validate → format_compat`, which both
+# `ledger_core → format_compat` and `workflow_validate → format_compat`, which both
 # preserve those modules' own root property. NB: this lint is
 # forbidden-edge/negative-grep, so an ALLOWED edge missing from this comment would
 # not turn it red; these four entries are documentation accuracy, and the
@@ -155,7 +155,7 @@ else
 fi
 
 # ─── presets DAG: the validator stays a light leaf (KTD-2) ─────────────────
-# lib/presets.py (U1, addressable-step-contents) reuses recipe_validate's
+# lib/presets.py (U1, addressable-step-contents) reuses workflow_validate's
 # primitives + the backend_ops leaf, but MUST NOT import dispatcher.py — that
 # module pulls in the ledger and the whole dispatch surface. Keeping the preset
 # validator off the heavy dispatch module is the KTD-2 boundary.
@@ -244,6 +244,35 @@ else
   fail "lib/step_producers.py is missing — the U7 producer-module rename did not land"
 fi
 
+# ─── file-existence asserts for the U8-renamed workflow modules (F13) ────────
+# The DAG edges asserted at the top of this file (`workflows → workflow_validate,
+# format_compat`, `presets → workflow_validate`) are all NEGATIVE greps or
+# loads_sibling checks, and every one of them passes VACUOUSLY against a module
+# that isn't there. A rename that landed `lib/workflow_validate.py` under a typo'd
+# name would leave this lint green while `/auto` died at the first resolve. Pin
+# the two U8 module names positively — plus the built-in workflow DIRECTORY, whose
+# absence would silently drop `resolve()` through to the A1_BUILTIN constant for
+# a1 and to a not-found error for every other built-in.
+for _mod in workflows.py workflow_validate.py workflows-list.sh; do
+  it "lib/${_mod} exists (the U8-renamed workflow module — guard against a vacuous pass)"
+  if [ -f "$LIB/${_mod}" ]; then
+    pass
+  else
+    fail "lib/${_mod} is missing — the U8 workflow rename did not land it"
+  fi
+done
+
+it "the built-in workflow dir exists and holds the conformance corpus (a1/a2/a4/w/pipeline/review)"
+_missing=""
+for _wf in a1 a2 a4 w pipeline review schema; do
+  [ -f "${AUTO_ROOT}/workflows/${_wf}.json" ] || _missing="${_missing} ${_wf}.json"
+done
+if [ -z "$_missing" ]; then
+  pass
+else
+  fail "workflows/ is missing:${_missing} — the U8 built-in dir rename did not land"
+fi
+
 # The producer module is a LEAF: pulse/pulse_advance import it, it imports no
 # sibling back. A back-edge to pulse* or the ledger facade would close a cycle.
 it "step_producers.py does NOT back-import pulse/pulse_advance (leaf)"
@@ -258,7 +287,7 @@ fi
 # ever grew a sibling edge it could cycle back through ledger_core (which imports
 # IT), so this is the load-bearing negative check for the new module.
 it "format_compat.py imports NO sibling lib module (it is the DAG root)"
-if grep -qE 'load_lib_module\(|^from (ledger|recipes|recipe_validate|pulse)' "$LIB/format_compat.py"; then
+if grep -qE 'load_lib_module\(|^from (ledger|workflows|workflow_validate|pulse)' "$LIB/format_compat.py"; then
   fail "format_compat.py must import no sibling — ledger_core imports it, so any sibling edge risks a cycle"
 else
   pass

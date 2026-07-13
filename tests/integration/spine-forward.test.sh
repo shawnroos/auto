@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto U9 (v0.6.0) integration test: the brainstorm-rooted spine
-# (recipes/pipeline.json) advances brainstorm → plan → work FORWARD, and an
+# (workflows/pipeline.json) advances brainstorm → plan → work FORWARD, and an
 # injected upstream cluster PAUSES + escalates to the operator with NO
 # loop_phase change and NO new persisted ledger field.
 #
@@ -11,7 +11,7 @@
 # current phase can't close — it escalates the cluster to the operator via the
 # EXISTING pause handoff (driver=manual + blocked_on). The autonomous backward edge
 # (rebound) is deferred to v0.7.0; this test asserts v0.6.0's narrow contract:
-#   * forward advance works (the spine recipe's producers fire on arrival), AND
+#   * forward advance works (the spine workflow's producers fire on arrival), AND
 #   * on a detected cluster the run PAUSES (driver=manual, blocked_on names the
 #     upstream phase), loop_phase is UNCHANGED (no backward move), and NO new
 #     top-level ledger field is written.
@@ -71,9 +71,9 @@ repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# x\n")
 
-# Step 1: /auto --recipe pipeline → spine run at brainstorm entry (U7 wiring).
+# Step 1: /auto --workflow pipeline → spine run at brainstorm entry (U7 wiring).
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run(["--recipe", "pipeline", plan])
+    a.run(["--workflow", "pipeline", plan])
 run_id = [os.path.basename(f).rsplit(".json", 1)[0]
           for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))
           if not f.endswith(".lock")][0]
@@ -200,7 +200,7 @@ plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# x\n")
 # requirements_doc — do NOT pre-seed it (that is exactly the green-by-construction
 # masking this scenario exists to remove).
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run(["--recipe", "pipeline", plan])
+    a.run(["--workflow", "pipeline", plan])
 run_id = [os.path.basename(f).rsplit(".json", 1)[0]
           for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))
           if not f.endswith(".lock")][0]
@@ -239,7 +239,7 @@ assert_eq "yes" "$has_doc"
 res="$(drive_spine 1)"
 IFS='|' read -r forward reason phase driver phase_unchanged blocked_named keys <<< "$res"
 
-it "spine recipe advances brainstorm → plan → work forward (producer-driven)"
+it "spine workflow advances brainstorm → plan → work forward (producer-driven)"
 assert_eq "yes" "$forward"
 
 it "injected upstream cluster PAUSES the run (pulse stop reason = handoff-pause)"

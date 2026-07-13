@@ -5,13 +5,13 @@
 # WHY THIS TEST EXISTS (memory project_auto_v042_stuck_root_causes, root cause ③):
 # Before this, smart-entry detected `reviewed-plan` but routed to a1, whose
 # plan-loop re-ran /ce-plan + /ce-doc-review on the already-green plan ("auto
-# re-plans a finished plan"). The W recipe that should skip the plan-loop was a
+# re-plans a finished plan"). The W workflow that should skip the plan-loop was a
 # v0.2.0 stub with no plan→steps enumeration. The fix makes W declare its plan
 # phase `plan_presatisfied`: init sets plan_step="review_plan" + gaps_open=0 so
 # the FIRST pulse's next_plan_step returns "done" → enumerate_plan_steps →
 # plan→work, with NO plan/deepen/review pass.
 #
-# STRUCTURE: create a real W run via `/auto <plan> --recipe w`, assert the
+# STRUCTURE: create a real W run via `/auto <plan> --workflow w`, assert the
 # pre-satisfied ledger state, stash the model-enumerated work steps (what the
 # model does when it executes the enumerate_plan_steps prepare op), pulse once in
 # auto mode, and assert the run is now in `work` with those steps — proving the
@@ -39,15 +39,15 @@ fail() {
   return 0
 }
 
-# Drive a recipe from /auto creation through one auto-mode pulse. Prints CSV:
+# Drive a workflow from /auto creation through one auto-mode pulse. Prints CSV:
 #   init_plan_step | init_gaps_open | init_met | plan_path_bound | post_phase | work_step_ids
-# recipe arg selects the recipe (w | a1).
+# workflow arg selects the workflow (w | a1).
 drive_presatisfied() {
-  recipe="${1:-w}"
-  "$PY" - "$AUTO_ROOT" "$recipe" <<'PYEOF'
+  workflow="${1:-w}"
+  "$PY" - "$AUTO_ROOT" "$workflow" <<'PYEOF'
 import sys, os, importlib.util, tempfile, glob, json, io, contextlib
 auto_root = sys.argv[1]
-recipe = sys.argv[2]
+workflow = sys.argv[2]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 
 def load(name, path):
@@ -64,7 +64,7 @@ os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "reviewed-plan.md"); open(plan, "w").write("# Reviewed Plan\n")
 
 with contextlib.redirect_stdout(io.StringIO()):
-    a.run([plan, "--recipe", recipe])
+    a.run([plan, "--workflow", workflow])
 run_id = None
 for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
     if not f.endswith(".lock"):

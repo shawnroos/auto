@@ -3,8 +3,8 @@
 #
 # The pre-dispatch ratify gate: before the ratified criteria flow into the
 # terminal verdict, the list is validated against the SAME taxonomy shape a
-# recipe's verification block uses. validate_oneshot_criteria
-# REUSES recipe_validate._validate_verification (KTD-2 reuse discipline) so
+# workflow's verification block uses. validate_oneshot_criteria
+# REUSES workflow_validate._validate_verification (KTD-2 reuse discipline) so
 # "malformed proposed criterion is rejected" is a REAL test, not just prose.
 #
 # SELF-CONTAINED: minimal inline it/pass/fail/assert_eq harness, python pinned
@@ -14,7 +14,7 @@
 # Scenarios (U3 plan, AE1/AE2 pre-bake validation):
 #   1. a well-formed criteria list (all four types) validates ok.
 #   2. a `programmatic` criterion with a SHELL STRING instead of an argv list is
-#      rejected (parity with the recipe validator's argv-only rule).
+#      rejected (parity with the workflow validator's argv-only rule).
 #   3. an unknown criterion `type` is rejected.
 #   4. more than 16 criteria are rejected (the taxonomy cap).
 

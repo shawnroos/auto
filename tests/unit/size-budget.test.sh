@@ -106,13 +106,13 @@ ALLOWED_FUNCTIONS=(
   # single delegation call, +1 net. Decomposed first, waived only the residue.
   "lib/auto-status.py:_print_run:127"
   # iterate_template is v0.3.0 U3's producer. A single coherent computation:
-  # validate inputs (recipe shape + emit_count bounds), read
+  # validate inputs (workflow shape + emit_count bounds), read
   # iteration_emit_count, compute the next N step ids, build the step dicts.
   # Decomposition would extract 2-3 private helpers (validate-shape,
   # validate-emit-count, build-steps). Tracked as v0.3.2 candidate. (U12
   # shrank it 2 LOC via iteration.read_decision_payload.)
   "lib/step_producers.py:iterate_template:125"
-  # (recipes.py:validate waiver retired: decomposed into per-concern
+  # (workflows.py:validate waiver retired: decomposed into per-concern
   # validators — _validate_toplevel / _validate_phase_order / _validate_steps /
   # _gather_emit_prefixes / _validate_expected_emit_outputs / _validate_depends_on
   # / _validate_phase_transitions / _validate_emit_templates / _validate_iteration
@@ -131,14 +131,14 @@ ALLOWED_FUNCTIONS=(
   # `enumerate_plan_steps` method (in the Backend class body the awk attributes
   # here) so the readiness engine can order the producer fan-out — 125 → 137.
   "lib/backend-ce.py:_next_plan_step:137"
-  # run() is auto.py's linear run-creation dispatcher (parse → validate recipe
+  # run() is auto.py's linear run-creation dispatcher (parse → validate workflow
   # → build steps → init ledger → emit arm intent). Already partially decomposed
   # into helpers (_parse_args, _bind_presatisfied_plan, _derive_goal_intent,
   # _emit_arm). v0.4.3 KTD-15 added plan_presatisfied wiring (the bind logic is in
   # _bind_presatisfied_plan, off-budget; the residual is glue). Further splitting
   # the linear glue into micro-helpers would hurt readability, not help it.
-  # Launch-chooser agent-native Gap 3 added the post-init run-scoped-recipe
-  # teardown — the delete logic is extracted to _teardown_run_scoped_recipe
+  # Launch-chooser agent-native Gap 3 added the post-init run-scoped-workflow
+  # teardown — the delete logic is extracted to _teardown_run_scoped_workflow
   # (off-budget); only the +3 lines of conditional glue stay in run().
   "lib/auto.py:run:128"
 )

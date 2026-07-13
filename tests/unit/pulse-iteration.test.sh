@@ -126,7 +126,7 @@ echo "pulse-iteration.test.sh"
 # ════════════════════════════════════════════════════════════════════════════
 #
 # Each scenario primes a ledger that emulates the post-U6 iteration shape
-# (recipes ship iteration + emit_templates blocks; U6 has not landed yet so
+# (workflows ship iteration + emit_templates blocks; U6 has not landed yet so
 # we install them directly via _with_locked_ledger). U4 reads those fields
 # through `iteration.evaluate_decision` and the ledger mutators U2 ships.
 
@@ -1044,13 +1044,13 @@ open(p, "w").write(src[:start] + replacement + src[end_idx:])
 PYEOF
 
 # DF#6 patch: revert the emit_template-optional branch so the iterate path
-# ALWAYS calls iterate_template even when the recipe omits emit_template.
-# Under a recipe with iteration but no emit_template, iterate_template raises
-# RecipeError at lib/producers.py:229.
+# ALWAYS calls iterate_template even when the workflow omits emit_template.
+# Under a workflow with iteration but no emit_template, iterate_template raises
+# WorkflowError at lib/producers.py:229.
 cat > "$DF_DIR/df6_no_optional_emit.py" <<'PYEOF'
 """DF#6: revert the F2 emit_template-optional branch so the iterate path
-unconditionally hardcodes producer=iterate_template. With a recipe that
-omits iteration.emit_template, iterate_template raises RecipeError."""
+unconditionally hardcodes producer=iterate_template. With a workflow that
+omits iteration.emit_template, iterate_template raises WorkflowError."""
 import os, sys
 p = os.path.join(sys.argv[1], "pulse_advance.py")  # B4: anchor moved to pulse_advance
 src = open(p).read()
@@ -1158,7 +1158,7 @@ def _init_iter_no_emit(run, *, attempts=0, max_attempts=5):
                   steps=steps)
     def seed(L):
         # iteration WITHOUT emit_template (validator allows it; see
-        # lib/recipes.py:380-393). No emit_templates declared either.
+        # lib/workflows.py:380-393). No emit_templates declared either.
         L["iteration"] = {"gate_step": "compare",
                           "bound": {"max_attempts": max_attempts}}
         L["iteration_attempts"] = attempts
@@ -1222,8 +1222,8 @@ if op == "df-iteration-raise-unwrapped":
                           "exc_msg": str(exc)}))
 
 elif op == "df-no-emit-raises":
-    # DF#6: iterate_template ALWAYS called; on a no-emit_template recipe
-    # this raises RecipeError. With the F2 fix, the iterate path uses the
+    # DF#6: iterate_template ALWAYS called; on a no-emit_template workflow
+    # this raises WorkflowError. With the F2 fix, the iterate path uses the
     # no-op producer instead and the pulse re-arms cleanly.
     _init_iter_no_emit("f2-df-noemit", attempts=0, max_attempts=5)
     try:
@@ -1269,12 +1269,12 @@ else
 fi
 
 # DF#6 — Revert the F2 emit_template-optional branch. With the iterate path
-# unconditionally calling iterate_template, a recipe that has iteration but
-# NO emit_template raises RecipeError inside atomic_iterate_step. DF#6 only
+# unconditionally calling iterate_template, a workflow that has iteration but
+# NO emit_template raises WorkflowError inside atomic_iterate_step. DF#6 only
 # reverts the optional-emit branch — the F2 try/except (DF#5's target) is
 # left intact — so the visible effect is a stop intent with
 # reason="iteration-check-failed". We assert EXACTLY that observable.
-it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op producer branch → an iterate path on a recipe missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
+it "F2 DELIBERATE-FAIL #6 (correctness-emit-template): WITHOUT the no-op producer branch → an iterate path on a workflow missing emit_template fails the iteration check (try/except converts to stop reason=iteration-check-failed)"
 res="$(f2_df_with_patched_pulse "$DF_DIR/df6_no_optional_emit.py" df-no-emit-raises)"
 action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('action',''))" "$res")"
 reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1]).get('reason',''))" "$res")"
@@ -1302,7 +1302,7 @@ fi
 # catch (rel-r2-2). Two GREEN-path tests + one DF cycle each. Both run against
 # the PRODUCTION pulse.py (not a patched copy) so the assertions verify the
 # fix is wired in the canonical source. The DF cycles are documented as
-# operator-run Edit-revert recipes — the existing DF#5 sibling already
+# operator-run Edit-revert workflows — the existing DF#5 sibling already
 # enforces the try/except's presence; G2's narrower contract is the
 # subclass branch + the exit_reason write.
 # ════════════════════════════════════════════════════════════════════════════
@@ -1393,7 +1393,7 @@ fi
 # bare LedgerError catch precedes the subclass tuple → this test sees the
 # raise propagate (no stop intent, no exit_reason on the ledger).
 it "G2 rel-r2-2: ledger.UnknownStep from advance_iteration_loop → stop reason=workflow-bug + exit_reason persisted"
-g2_recipe="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
+g2_workflow="$("$PY" - "$AUTO_ROOT" "$REPO" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import json, sys, os, importlib.util
 auto_root, repo, pulse_py, ledger_py = sys.argv[1:5]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
@@ -1448,17 +1448,17 @@ print(json.dumps({
 }))
 PYEOF
 )"
-raised="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raised'])" "$g2_recipe")"
-intent_action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_action'])" "$g2_recipe")"
-intent_reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_reason'])" "$g2_recipe")"
-exit_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['exit_reason_kind'])" "$g2_recipe")"
-err_type="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['error_type'])" "$g2_recipe")"
+raised="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['raised'])" "$g2_workflow")"
+intent_action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_action'])" "$g2_workflow")"
+intent_reason="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['intent_reason'])" "$g2_workflow")"
+exit_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['exit_reason_kind'])" "$g2_workflow")"
+err_type="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['error_type'])" "$g2_workflow")"
 if [ "$raised" = "False" ] && [ "$intent_action" = "stop" ] \
    && [ "$intent_reason" = "workflow-bug" ] && [ "$exit_kind" = "workflow-bug" ] \
    && [ "$err_type" = "UnknownStep" ]; then
   pass
 else
-  fail "G2 rel-r2-2 expected raised=False action=stop reason=workflow-bug exit_kind=workflow-bug err_type=UnknownStep; got $g2_recipe"
+  fail "G2 rel-r2-2 expected raised=False action=stop reason=workflow-bug exit_kind=workflow-bug err_type=UnknownStep; got $g2_workflow"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
