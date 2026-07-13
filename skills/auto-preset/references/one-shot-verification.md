@@ -26,7 +26,7 @@ which reuses the recipe validator) before anything is baked.
 Extend `auto-design`'s **"Seed, don't interview"** invariant to the step level.
 Do NOT open a blank questionnaire. Read the target the operator named (the diff,
 the branch, the file, the change to build) and the preset's own intent (its
-`description` and `adapter_op`), and PROPOSE a short list — usually 1–3 criteria —
+`description` and `backend_op`), and PROPOSE a short list — usually 1–3 criteria —
 that would actually prove this one step landed. Then let the operator accept or
 edit.
 
@@ -41,7 +41,7 @@ Worked seeds:
 - A `review` preset fired at a diff → propose `programmatic` `{argv: ["bash",
   "tests/run.sh"], check: exit_zero}` when the repo has a test command, plus a
   `model_judge` "the review's findings are grounded in the diff, not generic."
-- A `do_unit` preset fired at a scoped build → propose `programmatic` that the
+- A `do_step` preset fired at a scoped build → propose `programmatic` that the
   build's own test/typecheck passes, plus (only if the change is taste-sensitive)
   a `human` sign-off.
 

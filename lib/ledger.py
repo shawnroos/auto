@@ -198,7 +198,7 @@ _TOOL_SURFACE_PREAMBLE = {
         "doc": "lib/pulse.py emits ONE of these on stdout; the model issues the tool call.",
         "actions": {
             "rearm": '{"action":"rearm","delay":N,"prompt":"/auto:auto-pulse <run>",...}',
-            "stop": '{"action":"stop","reason":"predicate-met"|"seam-pause",...}',
+            "stop": '{"action":"stop","reason":"predicate-met"|"handoff-pause",...}',
             "noop": '{"action":"noop","reason":"lock-held-by-live-pulse"}',
         },
     },
@@ -342,7 +342,7 @@ def _h_init(argv):
     # file), and an existing run-id raises LedgerExists leaving the ledger
     # untouched — so the CLI never re-guesses the allowed set.
     run = argv[1]
-    units = _json_array(argv[2], "units") if len(argv) > 2 and argv[2] else None
+    units = _json_array(argv[2], "steps") if len(argv) > 2 and argv[2] else None
     backend = argv[3] if len(argv) > 3 and argv[3] else "ce"
     loop_phase = argv[4] if len(argv) > 4 and argv[4] else "plan"
     init_ledger(resolve_repo(), run, backend=backend, units=units, loop_phase=loop_phase)

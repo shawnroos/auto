@@ -2,7 +2,7 @@
 """auto U5 (v0.2.0): the ONE phase-grammar decision point.
 
 Every site that used to branch on the `loop_phase` string literal — the pulse's
-phase switch, the seam/phase-advance handler, `recompute_predicate`'s phase-aware
+phase switch, the handoff/phase-advance handler, `recompute_predicate`'s phase-aware
 branch, `_ready_fix_unit`'s phase-awareness, and auto-status's reporting — reads
 through THIS module instead of comparing `ledger["loop_phase"]` to a literal.
 
@@ -15,7 +15,7 @@ forbids the string literal "loop_phase" anywhere ELSE in lib/, so a new consumer
 physically cannot re-introduce a divergent literal comparison.
 
 RECIPE-BLIND DEFAULTS: a v0.1.x ledger has no `phase_order`/`terminal_phase`.
-Every accessor here falls back to the legacy grammar (`["plan","seam","work"]`,
+Every accessor here falls back to the legacy grammar (`["plan","handoff","work"]`,
 terminal `"work"`) so a recipe-blind ledger routes phases EXACTLY as v0.1.1 did.
 
 Loaded via `_bootstrap.load_lib_module("phase-grammar")` (the file name is
@@ -24,7 +24,7 @@ hyphenated per repo convention; the registered module name is `phase_grammar`).
 
 from __future__ import annotations
 
-_DEFAULT_PHASE_ORDER = ["plan", "seam", "work"]
+_DEFAULT_PHASE_ORDER = ["plan", "handoff", "work"]
 _DEFAULT_TERMINAL_PHASE = "work"
 
 # The canonical ledger key. Exported so status-output dicts that mirror the
@@ -95,7 +95,7 @@ def producer_name_for_arrival(ledger: dict, to_phase: str) -> str | None:
 
     Per recipe-format §4, producer firing is keyed on the ``to`` phase (not the
     ``from``): a transition ``{from: plan, to: work}`` fires the producer when
-    the run reaches work, even if it routes through seam. The seam-handler
+    the run reaches work, even if it routes through handoff. The handoff-handler
     looks up the producer for its DESTINATION phase via this helper.
 
     Returns None in two distinct shapes:
@@ -107,10 +107,10 @@ def producer_name_for_arrival(ledger: dict, to_phase: str) -> str | None:
         whether that's a misconfigured recipe (raise) or a legitimate
         pass-through (proceed without emission).
 
-    The caller distinguishes these via ``ledger.get("recipe") is None``.
+    The caller distinguishes these via ``ledger.get("workflow") is None``.
     """
     transitions = ledger.get("phase_transitions") or []
     for pt in transitions:
         if isinstance(pt, dict) and pt.get("to") == to_phase:
-            return pt.get("emitter")
+            return pt.get("producer")
     return None

@@ -3,7 +3,7 @@
 
 Consumer: the engine's OWN Stop hook (.claude/hooks/on-stop.sh). NOT native
 `/goal` (U9 spike: `/goal` is a closed model-judged loop with no external
-predicate seam — see docs/research/native-goal-mechanism-spike.md).
+predicate handoff — see docs/research/native-goal-mechanism-spike.md).
 
 FRESHNESS GUARANTEE (C2 / I-1):
     No cached copy exists; we read the I-1-fresh field directly off the ledger.
@@ -77,7 +77,7 @@ def status(repo_root: str, run_id: str) -> dict:
     predicate = led.get("exit_predicate_result") or {}
     # `done` IS the I-1-fresh predicate field — read directly, never re-derived.
     done = bool(predicate.get("met"))
-    all_terminal = bool(predicate.get("all_units_terminal"))
+    all_terminal = bool(predicate.get("all_steps_terminal"))
     active = phase != "done"
 
     if not active:

@@ -1,7 +1,8 @@
 # Backend Contract (LOCKED)
 
-> **Status: LOCKED v0.14.0 — vocabulary rename; supersedes `adapter-contract.md`
-> (day-zero / v0.2.0 re-lock).** This file is the source-of-truth
+> **Status: LOCKED v0.15.0 — format-v2 key cutover; supersedes v0.14.0
+> (vocabulary rename), which in turn supersedes `adapter-contract.md` (day-zero /
+> v0.2.0 re-lock).** This file is the source-of-truth
 > specification for the auto **backend interface**. U5 (the dispatch
 > driver) and U6b (the native + CE backend implementations) build against THIS
 > document. It is locked **before** either begins so they can build in parallel.
@@ -9,14 +10,18 @@
 > shapes, the severity-declaration rule, or the exit-predicate constants without
 > re-locking with all consumers.
 >
+> **Changelog — v0.15.0 (concept-vocabulary rename, U6 — content re-lock):** the
+> persisted JSON keys this contract names are now flipped ON DISK to format v2:
+> `backend`, `backend_scale`, `backend_op` (and the op VALUE `do_step`). v0.14.0
+> named the new vocabulary while the on-disk keys still carried the old spelling;
+> this version's key names match the bytes. NO op-set / signature / severity /
+> exit-predicate change. Old keys are still accepted on READ, indefinitely — see
+> the **Legacy keys (read-compat)** appendix (now complete).
+>
 > **Changelog — v0.14.0 (concept-vocabulary rename, U4):** renamed the contract
-> and its vocabulary `adapter`→`backend` (file `adapter-contract.md` →
-> `backend-contract.md`; formerly the "adapter interface", now the "backend interface").
-> NO op-set / signature / severity / exit-predicate change. The persisted JSON
-> keys (`adapter`, `adapter_scale`, `adapter_op`) are UNCHANGED on disk — their
-> rename lands with format v2 (U6); the key names in this file show the current
-> on-disk (v1) spelling. See the **Legacy keys (read-compat)** appendix, which is
-> completed in U6.
+> and its vocabulary (supersedes `adapter-contract.md` → `backend-contract.md`;
+> formerly the "adapter interface", now the "backend interface").
+> NO op-set / signature / severity / exit-predicate change.
 >
 > **Reading test:** a backend author should be able to implement a complete
 > backend by reading *only* this file plus its companion `SKILL.md` — never the
@@ -67,13 +72,13 @@ observable — every advance is one named op the ledger can record.
 | `deepen(plan)` | → `plan` (improved, or unchanged = no-op) | pulse (U4) | one round of plan deepening |
 | `review_plan(plan)` | → `gap_set` | pulse (U4) | one plan-review pass; returns the open gaps |
 | `next_plan_step(ledger)` | → `"plan"` \| `"deepen"` \| `"review_plan"` \| `"done"` | pulse (U4) | **the backend owns plan-step sequencing** — the engine never picks the next plan step |
-| `do_unit(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
+| `do_step(unit)` | → `dispatch_handle` | dispatcher (U10) | dispatch one work-loop unit for execution |
 | `review(unit)` | → `findings[]` (each tagged on the severity scale) | background agent (U10) | review one unit and translate its workflow's output onto `blocker`\|`major`\|`minor` |
-| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `units[]`) | pulse (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_units` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
+| `enumerate_plan_units(ledger)` | → PREPARE envelope (model fills `steps[]`) | pulse (U4), at `plan-done` | **v0.2.0 RE-LOCK** — the producer the recipe producers read. Turns a completed/reviewed plan into a concrete work-unit list. Prepare-only (like the plan-loop ops): the model executes the prepared invocation and returns `[{id, invokes, dispatch_context?}, ...]`; the engine persists it onto the plan unit's `dispatch_context.enumerated_steps` (U6), and the phase-transition producer (U5b) shapes it into ledger units. |
 
 > **v0.2.0 contract re-lock (KTD-4).** The op set grew from six to **seven** with
 > `enumerate_plan_units`. This was a deliberate re-lock, not a drift: v0.1.x had no
-> in-code work-unit producer (the seam paused for off-ledger manual creation), so
+> in-code work-unit producer (the handoff paused for off-ledger manual creation), so
 > the recipe producers had no source data (feasibility F4). Both `ce` and `native`
 > backends implement the new op. `next_plan_step`'s signature is UNCHANGED — N>1
 > parallel plan-loops advance serialized (one per pulse), so the backend still sees
@@ -89,9 +94,9 @@ ops**. The work-loop ops are invoked by different actors, deliberately:
   (U4) during the plan-loop. Each pulse asks `next_plan_step(ledger)` which step is
   next, then calls that one step. The pulse does NOT hardcode the plan→deepen→review
   order; the backend does (see §4).
-- **`do_unit`** — invoked by the **dispatcher** (U10), NOT the pulse. The pulse
-  never dispatches work. The dispatcher decides batch size and calls `do_unit`
-  for each unit in a wave; `do_unit` returns a dispatch handle the dispatcher
+- **`do_step`** — invoked by the **dispatcher** (U10), NOT the pulse. The pulse
+  never dispatches work. The dispatcher decides batch size and calls `do_step`
+  for each unit in a wave; `do_step` returns a dispatch handle the dispatcher
   uses to correlate the in-flight agent.
 - **`review`** — invoked by the **background work agent** on the unit it executed.
   The agent self-writes the resulting findings through the engine's
@@ -99,7 +104,7 @@ ops**. The work-loop ops are invoked by different actors, deliberately:
   backend's `review` op produces the findings; the engine records them. **The
   backend does not write findings to disk.**
 
-A consequence: a single dispatched unit's lifecycle touches `do_unit` (at
+A consequence: a single dispatched unit's lifecycle touches `do_step` (at
 dispatch) and `review` (at completion), but never the pulse. The pulse only ever
 reads the recorded verdict and applies fixes.
 
@@ -147,13 +152,13 @@ Each backend MUST **declare** two things up front (not decide them per-call):
    per-finding judgment. (The concrete tables for `native` and `ce` are U6b's
    deliverable; this contract specifies only that a declared mapping MUST exist.)
 
-2. **Its `adapter_scale`** — one of:
+2. **Its `backend_scale`** — one of:
    - `"three-tier"` — the backend reliably produces all three severities.
    - `"blocker-only"` — the backend reliably produces `blocker` but its
      major/minor boundary is unreliable; the predicate then uses blocker-only
      logic for this backend.
 
-   `adapter_scale` is recorded in the ledger so the engine's predicate evaluator
+   `backend_scale` is recorded in the ledger so the engine's predicate evaluator
    knows which severity logic applies. For the `native` backend it is set by
    U6b's **rubric probe** (does a native reviewer tag findings consistently across
    three tiers?). For `ce` it is `"three-tier"` (CE's P-levels map cleanly).
@@ -224,11 +229,11 @@ predicates are fixed constants:
 
 - **Work-loop exit:**
   ```
-  blockers == 0  AND  majors == 0  AND  all_units_terminal == true
+  blockers == 0  AND  majors == 0  AND  all_steps_terminal == true
   ```
   All three conjuncts are required. The first two come from counting the
   `findings[]` the backend's `review` ops returned. The third —
-  `all_units_terminal` — is an engine-computed guard that no unit is still
+  `all_steps_terminal` — is an engine-computed guard that no unit is still
   `pending`, `dispatched`, or `stalled`, and no `fixed` unit is carrying a stale
   blocker/major. (Full terminal definition: a unit is terminal iff it is
   `terminal-skip`, OR it is `verdict-returned`/`fixed` with **no** open
@@ -250,10 +255,10 @@ To implement a conforming backend, provide:
 2. `deepen(plan) -> plan` — one deepening round; return the plan unchanged if the workflow has no deepen step.
 3. `review_plan(plan) -> gap_set` — one review pass; return an array whose length is the open-gap count (empty ⇒ done).
 4. `next_plan_step(ledger) -> token` — the plan-loop sequencer; MUST return `"done"` once `gaps_open == 0`.
-5. `do_unit(unit) -> dispatch_handle` — dispatch one unit; return an opaque correlation token.
+5. `do_step(unit) -> dispatch_handle` — dispatch one unit; return an opaque correlation token.
 6. `review(unit) -> findings[]` — review one unit; translate the workflow's output onto `blocker`/`major`/`minor` and return `[{severity, note}, ...]`.
 7. **A declared severity mapping** from the workflow's native vocabulary onto the three-value scale.
-8. **A declared `adapter_scale`** (`"three-tier"` or `"blocker-only"`).
+8. **A declared `backend_scale`** (`"three-tier"` or `"blocker-only"`).
 
 Do NOT write the ledger from any op. Return data; the engine records it.
 
@@ -266,28 +271,34 @@ Do NOT write the ledger from any op. Return data; the engine records it.
   §6 (`SEVERITIES` and other module constants), §3 (state grammar / who-writes-what).
 - Plan: `docs/plans/2026-05-21-001-feat-auto-loop-engine-plan.md`
   — U6a (this contract), U6b (the two backend implementations), U5 (the driver),
-  U4 (the pulse that calls the plan-loop ops), U10 (the dispatcher that calls `do_unit`).
+  U4 (the pulse that calls the plan-loop ops), U10 (the dispatcher that calls `do_step`).
 
 ---
 
 ## Appendix — Legacy keys (read-compat)
 
-The `adapter`→`backend` rename (v0.14.0, U4 of the concept-vocabulary rename)
-renamed the CONTRACT and code vocabulary but deliberately did NOT change the
-persisted JSON keys. The on-disk run-record and workflow keys still spell the v1
-names; their rename lands with the format-v2 cutover (U6, KTD-6), which flips
-every persisted literal in one unit. The key names throughout this file show the
-current on-disk (v1) spelling.
+The format-v2 cutover (v0.15.0, U6 of the concept-vocabulary rename) flipped every
+persisted key and value in one unit. The key names throughout this file are the
+**current on-disk (v2)** spelling. Records and workflow files written by
+pre-rename code still carry the v1 names and are upgraded **in memory on every
+read** by `lib/format_compat.py`.
 
-| current on-disk (v1) key | v2 key (lands in U6) | where |
-|---|---|---|
-| `adapter` | `backend` | run-record top-level — the backend name (`ce` \| `native`) |
-| `adapter_scale` | `backend_scale` | run-record top-level (`three-tier` \| `blocker-only`) |
-| `adapter_op` | `backend_op` | `invokes.adapter_op` / `dispatch_context.adapter_op` |
+| legacy (v1) key | current (v2) key | where | <!--legacy--> |
+|---|---|---|---|
+| `adapter` | `backend` | run-record top-level — the backend name (`ce` \| `native`) | <!--legacy--> |
+| `adapter_scale` | `backend_scale` | run-record top-level (`three-tier` \| `blocker-only`) | <!--legacy--> |
+| `adapter_op` | `backend_op` | `invokes.backend_op` / `dispatch_context.backend_op` | <!--legacy--> |
+| `do_unit` (value) | `do_step` | the backend-op VALUE. `brainstorm` / `next_plan_step` / `review` are unchanged | <!--legacy--> |
 
-**Shim guarantee:** old keys are accepted on read indefinitely (the format-v2
-read-shim, U6, maps v1→v2 on every read); records are always WRITTEN in the
-current on-disk format. This appendix is *completed* in U6 when the key table
-above flips to v2 (and this contract takes a second, content version bump per
-KTD-6).
+**Shim guarantee:** old keys are accepted on READ **indefinitely** — the shim
+applies the v1→v2 map unconditionally at every read chokepoint, never gated on the
+`format` marker. Records are always WRITTEN in the current (v2) format, so a v1
+record lazily migrates on its first post-upgrade mutation. A `format: 2` record
+carrying stray v1 keys (what a still-installed OLD plugin produces in a mixed
+fleet) is therefore still repaired on read rather than skipped forever.
+
+**Mixed-fleet cutover (required):** before running against a repo whose
+`.claude/auto/` state dir is SHARED with an installed pre-rename plugin, update
+that plugin to ≥ this rename, or run on an isolated state dir.
+
 - Companion authoring guide: `skills/auto-backend/SKILL.md`.

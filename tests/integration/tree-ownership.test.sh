@@ -9,7 +9,7 @@
 # session id on the ledger, and the hooks test membership.
 #
 # Exercises the REAL hooks + REAL ledger, exactly as advisor-gate.test.sh does.
-# Nothing is mocked; the only injected seams are the sandbox repo and the
+# Nothing is mocked; the only injection points are the sandbox repo and the
 # PreToolUse event JSON on stdin.
 #
 # THE HAZARD THIS FILE EXISTS TO PIN DOWN (found while reading on-pretooluse-

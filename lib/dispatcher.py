@@ -124,7 +124,7 @@ class DispatcherError(Exception):
 
 
 def _units_by_id(ledger: dict) -> dict:
-    return {u["id"]: u for u in ledger.get("units", [])}
+    return {u["id"]: u for u in ledger.get("steps", [])}
 
 
 def _dependency_satisfied(dep_unit: dict, scale: str = "three-tier") -> bool:
@@ -148,7 +148,7 @@ def _dependency_satisfied(dep_unit: dict, scale: str = "three-tier") -> bool:
     Note ``fixed`` is treated as satisfied unconditionally here (per the
     explicit list in the U10 approach). The closure livelock is guarded at the
     predicate level (a ``fixed`` unit with a stale gating finding keeps
-    ``all_units_terminal == false``), so a downstream unit dispatched against a
+    ``all_steps_terminal == false``), so a downstream unit dispatched against a
     ``fixed`` predecessor is correct — the predecessor will be re-reviewed.
     """
     gating = _gating_severities(scale)
@@ -224,8 +224,8 @@ def ready_units(repo_root: str, run_id: str):
     """
     ledger = read_ledger(repo_root, run_id)
     by_id = _units_by_id(ledger)
-    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
-    return [u["id"] for u in ledger.get("units", []) if _is_ready(u, by_id, scale)]
+    scale = ledger.get("backend_scale", "three-tier")
+    return [u["id"] for u in ledger.get("steps", []) if _is_ready(u, by_id, scale)]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -256,7 +256,7 @@ def pick_next_plan_unit_to_advance(ledger: dict):
     per pulse so the backend's ``next_plan_step(ledger)`` sees a single logical
     advance-stream and the contract stays unchanged. This picks which one: the
     eligible plan unit with the OLDEST ``last_advanced_at`` (``null`` sorts oldest
-    → a never-advanced unit goes first), ties broken by ``units[]`` declaration
+    → a never-advanced unit goes first), ties broken by ``steps[]`` declaration
     order. State lives in the ledger (``last_advanced_at`` per unit), so resume
     continues the rotation correctly across pulses.
 
@@ -266,7 +266,7 @@ def pick_next_plan_unit_to_advance(ledger: dict):
     this — it uses the scalar fast path). A READER: no mutation.
     """
     candidates = [
-        u for u in ledger.get("units", [])
+        u for u in ledger.get("steps", [])
         if u.get("phase") == "plan" and u.get("state") == "dispatched"
     ]
     if not candidates:
@@ -283,7 +283,7 @@ def pick_next_plan_unit_to_advance(ledger: dict):
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
-# The closed set of backend ops a unit may declare via ``invokes.adapter_op``
+# The closed set of backend ops a unit may declare via ``invokes.backend_op``
 # (recipe-compiled units carry it on ``dispatch_context`` — ``recipes.unit_for``
 # merges ``invokes`` into ``dispatch_context``, and ``_normalize_unit`` drops the
 # raw ``invokes`` key but preserves ``dispatch_context`` verbatim). Every shipped
@@ -301,17 +301,17 @@ VALID_BACKEND_OPS = load_lib_module("backend_ops").VALID_BACKEND_OPS
 
 
 def _unit_backend_op(unit: dict):
-    """Resolve a unit's declared ``adapter_op``, or None if it declares none.
+    """Resolve a unit's declared ``backend_op``, or None if it declares none.
 
-    Reads ``dispatch_context.adapter_op`` FIRST (the durable home on a
+    Reads ``dispatch_context.backend_op`` FIRST (the durable home on a
     recipe-compiled ledger unit — ``_normalize_unit`` preserves dispatch_context
-    but drops the raw ``invokes`` bag), falling back to ``invokes.adapter_op``
+    but drops the raw ``invokes`` bag), falling back to ``invokes.backend_op``
     for any pre-normalize/raw unit shape. Returns None when neither is present;
     a None op is NOT rejected (units may legitimately carry no op).
     """
     dc = unit.get("dispatch_context") or {}
     inv = unit.get("invokes") or {}
-    return dc.get("adapter_op") or inv.get("adapter_op")  # format-v1 keys; flip in U6
+    return dc.get("backend_op") or inv.get("backend_op")
 
 
 def _default_launch_fn(unit_id: str, attempt: int = 0) -> None:
@@ -395,7 +395,7 @@ def dispatch_batch(repo_root, run_id, unit_ids, cap, *, launch_fn=None):
             continue
         op = _unit_backend_op(unit)
         if op is not None and op not in VALID_BACKEND_OPS:
-            # A declared-but-unknown adapter_op (typo in a recipe, or a hand-
+            # A declared-but-unknown backend_op (typo in a recipe, or a hand-
             # crafted unit) must NOT flow to launch — reject it per-unit,
             # mirroring the not-pending path. Checked BEFORE the cap so a bad op
             # surfaces eagerly rather than being deferred as "over-cap".
@@ -492,7 +492,7 @@ def converge(repo_root, run_id):
                          {"verdict-returned","fixed"}],
           "stalled":    [ids in "stalled"],
           "terminal":   [ids where unit_is_terminal(u) is True],
-          "all_units_terminal": bool (read from the cached predicate — NOT
+          "all_steps_terminal": bool (read from the cached predicate — NOT
                          re-derived; honors feedback_loop_monitor_terminal_state_field),
           "met": bool (the cached exit predicate; read, never recomputed here),
         }
@@ -507,13 +507,13 @@ def converge(repo_root, run_id):
     # #3 — a scale-blind _unit_is_terminal(unit) here would mark a blocker-only
     # run's major-only unit non-terminal, contradicting the met=True the predicate
     # reports and confusing the driver about done-ness).
-    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
+    scale = ledger.get("backend_scale", "three-tier")
 
     in_flight = []
     completed = []
     stalled = []
     terminal = []
-    for unit in ledger.get("units", []):
+    for unit in ledger.get("steps", []):
         state = unit.get("state")
         if state == "dispatched":
             in_flight.append(unit["id"])
@@ -530,7 +530,7 @@ def converge(repo_root, run_id):
         "completed": completed,
         "stalled": stalled,
         "terminal": terminal,
-        "all_units_terminal": bool(pred.get("all_units_terminal", False)),
+        "all_steps_terminal": bool(pred.get("all_steps_terminal", False)),
         "met": bool(pred.get("met", False)),
     }
 

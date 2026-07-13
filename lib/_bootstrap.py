@@ -380,13 +380,28 @@ def load_ledger_safe(path: str):
     The dict guard is folded in here: returning None on a non-dict value means a
     list/scalar ledger skips instead of raising AttributeError at the caller's
     ``led.get(...)`` — strictly safer than the bare ``json.load`` it replaced.
+
+    READ CHOKEPOINT 2 of 2 (U6 / KTD-1). This is the path every HOOK and SCAN
+    consumer takes — on-stop (including its batch-sidecar sub-run reads),
+    on-session-start, on-pretooluse-action / -askuser, auto-detect, auto-resume's
+    run scan, auto-status's list-all, launch-mode, and ``iter_worktree_ledgers``
+    which wraps it. It does NOT go through ``ledger_core._read_json``, so wiring
+    only that first chokepoint would leave exactly the in-flight population the
+    shim exists to protect reading v1 keys as absent — e.g. the Stop hook's
+    handoff-paused carve-out comparing a new ``"handoff"`` against the RETIRED v1
+    phase value still on disk, and concluding the run is not paused.
+
+    The upgrade is inside the try/except: a shim raise on a pathological record
+    degrades to None (skip) rather than taking a fail-closed hook down.
     """
     try:
         with open(path, "r") as fh:
             led = json.load(fh)
+        if not isinstance(led, dict):
+            return None
+        return load_lib_module("format_compat").upgrade_run_record(led)
     except Exception:
         return None
-    return led if isinstance(led, dict) else None
 
 
 def iter_worktree_ledgers(repo_root: str):

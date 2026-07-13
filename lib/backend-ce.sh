@@ -2,7 +2,7 @@
 # auto U6b: the Compound Engineering (CE) backend.
 #
 # Implements the LOCKED backend contract (docs/contracts/backend-contract.md):
-# the six ops `plan / deepen / review_plan / next_plan_step / do_unit / review`,
+# the six ops `plan / deepen / review_plan / next_plan_step / do_step / review`,
 # mapping the CE `/ce-*` workflow onto the engine's fixed interface.
 #
 # A backend is a PURE PROVIDER OF OPERATIONS. It NEVER writes the ledger
@@ -12,10 +12,10 @@
 # logic here, never in a command `.md` (memory feedback_slash_command_arg_substitution).
 #
 # ── THE LIVE-INVOCATION BOUNDARY (read before wiring this into the engine) ──
-# `plan`, `deepen`, `review_plan`, `do_unit`, and `review` each correspond to a
+# `plan`, `deepen`, `review_plan`, `do_step`, and `review` each correspond to a
 # live Claude command (/ce-plan, /ce-doc-review, /ce-work, /ce-code-review). A
 # CLI cannot *run* a slash command — that is a model action. So each of those
-# ops here is a two-part shape, and the contract is honored at the seam, not faked:
+# ops here is a two-part shape, and the contract is honored at the handoff, not faked:
 #   1. PREPARE  — emit the invocation envelope the engine/model should run
 #                 (`ce_prepare_*`). The model issues the actual /ce-* command.
 #   2. PARSE    — translate the command's structured output back onto the

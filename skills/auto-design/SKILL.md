@@ -29,7 +29,7 @@ Read these before coaching — they are the quality bar, not background:
 ## What stays true throughout
 
 - **The deterministic exit predicate is the single source of truth for "done."**
-  Auto's Stop hook (`blockers == 0 AND majors == 0 AND all_units_terminal` —
+  Auto's Stop hook (`blockers == 0 AND majors == 0 AND all_steps_terminal` —
   "only P3 findings remain") decides when the *run* is over. Typed verification
   criteria are *gate* conditions layered on top; they steer a gate's
   iterate/advance/exit decision but never become a second exit judge. This is
@@ -99,7 +99,7 @@ and for how criteria combine):
   `rubric_ref`. For the high-leverage semantic calls where a second independent
   read earns its cost.
 - **`human`** — a checkpoint only a person can clear (routes through the pause
-  seam). Optional `prompt`. For taste, business judgment, legal risk.
+  handoff). Optional `prompt`. For taste, business judgment, legal risk.
 
 Each criterion is `{id, type, …type-fields}`; `type` is one of exactly those
 four; the array is capped at ≤ 16. Keep one claim per criterion. Per the
@@ -149,10 +149,10 @@ Two writes, each through an existing skill (no consolidation — both backends
 stay separate; this skill orchestrates them). R3.
 
 - **Recipe → `auto-author-recipe`.** Hand it the confirmed draft, with the
-  `verification` array on the unit named by `iteration.gate_unit`. That skill
+  `verification` array on the unit named by `iteration.gate_step`. That skill
   owns the write gate: `lib/recipes.py::validate_and_lint` before write, atomic
   mkstemp+rename, and read-back verification. The typed `verification` block
-  rides on the *existing* `iteration.gate_unit` mechanism — no new producer, no
+  rides on the *existing* `iteration.gate_step` mechanism — no new producer, no
   new topology grammar, and the same `validate()` enforces the criterion shape
   at both write time and engine load time. Surface any hard validation error and
   fix it with the user; do not work around the gate.

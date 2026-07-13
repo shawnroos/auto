@@ -4,7 +4,7 @@
   "title": "auto recipe",
   "description": "Documentation schema for an auto recipe (the named, file-backed JSON declaration of a workflow topology). The hand-rolled validator lib/recipes.py::validate() is the ENFORCER — it is pure-stdlib (no jsonschema dependency, install-anywhere) and applies cross-field integrity rules this schema only sketches (depends_on integrity, the iteration<->emit_templates pairing rule, phase membership). See docs/contracts/recipe-format.md for the LOCKED prose contract. If this schema and validate() ever disagree, validate() wins.",
   "type": "object",
-  "required": ["name", "version", "units"],
+  "required": ["name", "version", "steps"],
   "additionalProperties": false,
   "properties": {
     "name": {
@@ -20,14 +20,14 @@
       "type": "string",
       "description": "One-line summary; shown in the picker + rendered card."
     },
-    "default_adapter": {
+    "default_backend": {
       "enum": ["ce", "native"],
-      "description": "Adapter used when --adapter is not passed."
+      "description": "Backend used when --backend is not passed."
     },
     "phase_order": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "The run's phase sequence. Validated STRUCTURALLY (v0.6.0/U6): every element a non-empty string; terminal_phase, every unit/emit_template phase, and every phase_transition from/to MUST be a member. Default [\"plan\",\"seam\",\"work\"]."
+      "description": "The run's phase sequence. Validated STRUCTURALLY (v0.6.0/U6): every element a non-empty string; terminal_phase, every unit/emit_template phase, and every phase_transition from/to MUST be a member. Default [\"plan\",\"handoff\",\"work\"]."
     },
     "terminal_phase": {
       "type": "string",
@@ -37,24 +37,24 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["from", "to", "emitter"],
+        "required": ["from", "to", "producer"],
         "additionalProperties": false,
         "properties": {
           "from": { "type": "string" },
           "to": { "type": "string" },
-          "emitter": {
+          "producer": {
             "enum": [
-              "plan_output_to_work_units",
-              "judge_winner_to_work_units",
+              "plan_output_to_work_steps",
+              "judge_winner_to_work_steps",
               "plan_output_to_paired_builders",
-              "brainstorm_output_to_plan_unit"
+              "brainstorm_output_to_plan_step"
             ],
             "description": "MUST be a V1-registered phase-boundary producer name (validate() rejects any other). iterate_template is within-phase and never named here."
           }
         }
       }
     },
-    "units": {
+    "steps": {
       "type": "array",
       "description": "The declared units. MUST be non-empty for a work-only ([\"work\"]) recipe.",
       "items": { "$ref": "#/$defs/unit" }
@@ -62,10 +62,10 @@
     "iteration": {
       "type": "object",
       "description": "(v0.3.0, additive) Outcomes-gated iteration block — see recipe-format.md §6.",
-      "required": ["gate_unit", "bound"],
+      "required": ["gate_step", "bound"],
       "additionalProperties": false,
       "properties": {
-        "gate_unit": { "type": "string" },
+        "gate_step": { "type": "string" },
         "emit_template": { "type": "string" },
         "bound": {
           "type": "object",
@@ -116,11 +116,11 @@
         "depends_on": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Unit ids this unit waits for. Each member must be in units[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
+          "description": "Unit ids this unit waits for. Each member must be in steps[], iterate-shape ({id_prefix}{positive_int}), or in expected_emit_outputs — see recipe-format.md §3/§8."
         },
         "invokes": {
           "type": "object",
-          "description": "What the unit invokes — adapter_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
+          "description": "What the unit invokes — backend_op plus optional recipe-side metadata. prompt_template (if present) MUST be a relative path with no '..' segments and no leading '/'."
         },
         "verification": {
           "type": "array",
@@ -175,7 +175,7 @@
         },
         {
           "title": "human",
-          "description": "A checkpoint only a human can clear — routes through auto's pause seam.",
+          "description": "A checkpoint only a human can clear — routes through auto's pause handoff.",
           "type": "object",
           "required": ["id", "type"],
           "additionalProperties": false,

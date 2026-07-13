@@ -10,10 +10,10 @@
 #
 # Scenarios:
 #   1. registry ↔ validator consistency: producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES
-#   2. plan_output_to_work_units: 1 plan unit's enumerated_units → N work units
-#   3. plan_output_to_work_units: empty enumerated_units → [] (vacuous, no crash)
-#   4. judge_winner_to_work_units: emits the WINNER's enumerated_units
-#   5. judge_winner_to_work_units: no winner in findings → raises (hard error)
+#   2. plan_output_to_work_steps: 1 plan unit's enumerated_units → N work units
+#   3. plan_output_to_work_steps: empty enumerated_units → [] (vacuous, no crash)
+#   4. judge_winner_to_work_steps: emits the WINNER's enumerated_units
+#   5. judge_winner_to_work_steps: no winner in findings → raises (hard error)
 #   6. plan_output_to_paired_builders: 2 biased builders + comparator depends_on both
 #   7. transition_and_emit: emits + advances + recomputes atomically within ONE
 #      _with_locked_ledger body; a reader BETWEEN the emit and the advance sees
@@ -26,7 +26,7 @@
 #   9. iterate_template happy: 3 plan-* units, counter=3, emit_count=1 → plan-4
 #  10. iterate_template happy: emit_count=2 → plan-4, plan-5
 #  11. iterate_template counter-resume: counter=7, units plan-1..plan-4, emit_count=1 → plan-8
-#  12. judge_winner generalized: iteration.gate_unit="custom_judge", no "judge" unit → still emits
+#  12. judge_winner generalized: iteration.gate_step="custom_judge", no "judge" unit → still emits
 #  13. judge_winner backward-compat: no iteration field, unit "judge" exists → still emits
 #  14. iterate_template no-iteration: ledger lacks iteration field → raises
 #  15. iterate_template missing counter: legacy ledger w/o iteration_emit_count → defaults to 0
@@ -73,18 +73,18 @@ def _ledger_for_iter(units, *, gate_unit="judge", template_name="plan-candidate"
                     id_prefix="plan-", phase="plan", counter=0,
                     invokes=None, missing_iteration=False, missing_template=False):
     led = {
-        "units": units,
+        "steps": units,
         "iteration_emit_count": counter,
     }
     if not missing_iteration:
         led["iteration"] = {
-            "gate_unit": gate_unit, "emit_template": template_name,
+            "gate_step": gate_unit, "emit_template": template_name,
         }
     if not missing_template:
         led["emit_templates"] = {
             template_name: {
                 "phase": phase,
-                "invokes": invokes if invokes is not None else {"adapter_op": "next_plan_step"},
+                "invokes": invokes if invokes is not None else {"backend_op": "next_plan_step"},
                 "id_prefix": id_prefix,
             }
         }
@@ -95,57 +95,57 @@ if op == "registry-consistency":
     print("match" if set(producers.REGISTRY) == set(recipes.V1_PRODUCER_NAMES) else "MISMATCH")
 
 elif op == "a1-emit":
-    led = {"units": [{"id": "plan", "phase": "plan",
-            "dispatch_context": {"enumerated_units": [
+    led = {"steps": [{"id": "plan", "phase": "plan",
+            "dispatch_context": {"enumerated_steps": [
                 {"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]}}]}
-    out = producers.plan_output_to_work_units(led, "work")
+    out = producers.plan_output_to_work_steps(led, "work")
     print(",".join(u["id"] + ":" + u["phase"] for u in out))
 
 elif op == "a1-empty":
-    led = {"units": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
-    print(len(producers.plan_output_to_work_units(led, "work")))
+    led = {"steps": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
+    print(len(producers.plan_output_to_work_steps(led, "work")))
 
-# ─── v0.6.0 U8: brainstorm_output_to_plan_unit ──────────────────────────────
+# ─── v0.6.0 U8: brainstorm_output_to_plan_step ──────────────────────────────
 elif op == "brainstorm-emit":
     # The brainstorm unit carries its requirements-doc output on
     # dispatch_context.requirements_doc; the producer materializes ONE plan unit
     # (5-key dict) carrying that path, invoking next_plan_step (a1's plan shape).
-    led = {"units": [
+    led = {"steps": [
         {"id": "brainstorm", "phase": "brainstorm",
          "dispatch_context": {"requirements_doc": "docs/brainstorms/x-requirements.md"}}]}
-    out = producers.brainstorm_output_to_plan_unit(led, "plan")
+    out = producers.brainstorm_output_to_plan_step(led, "plan")
     u = out[0]
     print("%d|%s|%s|%s|%s|%s" % (
         len(out), u["id"], u["phase"],
-        u["invokes"].get("adapter_op"),
+        u["invokes"].get("backend_op"),
         u["dispatch_context"].get("requirements_doc"),
         ",".join(sorted(u.keys()))))
 
 elif op == "brainstorm-pure":
     # The producer is PURE — it must not mutate the input ledger dict. Snapshot
     # the units list identity + content before/after; both must be unchanged.
-    led = {"units": [
+    led = {"steps": [
         {"id": "brainstorm", "phase": "brainstorm",
          "dispatch_context": {"requirements_doc": "docs/x.md"}}]}
     before = json.dumps(led, sort_keys=True)
-    producers.brainstorm_output_to_plan_unit(led, "plan")
+    producers.brainstorm_output_to_plan_step(led, "plan")
     after = json.dumps(led, sort_keys=True)
     print("unchanged" if before == after else "MUTATED")
 
 elif op == "brainstorm-no-unit":
     # No brainstorm unit at all → RecipeError (not a silent empty emit).
-    led = {"units": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
+    led = {"steps": [{"id": "plan", "phase": "plan", "dispatch_context": {}}]}
     try:
-        producers.brainstorm_output_to_plan_unit(led, "plan"); print("NO-RAISE")
+        producers.brainstorm_output_to_plan_step(led, "plan"); print("NO-RAISE")
     except recipes.RecipeError:
         print("raised")
 
 elif op == "brainstorm-no-output":
     # brainstorm unit exists but carries no requirements_doc → RecipeError
     # (mirrors A2/A4 producer failure; silent empty emit would leave plan vacuous).
-    led = {"units": [{"id": "brainstorm", "phase": "brainstorm", "dispatch_context": {}}]}
+    led = {"steps": [{"id": "brainstorm", "phase": "brainstorm", "dispatch_context": {}}]}
     try:
-        producers.brainstorm_output_to_plan_unit(led, "plan"); print("NO-RAISE")
+        producers.brainstorm_output_to_plan_step(led, "plan"); print("NO-RAISE")
     except recipes.RecipeError:
         print("raised")
 
@@ -155,17 +155,17 @@ elif op == "judge-winner":
     # {severity, note}, so the prior findings-based contract was unreachable
     # from any production write path. dispatch_context is preserved by
     # transition() and the verdict-write path with no normalize.
-    led = {"units": [
-        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": [{"id": "wA", "invokes": {}}]}},
-        {"id": "plan-2", "phase": "plan", "dispatch_context": {"enumerated_units": [{"id": "wB", "invokes": {}}]}},
-        {"id": "judge", "phase": "work", "dispatch_context": {"winner_unit_id": "plan-2"}},
+    led = {"steps": [
+        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_steps": [{"id": "wA", "invokes": {}}]}},
+        {"id": "plan-2", "phase": "plan", "dispatch_context": {"enumerated_steps": [{"id": "wB", "invokes": {}}]}},
+        {"id": "judge", "phase": "work", "dispatch_context": {"winner_step_id": "plan-2"}},
     ]}
-    out = producers.judge_winner_to_work_units(led, "work")
+    out = producers.judge_winner_to_work_steps(led, "work")
     print(",".join(u["id"] for u in out))
 
 elif op == "judge-no-winner":
-    led = {"units": [
-        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": []}},
+    led = {"steps": [
+        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_steps": []}},
         # No winner_unit_id on dispatch_context, AND any leftover findings
         # are ignored by the new contract (the producer only reads dispatch_context).
         {"id": "judge", "phase": "work", "dispatch_context": {}, "findings": [{"note": "undecided"}]},
@@ -174,16 +174,16 @@ elif op == "judge-no-winner":
     # malformed judge verdict — keeps the engine's "recipe-contract violation"
     # surface uniform whether validate() or a producer raises.
     try:
-        producers.judge_winner_to_work_units(led, "work"); print("NO-RAISE")
+        producers.judge_winner_to_work_steps(led, "work"); print("NO-RAISE")
     except recipes.RecipeError:
         print("raised")
 
 elif op == "a4-pair":
-    # v0.3.0 U6: compare is now structurally declared in a4's units[]; the
+    # v0.3.0 U6: compare is now structurally declared in a4's steps[]; the
     # producer only produces the two bias-differentiated builders. The test
     # asserts the producer's NEW return shape (builders only, no compare).
-    led = {"units": [{"id": "plan", "phase": "plan",
-            "dispatch_context": {"enumerated_units": [{"id": "task", "invokes": {}}]}}]}
+    led = {"steps": [{"id": "plan", "phase": "plan",
+            "dispatch_context": {"enumerated_steps": [{"id": "task", "invokes": {}}]}}]}
     out = producers.plan_output_to_paired_builders(led, "work")
     ids = [u["id"] for u in out]
     biases = sorted((u["dispatch_context"].get("bias") for u in out if u["id"].startswith("build-")))
@@ -197,17 +197,17 @@ elif op == "atomic-emit":
     repo = tempfile.mkdtemp(); run = "ae"
     ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a1", "source_tier": "built-in"},
-        phase_order=["plan", "seam", "work"], terminal_phase="work",
-        loop_phase="seam",
+        phase_order=["plan", "handoff", "work"], terminal_phase="work",
+        loop_phase="handoff",
         units=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
-                "dispatch_context": {"enumerated_units": [
+                "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}}, {"id": "w2", "invokes": {}}]}}])
     appended = ledger.transition_and_emit(repo, run, "work",
-        producers.plan_output_to_work_units)
+        producers.plan_output_to_work_steps)
     led = ledger.read_ledger(repo, run)
-    work_units = [u["id"] for u in led["units"] if u["phase"] == "work"]
+    work_units = [u["id"] for u in led["steps"] if u["phase"] == "work"]
     # phase advanced to work; 2 work units appended; predicate saw them (not met —
-    # they're pending, so all_units_terminal is False).
+    # they're pending, so all_steps_terminal is False).
     print("%s|%s|%s|%s" % (
         led["loop_phase"], ",".join(sorted(appended)),
         ",".join(sorted(work_units)), led["exit_predicate_result"]["met"]))
@@ -265,41 +265,41 @@ elif op == "iter-tpl-counter-resume":
     print(",".join(u["id"] for u in out))
 
 elif op == "judge-generalized":
-    # iteration.gate_unit = "custom_judge", NO unit named "judge" exists.
-    # judge_winner_to_work_units must find the gate via iteration.gate_unit.
+    # iteration.gate_step = "custom_judge", NO unit named "judge" exists.
+    # judge_winner_to_work_steps must find the gate via iteration.gate_step.
     led = {
-        "iteration": {"gate_unit": "custom_judge"},
-        "units": [
+        "iteration": {"gate_step": "custom_judge"},
+        "steps": [
             {"id": "plan-1", "phase": "plan",
-             "dispatch_context": {"enumerated_units": [{"id": "wA", "invokes": {}}]}},
+             "dispatch_context": {"enumerated_steps": [{"id": "wA", "invokes": {}}]}},
             {"id": "plan-2", "phase": "plan",
-             "dispatch_context": {"enumerated_units": [{"id": "wB", "invokes": {}}]}},
+             "dispatch_context": {"enumerated_steps": [{"id": "wB", "invokes": {}}]}},
             {"id": "custom_judge", "phase": "work",
-             "dispatch_context": {"winner_unit_id": "plan-2"}},
+             "dispatch_context": {"winner_step_id": "plan-2"}},
         ],
     }
-    out = producers.judge_winner_to_work_units(led, "work")
+    out = producers.judge_winner_to_work_steps(led, "work")
     print(",".join(u["id"] for u in out))
 
 elif op == "judge-backcompat":
     # No iteration field (v0.2.0 a2.json shape). Default fallback to literal
     # "judge" must still work — preserves v0.2.0 a2 behavior unchanged.
     led = {
-        "units": [
+        "steps": [
             {"id": "plan-1", "phase": "plan",
-             "dispatch_context": {"enumerated_units": [{"id": "wA", "invokes": {}}]}},
+             "dispatch_context": {"enumerated_steps": [{"id": "wA", "invokes": {}}]}},
             {"id": "plan-2", "phase": "plan",
-             "dispatch_context": {"enumerated_units": [{"id": "wB", "invokes": {}}]}},
+             "dispatch_context": {"enumerated_steps": [{"id": "wB", "invokes": {}}]}},
             {"id": "judge", "phase": "work",
-             "dispatch_context": {"winner_unit_id": "plan-1"}},
+             "dispatch_context": {"winner_step_id": "plan-1"}},
         ],
     }
-    out = producers.judge_winner_to_work_units(led, "work")
+    out = producers.judge_winner_to_work_steps(led, "work")
     print(",".join(u["id"] for u in out))
 
 elif op == "iter-tpl-no-iteration":
     # Ledger has no iteration field → iterate_template raises RecipeError.
-    led = {"units": [], "iteration_emit_count": 0}
+    led = {"steps": [], "iteration_emit_count": 0}
     try:
         producers.iterate_template(led, "plan"); print("NO-RAISE")
     except recipes.RecipeError:
@@ -309,16 +309,16 @@ elif op == "iter-tpl-missing-counter":
     # v0.2.x-shaped ledger missing iteration_emit_count field. .get default
     # returns 0; first emit id is plan-1.
     led = {
-        "iteration": {"gate_unit": "judge", "emit_template": "plan-candidate"},
+        "iteration": {"gate_step": "judge", "emit_template": "plan-candidate"},
         "emit_templates": {
             "plan-candidate": {
                 "phase": "plan",
-                "invokes": {"adapter_op": "next_plan_step"},
+                "invokes": {"backend_op": "next_plan_step"},
                 "id_prefix": "plan-",
             }
         },
         # NO iteration_emit_count field.
-        "units": [
+        "steps": [
             {"id": "judge", "phase": "work",
              "dispatch_context": {"decision_payload": {"emit_count": 1}}},
         ],
@@ -347,16 +347,16 @@ elif op == "iter-tpl-emit-count-validation":
 elif op == "iter-tpl-bad-template-ref":
     # iteration.emit_template names a key that emit_templates doesn't contain.
     led = {
-        "iteration": {"gate_unit": "judge", "emit_template": "nonexistent"},
+        "iteration": {"gate_step": "judge", "emit_template": "nonexistent"},
         "emit_templates": {
             "plan-candidate": {
                 "phase": "plan",
-                "invokes": {"adapter_op": "next_plan_step"},
+                "invokes": {"backend_op": "next_plan_step"},
                 "id_prefix": "plan-",
             }
         },
         "iteration_emit_count": 0,
-        "units": [
+        "steps": [
             {"id": "judge", "phase": "work",
              "dispatch_context": {"decision_payload": {"emit_count": 1}}},
         ],
@@ -374,7 +374,7 @@ elif op == "iter-tpl-integration":
     repo = tempfile.mkdtemp(); run = "iter-integration"
     ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a2", "source_tier": "built-in"},
-        phase_order=["plan", "seam", "work"], terminal_phase="work",
+        phase_order=["plan", "handoff", "work"], terminal_phase="work",
         loop_phase="plan",
         units=[
             {"id": "plan-1", "phase": "plan", "state": "fixed"},
@@ -389,11 +389,11 @@ elif op == "iter-tpl-integration":
     path = ledger.ledger_path(repo, run)
     with open(path) as f:
         led = json.load(f)
-    led["iteration"] = {"gate_unit": "judge", "emit_template": "plan-candidate"}
+    led["iteration"] = {"gate_step": "judge", "emit_template": "plan-candidate"}
     led["emit_templates"] = {
         "plan-candidate": {
             "phase": "plan",
-            "invokes": {"adapter_op": "next_plan_step"},
+            "invokes": {"backend_op": "next_plan_step"},
             "id_prefix": "plan-",
         }
     }
@@ -402,7 +402,7 @@ elif op == "iter-tpl-integration":
         json.dump(led, f)
     appended = ledger.emit_within_phase(repo, run, "plan", producers.iterate_template)
     led = ledger.read_ledger(repo, run)
-    new_ids = [u["id"] for u in led["units"] if u["id"].startswith("plan-")
+    new_ids = [u["id"] for u in led["steps"] if u["id"].startswith("plan-")
                and u["id"] not in {"plan-1", "plan-2", "plan-3"}]
     print("%s|%s|%s" % (
         ",".join(sorted(appended)),
@@ -421,31 +421,31 @@ elif op == "a1-passthrough":
     repo = tempfile.mkdtemp(); run = "pt"
     ledger.init_ledger(repo, run, backend="ce",
         recipe={"name": "a1", "source_tier": "built-in"},
-        phase_order=["plan", "seam", "work"], terminal_phase="work",
-        loop_phase="seam",
+        phase_order=["plan", "handoff", "work"], terminal_phase="work",
+        loop_phase="handoff",
         units=[{"id": "plan", "phase": "plan", "state": "verdict-returned",
-                "dispatch_context": {"enumerated_units": [
+                "dispatch_context": {"enumerated_steps": [
                     {"id": "w1", "invokes": {}},
                     {"id": "w2", "invokes": {}, "depends_on": ["w1"]}]}}])
-    ledger.transition_and_emit(repo, run, "work", producers.plan_output_to_work_units)
+    ledger.transition_and_emit(repo, run, "work", producers.plan_output_to_work_steps)
     led = ledger.read_ledger(repo, run)
-    w1 = next(u for u in led["units"] if u["id"] == "w1")
-    w2 = next(u for u in led["units"] if u["id"] == "w2")
+    w1 = next(u for u in led["steps"] if u["id"] == "w1")
+    w2 = next(u for u in led["steps"] if u["id"] == "w2")
     print("%s|%s" % (",".join(w2["depends_on"]), ",".join(w1["depends_on"])))
 
 elif op == "judge-passthrough":
-    # U14 passthrough, Site 3 (judge_winner_to_work_units). The WINNER's
+    # U14 passthrough, Site 3 (judge_winner_to_work_steps). The WINNER's
     # enumerated items carry per-item depends_on; the producer must propagate
     # them. Direct producer-return inspection (Site 3 is symmetric to Site 1;
     # the normalize-preservation half is proven by a1-passthrough). After the
     # fix: "wA:;wB:wA". On current code both are edgeless -> "wA:;wB:".
-    led = {"units": [
-        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_units": [
+    led = {"steps": [
+        {"id": "plan-1", "phase": "plan", "dispatch_context": {"enumerated_steps": [
             {"id": "wA", "invokes": {}},
             {"id": "wB", "invokes": {}, "depends_on": ["wA"]}]}},
-        {"id": "judge", "phase": "work", "dispatch_context": {"winner_unit_id": "plan-1"}},
+        {"id": "judge", "phase": "work", "dispatch_context": {"winner_step_id": "plan-1"}},
     ]}
-    out = producers.judge_winner_to_work_units(led, "work")
+    out = producers.judge_winner_to_work_steps(led, "work")
     print(";".join(u["id"] + ":" + ",".join(u["depends_on"]) for u in out))
 
 elif op == "a4-depends-stay-empty":
@@ -453,8 +453,8 @@ elif op == "a4-depends-stay-empty":
     # (it builds the SAME plan twice, bias-differentiated). Even when a plan item
     # carries a depends_on, the two builders must materialize with []. Regression
     # guard that the passthrough change does NOT leak into Sites 2 & 4.
-    led = {"units": [{"id": "plan", "phase": "plan",
-            "dispatch_context": {"enumerated_units": [
+    led = {"steps": [{"id": "plan", "phase": "plan",
+            "dispatch_context": {"enumerated_steps": [
                 {"id": "task", "invokes": {}, "depends_on": ["x"]}]}}]}
     out = producers.plan_output_to_paired_builders(led, "work")
     print(";".join(u["id"] + ":" + ",".join(u["depends_on"]) for u in out))
@@ -481,23 +481,23 @@ PYEOF
 it "producers.REGISTRY keys == recipes.V1_PRODUCER_NAMES (no drift)"
 assert_eq "match" "$(em registry-consistency)"
 
-# ─── Scenario 2-3: plan_output_to_work_units ────────────────────────────────
-it "plan_output_to_work_units: enumerated → work units (phase set)"
+# ─── Scenario 2-3: plan_output_to_work_steps ────────────────────────────────
+it "plan_output_to_work_steps: enumerated → work units (phase set)"
 assert_eq "w1:work,w2:work" "$(em a1-emit)"
 
-it "plan_output_to_work_units: empty enumerated → [] (vacuous, no crash)"
+it "plan_output_to_work_steps: empty enumerated → [] (vacuous, no crash)"
 assert_eq "0" "$(em a1-empty)"
 
-# ─── v0.6.0 U8: brainstorm_output_to_plan_unit ──────────────────────────────
+# ─── v0.6.0 U8: brainstorm_output_to_plan_step ──────────────────────────────
 # The spine producer that fires on arrival at `plan` from `brainstorm`: it reads
 # the brainstorm unit's requirements-doc output and emits ONE structural plan
 # unit (5-key dict), invoking next_plan_step so the downstream plan→work
 # machinery is identical to a1's plan-entry path. Registry symmetry (Scenario 1)
 # already asserts this producer is in BOTH REGISTRY and V1_PRODUCER_NAMES.
-it "U8: brainstorm_output_to_plan_unit → one plan unit (5-key, requirements-doc carried)"
+it "U8: brainstorm_output_to_plan_step → one plan unit (5-key, requirements-doc carried)"
 assert_eq "1|plan|plan|next_plan_step|docs/brainstorms/x-requirements.md|depends_on,dispatch_context,id,invokes,phase" "$(em brainstorm-emit)"
 
-it "U8: brainstorm_output_to_plan_unit is pure (no ledger mutation)"
+it "U8: brainstorm_output_to_plan_step is pure (no ledger mutation)"
 assert_eq "unchanged" "$(em brainstorm-pure)"
 
 it "U8: no brainstorm unit → RecipeError (not a silent empty emit)"
@@ -506,16 +506,16 @@ assert_eq "raised" "$(em brainstorm-no-unit)"
 it "U8: brainstorm unit with missing requirements_doc → RecipeError"
 assert_eq "raised" "$(em brainstorm-no-output)"
 
-# ─── Scenario 4-5: judge_winner_to_work_units ───────────────────────────────
-it "judge_winner_to_work_units: emits the WINNER's units"
+# ─── Scenario 4-5: judge_winner_to_work_steps ───────────────────────────────
+it "judge_winner_to_work_steps: emits the WINNER's units"
 assert_eq "wB" "$(em judge-winner)"
 
-it "judge_winner_to_work_units: no winner → raises (hard error)"
+it "judge_winner_to_work_steps: no winner → raises (hard error)"
 assert_eq "raised" "$(em judge-no-winner)"
 
 # ─── Scenario 6: plan_output_to_paired_builders (v0.3.0 U6 — compare structural) ──
 # Before v0.3.0 U6, this producer synthesized 3 units (build-clarity, build-perf,
-# compare). U6 moved compare into a4.json's `units[]` (declared with
+# compare). U6 moved compare into a4.json's `steps[]` (declared with
 # depends_on: [build-clarity, build-perf] — forward-referencing the bias-builder
 # emit_template id_prefix). The producer now produces ONLY the two builders;
 # compare is on the ledger from init. This closes round-2 P0 #7 (compare's
@@ -543,12 +543,12 @@ assert_eq "plan-4,plan-5" "$(em iter-tpl-happy-2)"
 it "iterate_template: counter=7 with units 1-4 → plan-8 (monotonic counter wins)"
 assert_eq "plan-8" "$(em iter-tpl-counter-resume)"
 
-# ─── Scenario 12: judge_winner generalized via iteration.gate_unit ──────────
-it "judge_winner_to_work_units: reads gate_unit from iteration block (no 'judge' literal)"
+# ─── Scenario 12: judge_winner generalized via iteration.gate_step ──────────
+it "judge_winner_to_work_steps: reads gate_unit from iteration block (no 'judge' literal)"
 assert_eq "wB" "$(em judge-generalized)"
 
 # ─── Scenario 13: judge_winner backward-compat (no iteration field) ─────────
-it "judge_winner_to_work_units: no iteration field → falls back to literal 'judge'"
+it "judge_winner_to_work_steps: no iteration field → falls back to literal 'judge'"
 assert_eq "wA" "$(em judge-backcompat)"
 
 # ─── Scenario 14: iterate_template with no iteration field → raises ─────────
@@ -587,7 +587,7 @@ it "U14 Site1: enumerated item's depends_on materializes onto the work unit (del
 assert_eq "w1|" "$(em a1-passthrough)"
 
 # ─── Passthrough Site 3 (judge winner) ──────────────────────────────────────
-it "U14 Site3: judge_winner_to_work_units propagates the winner's per-item depends_on"
+it "U14 Site3: judge_winner_to_work_steps propagates the winner's per-item depends_on"
 assert_eq "wA:;wB:wA" "$(em judge-passthrough)"
 
 # ─── Regression: Sites 2 & 4 have no per-unit source → STAY [] ───────────────

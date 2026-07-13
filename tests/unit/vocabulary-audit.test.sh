@@ -59,7 +59,7 @@ orchestrator=done
 emitter=done
 adapter=done
 tick=done
-seam=pending
+seam=done
 unit=pending
 recipe=pending
 ledger=pending"
@@ -79,6 +79,12 @@ SCAN_ROOTS=(lib skills commands docs/contracts tests recipes presets .claude/hoo
 #     re-export shim, kept one minor version for agents with memorized paths.
 #   * commands/auto-tick.md — the kept alias command (persisted in in-flight
 #     ScheduleWakeup rearm prompts).
+#   * tests/unit/format-compat.test.sh + tests/integration/format-v1-compat.test.sh
+#     — the shim's OWN tests. Both necessarily name both vocabularies: they assert
+#     that `adapter` maps to `backend`, that `.emitter` becomes `.producer`, and
+#     (in the integration test) that NO old key survives on disk — an assertion
+#     that has to spell the old key to look for it. Same rationale as
+#     lib/format_compat.py: these are the files whose JOB is to know both.
 #   * This test file itself — it names every old term in prose/patterns.
 GLOBAL_PATH_WHITELIST=(
   'lib/format_compat.py'
@@ -90,7 +96,20 @@ GLOBAL_PATH_WHITELIST=(
   'lib/adapter-native.sh'
   'lib/recipes-list.sh'
   'commands/auto-tick.md'
+  'tests/unit/format-compat.test.sh'
+  'tests/integration/format-v1-compat.test.sh'
   'tests/unit/vocabulary-audit.test.sh'
+)
+
+# ─── PERMANENT GLOBAL PATH-PREFIX WHITELIST ─────────────────────────────────
+# The ONE directory whose whole contents legitimately speak the OLD vocabulary:
+# the format-v1 fixture corpus (U6). These files ARE v1 by definition — captured
+# from real pre-rename runs / recipe files — and exist precisely so the shim can
+# be proven to upgrade them. Whitelisting the directory (not each file) keeps the
+# audit from rotting when a fixture is added. This is the only prefix entry; the
+# "explicit paths, no wildcard-by-default" doctrine otherwise stands.
+GLOBAL_PATH_PREFIX_WHITELIST=(
+  'tests/fixtures/format-v1/'
 )
 
 # ─── PERMANENT GLOBAL CONTENT WHITELIST ─────────────────────────────────────
@@ -99,14 +118,28 @@ GLOBAL_PATH_WHITELIST=(
 #   * The renamed skills' "(formerly auto-adapter)" / "(formerly
 #     auto-author-recipe)" description breadcrumbs that keep model-side
 #     triggering matching old phrasing (KTD-4).
-GLOBAL_CONTENT_WHITELIST_RE='(supersedes|[Ff]ormerly )'
+#   * `<!--legacy-->` — the explicit marker on the "Legacy keys (read-compat)"
+#     appendix rows of the three schema-bearing contracts (KTD-5 step 3). Such a
+#     row MUST name the old key — that is the entire point of a read-compat
+#     table. The marker is an HTML comment (invisible when rendered) and is
+#     tagged PER LINE, so it exempts exactly the legacy rows and never a
+#     normative key table elsewhere in the same file.
+GLOBAL_CONTENT_WHITELIST_RE='(supersedes|[Ff]ormerly |<!--legacy-->)'
 
 # regex_for_term <term> → the OLD-identifier grep pattern (ERE, used with -i).
-# Leading word boundary, case-insensitive at call site: catches `ledger`,
-# `Ledger`, `LEDGER_`, `ledger_core`; NOT `myledger` (no boundary) — see the
-# task's "case-aware: catch Ledger, LEDGER_, ledger" requirement. For all 8
-# terms the term name IS the old identifier.
-regex_for_term() { printf '\\b%s' "$1"; }
+# Leading word boundary OR a leading underscore, case-insensitive at call site:
+# catches `ledger`, `Ledger`, `LEDGER_`, `ledger_core`, AND `_read_ledger` /
+# `_maybe_ledger`; NOT `myledger`. For all 8 terms the term name IS the old
+# identifier.
+#
+# U6 HARDENING — why the `_` alternative exists. A bare `\bseam` has NO word
+# boundary between `_` and `s` (both are word characters), so it silently missed
+# the whole leading-underscore SYMBOL class: `_maybe_seam`, `_try_seam_pause`,
+# `_seam_default_notice` would all have survived U6 audit-GREEN while the term
+# was supposedly retired. Private helpers are exactly where a renamed concept
+# hides longest. Adding the `_` alternative closes that blind spot for every
+# term, not just this one.
+regex_for_term() { printf '(\\b|_)%s' "$1"; }
 
 # term_status <term> → prints `pending` or `done` from the table.
 term_status() {
@@ -136,6 +169,14 @@ audit_term_hits() {
     [ -z "$raw" ] && return 0
   done
 
+  # ── global path-PREFIX whitelist (the format-v1 fixture corpus) ──
+  # Anchored at the start of the `path:lineno:content` hit so it can only ever
+  # exempt a leading directory, never a substring match mid-content.
+  for wl in "${GLOBAL_PATH_PREFIX_WHITELIST[@]}"; do
+    raw="$(printf '%s\n' "$raw" | grep -v "^${wl}" || true)"
+    [ -z "$raw" ] && return 0
+  done
+
   # ── global content whitelist ──
   raw="$(printf '%s\n' "$raw" | grep -vE "$GLOBAL_CONTENT_WHITELIST_RE" || true)"
   [ -z "$raw" ] && return 0
@@ -158,24 +199,10 @@ audit_term_hits() {
       # `--adapter` as a deprecated alias plus its one-line deprecation string.
       raw="$(printf '%s\n' "$raw" \
              | grep -vE '^lib/auto\.py:[0-9]+:.*(--adapter|[Dd]eprecat)' || true)"
-      # TEMP: until U6. U4 renamed the adapter CONCEPT (symbols + prose + files
-      # + the backend-contract) to `backend`, but the on-disk KEY cutover is
-      # deferred to U6 (KTD-6 — all persisted key/value literals flip in one
-      # unit). So the persisted keys `adapter` / `adapter_scale` / `adapter_op`
-      # (and the workflow `default_adapter`) legitimately survive, in their
-      # persisted form, wherever code READS/WRITES them, in recipe/schema files,
-      # in doc examples, and in test fixtures. The compound tokens `adapter_op`
-      # / `adapter_scale` / `default_adapter` are UNIQUELY persisted-key names
-      # (nothing else is spelled that way), so filtering them bare is safe; the
-      # bare `adapter` CONCEPT is narrowed to the quoted/backticked key token so
-      # any un-renamed adapter concept prose or symbol still fails the audit.
-      # Remove this whole branch at U6.
-      raw="$(printf '%s\n' "$raw" | grep -vE 'adapter_op|adapter_scale|default_adapter' || true)"
-      raw="$(printf '%s\n' "$raw" | grep -vE "[\"'\`]adapter[\"'\`]" || true)"
-      # recipes/schema.json's `default_adapter` property carries a bare
-      # "Adapter used when --adapter is not passed." description string; the
-      # schema is a persisted-format file left untouched until U6 (KTD-6).
-      raw="$(printf '%s\n' "$raw" | grep -vE '^recipes/schema\.json:' || true)"
+      # (U6 REMOVED the TEMP persisted-key exemptions here — `adapter`,
+      # `adapter_scale`, `adapter_op`, `default_adapter` are now flipped ON DISK
+      # to backend/backend_scale/backend_op/default_backend. The only module that
+      # may still spell them is lib/format_compat.py, which is path-whitelisted.)
       ;;
     recipe)
       # The KTD-4 flag-alias branches in lib/auto.py::_parse_args keep the old
@@ -199,33 +226,26 @@ audit_term_hits() {
              || true)"
       ;;
     emitter)
-      # TEMP: until U6. U3 renamed the emitter ROLE vocabulary (symbols + prose)
-      # to `producer`, but the on-disk KEY cutover is deferred to U6 (KTD-6 — all
-      # persisted key/value literals flip in one unit). So the literal JSON key
-      # `emitter` (phase_transitions[].emitter) legitimately survives, in its
-      # persisted form, in exactly these places:
-      #   * recipes/*.json + recipes/schema.json — the recipe files that carry
-      #     `"emitter": "<producer-name>"` and the schema's `required`/property key;
-      #   * lib/recipe_validate.py, lib/phase-grammar.py, lib/topology-render.py —
-      #     the code that READS phase_transitions[].emitter (pt["emitter"] /
-      #     pt.get("emitter")) plus lib/recipes.py's docstring example;
-      #   * docs/contracts/recipe-format.md — the normative JSON example + the
-      #     `emitter` key identifier in §4 (key tables wait for U6, KTD-5);
-      #   * tests/**/*.sh — recipe/transition fixtures exercising the key.
-      # The producer-name VALUES (`plan_output_to_work_units`, …) also rename in
-      # U6 — they contain no `emitter` token, so no entry is needed for them.
-      # Narrow to the QUOTED/BACKTICKED key token so any un-renamed emitter ROLE
-      # prose or symbol still fails the audit. Remove this whole branch at U6.
-      raw="$(printf '%s\n' "$raw" | grep -vE "[\"'\`]emitter[\"'\`]" || true)"
-      # Two-term test files whose module family renames later (KTD-3): the module
-      # names lib/unit_emitters.py / lib/ledger_emitters.py use `_` (no \b before
-      # `emitter`, never matched here), but their sibling test files use a hyphen
-      # (unit-emitters.test.sh renames at U7 with the `unit` family;
-      # ledger-emitters.test.sh at U9 with the `ledger` family). Their summary
-      # lines MUST equal the on-disk filename for tests/run.sh to tally them, so
-      # the `-emitters` token legitimately survives until those units. TEMP-ish:
-      # these two drop out of this branch when their file is renamed (U7/U9).
-      raw="$(printf '%s\n' "$raw" | grep -vE 'unit-emitters\.test\.sh|ledger-emitters\.test\.sh' || true)"
+      # (U6 REMOVED the TEMP persisted-key exemption here — the JSON key
+      # `phase_transitions[].emitter` is now flipped ON DISK to `.producer`. The
+      # only module that may still spell it is lib/format_compat.py, which is
+      # path-whitelisted.)
+      #
+      # Two-term MODULE FAMILIES whose final name lands in a later unit (KTD-3):
+      # lib/unit_emitters.py renames at U7 (with the `unit` family) and
+      # lib/ledger_emitters.py at U9 (with the `ledger` family) — one file move
+      # each, not two. Until then both the module name and its sibling test file
+      # (unit-emitters.test.sh / ledger-emitters.test.sh, whose summary line MUST
+      # equal the on-disk filename for tests/run.sh to tally it) legitimately
+      # carry the `emitters` token, as does every `load_lib_module("…_emitters")`
+      # call site.
+      #
+      # NB (U6): the `_`-prefixed forms became VISIBLE to this audit only when
+      # regex_for_term gained its `_` alternative — a bare `\bemitter` never
+      # matched `unit_emitters` at all. So this exemption is newly load-bearing;
+      # it is scoped to the `[_-]emitters` token so any un-renamed emitter ROLE
+      # prose or symbol still fails. Both branches drop out at U7 / U9.
+      raw="$(printf '%s\n' "$raw" | grep -vE '[_-]emitters' || true)"
       ;;
   esac
 
@@ -267,8 +287,8 @@ fi
 # renamed it no longer produces non-whitelisted hits, so the control would go
 # vacuous itself; each rename unit re-points this to the next still-pending term.
 # U2 moved it orchestrator→emitter; U3 renamed `emitter`; U4 renamed `adapter`;
-# U5 renamed `tick`, so it now probes `seam` (pending until U6).
-DF_TERM="seam"
+# U5 renamed `tick`; U6 renamed `seam`, so it now probes `unit` (pending until U7).
+DF_TERM="unit"
 it "deliberate-fail: auditing a pending term ('${DF_TERM}') as done names offending files"
 df_hits="$(audit_term_hits "$DF_TERM")"
 if [ -n "$df_hits" ]; then

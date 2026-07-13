@@ -1,6 +1,21 @@
-# Recipe Format (LOCKED — v0.3.0 contract)
+# Recipe Format (LOCKED — v0.4.0 contract)
 
-> **Status: LOCKED v0.3.0 contract.** This is the source-of-truth spec for the
+> **Status: LOCKED v0.4.0 — format-v2 key cutover; supersedes the v0.3.0
+> contract.** (KTD-6: the normative key table below is now v2. The file is
+> renamed to `workflow-format.md` and fully re-locked in U8, which carries a
+> second, rename-only version bump — this bump exists so no version label ever
+> denotes two different normative texts.)
+>
+> **Changelog — v0.4.0 (concept-vocabulary rename, U6 — content re-lock):** EVERY
+> persisted key and value in this format flipped ON DISK to format v2 — the step
+> list (and its `$defs` entry), the default-backend field, the `invokes` op key and
+> its op values, the producer key and its name values, the iteration gate, and the
+> handoff phase value. **The full old→new map is the "Legacy keys (read-compat)"
+> appendix at the end of this file** — it is normative. NO field-set or
+> validation-rule change beyond the spelling. **v1-keyed workflow files on disk keep
+> working, indefinitely.**
+>
+> This is the source-of-truth spec for the
 > `auto` **recipe format** — the named, file-backed JSON declaration of a workflow
 > topology that `/auto` builds a run from. The validator (`lib/recipes.py::validate`)
 > enforces it mechanically; the picker (`commands/auto.md`), the authoring skill
@@ -17,7 +32,7 @@
 > neither validates exactly as a v0.2.0 recipe (R7 backward compatibility).
 >
 > **v0.7.0 additions** (purely additive — see §11 for the typed `verification`
-> block): a `units[]` entry MAY carry an optional `verification` array — typed,
+> block): a `steps[]` entry MAY carry an optional `verification` array — typed,
 > checkable done-conditions (programmatic / model_judge / advisor_judge / human)
 > layered onto the existing gate decision. A unit that omits it validates exactly
 > as before.
@@ -47,25 +62,25 @@ Recipes resolve from a three-tier registry (first-wins): **workspace**
 |-------|-----|------|---------|
 | `name` | yes | string | recipe id, non-empty. Matches the filename stem. |
 | `version` | yes | string | format version (currently `"1"`). |
-| `units` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
+| `steps` | yes | array | the declared units (§3). v0.2.0: MUST be non-empty for work-only (`phase_order: ["work"]`) recipes — init-time enumeration from `enumerate_plan_units` ships in v0.2.1 (KTD-15). |
 | `description` | no | string | one-line summary; shown in the picker + rendered card. |
-| `default_adapter` | no | `"ce"`\|`"native"` | the backend to use when `--backend` is not passed. |
-| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every unit/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","seam","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","seam","work"]` (the `pipeline` recipe) validate. |
+| `default_backend` | no | `"ce"`\|`"native"` | the backend to use when `--backend` is not passed. |
+| `phase_order` | no | array | the run's phase sequence. **v0.6.0 (U6): validated STRUCTURALLY** — every element MUST be a non-empty string, and all phase-membership invariants (`terminal_phase`, every unit/emit_template `phase`, every `phase_transitions` from/to ∈ `phase_order`) hold. The earlier literal allow-list (`["plan","handoff","work"]` or `["work"]` only) is gone, so arbitrary spines like `["brainstorm","plan","handoff","work"]` (the `pipeline` recipe) validate. |
 | `terminal_phase` | no | string | the phase whose completion ends the run. Default `"work"`. MUST be a member of `phase_order`. |
 | `phase_transitions` | no | array | producer declarations (§4). |
 | `iteration` | no | object | **(v0.3.0, additive)** the outcomes-gated iteration block (§6). Declares the gate unit, the optional emit-template name to re-emit from on `iterate`, and the engine-enforced bound (`max_attempts` + optional `max_wall_seconds`). Absent on v0.2.x recipes — they validate unchanged. |
 | `emit_templates` | no | object | **(v0.3.0, additive)** map of `<template_name> → {phase, invokes, id_prefix}` consumed by the `iterate_template` producer at iteration time (§7). MUST be present (and contain the named template) when `iteration.emit_template` is set; MAY be absent when `iteration` is absent or when `iteration.emit_template` is omitted (the "re-engage the gate without spawning new siblings" shape, round-3 P2 #21). |
-| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of unit ids the recipe declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `units[]` and NOT iterate-shape (§8). Default `[]`. |
+| `expected_emit_outputs` | no | string[] | **(v0.3.0, additive — F4)** explicit list of unit ids the recipe declares will be materialized by a **phase-boundary producer** (e.g. `plan_output_to_paired_builders`'s `build-clarity` / `build-perf`). Used by the validator to accept `depends_on` references to ids that are NOT in `steps[]` and NOT iterate-shape (§8). Default `[]`. |
 | `python_hook` | no | (reserved) | RESERVED — parses but the V1 engine ignores it. The ONLY unknown-ish key tolerated; every OTHER unknown top-level field is rejected. |
 
-## 3. `units[]` entries
+## 3. `steps[]` entries
 
 | field | req | type | meaning |
 |-------|-----|------|---------|
 | `id` | yes | string | unique within the recipe, non-empty. |
 | `phase` | yes | string | MUST be a member of `phase_order`. |
-| `depends_on` | no | string[] | unit ids this unit waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `units[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
-| `invokes` | no | object | what the unit invokes — `adapter_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger unit's `dispatch_context` at load (after path-bounding). |
+| `depends_on` | no | string[] | unit ids this unit waits for. Each member is accepted iff it satisfies AT LEAST ONE of: (a) references an existing id in `steps[]`; (b) matches an **iterate-shape** id `{id_prefix}{positive_int}` where `id_prefix` is declared by some `emit_templates[].id_prefix` (the `iterate_template` producer materializes these — see §7); (c) is explicitly declared in the top-level `expected_emit_outputs` list (a non-iterate phase-boundary producer materializes these — see §8). A `depends_on` member matching none of (a)/(b)/(c) is REJECTED. |
+| `invokes` | no | object | what the unit invokes — `backend_op` (one of the locked ops) plus optional recipe-side metadata like `prompt_template`. Merged into the ledger unit's `dispatch_context` at load (after path-bounding). |
 | `verification` | no | array | **(v0.7.0, additive — §11)** typed, checkable done-conditions (≤ 16 criteria) layered onto the gate decision. Each criterion is `{id, type, …type-fields}` with `type ∈ {programmatic, model_judge, advisor_judge, human}`. Absent on v0.2.x–v0.6.x recipes — they validate unchanged. |
 
 **`prompt_template` path-bounding (security):** if present, it MUST be a relative
@@ -78,19 +93,19 @@ exfiltrate files into LLM context.
 Each entry declares which **producer** fires at a phase boundary:
 
 ```json
-{"from": "<phase>", "to": "<phase>", "emitter": "<name>"}
+{"from": "<phase>", "to": "<phase>", "producer": "<name>"}
 ```
 
 - `from` / `to` MUST be members of `phase_order`.
-- `emitter` MUST be one of the **V1-registered names** (the validator rejects any
+- `producer` MUST be one of the **V1-registered names** (the validator rejects any
   other — a recipe can't name a non-existent producer):
-  - `plan_output_to_work_units` — one plan's output → work units (A1).
-  - `judge_winner_to_work_units` — the winning plan's output, after a judge (A2).
+  - `plan_output_to_work_steps` — one plan's output → work units (A1).
+  - `judge_winner_to_work_steps` — the winning plan's output, after a judge (A2).
   - `plan_output_to_paired_builders` — two bias-differentiated builders + a
     comparator (A4).
 - The producer fires when the run ARRIVES at its `to` phase (keyed on `to`), so a
   `{from: plan, to: work}` producer fires entering `work` even though the run
-  routes through `seam`.
+  routes through `handoff`.
 
 > **Note.** `iterate_template` is also registered in `lib/producers.py::REGISTRY`
 > but is a **within-phase** producer — it never appears in `phase_transitions[]`.
@@ -100,11 +115,11 @@ Each entry declares which **producer** fires at a phase boundary:
 
 ## 5. The built-in recipes (the conformance corpus)
 
-- **a1** — Classic CE Stack. One plan unit; `plan_output_to_work_units` at
+- **a1** — Classic CE Stack. One plan unit; `plan_output_to_work_steps` at
   plan→work. The v0.1.x-equivalent default. Also a Python constant
   (`A1_BUILTIN`) so a corrupt built-in JSON can't break bare `/auto`.
 - **a2** — Parallel Theories + Judge. Three plan units + a judge work unit
-  (`depends_on` all three); `judge_winner_to_work_units`.
+  (`depends_on` all three); `judge_winner_to_work_steps`.
 - **a4** — Adversarial Pair + Comparator. One plan unit;
   `plan_output_to_paired_builders`.
 - **w** — Work-only. `phase_order: ["work"]`, no producer; units must be
@@ -115,23 +130,23 @@ Each entry declares which **producer** fires at a phase boundary:
   then, a work-only recipe with `units: []` is REJECTED by `validate()` (it
   would create a zero-unit ledger that re-arms forever).
 - **pipeline** — **(v0.6.0, U7)** Brainstorm-rooted creative spine.
-  `phase_order: ["brainstorm","plan","seam","work"]`, terminal `work`. One
-  structural `brainstorm` unit; `brainstorm_output_to_plan_unit` at
-  brainstorm→plan, then `plan_output_to_work_units` at plan→work. The
+  `phase_order: ["brainstorm","plan","handoff","work"]`, terminal `work`. One
+  structural `brainstorm` unit; `brainstorm_output_to_plan_step` at
+  brainstorm→plan, then `plan_output_to_work_steps` at plan→work. The
   conversation-entry forward chain — brainstorm-entry runs auto-advance
   brainstorm→plan→work. Spine-only phase (`brainstorm`) is advanced via the
   direct-mutation `transition_and_emit` path, never `set_loop` (KTD-3).
 - **review** — **(v0.6.0, U11)** Off-spine code-review-only entry.
   `phase_order: ["work"]`, terminal `work`; a single unit invoking the `review`
   backend op (one review/fix loop to P3, then stop). Distinct from `w` (which
-  invokes `do_unit` to build): same single-phase shape, different op — no
+  invokes `do_step` to build): same single-phase shape, different op — no
   plan phase, no auto-advance, no rebound.
 
 > **Launch run-scoped variants (v0.7.0).** The interactive launch chooser
 > (`skills/auto-launch`, `driver-reference.md` §14) may compile a **run-scoped
 > variant** when the operator edits a gated recipe's gates or composes a custom
 > loop: it is a plain **workspace-tier** recipe (`<repo>/.claude/auto/recipes/`)
-> carrying the typed `verification` array on its `iteration.gate_unit` (§11), so
+> carrying the typed `verification` array on its `iteration.gate_step` (§11), so
 > the ordinary first-wins resolver and `validate()` apply to it unchanged — it is
 > **not** a new built-in and not part of the conformance corpus above. Its only
 > distinguishing trait is a **distinct stem `<builtin>-<run-slug>`** (e.g.
@@ -153,15 +168,15 @@ audit trail (`exit`). An engine-enforced **bound** caps runaway iteration so a
 misbehaving gate agent cannot loop forever (deterministic over probabilistic
 — the bound lives in the engine, not in the gate agent's disposition).
 
-> **Carve-outs.** `iteration.gate_unit` may reference an `emit_templates[].id_prefix`
+> **Carve-outs.** `iteration.gate_step` may reference an `emit_templates[].id_prefix`
 > (documented inline in the block below). Separately, `depends_on` integrity has
-> its own three-branch contract (units[] / iterate-shape / `expected_emit_outputs`)
+> its own three-branch contract (steps[] / iterate-shape / `expected_emit_outputs`)
 > — see §3 + §8.
 
 ```
 iteration:
   gate_unit: "<unit_id>"        # required — references a unit declared in
-                                #   units[]  OR  an emit_templates[].id_prefix
+                                #   steps[]  OR  an emit_templates[].id_prefix
                                 #   (forward-looking carve-out per round-3 P2
                                 #   #21; for V1 the unit-id form is the canonical
                                 #   path — see §5's built-in shapes).
@@ -204,8 +219,8 @@ iteration:
   `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
   on the gate unit (audit trail) and flips the loop directly to `done`
   / `driver = "manual"` via `set_loop`. The phase transition is NOT routed
-  through the normal seam-handler — that would re-invoke
-  `judge_winner_to_work_units`, which raises on a missing `winner_unit_id` when
+  through the normal handoff-handler — that would re-invoke
+  `judge_winner_to_work_steps`, which raises on a missing `winner_step_id` when
   the gate said iterate rather than advance.
 
 **Bound semantics.** Both bounds are checked against `iteration.evaluate_decision`'s
@@ -249,9 +264,9 @@ emit_templates:
     phase: "<loop_phase>"   # required — MUST be a member of `phase_order`.
                             #   The phase the new sibling units land in.
     invokes:                # required — object, same depth/shape as
-                            #   `units[].invokes` (§3). `prompt_template`
+                            #   `steps[].invokes` (§3). `prompt_template`
                             #   is path-bounded identically.
-      adapter_op: "..."
+      backend_op: "..."
       prompt_template: "<relative path>"
 ```
 
@@ -270,10 +285,10 @@ one pulse).
 A recipe MAY declare a top-level `expected_emit_outputs: [<unit-id-str>, ...]`
 list. It names unit ids the recipe asserts will be **materialized at run time
 by a phase-boundary producer** (one of the `phase_transitions[]` producers listed
-in §4 — `plan_output_to_work_units`, `judge_winner_to_work_units`, or
+in §4 — `plan_output_to_work_steps`, `judge_winner_to_work_steps`, or
 `plan_output_to_paired_builders`). The validator consults this list when
 checking `depends_on` integrity (§3 row 3): a `depends_on` member that is NOT
-in `units[]` AND NOT iterate-shape (§7's `iterate_template` id math) is
+in `steps[]` AND NOT iterate-shape (§7's `iterate_template` id math) is
 accepted iff it is listed here.
 
 ```
@@ -293,10 +308,10 @@ declares structurally:
   prefix-match — `"build-typo"` no longer passes against id_prefix `"build-"`
   by accident). The recipe author declares the producer-output contract here.
 
-**When to use.** Declare a member in `expected_emit_outputs` when a `units[]`
+**When to use.** Declare a member in `expected_emit_outputs` when a `steps[]`
 unit's `depends_on` names an id that:
 
-1. is NOT in `units[]` (no structural producer), AND
+1. is NOT in `steps[]` (no structural producer), AND
 2. is NOT iterate-shape (i.e., NOT `{id_prefix}{positive_int}` for any
    `emit_templates[].id_prefix`), AND
 3. WILL be produced at run time by a `phase_transitions[]` producer.
@@ -307,26 +322,26 @@ carve-out accepted any prefix-matching string — F4 tightened that to require
 an explicit declaration, and A4 was updated atomically.
 
 **Worked example — A4's `compare` unit.** A4 declares a structural `compare`
-unit in `units[]` whose `depends_on` names `build-clarity` and `build-perf`:
+unit in `steps[]` whose `depends_on` names `build-clarity` and `build-perf`:
 
 ```json
 {
-  "units": [
+  "steps": [
     {"id": "plan",    "phase": "plan", "invokes": {...}},
     {"id": "compare", "phase": "work",
      "depends_on": ["build-clarity", "build-perf"],
-     "invokes": {"adapter_op": "review", "prompt_template": "compare.md"}}
+     "invokes": {"backend_op": "review", "prompt_template": "compare.md"}}
   ],
   "expected_emit_outputs": ["build-clarity", "build-perf"],
   "phase_transitions": [
-    {"from": "plan", "to": "work", "emitter": "plan_output_to_paired_builders"}
+    {"from": "plan", "to": "work", "producer": "plan_output_to_paired_builders"}
   ]
 }
 ```
 
 The `plan_output_to_paired_builders` producer (§4) fires at plan→work and
 materializes the two builder units; `compare` waits on both. Because neither
-id is in `units[]` and neither is iterate-shape, the recipe declares them in
+id is in `steps[]` and neither is iterate-shape, the recipe declares them in
 `expected_emit_outputs` so `depends_on` integrity passes. (A4 also declares an
 `iteration` block with an `iterate_template` named `bias-builder`; that's the
 RE-EMIT path on `iterate` verdicts, distinct from the initial plan-output
@@ -337,7 +352,7 @@ emission — see §6 + §7.)
 - shape check (~line 269-280): each entry must be a non-empty string; the
   field itself must be a list.
 - integrity check (~line 300-311): `depends_on` accepts members iff (a) in
-  `units[]`, (b) iterate-shape per §7, OR (c) in `expected_emit_outputs`.
+  `steps[]`, (b) iterate-shape per §7, OR (c) in `expected_emit_outputs`.
 
 ## 9. Acceptance boundary
 
@@ -345,7 +360,7 @@ The validator REJECTS: a `phase_order` with a non-string or empty element (the
 v0.6.0/U6 structural rule); a `terminal_phase`, unit `phase`, or
 `phase_transitions` from/to not a member of `phase_order`; unregistered producer
 names; a loaded `python_hook` (parsed but ignored); AND a work-only recipe
-(`phase_order: ["work"]`) with an empty `units` list (the init-time enumeration
+(`phase_order: ["work"]`) with an empty `steps` list (the init-time enumeration
 path ships in v0.2.1 — KTD-15). **v0.6.0 (U6)** dropped the earlier literal
 allow-list, so a structurally-sound multi-phase `phase_order` (e.g. the
 `pipeline` spine) now validates. The rejection is mechanical (a tested code
@@ -371,12 +386,12 @@ path), so no malformed topology can ship.
 
 ## 11. `verification` — typed gate criteria (v0.7.0+)
 
-A `units[]` entry MAY carry an optional `verification` array: typed, checkable
+A `steps[]` entry MAY carry an optional `verification` array: typed, checkable
 done-conditions layered onto the existing iterate/advance/exit gate decision
-(KTD-1). It attaches to the gate unit (the `iteration.gate_unit` mechanism); it
+(KTD-1). It attaches to the gate unit (the `iteration.gate_step` mechanism); it
 is **not** a new producer and does **not** add topology grammar. It is also **not**
 a second exit judge — the deterministic Stop predicate
-(`blockers==0 ∧ majors==0 ∧ all_units_terminal`) stays the run's exit spine;
+(`blockers==0 ∧ majors==0 ∧ all_steps_terminal`) stays the run's exit spine;
 criteria only steer the gate decision (R11). A unit that omits `verification`
 validates exactly as a pre-v0.7.0 recipe (additive — R7).
 
@@ -410,14 +425,14 @@ so a programmatic criterion carrying `prompt`, or a human criterion carrying
   `advisor` tool (driver-evaluated — the in-house replacement for looper's
   cross-vendor council; no model registry, no CLI shell-out).
 - **human** — a checkpoint only a human can clear; routes through auto's pause
-  seam.
+  handoff.
 
 ```json
 {
-  "units": [
+  "steps": [
     {
       "id": "gate", "phase": "work",
-      "invokes": {"adapter_op": "review"},
+      "invokes": {"backend_op": "review"},
       "verification": [
         {"id": "tests-green", "type": "programmatic",
          "argv": ["bash", "tests/run.sh"], "check": "exit_zero",
@@ -439,3 +454,35 @@ canonical reference) and mirrored as a JSON Schema in `recipes/schema.json`. The
 hand-rolled `lib/recipes.py::validate()` is the enforcer of all three; if the
 doc, the schema, and the validator ever disagree, that is a contract bug —
 `validate()` wins.
+
+---
+
+## Appendix — Legacy keys (read-compat)
+
+The format-v2 cutover (v0.4.0, U6 of the concept-vocabulary rename) flipped every
+persisted key and value in one unit. The key names throughout this file are the
+**current on-disk (v2)** spelling.
+
+**A v1-keyed workflow file on disk keeps working, indefinitely.** `resolve()` runs
+`format_compat.upgrade_workflow` on every read, before `validate()` — auto never
+rewrites a user's workflow file, so acceptance of the old keys has no end date.
+The authoring write-gate (`validate_and_lint`) likewise validates an internally
+UPGRADED COPY of a draft, so a v1-keyed draft is accepted; a file the authoring
+flow writes may itself persist v1-keyed and still resolve cleanly forever.
+
+| legacy (v1) key | current (v2) key | where | <!--legacy--> |
+|---|---|---|---|
+| `units` | `steps` | workflow top-level (and `$defs.unit` → `$defs.step`) | <!--legacy--> |
+| `default_adapter` | `default_backend` | workflow top-level | <!--legacy--> |
+| `invokes.adapter_op` | `invokes.backend_op` | per step, and in `emit_templates.*.invokes` | <!--legacy--> |
+| `do_unit` (value) | `do_step` | the backend-op VALUE (`brainstorm` / `next_plan_step` / `review` unchanged) | <!--legacy--> |
+| `phase_transitions[].emitter` | `.producer` | mapped PER ITEM | <!--legacy--> |
+| `plan_output_to_work_units` (value) | `plan_output_to_work_steps` | producer name; likewise `judge_winner_to_work_steps`, `brainstorm_output_to_plan_step`. `plan_output_to_paired_builders` is unchanged | <!--legacy--> |
+| `iteration.gate_unit` | `iteration.gate_step` | the iteration block | <!--legacy--> |
+| `"seam"` (value) | `"handoff"` | the phase VALUE in `phase_order`, `terminal_phase`, `phase_transitions[].from`/`.to`, and a step's `phase` | <!--legacy--> |
+
+**Shim guarantee:** old keys are accepted on READ indefinitely; the map is applied
+unconditionally, is pure, and is idempotent, so a mixed old/new file resolves to
+the new shape with the new key winning and the stale twin dropped. A workflow file
+is NEVER stamped with a `format` marker — the schema is
+`additionalProperties: false`, and a workflow carries its own `version` field.

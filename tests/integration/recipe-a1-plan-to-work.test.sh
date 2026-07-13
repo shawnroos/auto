@@ -4,7 +4,7 @@
 # the engine rewire).
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
-# Round-1 review's P0 #1: the v0.1.x seam handler did raw set_loop(loop_phase="work")
+# Round-1 review's P0 #1: the v0.1.x handoff handler did raw set_loop(loop_phase="work")
 # and never called the new transition_and_emit primitive — the recipe topology
 # was built INTO the initial ledger but the runtime ignored it. A unit test on
 # transition_and_emit in isolation passes; a unit test on producers.resolve()
@@ -77,7 +77,7 @@ os.makedirs(os.path.join(repo, ".claude", "auto"), exist_ok=True)
 plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 
 # Step 1: /auto plan.md (default recipe a1). This creates the ledger with one
-# plan unit `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_units}].
+# plan unit `plan` and phase_transitions=[{from:plan,to:work,producer:plan_output_to_work_steps}].
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan])
 run_id = None
@@ -89,8 +89,8 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 # Step 2: prime to plan-done. Stash enumerated_units on the plan unit, set
 # gaps_open=0, plan_step=review_plan (the cached predicate sees plan-met).
 enumerated = [
-    {"id": "u-alpha", "invokes": {"adapter_op": "do_unit"}},
-    {"id": "u-beta",  "invokes": {"adapter_op": "do_unit"}},
+    {"id": "u-alpha", "invokes": {"backend_op": "do_step"}},
+    {"id": "u-beta",  "invokes": {"backend_op": "do_step"}},
 ]
 # v0.6.2 producer handshake: with no_stash we SKIP set_enumerated_units to model
 # the production reality (the model hasn't run the enumerate prepare op yet). The
@@ -110,7 +110,7 @@ if legacy_no_recipe:
     path = os.path.join(repo, ".claude", "auto", f"{run_id}.json")
     with open(path) as f:
         led_raw = json.load(f)
-    led_raw["recipe"] = None
+    led_raw["workflow"] = None
     led_raw["phase_transitions"] = []
     with open(path, "w") as f:
         json.dump(led_raw, f)
@@ -124,12 +124,12 @@ if producer_off:
     ledger.transition_and_emit = _noop
     pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
 
-# Step 4: pulse. auto=True so _maybe_seam takes the auto-flip branch.
+# Step 4: pulse. auto=True so _maybe_handoff takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-work_units = sorted(u["id"] for u in led["units"] if u.get("phase") == "work")
+work_units = sorted(u["id"] for u in led["steps"] if u.get("phase") == "work")
 print("%s|%s" % (led["loop_phase"], ",".join(work_units)))
 PYEOF
 }
@@ -138,7 +138,7 @@ it "fix-pass A.2: a1 plan-done → auto-flip fires the producer (work units appe
 res="$(drive_plan_to_work 0 0)"
 # After auto-flip the pulse reads predicate.met and sets loop_phase="done" (work
 # loop is vacuously met if no work units — but the producer ran FIRST and added
-# u-alpha + u-beta, both pending, so all_units_terminal=false and met=false →
+# u-alpha + u-beta, both pending, so all_steps_terminal=false and met=false →
 # stays at work). loop_phase MUST be "work" (or "done" if predicate flipped),
 # units MUST contain u-alpha,u-beta.
 case "$res" in

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto v0.13.0 U5 integration test: the phase sub-agent DISPATCH SEAM.
+# auto v0.13.0 U5 integration test: the phase sub-agent DISPATCH HANDOFF.
 #
 # WHY THIS TEST EXISTS (plan RISK-10 / KTD-1):
 # U5 pushes the loop's context-heavy phase work into a sub-agent tree. The
@@ -11,7 +11,7 @@
 # performs ONLY the `pending -> dispatched` ledger transition. `lib/dispatcher.py`
 # is unchanged by U5.
 #
-# This test cannot spawn a real Claude Agent, so it proves the SEAM the runtime
+# This test cannot spawn a real Claude Agent, so it proves the HANDOFF the runtime
 # rests on, deterministically:
 #   A. dispatch_batch transitions ready units pending->dispatched, capped, and
 #      delegates the (no-op) launch to launch_fn — it never spawns anything itself.
@@ -59,7 +59,7 @@ REPO="$(mktemp -d)"
 export CLAUDE_AUTO_REPO="$REPO"
 mkdir -p "$REPO/.claude/auto"
 
-# Seed a run with N work-phase pending units (adapter_op=do_unit, the default
+# Seed a run with N work-phase pending units (backend_op=do_step, the default
 # work-loop op). Runs in one python process; the ledger persists on disk.
 seed_run() {
   local run="$1"; local n="$2"; local threshold="${3:-}"
@@ -79,7 +79,7 @@ repo = os.environ["CLAUDE_AUTO_REPO"]
 units = []
 for i in range(1, n + 1):
     u = {"id": f"u{i}", "phase": "work",
-         "dispatch_context": {"adapter_op": "do_unit"}}
+         "dispatch_context": {"backend_op": "do_step"}}
     if threshold:
         u["stall_threshold_seconds"] = int(threshold)
     units.append(u)
@@ -119,7 +119,7 @@ ready = orch.ready_units(repo, run)
 results = orch.dispatch_batch(repo, run, ready, cap=2, launch_fn=launch_fn)
 
 led = ledger.read_ledger(repo, run)
-by = {u["id"]: u for u in led["units"]}
+by = {u["id"]: u for u in led["steps"]}
 statuses = ",".join(s for _, s in results)
 states = ",".join(f'{u}:{by[u]["state"]}' for u in ("u1", "u2", "u3"))
 print("ready=%s|status=%s|states=%s|spy=%s|noop=%s" % (
@@ -148,9 +148,9 @@ def load(name):
     return m
 orch = load("dispatcher"); ledger = load("ledger")
 repo = os.environ["CLAUDE_AUTO_REPO"]
-before = ledger.read_ledger(repo, run)["units"][0].get("attempt", 0)
+before = ledger.read_ledger(repo, run)["steps"][0].get("attempt", 0)
 orch.dispatch_batch(repo, run, ["u1"], cap=1)
-after = ledger.read_ledger(repo, run)["units"][0].get("attempt", 0)
+after = ledger.read_ledger(repo, run)["steps"][0].get("attempt", 0)
 print("%s->%s" % (before, after))
 PYEOF
 )"
@@ -213,7 +213,7 @@ PYEOF
 it "stale verdict (attempt 0 < current 1) is REJECTED (StaleVerdict) — non-zero exit, ledger unchanged"
 "$PY" "$AUTO_ROOT/lib/ledger.py" record-verdict D u1 '[]' 0 >/dev/null 2>&1
 stale_rc=$?
-state_after="$("$PY" "$AUTO_ROOT/lib/ledger.py" read "$CLAUDE_AUTO_REPO" D 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["units"][0]["state"])')"
+state_after="$("$PY" "$AUTO_ROOT/lib/ledger.py" read "$CLAUDE_AUTO_REPO" D 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["steps"][0]["state"])')"
 # rejected: non-zero exit AND the unit stays `dispatched` (no verdict merged).
 if [ "$stale_rc" -ne 0 ] && [ "$state_after" = "dispatched" ]; then pass; else
   fail "expected non-zero rc + state 'dispatched', got rc=$stale_rc state='$state_after'"; fi
@@ -221,7 +221,7 @@ if [ "$stale_rc" -ne 0 ] && [ "$state_after" = "dispatched" ]; then pass; else
 it "deliberate-fail control: a CURRENT-attempt verdict (attempt 1) is accepted — proves the rejection is staleness-specific"
 "$PY" "$AUTO_ROOT/lib/ledger.py" record-verdict D u1 '[]' 1 >/dev/null 2>&1
 fresh_rc=$?
-state_fresh="$("$PY" "$AUTO_ROOT/lib/ledger.py" read "$CLAUDE_AUTO_REPO" D 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["units"][0]["state"])')"
+state_fresh="$("$PY" "$AUTO_ROOT/lib/ledger.py" read "$CLAUDE_AUTO_REPO" D 2>/dev/null | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["steps"][0]["state"])')"
 if [ "$fresh_rc" -eq 0 ] && [ "$state_fresh" = "verdict-returned" ]; then pass; else
   fail "expected rc=0 + state 'verdict-returned', got rc=$fresh_rc state='$state_fresh'"; fi
 
@@ -245,7 +245,7 @@ def launch_fn(uid, attempt):
         raise RuntimeError("spawn boom")
 results = orch.dispatch_batch(repo, run, ["u1", "u2", "u3"], cap=3, launch_fn=launch_fn)
 led = ledger.read_ledger(repo, run)
-by = {u["id"]: u for u in led["units"]}
+by = {u["id"]: u for u in led["steps"]}
 u2 = by["u2"]
 call = (u2.get("last_error") or {}).get("call")
 u2status = next(s for uid, s in results if uid == "u2")
@@ -278,19 +278,19 @@ ta = load("pulse_advance")
 repo = os.environ["CLAUDE_AUTO_REPO"]
 orch.dispatch_batch(repo, run, ["u1"], cap=1)  # dispatched_at = now
 led = ledger.read_ledger(repo, run)
-dispatched_at = led["units"][0]["dispatched_at"]
+dispatched_at = led["steps"][0]["dispatched_at"]
 base = ledger.parse_iso(dispatched_at)
 
 # ALIVE: 60s in, far below the unit's 3600s threshold -> not stalled.
 alive = base + timedelta(seconds=60)
 _, halted_alive, confirmed_alive = ta.detect_and_halt_stalled(repo, run, led, alive)
-state_alive = ledger.read_ledger(repo, run)["units"][0]["state"]
+state_alive = ledger.read_ledger(repo, run)["steps"][0]["state"]
 
 # PAST THRESHOLD: 3601s in (age > 3600) -> stalled.
 led2 = ledger.read_ledger(repo, run)
 dead = base + timedelta(seconds=3601)
 _, halted_dead, confirmed_dead = ta.detect_and_halt_stalled(repo, run, led2, dead)
-state_dead = ledger.read_ledger(repo, run)["units"][0]["state"]
+state_dead = ledger.read_ledger(repo, run)["steps"][0]["state"]
 
 print("alive: confirmed=%s state=%s | dead: confirmed=%s state=%s" % (
     confirmed_alive, state_alive, confirmed_dead, state_dead))

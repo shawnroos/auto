@@ -24,7 +24,7 @@ unit carries a `dispatch_context.bound_override` — `/auto-status` prints
 an additional `iteration:` block between the exit-predicate line and the
 units list. Fields:
 
-- `gate_unit` — the unit id whose `verdict.decision` drives the loop.
+- `gate_step` — the unit id whose `verdict.decision` drives the loop.
 - `attempts` — `iteration_attempts` / `iteration.bound.max_attempts`
   (honored iterate decisions vs the configured cap).
 - `wall_time` — `active_wall_seconds` /
@@ -67,9 +67,9 @@ diagnostic). The line carries `kind: <error-type>: <message>`. Two
   non-`LedgerError` exception (typically a malformed iteration block, a
   corrupted gate verdict, or a raise from the producer). Investigate the
   ledger's `iteration` block + the gate unit's `dispatch_context`.
-- `recipe-bug` — `advance_iteration_loop` raised a `LedgerError`
+- `workflow-bug` — `advance_iteration_loop` raised a `LedgerError`
   subclass (`UnknownUnit`, `InvalidTransition`, `StaleVerdict`) — the
-  recipe's `units[]` / `phase_transitions` don't match what the engine
+  recipe's `steps[]` / `phase_transitions` don't match what the engine
   reached for. Investigate the recipe JSON against the schema in
   `docs/contracts/recipe-format.md`.
 

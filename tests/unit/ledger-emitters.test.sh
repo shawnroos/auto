@@ -17,8 +17,8 @@
 #   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
 #   6. I-2: 3 units, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
-#      dispatched -> met==false (all_units_terminal false)
-#   7. I-2 closure: unit `fixed` with a stale blocker -> all_units_terminal==false
+#      dispatched -> met==false (all_steps_terminal false)
+#   7. I-2 closure: unit `fixed` with a stale blocker -> all_steps_terminal==false
 #   8. I-3: liveness/orphan predicate (manual / stale-beat / healthy-slow)
 #   9. state grammar: every documented transition holds; undocumented rejected
 #  10. fence: no production file enables a TEST_NO_* hatch
@@ -86,8 +86,8 @@ print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-units> <adapter_scale> [phase]  — like ledger_init but
-# threads adapter_scale (the ledger_init helper above is fixed at the default
+# init_scale <run> <json-units> <backend_scale> [phase]  — like ledger_init but
+# threads backend_scale (the ledger_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
 ledger_init_scale() {
   local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
@@ -159,7 +159,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
     if extra_units:
         units.extend(extra_units)
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
-                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   units=units)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
@@ -169,11 +169,11 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
             bound = {"max_attempts": max_attempts}
             if max_wall is not None:
                 bound["max_wall_seconds"] = max_wall
-            L["iteration"] = {"gate_unit": "judge", "bound": bound}
+            L["iteration"] = {"gate_step": "judge", "bound": bound}
         L["iteration_attempts"] = attempts
         L["active_wall_seconds"] = active_wall
         # Walk the gate unit to the requested state via grammar-valid edges.
-        u = L["units"][0]
+        u = L["steps"][0]
         if gate_state == "verdict-returned":
             u["state"] = "dispatched"  # then record_verdict will edge it.
     m._with_locked_ledger(repo, run, seed)
@@ -202,7 +202,7 @@ if op == "emit_within_phase-emit":
         ]
     appended = m.emit_within_phase(repo, "u2-ewp-emit", "plan", emit)
     after = m.read_ledger(repo, "u2-ewp-emit")
-    ids = sorted(u["id"] for u in after["units"])
+    ids = sorted(u["id"] for u in after["steps"])
     print(json.dumps({
         "appended": appended,
         "all_ids": ids,
@@ -242,7 +242,7 @@ elif op == "atomic_iterate_step-happy":
         repo, "u2-ais-happy", "judge", emit2, ["plan-1", "plan-2", "plan-3"],
     )
     after = m.read_ledger(repo, "u2-ais-happy")
-    judge = next(u for u in after["units"] if u["id"] == "judge")
+    judge = next(u for u in after["steps"] if u["id"] == "judge")
     print(json.dumps({
         "appended": appended,
         "iteration_attempts": after["iteration_attempts"],
@@ -250,7 +250,7 @@ elif op == "atomic_iterate_step-happy":
         "gate_state": judge["state"],
         "gate_depends_on": judge["depends_on"],
         "decision_cleared": "decision" not in (judge.get("dispatch_context") or {}),
-        "unit_count": len(after["units"]),
+        "unit_count": len(after["steps"]),
     }))
 
 # ─── op: atomic_iterate_step-bad-producer-keeps-counter ─────────────────────
@@ -272,7 +272,7 @@ elif op == "atomic_iterate_step-bad-producer-keeps-counter":
         "raised": raised,
         "iteration_attempts": after["iteration_attempts"],
         "iteration_emit_count": after.get("iteration_emit_count"),
-        "unit_count": len(after["units"]),
+        "unit_count": len(after["steps"]),
     }))
 
 

@@ -56,8 +56,8 @@ def _init_from_recipe(repo, run, name):
     """Init a ledger from a built-in recipe exactly as lib/auto.py does (the
     recipe-generic init call: loop_phase=phase_order[0])."""
     r, tier = recipes.load_and_validate(name, repo)
-    init_units = [recipes.unit_for(u, r) for u in r.get("units", [])]
-    po = r.get("phase_order", ["plan", "seam", "work"])
+    init_units = [recipes.unit_for(u, r) for u in r.get("steps", [])]
+    po = r.get("phase_order", ["plan", "handoff", "work"])
     ledger.init_ledger(
         repo, run, backend="ce", units=init_units,
         loop_phase=po[0],
@@ -79,7 +79,7 @@ elif op == "init-brainstorm":
     led = ledger.read_ledger(repo, "pl")
     print("%s|%s|%s" % (
         led["loop_phase"], ",".join(led["phase_order"]),
-        ",".join(u["id"] for u in led["units"])))
+        ",".join(u["id"] for u in led["steps"])))
 
 elif op == "forward-advance":
     # Record the brainstorm output, then advance brainstorm→plan via
@@ -91,16 +91,16 @@ elif op == "forward-advance":
     path = ledger.ledger_path(repo, "pl")
     with open(path) as f:
         d = json.load(f)
-    for u in d["units"]:
+    for u in d["steps"]:
         if u["id"] == "brainstorm":
             u.setdefault("dispatch_context", {})["requirements_doc"] = "docs/req.md"
             u["state"] = "verdict-returned"
     with open(path, "w") as f:
         json.dump(d, f)
     appended = ledger.transition_and_emit(
-        repo, "pl", "plan", producers.brainstorm_output_to_plan_unit)
+        repo, "pl", "plan", producers.brainstorm_output_to_plan_step)
     led = ledger.read_ledger(repo, "pl")
-    plan = next(u for u in led["units"] if u["id"] == "plan")
+    plan = next(u for u in led["steps"] if u["id"] == "plan")
     print("%s|%s|%s" % (
         led["loop_phase"], ",".join(sorted(appended)),
         plan["dispatch_context"].get("requirements_doc")))
@@ -143,11 +143,11 @@ PYEOF
 
 # ─── Scenario 1: validate + resolve ─────────────────────────────────────────
 it "U7: pipeline.json validates + resolves (built-in, brainstorm-rooted spine, terminal work)"
-assert_eq "pipeline:built-in:brainstorm,plan,seam,work:work" "$(pl validate-resolve)"
+assert_eq "pipeline:built-in:brainstorm,plan,handoff,work:work" "$(pl validate-resolve)"
 
 # ─── Scenario 2: init at brainstorm ─────────────────────────────────────────
 it "U7: init bakes loop_phase=brainstorm + full phase_order + the brainstorm unit"
-assert_eq "brainstorm|brainstorm,plan,seam,work|brainstorm" "$(pl init-brainstorm)"
+assert_eq "brainstorm|brainstorm,plan,handoff,work|brainstorm" "$(pl init-brainstorm)"
 
 # ─── Scenario 3: forward advance brainstorm→plan (producer-driven) ───────────
 it "U7: forward advance brainstorm→plan emits the plan unit (producer path), carries the req-doc"
@@ -163,14 +163,14 @@ assert_eq "work|False" "$(pl predicate-not-met-at-brainstorm)"
 
 # ─── Scenario 6: no regression — plan-entry a1, work-entry w ────────────────
 it "U7: plan-entry still routes to a1 (loop_phase=plan, default grammar)"
-assert_eq "plan|plan,seam,work" "$(pl plan-entry-a1)"
+assert_eq "plan|plan,handoff,work" "$(pl plan-entry-a1)"
 
 # v0.4.3 KTD-15: w is no longer a work-only ["work"] stub — it's plan_presatisfied,
 # entering at an already-satisfied plan phase that enumerates straight to work
 # (the work-only stub could never enumerate a reviewed plan's tasks). Same
 # functional outcome (reviewed plan -> work), real producer path.
 it "U7: w routes through a pre-satisfied plan phase (plan_presatisfied grammar)"
-assert_eq "plan|plan,seam,work" "$(pl work-entry-w)"
+assert_eq "plan|plan,handoff,work" "$(pl work-entry-w)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

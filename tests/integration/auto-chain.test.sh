@@ -3,7 +3,7 @@
 #
 # This exercises the REAL pulse (lib/pulse.py) + dispatcher (lib/dispatcher.py)
 # + ledger (lib/ledger.py) wired together exactly as skills/auto/SKILL.md
-# instructs the driving agent to wire them. The ONLY injected seams are the
+# instructs the driving agent to wire them. The ONLY injection points are the
 # documented ones:
 #   * the BACKEND (a Python object exposing next_plan_step/plan/deepen/
 #     review_plan) — injected the same way pulse.test.sh injects BoomBackend;
@@ -29,8 +29,8 @@
 #      re-enqueue -> re-dispatch -> re-review clean -> met==true exits; a
 #      `fixed`-with-stale-blocker must NOT exit; deliberate-fail proves the
 #      re-review is load-bearing
-#   3. auto vs manual seam: a seam-paused pulse stops without re-arming and leaves
-#      driver=manual; auto flips plan->work via _maybe_seam (the auto branch)
+#   3. auto vs manual handoff: a handoff-paused pulse stops without re-arming and leaves
+#      driver=manual; auto flips plan->work via _maybe_handoff (the auto branch)
 #   4. dispatcher-driven fan-out + in-flight cap resize: wave1 cap=N, wave2 smaller
 #   5. goal binding active: a self-pacing run is legible to the U7 Stop hook
 #      (predicate present + unmet; driver=self) and the SKILL instructs goal binding
@@ -88,10 +88,10 @@ echo "dispatch-chain.test.sh"
 # reads exit_predicate_result.met==true off the ledger, flips to done, and emits
 # a report whose minor_findings carry the minor for operator promotion (R6).
 #
-# NOTE: this scenario starts in loop_phase="work". The plan->work / plan->seam
+# NOTE: this scenario starts in loop_phase="work". The plan->work / plan->handoff
 # transition is exercised structurally in Scenario 3; see the gaps noted there
 # (the committed engine cannot currently drive a live plan->work flip with
-# pending work units, because the plan predicate also requires all_units_terminal
+# pending work units, because the plan predicate also requires all_steps_terminal
 # and nothing writes gaps_open). Starting in work isolates the work-loop exit +
 # report path, which is what R5/R6 specify.
 it "full chain: work-loop exits on work predicate (met), emits minors report (R6)"
@@ -148,7 +148,7 @@ fi
 # ─── Scenario 2: findings-closure loop (the livelock guard) ───────────────────
 # Seed a work-loop unit verdict-returned WITH one blocker. Drive the work-loop:
 # the pulse applies a fix (verdict-returned -> fixed). A `fixed` unit with a STALE
-# blocker must NOT let the loop exit (all_units_terminal==false). The driver then
+# blocker must NOT let the loop exit (all_steps_terminal==false). The driver then
 # re-enqueues (fixed -> pending), re-dispatches, and the agent re-reviews with a
 # CLEAN verdict -> verdict-returned with no blockers -> met.
 #
@@ -178,7 +178,7 @@ def launch_fn(uid, attempt=0):
 BUDGET=30; no_stale_exit=True; n=0
 for _ in range(BUDGET):
     n+=1
-    L=ledger.read_ledger(repo, run); pred=L.get("exit_predicate_result",{}); u1=L["units"][0]
+    L=ledger.read_ledger(repo, run); pred=L.get("exit_predicate_result",{}); u1=L["steps"][0]
     if u1["state"]=="fixed":
         stale=any(f["severity"]=="blocker" for f in u1.get("findings") or [])
         if stale and pred.get("met"):
@@ -196,7 +196,7 @@ for _ in range(BUDGET):
 L=ledger.read_ledger(repo, run)
 print(json.dumps({
     "met": L.get("exit_predicate_result",{}).get("met"),
-    "final_state": L["units"][0]["state"],
+    "final_state": L["steps"][0]["state"],
     "no_stale_exit": no_stale_exit,
     "pulses": n, "budget": BUDGET,
 }))
@@ -283,7 +283,7 @@ for _ in range(BUDGET):
     if pulse.dispatch_pulse(repo, run)["action"]=="stop":
         exited=True; break
 L=ledger.read_ledger(repo, run)
-print(json.dumps({"exited": exited, "final_state": L["units"][0]["state"]}))
+print(json.dumps({"exited": exited, "final_state": L["steps"][0]["state"]}))
 PYEOF
 )"
 exited2c="$(jqf "$out2c" exited)"
@@ -294,22 +294,22 @@ else
   fail "exited=$exited2c final_state=$fstate2c (expected False / fixed: NO_REENQUEUE must livelock at fixed)"
 fi
 
-# ─── Scenario 3: auto vs manual seam ──────────────────────────────────────────
-# MANUAL: a seam-paused pulse (loop_phase="seam") must STOP without re-arming and
-# leave driver=manual, seam_paused=true — the true-pause behavior the driver
-# surfaces (the real pulse "phase==seam" branch). AUTO: at the plan-predicate-met
-# moment the engine's _maybe_seam(auto=True) flips plan->work directly (no pause)
-# and keeps driver=self. We drive _maybe_seam against a forged met-true plan
+# ─── Scenario 3: auto vs manual handoff ──────────────────────────────────────────
+# MANUAL: a handoff-paused pulse (loop_phase="handoff") must STOP without re-arming and
+# leave driver=manual, handoff_paused=true — the true-pause behavior the driver
+# surfaces (the real pulse "phase==handoff" branch). AUTO: at the plan-predicate-met
+# moment the engine's _maybe_handoff(auto=True) flips plan->work directly (no pause)
+# and keeps driver=self. We drive _maybe_handoff against a forged met-true plan
 # ledger to exercise the auto branch.
 #
-# GAP: a fully-driven LIVE plan->work / plan->seam transition is currently
-# unreachable in committed code — recompute_predicate requires all_units_terminal
+# GAP: a fully-driven LIVE plan->work / plan->handoff transition is currently
+# unreachable in committed code — recompute_predicate requires all_steps_terminal
 # even in plan phase, nothing writes gaps_open from review_plan's return, the
-# top-of-pulse met-check preempts the seam, and next_plan_step=="done" does not
+# top-of-pulse met-check preempts the handoff, and next_plan_step=="done" does not
 # transition loop_phase. So we exercise the two transition behaviors at the
-# pulse/_maybe_seam seam (real engine functions), and report the live-transition
+# pulse/_maybe_handoff handoff (real engine functions), and report the live-transition
 # gaps in the U5 reply.
-it "seam (manual): a seam-paused pulse stops without re-arming and leaves driver=manual"
+it "handoff (manual): a handoff-paused pulse stops without re-arming and leaves driver=manual"
 out3="$("$PY" - "$REPO" "$LEDGER_PY" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, ledger_py, pulse_py = sys.argv[1:4]
@@ -317,16 +317,16 @@ def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
 ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py)
 
-run="seam-manual"
+run="handoff-manual"
 ledger.init_ledger(repo, run, backend="native",
-                   units=[{"id":"U1","state":"pending"}], loop_phase="seam")
+                   units=[{"id":"U1","state":"pending"}], loop_phase="handoff")
 intent=pulse.dispatch_pulse(repo, run)
 L=ledger.read_ledger(repo, run)
 print(json.dumps({
     "action": intent.get("action"),
     "reason": intent.get("reason"),
     "phase": L.get("loop_phase"),
-    "seam_paused": L.get("seam_paused"),
+    "handoff_paused": L.get("handoff_paused"),
     "driver": (L.get("loop") or {}).get("driver"),
 }))
 PYEOF
@@ -334,16 +334,16 @@ PYEOF
 m_action="$(jqf "$out3" action)"
 m_reason="$(jqf "$out3" reason)"
 m_phase="$(jqf "$out3" phase)"
-m_paused="$(jqf "$out3" seam_paused)"
+m_paused="$(jqf "$out3" handoff_paused)"
 m_driver="$(jqf "$out3" driver)"
-if [ "$m_action" = "stop" ] && [ "$m_reason" = "seam-pause" ] && [ "$m_phase" = "seam" ] \
+if [ "$m_action" = "stop" ] && [ "$m_reason" = "handoff-pause" ] && [ "$m_phase" = "handoff" ] \
    && [ "$m_paused" = "True" ] && [ "$m_driver" = "manual" ]; then
   pass
 else
   fail "action=$m_action reason=$m_reason phase=$m_phase paused=$m_paused driver=$m_driver"
 fi
 
-it "seam (auto): the engine's _maybe_seam(auto) flips plan->work directly (no pause), driver stays self"
+it "handoff (auto): the engine's _maybe_handoff(auto) flips plan->work directly (no pause), driver stays self"
 out3b="$("$PY" - "$REPO" "$LEDGER_PY" "$PULSE_PY" <<'PYEOF'
 import sys, importlib.util, json
 repo, ledger_py, pulse_py = sys.argv[1:4]
@@ -351,12 +351,12 @@ def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
 ledger=load("ledger",ledger_py); pulse=load("pulse",pulse_py)
 
-run="seam-auto"
+run="handoff-auto"
 # A plan ledger forged into "a review_plan round just closed the gaps" state:
 # loop_phase="plan", plan_step="review_plan", and a REAL review reported zero gaps
 # (set_gaps_open(0)). The phase-aware predicate (schema §3.1) makes plan-met ==
 # (gaps_open is not None AND gaps_open==0 AND plan_step=="review_plan") — so this
-# honest "review complete, no gaps" state is met and _maybe_seam(auto) fires.
+# honest "review complete, no gaps" state is met and _maybe_handoff(auto) fires.
 # Bug #5: gaps_open is now NULLABLE — a forged review_plan WITHOUT set_gaps_open
 # leaves gaps_open null (no real review reported), and plan-met does NOT fire. We
 # must seed the zero-gap count explicitly to model a completed review. (A plan
@@ -367,31 +367,31 @@ ledger.init_ledger(repo, run, backend="native",
 ledger.set_gaps_open(repo, run, 0)  # a real review ran and found zero gaps.
 # v0.4.3 producer handshake: the model must have ENUMERATED the plan's work units
 # before plan→work transitions (else it'd flip to a work phase with no units).
-# This test exercises seam ROUTING (auto-flip vs manual-pause), so stash the
+# This test exercises handoff ROUTING (auto-flip vs manual-pause), so stash the
 # units the model would have produced; the gate then lets the auto-flip proceed.
 ledger.set_enumerated_units(repo, run, "U1", [{"id":"w1","invokes":{}}])
 L=ledger.read_ledger(repo, run)
 met_plan=L.get("exit_predicate_result",{}).get("met")
-# Exercise the auto seam branch directly (the engine function), as the pulse would.
-out=pulse.pulse_advance._maybe_seam(repo, run, L, auto=True, advance_result={"advanced":"plan-step"})
+# Exercise the auto handoff branch directly (the engine function), as the pulse would.
+out=pulse.pulse_advance._maybe_handoff(repo, run, L, auto=True, advance_result={"advanced":"plan-step"})
 L2=ledger.read_ledger(repo, run)
 print(json.dumps({
     "met_plan": met_plan,
-    "auto_seam": out.get("seam"),
+    "auto_handoff": out.get("handoff"),
     "phase": L2.get("loop_phase"),
     "driver": (L2.get("loop") or {}).get("driver"),
 }))
 PYEOF
 )"
 a_metplan="$(jqf "$out3b" met_plan)"
-a_seam="$(jqf "$out3b" auto_seam)"
+a_handoff="$(jqf "$out3b" auto_handoff)"
 a_phase="$(jqf "$out3b" phase)"
 a_driver="$(jqf "$out3b" driver)"
-if [ "$a_metplan" = "True" ] && [ "$a_seam" = "auto-flip-to-work" ] \
+if [ "$a_metplan" = "True" ] && [ "$a_handoff" = "auto-flip-to-work" ] \
    && [ "$a_phase" = "work" ] && [ "$a_driver" = "self" ]; then
   pass
 else
-  fail "met_plan=$a_metplan auto_seam=$a_seam phase=$a_phase driver=$a_driver"
+  fail "met_plan=$a_metplan auto_handoff=$a_handoff phase=$a_phase driver=$a_driver"
 fi
 
 # ─── Scenario 4: dispatcher-driven fan-out + in-flight cap resize ───────────
@@ -412,7 +412,7 @@ units=[{"id":"U%d"%i,"state":"pending"} for i in range(1,7)]
 ledger.init_ledger(repo, run, backend="native", units=units, loop_phase="work")
 
 def n_disp():
-    return sum(1 for u in ledger.read_ledger(repo, run)["units"] if u["state"]=="dispatched")
+    return sum(1 for u in ledger.read_ledger(repo, run)["steps"] if u["state"]=="dispatched")
 
 r1=orch.ready_units(repo, run)
 res1=orch.dispatch_batch(repo, run, r1, cap=4)

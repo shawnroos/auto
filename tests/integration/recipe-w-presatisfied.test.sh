@@ -76,7 +76,7 @@ init_step = led.get("plan_step")
 epr = led.get("exit_predicate_result") or {}
 init_gaps = epr.get("gaps_open")
 init_met = epr.get("met")
-plan_units = [u for u in led["units"] if u.get("phase") == "plan"]
+plan_units = [u for u in led["steps"] if u.get("phase") == "plan"]
 plan_path_bound = bool(plan_units) and (plan_units[0].get("dispatch_context") or {}).get("plan_path") == plan
 
 # PULSE 1 — the model has NOT enumerated yet (production reality). The producer
@@ -91,15 +91,15 @@ enumerate_surfaced = "ENUMERATE" in guidance1 or "enumerate" in guidance1
 
 # The model executes the enumerate_plan_units prepare op → stashes work units.
 ledger.set_enumerated_units(repo, run_id, plan_units[0]["id"], [
-    {"id": "u-a", "invokes": {"adapter_op": "do_unit"}},
-    {"id": "u-b", "invokes": {"adapter_op": "do_unit"}},
+    {"id": "u-a", "invokes": {"backend_op": "do_step"}},
+    {"id": "u-b", "invokes": {"backend_op": "do_step"}},
 ])
 
 # PULSE 2 — now the units exist, so the handshake passes and we transition.
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led2 = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-work = sorted(u["id"] for u in led2["units"] if u.get("phase") == "work")
+work = sorted(u["id"] for u in led2["steps"] if u.get("phase") == "work")
 print("%s|%s|%s|%s|%s|%s|%s|%s" % (
     init_step, init_gaps, init_met, plan_path_bound,
     pulse1_phase, enumerate_surfaced, led2["loop_phase"], ",".join(work),

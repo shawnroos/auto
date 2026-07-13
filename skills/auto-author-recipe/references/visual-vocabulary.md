@@ -35,14 +35,14 @@ recipe: <name>
 - **`▼ emit: <name>`** on a between-phase arrow names the producer that fires when
   the run ARRIVES at the next phase (the producer is keyed on its `to` phase, so a
   `{from: plan, to: work}` producer shows on the arrow entering `work` even though
-  the run routes through `seam`).
+  the run routes through `handoff`).
 - **`(terminal)`** marks the phase whose completion ends the run.
 
 ## The four built-in cards (the reference set)
 
 Render each with `bash "${CLAUDE_PLUGIN_ROOT}/lib/recipes-list.sh" --render <name>`:
-- `a1` — one plan unit → `plan_output_to_work_units` → work (the classic stack).
-- `a2` — plan-1/2/3 (parallel) + judge → `judge_winner_to_work_units` → work.
+- `a1` — one plan unit → `plan_output_to_work_steps` → work (the classic stack).
+- `a2` — plan-1/2/3 (parallel) + judge → `judge_winner_to_work_steps` → work.
 - `a4` — one plan unit → `plan_output_to_paired_builders` → two biased builders +
   comparator.
 - `w` — work-only: `phase_order: ["work"]`, no plan, no producer; units come from

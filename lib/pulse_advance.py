@@ -4,7 +4,7 @@
 These are the functions that perform the ONE smallest-useful advance the pulse
 owns each beat — the plan-loop step, the work-loop fix/re-enqueue, the
 iteration check, and the stall-detect-and-halt that backs the parallel-fan-out
-promise — plus the seam transition that routes a finished plan-loop to seam
+promise — plus the handoff transition that routes a finished plan-loop to handoff
 (manual) or work (auto).
 
 They were extracted VERBATIM from lib/pulse.py (B4); no logic changed. The
@@ -103,7 +103,7 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     independent siblings still advance.
     """
     newly_stalled = []
-    for u in ledger_dict.get("units", []):
+    for u in ledger_dict.get("steps", []):
         if u.get("state") != "dispatched":
             continue
         threshold = int(
@@ -145,9 +145,9 @@ def detect_and_halt_stalled(repo_root, run_id, ledger_dict, now):
     # Compute the full halted set (newly + already-stalled) and their dependents.
     fresh = ledger.read_ledger(repo_root, run_id)
     stalled_ids = [
-        u.get("id") for u in fresh.get("units", []) if u.get("state") == "stalled"
+        u.get("id") for u in fresh.get("steps", []) if u.get("state") == "stalled"
     ]
-    halted = _transitive_dependents(fresh.get("units", []), stalled_ids)
+    halted = _transitive_dependents(fresh.get("steps", []), stalled_ids)
     return fresh, sorted(halted), confirmed_stalled
 
 
@@ -180,7 +180,7 @@ def reap_unit(repo_root, run_id, unit_id, attempt):
     """
     fresh = ledger.read_ledger(repo_root, run_id)
     unit = None
-    for u in fresh.get("units", []):
+    for u in fresh.get("steps", []):
         if u.get("id") == unit_id:
             unit = u
             break
@@ -220,7 +220,7 @@ def clear_reap_pending(repo_root, run_id, unit_id):
     write path. Returns True iff the unit was found and its marker cleared.
     """
     def mutate(led):
-        for u in led.get("units", []):
+        for u in led.get("steps", []):
             if u.get("id") == unit_id:
                 u["reap_pending"] = False
                 return True
@@ -241,7 +241,7 @@ def units_awaiting_reap(ledger_dict):
     """
     return [
         u.get("id")
-        for u in ledger_dict.get("units", [])
+        for u in ledger_dict.get("steps", [])
         if u.get("state") == "stalled" and u.get("reap_pending")
     ]
 
@@ -262,7 +262,7 @@ def record_stall_error(repo_root, run_id, unit_id, call, message, now_iso):
     """
     fresh = ledger.read_ledger(repo_root, run_id)
     unit = None
-    for u in fresh.get("units", []):
+    for u in fresh.get("steps", []):
         if u.get("id") == unit_id:
             unit = u
             break
@@ -289,14 +289,14 @@ def _ready_fix_unit(ledger_dict, halted_ids):
 
     SCALE-AWARE (Bug #3): which severities are fix-due is decided by the SINGLE
     helper ``ledger.gating_severities(scale)``, read off this ledger's
-    ``adapter_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
+    ``backend_scale``. Hardcoding ``GATING_SEVERITIES`` here would livelock a
     blocker-only run: the pulse would forever try to fix a major-only unit that
     re-reviews to the same advisory major, fix→re-enqueue→re-review forever, while
     the predicate already reports met. The fix-class and the terminality class
     MUST share the gating decision so they agree on which units still need work.
     """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))  # format-v1 key; flips in U6
-    for u in ledger_dict.get("units", []):
+    gating = ledger.gating_severities(ledger_dict.get("backend_scale", "three-tier"))
+    for u in ledger_dict.get("steps", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "verdict-returned":
@@ -319,8 +319,8 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
     and ``unit_is_terminal`` — a blocker-only run never re-enqueues a major-only
     fixed unit (majors are advisory), so it cannot churn fix→re-enqueue forever.
     """
-    gating = ledger.gating_severities(ledger_dict.get("adapter_scale", "three-tier"))  # format-v1 key; flips in U6
-    for u in ledger_dict.get("units", []):
+    gating = ledger.gating_severities(ledger_dict.get("backend_scale", "three-tier"))
+    for u in ledger_dict.get("steps", []):
         if u.get("id") in halted_ids:
             continue
         if u.get("state") != "fixed":
@@ -333,7 +333,7 @@ def _ready_reenqueue_unit(ledger_dict, halted_ids):
 
 def _collect_upstream_findings(ledger_dict):
     """Gather role-tagged finding records from verdict-returned units'
-    ``dispatch_context`` (the `decision`/`winner_unit_id` channel — findings[]
+    ``dispatch_context`` (the `decision`/`winner_step_id` channel — findings[]
     is normalized to {severity, note}, so role/phase tags survive only here).
 
     A unit's ``dispatch_context.cluster_findings`` (when present) is a list of
@@ -343,7 +343,7 @@ def _collect_upstream_findings(ledger_dict):
     non-list cluster_findings, etc. contributes nothing rather than raising.
     """
     collected = []
-    for u in ledger_dict.get("units", []) or []:
+    for u in ledger_dict.get("steps", []) or []:
         if not isinstance(u, dict) or u.get("state") != "verdict-returned":
             continue
         dc = u.get("dispatch_context")
@@ -380,7 +380,7 @@ def detect_upstream_cluster(ledger_dict):
 
 def _escalate_upstream_cluster(repo_root, run_id, result):
     """Escalate a detected upstream cluster to the operator via the EXISTING
-    pause seam — driver=manual + a blocked_on message naming the upstream phase
+    pause handoff — driver=manual + a blocked_on message naming the upstream phase
     and the converging findings. This is the SAME mechanism auto-resume.py's
     `pause` uses (ledger.set_loop direct, mirroring advance_iteration_loop's
     bound-exit), so on-stop.py's manual carve-out lets the session stop and
@@ -388,15 +388,15 @@ def _escalate_upstream_cluster(repo_root, run_id, result):
 
     Crucially this does NOT move loop_phase backward and writes NO new persisted
     field (driver + blocked_on already exist) — autonomous rebound is v0.7.0
-    (KTD-6). The returned dict carries ``seam_pause: True`` so pulse.py's
-    _try_seam_pause short-circuits BEFORE the standard driver="self" re-stamp +
+    (KTD-6). The returned dict carries ``handoff_pause: True`` so pulse.py's
+    _try_handoff_pause short-circuits BEFORE the standard driver="self" re-stamp +
     rearm (which would otherwise immediately undo this pause).
     """
     message = upstream_cluster.escalation_message(result) or "upstream-cluster detected"
     ledger.set_loop(repo_root, run_id, driver="manual", blocked_on=message)
     return {
         "advanced": "upstream-cluster-escalation",
-        "seam_pause": True,
+        "handoff_pause": True,
         "upstream_cluster": {
             "target_phase": result.get("target_phase"),
             "distinct_roles": result.get("distinct_roles"),
@@ -420,7 +420,7 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     verdict-returned+blocker unit applies the fix (one step), and the NEXT pulse
     re-enqueues that fixed-with-stale-blocker unit. This MIRRORS the plan_step
     advance: one persisted advance per fresh-process pulse. Without step 2 the
-    loop livelocks at `fixed` (the stale blocker keeps all_units_terminal false
+    loop livelocks at `fixed` (the stale blocker keeps all_steps_terminal false
     forever) — the closure loop is unreachable.
 
     The fixed→pending re-enqueue honors the test-only
@@ -434,7 +434,7 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     gate-then-route shape but routes to PAUSE, not a mutator): BEFORE picking a
     fix, check whether the converged review findings cluster on an upstream
     spine phase (role-diversity-weighted). If so, escalate to the operator via
-    the pause seam and return — do NOT ratchet a fix pass against a flaw the
+    the pause handoff and return — do NOT ratchet a fix pass against a flaw the
     current phase cannot close (KTD-6). The check is read-only + degrade-safe;
     on a recipe-blind / non-spine run upstream_phases is empty so it never fires.
     """
@@ -465,7 +465,7 @@ def _persist_enumerated_units(repo_root, run_id, enumerated):
     advance makes unambiguous. Idempotent-safe: re-persist overwrites.
     """
     led = ledger.read_ledger(repo_root, run_id)
-    plan_units = [u for u in led.get("units", []) if u.get("phase") == "plan"]
+    plan_units = [u for u in led.get("steps", []) if u.get("phase") == "plan"]
     if not plan_units:
         return
     target = next(
@@ -497,8 +497,8 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
 
     PLAN→exit (schema §3.1 / backend-contract §4.1, §5): when ``next_plan_step``
     returns ``"done"`` the plan sequence is complete (gaps closed). The plan-loop
-    must NOT re-arm on ``plan``; the caller (``_maybe_seam``) routes the met plan
-    predicate to seam (manual) or work (auto). We surface ``{"advanced":
+    must NOT re-arm on ``plan``; the caller (``_maybe_handoff``) routes the met plan
+    predicate to handoff (manual) or work (auto). We surface ``{"advanced":
     "plan-done"}`` so the caller knows the sequence finished this pulse.
 
     GAPS persist (gap-write, backend-contract §2.2): when the executed step is
@@ -516,12 +516,12 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
     if step == "done":
         # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
         # via the v0.2.0 backend op and PERSIST them onto the plan unit's
-        # dispatch_context.enumerated_units, so the phase-transition producer (U5b)
+        # dispatch_context.enumerated_steps, so the phase-transition producer (U5b)
         # can read them when it emits work units (resolves F4 — the producer).
         # enumerate_plan_units is prepare-only: it may return a bare list (a
         # synchronous/test backend) OR a PREPARE envelope the model fills with the
-        # units under the canonical "units" key. We persist whichever concrete list
-        # is available; a freshly-prepared envelope with no "units" key leaves the
+        # units under the canonical "steps" key. We persist whichever concrete list
+        # is available; a freshly-prepared envelope with no "steps" key leaves the
         # field untouched (same no-premature-default discipline as gaps_open).
         enum_op = getattr(backend, "enumerate_plan_units", None)
         enum_envelope = None
@@ -531,13 +531,13 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, backend):
             if isinstance(enum_result, list):
                 enumerated = enum_result
             elif isinstance(enum_result, dict):
-                if isinstance(enum_result.get("units"), list):
-                    enumerated = enum_result["units"]
+                if isinstance(enum_result.get("steps"), list):
+                    enumerated = enum_result["steps"]
                 else:
                     # A PREPARE envelope (the live backend): the model fills the
                     # units out-of-band via set_enumerated_units. Carry it so the
                     # caller can surface it as the rearm intent (producer
-                    # handshake — see _maybe_seam). NOT a synchronous result.
+                    # handshake — see _maybe_handoff). NOT a synchronous result.
                     enum_envelope = enum_result
             if enumerated is not None:
                 _persist_enumerated_units(repo_root, run_id, enumerated)
@@ -605,13 +605,13 @@ def advance_iteration_loop(repo_root, run_id, led):
       * "exit" OR "iterate over bound" → write `bound_override` on the gate
         unit's dispatch_context, then flip the loop to "done" / driver="manual"
         DIRECTLY via set_loop (NOT through advance_to_phase, which would re-
-        invoke `judge_winner_to_work_units` and raise on missing winner_unit_id
+        invoke `judge_winner_to_work_steps` and raise on missing winner_unit_id
         — KTD §D / round-2 P0 fix). Return {"action": "stop", "reason":
         "bound-exit", "report": ...}.
 
     Two safety gates fire BEFORE the decision read (no ledger writes on either
     early-return path — keeps a1/W pulses side-effect-clean):
-      1. a1/W early-return: `led.get("iteration")` missing OR `gate_unit` is
+      1. a1/W early-return: `led.get("iteration")` missing OR `gate_step` is
          None → return None. No call to `evaluate_decision`.
       2. Kill-switch: `_bootstrap.is_iteration_disabled()` True
          (CLAUDE_AUTO_DISABLE_ITERATION=1) → return None. A REAL operator
@@ -627,7 +627,7 @@ def advance_iteration_loop(repo_root, run_id, led):
     """
     # Gate 1: no iteration declared (a1, W, legacy ledgers). Side-effect-free.
     iter_block = led.get("iteration") or {}
-    gate_unit_id = iter_block.get("gate_unit")
+    gate_unit_id = iter_block.get("gate_step")
     if not gate_unit_id:
         return None
     # Gate 2: kill-switch. Operators can set CLAUDE_AUTO_DISABLE_ITERATION=1
@@ -692,7 +692,7 @@ def advance_iteration_loop(repo_root, run_id, led):
     # effective in ("exit", "iterate"-over-bound). Both shapes: write the
     # bound_override (carries bound_type + original_decision + at) and force
     # the loop to "done" / driver="manual" via set_loop DIRECTLY.
-    # advance_to_phase would re-invoke `judge_winner_to_work_units` which
+    # advance_to_phase would re-invoke `judge_winner_to_work_steps` which
     # raises on missing winner_unit_id (the gate said iterate, not advance, so
     # no winner is set). Skipping advance_to_phase preserves the audit trail
     # in the gate's dispatch_context.bound_override.
@@ -727,7 +727,7 @@ def _build_bound_exit_report(led, gate_unit_id):
     """
     base = pulse_guidance._build_report(led)
     gate = next(
-        (u for u in led.get("units", []) if u.get("id") == gate_unit_id), None
+        (u for u in led.get("steps", []) if u.get("id") == gate_unit_id), None
     )
     base["bound_override"] = iteration.read_bound_override(gate or {})
     base["best_so_far"] = iteration.read_decision_payload(gate or {})
@@ -735,7 +735,7 @@ def _build_bound_exit_report(led, gate_unit_id):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Seam handling.
+# Handoff handling.
 
 
 def _plan_has_enumerated_units(led) -> bool:
@@ -746,8 +746,8 @@ def _plan_has_enumerated_units(led) -> bool:
     remain), so we must transition. A MISSING key means the model hasn't run
     enumerate yet, so we surface the prepare and wait. The plan→work producers read
     enumerated_units off the plan unit."""
-    for u in led.get("units", []):
-        if u.get("phase") == "plan" and "enumerated_units" in (
+    for u in led.get("steps", []):
+        if u.get("phase") == "plan" and "enumerated_steps" in (
             u.get("dispatch_context") or {}
         ):
             return True
@@ -758,7 +758,7 @@ def _is_auto(auto_flag) -> bool:
     """Auto mode: the explicit --auto flag. The pulse honors only the flag the
     driver passes; there is no ledger-driven auto marker (the schema has no slot
     for one, and the driver owns the policy). Kept as a named predicate so the
-    seam-routing call site reads intentionally."""
+    handoff-routing call site reads intentionally."""
     return bool(auto_flag)
 
 
@@ -784,7 +784,7 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
     through here.
     """
     producer_name = phase_grammar.producer_name_for_arrival(led, to_phase)
-    legacy_ledger = led.get("recipe") is None
+    legacy_ledger = led.get("workflow") is None
     if producer_name is None:
         if not legacy_ledger:
             raise ledger.LedgerError(
@@ -793,16 +793,16 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
                 f"or fix the recipe"
             )
         # legacy: no recipe declared, behave like v0.1.x — raw advance.
-        # transition_and_emit's v0.2.0 path writes seam_paused=(to_phase=="seam");
-        # we mirror that here so manual seam→work via auto-resume clears the
+        # transition_and_emit's v0.2.0 path writes handoff_paused=(to_phase=="handoff");
+        # we mirror that here so manual handoff→work via auto-resume clears the
         # pause flag on legacy ledgers too. The auto-flip path (called with
-        # to_phase="work") clears it; future helpers that arrive at "seam"
+        # to_phase="work") clears it; future helpers that arrive at "handoff"
         # would set it. Either way, both writes happen in one set_loop.
         ledger.set_loop(
             repo_root,
             run_id,
             loop_phase=to_phase,
-            seam_paused=(to_phase == "seam"),
+            handoff_paused=(to_phase == "handoff"),
             driver="self",
             beat=True,
         )
@@ -814,7 +814,7 @@ def advance_to_phase(repo_root, run_id, led, *, to_phase):
 def _brainstorm_unit_ready(led) -> bool:
     """True iff the spine's brainstorm unit is complete AND has recorded its
     requirements-doc output — the precondition for firing the U8
-    ``brainstorm_output_to_plan_unit`` producer.
+    ``brainstorm_output_to_plan_step`` producer.
 
     Gating on BOTH conditions is load-bearing: if we advanced to plan before the
     doc path is recorded, the U8 producer raises ``RecipeError``, which
@@ -823,7 +823,7 @@ def _brainstorm_unit_ready(led) -> bool:
     only fire when its input is present). Until both hold the brainstorm pulse
     re-arms (the unit is still being worked by the model).
     """
-    for u in led.get("units", []) or []:
+    for u in led.get("steps", []) or []:
         if not isinstance(u, dict) or u.get("id") != "brainstorm":
             continue
         if u.get("state") != "verdict-returned":
@@ -834,7 +834,7 @@ def _brainstorm_unit_ready(led) -> bool:
 
 def advance_brainstorm_loop(repo_root, run_id, led):
     """Brainstorm-phase advance for the spine recipe (v0.6.0 / U7 — the forward
-    brainstorm→plan trigger that mirrors ``_maybe_seam``'s plan→work auto-flip).
+    brainstorm→plan trigger that mirrors ``_maybe_handoff``'s plan→work auto-flip).
 
     The brainstorm phase has NO predicate-met exit (KTD-3 / U7 technical design:
     ``eval_phase == terminal_phase`` is False at brainstorm, so ``met`` stays
@@ -847,18 +847,18 @@ def advance_brainstorm_loop(repo_root, run_id, led):
     When the brainstorm unit is complete + has its requirements-doc, advance to
     ``plan`` through ``advance_to_phase`` (the single phase-advance chokepoint),
     which resolves the recipe's {to: plan} transition and fires the registered
-    ``brainstorm_output_to_plan_unit`` producer atomically. Otherwise return
+    ``brainstorm_output_to_plan_step`` producer atomically. Otherwise return
     ``{"advanced":"none"}`` so the pulse re-arms while the model still works the
     brainstorm step. Pairs with the plan→work producer exactly as plan→work pairs
-    with seam.
+    with handoff.
     """
     if not _brainstorm_unit_ready(led):
         return {"advanced": "none", "reason": "brainstorm-pending"}
     advance_to_phase(repo_root, run_id, led, to_phase="plan")
-    return {"advanced": "brainstorm-done", "seam": "auto-advance-to-plan"}
+    return {"advanced": "brainstorm-done", "handoff": "auto-advance-to-plan"}
 
 
-def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
+def _maybe_handoff(repo_root, run_id, led, *, auto, advance_result):
     """If the plan-loop is complete, transition out of plan (gap #5).
 
     The plan sequence is complete when EITHER the cached predicate is met
@@ -868,8 +868,8 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     `next_plan_step=="done"` always transitions loop_phase, never re-arming on
     `plan`.
 
-    Manual (not auto): write loop_phase="seam", seam_paused=true,
-    loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
+    Manual (not auto): write loop_phase="handoff", handoff_paused=true,
+    loop.driver="manual"; do NOT re-arm (signal handoff_pause to the caller).
     Auto: flip plan → work directly via the recipe's producer (v0.2.0; P0 #1
     fix-pass A.2 — the load-bearing rewire). Reads the recipe's
     phase_transitions for the {to: work} producer, resolves it, and calls
@@ -903,22 +903,22 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     if not _plan_has_enumerated_units(led):
         out = dict(advance_result or {})
         out["advanced"] = "plan-enumerate-pending"
-        out["seam"] = "enumerate-pending"
+        out["handoff"] = "enumerate-pending"
         return out
     if _is_auto(auto):
         advance_to_phase(repo_root, run_id, led, to_phase="work")
         out = dict(advance_result or {})
-        out["seam"] = "auto-flip-to-work"
+        out["handoff"] = "auto-flip-to-work"
         return out
     ledger.set_loop(
         repo_root,
         run_id,
-        loop_phase="seam",
-        seam_paused=True,
+        loop_phase="handoff",
+        handoff_paused=True,
         driver="manual",
         beat=True,
     )
     out = dict(advance_result or {})
-    out["seam_pause"] = True
-    out["seam"] = "paused"
+    out["handoff_pause"] = True
+    out["handoff"] = "paused"
     return out

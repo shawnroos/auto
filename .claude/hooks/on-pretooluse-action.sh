@@ -8,7 +8,7 @@
 #   CLAUDE.md-anchored destructive set (push --force, reset --hard, checkout .,
 #   restore ., clean -f / git clean -fdx, branch -D, rm -rf, known publish
 #   endpoints) and, under the SAME live-run + session_id gate, escalates via the
-#   pause seam — independent of any question. This gives the "irreversible/
+#   pause handoff — independent of any question. This gives the "irreversible/
 #   destructive" boundary a real enforcement mechanism rather than prose the
 #   agent might ignore.
 #

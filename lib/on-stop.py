@@ -2,7 +2,7 @@
 """auto U7: decision logic behind .claude/hooks/on-stop.sh.
 
 The engine's OWN deliberate-stop guard (U9 spike: native `/goal` has no external
-predicate seam — auto ships this). Reads every ledger under
+predicate handoff — auto ships this). Reads every ledger under
 <repo>/.claude/auto/ LOCK-FREE (atomic-rename => consistent snapshot) and
 decides whether to BLOCK the stop.
 
@@ -12,19 +12,19 @@ BLOCK MECHANISM (U9 §4 + ralph-loop/hooks/stop-hook.sh:179-188):
 
 ACTIVE-RUN POLICY:
     BLOCK if ANY run has loop_phase != "done" AND exit_predicate_result.met ==
-    false AND loop.driver == "self". `met` already encodes the all_units_terminal
+    false AND loop.driver == "self". `met` already encodes the all_steps_terminal
     gate (schema §5 I-2), so a lurking stalled/pending unit (findings counters
     zero) keeps the stop blocked.
 
-    The `driver == "self"` conjunct is the SEAM/MANUAL carve-out: the engine
+    The `driver == "self"` conjunct is the HANDOFF/MANUAL carve-out: the engine
     blocks premature stop only during ACTIVE work — a live pulse chain (driver ==
     "self") that expects to keep going. When the engine writes `driver:
     "manual"` it is SIGNALING a valid stop-point awaiting human input (a
-    seam pause emits action:"stop" + driver:"manual" deliberately; predicate-met
+    handoff pause emits action:"stop" + driver:"manual" deliberately; predicate-met
     and abort also set manual but are already filtered by phase == "done").
     Blocking a manual-driver run would self-conflict with the engine's own
-    seam-stop signal. (Brief/plan stated the simpler "phase != done AND !met"
-    rule, which conflicts with the seam; this carve-out resolves it — raised as a
+    handoff-stop signal. (Brief/plan stated the simpler "phase != done AND !met"
+    rule, which conflicts with the handoff; this carve-out resolves it — raised as a
     gap for the dispatcher.)
 
 LOOP-SAFETY:
@@ -105,7 +105,7 @@ def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
     Applies the four carve-outs uniformly across per-worktree ledgers and
     batch-discovered sub-run ledgers (the v0.4.0 U4 batch path originally
     duplicated this predicate and dropped two carve-outs; code-review round
-    1 finding C-1 surfaced both gaps — manual-driver runs at the seam, and
+    1 finding C-1 surfaced both gaps — manual-driver runs at the handoff, and
     stale-chain `driver == "self"` runs — would block stop indefinitely
     via the batch path while correctly allowing it via the per-worktree
     path). Returns the predicate dict when blocking, None otherwise.
@@ -115,7 +115,7 @@ def _is_blocking(led, *, ledger, skip_staleness, stale_threshold, now):
     if phase_grammar.current_phase(led) == "done":
         return None
     loop = led.get("loop") or {}
-    # SEAM/MANUAL carve-out: a manual-driver run is the engine signaling
+    # HANDOFF/MANUAL carve-out: a manual-driver run is the engine signaling
     # a valid stop-point awaiting human input.
     if loop.get("driver") == "manual":
         return None
@@ -246,7 +246,7 @@ def _reason_for(blocking) -> str:
     for run_id, predicate in blocking:
         blockers = int(predicate.get("blockers", 0) or 0)
         majors = int(predicate.get("majors", 0) or 0)
-        all_terminal = bool(predicate.get("all_units_terminal"))
+        all_terminal = bool(predicate.get("all_steps_terminal"))
         parts = []
         if blockers:
             parts.append(f"{blockers} blocker{'s' if blockers != 1 else ''}")

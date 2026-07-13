@@ -57,7 +57,7 @@ def _emit_units_core(ledger: dict, to_phase: str, producer) -> list:
     Returns the list of newly-appended unit ids.
     """
     new_units = producer(ledger, to_phase) or []
-    existing_ids = {u["id"] for u in ledger.get("units", [])}
+    existing_ids = {u["id"] for u in ledger.get("steps", [])}
     appended = []
     for nu in new_units:
         if "id" not in nu:
@@ -67,7 +67,7 @@ def _emit_units_core(ledger: dict, to_phase: str, producer) -> list:
         # Emitted units default to the arriving phase unless they declare one.
         nu = dict(nu)
         nu.setdefault("phase", to_phase)
-        ledger.setdefault("units", []).append(
+        ledger.setdefault("steps", []).append(
             ledger_core._normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
         )
         existing_ids.add(nu["id"])
@@ -85,7 +85,7 @@ def transition_and_emit(
     advance and the emission as SEPARATE locked writes (`set_loop` then an emit),
     which left a torn-state window: a reader between the two writes would see the
     new phase with zero emitted units, and `recompute_predicate` could fire
-    ``met`` prematurely (e.g. A2's judge terminal → all_units_terminal with no
+    ``met`` prematurely (e.g. A2's judge terminal → all_steps_terminal with no
     work units yet). Doing both inside one ``_with_locked_ledger`` body closes
     that window: the producer's units are appended BEFORE ``_atomic_write``'s
     mandatory predicate recompute, so ``met`` is always computed against the
@@ -101,7 +101,7 @@ def transition_and_emit(
     Returns the list of newly-appended unit ids.
 
     F3 / maint-1: emit body delegates to ``_emit_units_core``; this path adds
-    the ``loop_phase``/``seam_paused`` advance that distinguishes a transition
+    the ``loop_phase``/``handoff_paused`` advance that distinguishes a transition
     from an in-phase emit.
     """
     def mutate(ledger):
@@ -109,9 +109,9 @@ def transition_and_emit(
         # Advance the phase AFTER emission (the units belong to to_phase; setting
         # loop_phase first or last is equivalent here since both happen in one
         # snapshot, but advancing last keeps "emit produces units FOR to_phase"
-        # readable). seam_paused tracks the phase per the v0.1.x rule.
+        # readable). handoff_paused tracks the phase per the v0.1.x rule.
         ledger["loop_phase"] = to_phase
-        ledger["seam_paused"] = to_phase == "seam"
+        ledger["handoff_paused"] = to_phase == "handoff"
         return appended
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
@@ -149,7 +149,7 @@ def emit_within_phase(repo_root, run_id, to_phase: str, producer):
 
     Sibling to ``transition_and_emit``: same atomicity contract (one
     ``_with_locked_ledger`` body wraps emit+normalize+append+recompute), but
-    NO ``loop_phase`` write and NO ``seam_paused`` flip. Re-emission stays
+    NO ``loop_phase`` write and NO ``handoff_paused`` flip. Re-emission stays
     within the gate unit's current phase per KTD §D — the iteration loop adds
     siblings rather than transitioning the run.
 
@@ -165,7 +165,7 @@ def emit_within_phase(repo_root, run_id, to_phase: str, producer):
     NEW PUBLIC FUNCTION rather than a ``transition_and_emit`` parameter
     extension. The bodies share the emit-append-normalize sub-step (factored
     into ``_apply_emit`` for ``atomic_iterate_step`` reuse) but diverge on
-    loop_phase/seam_paused/counter — a parameter would muddy both paths and
+    loop_phase/handoff_paused/counter — a parameter would muddy both paths and
     leak the counter into transition_and_emit.
     """
     def mutate(ledger):

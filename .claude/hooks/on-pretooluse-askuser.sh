@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto U4 PreToolUse hook (AskUserQuestion gate): the advisor-routing seam.
+# auto U4 PreToolUse hook (AskUserQuestion gate): the advisor-routing handoff.
 #
 # WHY THIS EXISTS (KTD-4/5):
 #   During a LIVE self-driven /auto run, the wrapped ce skills' own
@@ -7,7 +7,7 @@
 #   hands-off for MECHANICAL work. This hook DENIES the AskUserQuestion and
 #   redirects the driving agent to consult the `advisor` (prose advice) and
 #   itself classify: mechanical clarification -> resolve and proceed; a
-#   substantive design/architecture fork -> escalate via the pause seam.
+#   substantive design/architecture fork -> escalate via the pause handoff.
 #
 # FIRES ONLY when the PreToolUse stdin `session_id` equals the ledger's
 # `driving_session_id` AND a live self-driven run exists (KTD-5). A concurrent

@@ -6,7 +6,7 @@ whether they CLUSTER on a single UPSTREAM phase — i.e. the flaw is inherited
 from an earlier creative-spine stage (brainstorm/plan) rather than being a
 local issue in the current phase. The engine (lib/pulse_advance.py) calls this
 during a spine run and, on a positive detection, ESCALATES the cluster to the
-operator via the existing pause seam (driver=manual + blocked_on). No backward
+operator via the existing pause handoff (driver=manual + blocked_on). No backward
 loop_phase move, no new persisted field, no rebound machinery — that autonomous
 backward edge is deferred to v0.7.0 (KTD-6). v0.6.0 ships the detection half.
 
@@ -20,7 +20,7 @@ distinct reviewer roles attribute to ONE upstream phase", NOT a count threshold.
 The "many same-role local findings" negative case falls out for free: one role
 contributes distinct-role-count == 1 to any phase, below the threshold.
 
-WHERE THE METADATA LIVES (the `decision` / `winner_unit_id` precedent —
+WHERE THE METADATA LIVES (the `decision` / `winner_step_id` precedent —
 lib/iteration.py, lib/ledger_mutators.set_winner_unit_id): `record_verdict`
 NORMALIZES findings to ``{severity, note}`` only (lib/ledger_mutators.py:150),
 so any reviewer-role / target-phase tag on a finding is STRIPPED on the
@@ -213,7 +213,7 @@ def _result(detected, target_phase, roles, finding_count, reason):
 
 
 def escalation_message(result):
-    """A one-line operator message for the pause seam's ``blocked_on`` field.
+    """A one-line operator message for the pause handoff's ``blocked_on`` field.
 
     Names the upstream phase + the converging findings so the operator can see
     WHY the run halted without opening the ledger. Returns None when the result

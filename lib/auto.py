@@ -13,14 +13,14 @@ dispatch space-separated subcommands, per memory
 `feedback_slash_command_arg_substitution`):
 
     <plan-or-spec>                start a run from a plan/spec file (required).
-    ... auto                      append `auto` to skip the plan->work seam
+    ... auto                      append `auto` to skip the plan->work handoff
                                   pause (the pulse gets --auto).
     ... --backend ce|native       select the workflow backend (default ce).
                                   (`--adapter` accepted as a deprecated alias.)
     ... --goal "<text>"           compound deliberate-stop goal text (the
                                   default is the loop's own exit predicate).
 
-A new run starts at loop_phase="plan" with an EMPTY units[] — the plan-loop
+A new run starts at loop_phase="plan" with an EMPTY steps[] — the plan-loop
 (backend-driven, via the pulse) populates the work units later; /auto does
 NOT parse units from the plan. init_ledger's defaults are exactly this shape.
 
@@ -68,7 +68,7 @@ def _parse_args(argv):
     """Split the /auto arg string into (plan, auto, backend, goal, recipe).
 
     Positional: the first non-flag token is the plan/spec path. `auto` is a bare
-    positional keyword (v0.3.x; redundant under v0.4.0's seam-flip default but
+    positional keyword (v0.3.x; redundant under v0.4.0's handoff-flip default but
     accepted for back-compat). Flags: --backend <ce|native> (deprecated alias
     --adapter), --goal <text>,
     --recipe <name>, --review-plan. Returns a dict; raises ValueError on a
@@ -76,11 +76,11 @@ def _parse_args(argv):
     v0.1.x-equivalent default, KTD-1) when no --recipe is given, so bare
     ``/auto <plan>`` keeps working unchanged.
 
-    v0.4.0 KTD-4 — seam-default FLIP:
+    v0.4.0 KTD-4 — handoff-default FLIP:
       * v0.3.x: ``auto`` defaulted False; the ``auto`` positional token opted
-        IN to skip the plan→work seam pause.
+        IN to skip the plan→work handoff pause.
       * v0.4.0: ``auto`` defaults True; the ``--review-plan`` flag opts IN to
-        pause at the seam for review. The default-flip delivers the operator-
+        pause at the handoff for review. The default-flip delivers the operator-
         facing intent ("involved only at goal-divergence checkpoints, not
         fixed phase boundaries") without latency or a new intent type.
         The ``auto`` positional token still parses to True for scripted
@@ -138,7 +138,7 @@ def _parse_args(argv):
             i += 2
             continue
         if tok == "--review-plan":
-            # v0.4.0 KTD-4: opt in to the seam pause for first-pass plans.
+            # v0.4.0 KTD-4: opt in to the handoff pause for first-pass plans.
             auto = False
             i += 1
             continue
@@ -163,15 +163,15 @@ def _parse_args(argv):
             "recipe": recipe or "a1", "teardown_recipe": teardown_recipe}
 
 
-def _seam_default_notice():
-    """v0.4.0 KTD-4: one-time stderr notice for the seam-default flip.
+def _handoff_default_notice():
+    """v0.4.0 KTD-4: one-time stderr notice for the handoff-default flip.
 
-    The seam-pause default flipped from "pause unless `auto`" to "proceed
+    The handoff-pause default flipped from "pause unless `auto`" to "proceed
     unless `--review-plan`". Scripted callers that relied on the pause
     without spelling ``auto`` will now silently skip it. The notice makes
     the change discoverable.
 
-    Marker file at ``<resolve_shared_dir>/.seam-default-acknowledged``;
+    Marker file at ``<resolve_shared_dir>/.handoff-default-acknowledged``;
     first-run-after-upgrade emits the notice and writes the marker; every
     subsequent run is silent. Scoped to the HOST repo (not the worktree)
     so the notice doesn't re-fire per worktree under fanout — KTD-3 (the
@@ -183,12 +183,12 @@ def _seam_default_notice():
     shared = resolve_shared_dir()
     if shared is None:
         return  # No git → can't anchor the marker; skip the notice.
-    marker = os.path.join(shared, ".seam-default-acknowledged")
+    marker = os.path.join(shared, ".handoff-default-acknowledged")
     if os.path.exists(marker):
         return
     sys.stderr.write(
-        "[auto] v0.4.0 seam-default FLIP: `/auto <plan>` now proceeds past "
-        "the plan→work seam by default. Pass `--review-plan` to opt in to "
+        "[auto] v0.4.0 handoff-default FLIP: `/auto <plan>` now proceeds past "
+        "the plan→work handoff by default. Pass `--review-plan` to opt in to "
         "the pause for first-pass plans. See "
         "docs/plans/2026-05-27-002-feat-auto-bare-entry-and-fanout-plan.md "
         "KTD-4.\n"
@@ -371,10 +371,10 @@ def run(argv) -> int:
     recipes = load_lib_module("recipes")
     repo_root = _resolve_repo()
 
-    # v0.4.0 KTD-4: surface the seam-default flip once per host repo, before
+    # v0.4.0 KTD-4: surface the handoff-default flip once per host repo, before
     # any flag parsing — so a scripted caller that relied on the v0.3.x pause
     # without spelling `auto` sees the notice on its first post-upgrade run.
-    _seam_default_notice()
+    _handoff_default_notice()
 
     try:
         args = _parse_args(list(argv))
@@ -422,8 +422,8 @@ def run(argv) -> int:
     # declared units become the initial ledger units; phase_order / terminal_phase
     # drive phase routing. For a1 this is byte-identical to v0.1.x (one plan unit,
     # default grammar — R13 regression).
-    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("units", [])]
-    phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
+    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("steps", [])]
+    phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
     run_id = _make_run_id(ledger, repo_root, plan)
 
     # v0.4.3 KTD-15: plan_presatisfied (W) — init the plan phase already-done.

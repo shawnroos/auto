@@ -17,7 +17,7 @@ Design notes (the load-bearing correctness rules):
 
   * I-1 (atomic predicate freshness) is enforced STRUCTURALLY: there is exactly
     ONE serialization chokepoint, ``_atomic_write``, which ALWAYS recomputes
-    ``exit_predicate_result`` (including ``all_units_terminal``) immediately
+    ``exit_predicate_result`` (including ``all_steps_terminal``) immediately
     before writing. No public mutator bypasses it. Therefore every writer that
     routes a mutation through this module inherits freshness for free.
 
@@ -68,7 +68,7 @@ DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-unit stall timeout default.
 # 4200 orphan-grace). See on-stop.py's module docstring.
 DRIVER_SELF_STALE_SECONDS = 3900
 
-LOOP_PHASES = ("plan", "seam", "work", "done")
+LOOP_PHASES = ("plan", "handoff", "work", "done")
 # Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
 # backend reads plan_step to compute the NEXT step; the pulse persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
@@ -78,7 +78,7 @@ PLAN_STEPS = ("plan", "deepen", "review_plan")
 # spells intent as `ledger.ExitReason.RECIPE_BUG` rather than a string literal
 # (which would create a divergent-literal class the prose claims is a fixed enum
 # but the code only enforces by convention). StrEnum: members ARE strings, so
-# `ExitReason.RECIPE_BUG == "recipe-bug"` is True and JSON-serialization round-
+# `ExitReason.RECIPE_BUG == "workflow-bug"` is True and JSON-serialization round-
 # trips. Membership check (`kind in ExitReason`) replaces H's manual KINDS tuple
 # — one canonical surface instead of three top-level names + a tuple.
 #
@@ -86,7 +86,7 @@ PLAN_STEPS = ("plan", "deepen", "review_plan")
 #     (typically a malformed iteration block or gate verdict).
 #   RECIPE_BUG → a LedgerError subclass (UnknownUnit, InvalidTransition,
 #     StaleVerdict) escaping the iteration check, which signals the recipe's
-#     units[] / phase_transitions are mis-shaped relative to what the engine
+#     steps[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
 #
 # Both reasons drive /auto-status's exit_reason render and the harness
@@ -97,15 +97,15 @@ from enum import Enum
 # `str, Enum` (the pre-3.11 portable equivalent of StrEnum — Python 3.9 is the
 # auto runtime's actual floor, per `#!/usr/bin/env python3` on macOS which
 # resolves to 3.9). Members ARE strings via the str mixin:
-# `ExitReason.RECIPE_BUG == "recipe-bug"` is True; JSON-serializes as the
+# `ExitReason.RECIPE_BUG == "workflow-bug"` is True; JSON-serializes as the
 # value when `default=str` or via explicit `.value`. The one wrinkle vs
 # native StrEnum: `str(ExitReason.RECIPE_BUG)` gives `"ExitReason.RECIPE_BUG"`
 # (the repr), so set_exit_reason persists `kind.value` explicitly to keep
 # the on-disk shape backwards-compatible with v0.3.0 (where kind was a
-# plain string like "recipe-bug").
+# plain string like "workflow-bug").
 class ExitReason(str, Enum):
     ITERATION_CHECK_FAILED = "iteration-check-failed"
-    RECIPE_BUG = "recipe-bug"
+    RECIPE_BUG = "workflow-bug"
 UNIT_STATES = (
     "pending",
     "dispatched",
@@ -334,6 +334,13 @@ def _atomic_write(path: str, ledger: dict) -> None:
         ledger_predicate = _lazy_load("ledger_predicate")
         ledger["exit_predicate_result"] = ledger_predicate.recompute_predicate(ledger)
 
+    # U6: stamp the persisted-format version. Every write goes through here, so
+    # this is what LAZILY MIGRATES a v1 record — it was upgraded in memory at
+    # _read_json, and now persists in v2. Stamping order is not a hazard: the
+    # read-side map is unconditional and idempotent, so a writer may safely lag a
+    # reader (see format_compat's docstring).
+    ledger["format"] = _lazy_load("format_compat").FORMAT_VERSION
+
     target_dir = os.path.dirname(path) or "."
     os.makedirs(target_dir, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".ledger.", suffix=".json", dir=target_dir)
@@ -352,8 +359,26 @@ def _atomic_write(path: str, ledger: dict) -> None:
 
 
 def _read_json(path: str) -> dict:
+    """Read a run-record and upgrade it to the current on-disk format.
+
+    READ CHOKEPOINT 1 of 2 (U6 / KTD-1). Feeds ``read_ledger`` AND
+    ``_with_locked_ledger`` (the locked read-modify-write path), so every record
+    this module hands out — and every record a mutation is computed against — is
+    format v2. The SECOND chokepoint is ``_bootstrap.load_ledger_safe``, which
+    every hook and scan consumer uses; both must be wired or a v1 record reaches
+    a consumer that speaks only new keys and reads nothing.
+
+    Because every write funnels through ``_atomic_write`` (which stamps
+    ``format: 2``), a v1 record is LAZILY MIGRATED on its first post-upgrade
+    mutation — no migration command is needed.
+
+    The map is applied UNCONDITIONALLY, never gated on ``format`` — see
+    ``format_compat``'s docstring for the mixed-fleet write-skip-forever hole
+    that gating would open.
+    """
     with open(path, "r") as fh:
-        return json.load(fh)
+        led = json.load(fh)
+    return _lazy_load("format_compat").upgrade_run_record(led)
 
 
 def _flock_run(lpath: str, body):
@@ -441,7 +466,7 @@ def init_ledger(
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
-    ``units`` is a list of partial unit dicts (at minimum ``id``); missing
+    ``steps`` is a list of partial unit dicts (at minimum ``id``); missing
     fields are filled with schema defaults. The predicate is recomputed and the
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
@@ -452,12 +477,12 @@ def init_ledger(
       ``recipe``         — optional dict {name, source_tier}; the recipe this run
                            was built from. None on a recipe-blind (v0.1.x) ledger.
       ``phase_order``    — optional list; the run's phase sequence. Defaults to
-                           ["plan", "seam", "work"] (the v0.1.x grammar).
+                           ["plan", "handoff", "work"] (the v0.1.x grammar).
       ``terminal_phase`` — optional str; the phase whose completion ends the run.
                            Defaults to "work". MUST be a member of phase_order.
       ``phase_transitions`` — optional list of {from, to, producer} dicts; the
                            recipe's producer declarations. Persisted on the ledger
-                           so seam-handlers can resolve the producer for a given
+                           so handoff-handlers can resolve the producer for a given
                            arrival phase without re-loading the recipe file
                            (which could drift mid-run). Defaults to [] (no
                            producers declared — legacy v0.1.x behavior, the run
@@ -471,7 +496,7 @@ def init_ledger(
     # phase_order / terminal_phase default to the v0.1.x grammar so a call with
     # neither produces a ledger that behaves exactly as before.
     if phase_order is None:
-        phase_order = ["plan", "seam", "work"]
+        phase_order = ["plan", "handoff", "work"]
     elif not isinstance(phase_order, list) or not phase_order:
         raise LedgerError(f"phase_order must be a non-empty list: {phase_order!r}")
     if terminal_phase is None:
@@ -574,13 +599,13 @@ def init_ledger(
             "run_id": run_id,
             "loop_phase": loop_phase,
             "plan_step": plan_step,
-            "seam_paused": loop_phase == "seam",
-            "adapter": backend,  # format-v1 key; flips in U6
-            "adapter_scale": backend_scale,  # format-v1 key; flips in U6
+            "handoff_paused": loop_phase == "handoff",
+            "backend": backend,
+            "backend_scale": backend_scale,
             # v0.2.0 recipe fields (additive). recipe is None on a recipe-blind
             # v0.1.x ledger; phase_order/terminal_phase default to the legacy
             # grammar so the predicate + phase routing behave identically.
-            "recipe": recipe,
+            "workflow": recipe,
             "phase_order": phase_order,
             "terminal_phase": terminal_phase,
             "phase_transitions": phase_transitions,
@@ -614,7 +639,7 @@ def init_ledger(
             # v0.3.0 G2 / AN-W1: persisted record of a non-clean run exit. None
             # on a healthy run; populated by ``set_exit_reason`` when F2's
             # try/except (lib/pulse.py) catches an iteration-check raise or a
-            # recipe-bug LedgerError subclass. ``/auto-status`` renders it
+            # workflow-bug LedgerError subclass. ``/auto-status`` renders it
             # alongside loop_phase=done so the operator can distinguish a clean
             # finish from a wedge that was force-marked done.
             "exit_reason": None,
@@ -643,7 +668,7 @@ def init_ledger(
             # U8 ownership set the hooks gate on (see _bootstrap.AGENT_SESSIONS_KEY).
             "agent_session_ids": [],
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
-            "units": norm_units,
+            "steps": norm_units,
             "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
         _atomic_write(path, ledger)
@@ -732,7 +757,7 @@ def read_ledger(repo_root: str, run_id: str) -> dict:
 
 
 def _find_unit(ledger: dict, unit_id: str) -> dict:
-    for u in ledger.get("units", []):
+    for u in ledger.get("steps", []):
         if u.get("id") == unit_id:
             return u
     raise UnknownUnit(f"no unit {unit_id!r} in ledger")

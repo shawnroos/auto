@@ -10,7 +10,7 @@ flow, no pulse, no `/goal`):
      validator's shape check (KTD-2 reuse).
 
   2. ``build_oneshot_launch(preset, repo)`` (U5) — build the driver-side launch
-     descriptor: the preset's `adapter_op`, plus the `prompt_template` body when
+     descriptor: the preset's `backend_op`, plus the `prompt_template` body when
      the preset declares one (KTD-5 — the tuning is folded at the DRIVER launch,
      never via a backend edit).
 
@@ -115,7 +115,7 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
     consults the backend (driver-reference §7). This helper is what the
     ``auto-preset`` skill calls to assemble that launch:
 
-      - it always names the preset's ``adapter_op``;
+      - it always names the preset's ``backend_op``;
       - when the preset declares a ``prompt_template``, it folds the template's
         BODY into the descriptor (``prompt_template`` = the path, ``prompt_template_body``
         = the file text) so the skill can splice the tuning into the sub-agent's
@@ -125,7 +125,7 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
         template-less preset launches exactly as before).
 
     ``preset`` is a VALIDATED preset dict (see ``lib/presets.py::validate_preset``
-    / ``load_and_validate_preset``), so ``invokes`` and ``invokes.adapter_op`` are
+    / ``load_and_validate_preset``), so ``invokes`` and ``invokes.backend_op`` are
     accessed directly — the validator guarantees them.
 
     The relative ``prompt_template`` path is re-path-bounded (defensively — same
@@ -135,11 +135,11 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
     ship). A declared-but-unreadable template FAILS CLOSED with a ``RecipeError``
     rather than launching a half-tuned agent.
 
-    Returns ``{"adapter_op": <op>[, "prompt_template": <path>,
+    Returns ``{"backend_op": <op>[, "prompt_template": <path>,
     "prompt_template_body": <text>]}``. Pure w.r.t. ``preset`` — mutates nothing.
     """
     invokes = preset["invokes"]
-    descriptor = {"adapter_op": invokes["adapter_op"]}  # format-v1 keys; flip in U6
+    descriptor = {"backend_op": invokes["backend_op"]}
 
     pt = invokes.get("prompt_template")
     if pt:

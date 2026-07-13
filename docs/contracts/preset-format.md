@@ -14,9 +14,9 @@
 A **preset** is the pure payload of a step — the `invokes` that actually runs —
 promoted to a first-class, named, addressable object. The reframe: a step is two
 things, a **container** (its flow-local slot: `id`, `phase`, `depends_on`) and a
-**preset** (the payload that runs there: one `adapter_op` invocation, optionally
+**preset** (the payload that runs there: one `backend_op` invocation, optionally
 tuned by a `prompt_template`). This spec covers the *preset*; the container stays
-part of the recipe/flow — see [`recipe-format.md` §3 (`units[]`
+part of the recipe/flow — see [`recipe-format.md` §3 (`steps[]`
 entries)](recipe-format.md), where a unit's `invokes` is exactly the preset
 embedded in a container.
 
@@ -33,7 +33,7 @@ written back onto the preset.
   "version": "1",
   "description": "A tuned code-review preset — runs `review` with a focused prompt.",
   "invokes": {
-    "adapter_op": "review",
+    "backend_op": "review",
     "prompt_template": "presets/tuned-review.prompt.md"
   }
 }
@@ -44,8 +44,8 @@ written back onto the preset.
 | `name` | yes | string | filename-safe (`^[a-z0-9][a-z0-9._-]*$`); the resolution key. Reuses the recipe name guard to prevent path traversal. |
 | `version` | yes | string | opaque version tag. |
 | `description` | yes | string | one-line human description — what this preset does and when to reach for it. |
-| `invokes` | yes | object | the payload: `{adapter_op, prompt_template?}` and nothing else. |
-| `invokes.adapter_op` | yes | string | one of the closed set `{brainstorm, do_unit, next_plan_step, review}` (shared with recipes via `lib/backend_ops.py::VALID_BACKEND_OPS`). |
+| `invokes` | yes | object | the payload: `{backend_op, prompt_template?}` and nothing else. |
+| `invokes.backend_op` | yes | string | one of the closed set `{brainstorm, do_step, next_plan_step, review}` (shared with recipes via `lib/backend_ops.py::VALID_BACKEND_OPS`). |
 | `invokes.prompt_template` | no | string | a **relative** path (no `..`, no leading `/`) to a tuning prompt. Path-bounded by the same `_check_prompt_template` recipes use. |
 
 ### Forbidden keys (hard errors)
@@ -82,7 +82,7 @@ unenforced schema doc would just duplicate this one.
 
 - **`tuned-review`** — `review` backend op + a focused review prompt. Fire it
   one-shot against a diff/branch.
-- **`scoped-build`** — `do_unit` backend op + a tightly-scoped build prompt. Fire
+- **`scoped-build`** — `do_step` backend op + a tightly-scoped build prompt. Fire
   it one-shot to implement one bounded change.
 
 ## 5. DAG discipline

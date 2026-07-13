@@ -7,7 +7,7 @@ transition via ledger.py (so the per-run RMW flock is inherited — no new flock
 Subcommands:
     [<run>]            default continue: re-record the driving session (so the
                        advisor gates own the re-armed run — fix-round-6 P1),
-                       flip a paused seam -> work, then emit a re-arm INTENT
+                       flip a paused handoff -> work, then emit a re-arm INTENT
                        (the model fires /auto:auto-pulse).
     continue <run>     explicit continue (same as default with a run-id).
     pause <run> [why]  blocked on a human/external action (auth, approval,
@@ -19,7 +19,7 @@ Subcommands:
                        (v0.4.3 KTD-15). The "the plan is done — stop re-planning
                        it" tool: in the plan phase it marks the plan satisfied
                        (plan_step=review_plan, gaps_open=0) so the next pulse goes
-                       straight to enumerate -> work; at a seam it behaves like
+                       straight to enumerate -> work; at a handoff it behaves like
                        continue; in the work phase it is a no-op (work advances by
                        unit verdicts, not by fiat).
     abort <run>        loop_phase -> "done" (cancellation marker).
@@ -60,7 +60,7 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
-# v0.2.0 fix-pass A.2: the manual seam→work resume routes through pulse.py's
+# v0.2.0 fix-pass A.2: the manual handoff→work resume routes through pulse.py's
 # centralized advance helper so it fires the recipe's producer the same way the
 # auto-flip does. pulse.py uses a hyphenless name so plain import works.
 import pulse  # noqa: E402 — after _LIB_DIR is on sys.path via _bootstrap.
@@ -78,22 +78,22 @@ _resolve_repo = resolve_repo
 
 
 def _resumable_runs(ledger, repo_root: str):
-    """Run-ids that are resumable (seam-paused OR blocked-paused OR is_orphaned)."""
+    """Run-ids that are resumable (handoff-paused OR blocked-paused OR is_orphaned)."""
     runs = []
     for run_id, led in iter_worktree_ledgers(repo_root):
         if phase_grammar.current_phase(led) == "done":
             continue
-        seam_paused = phase_grammar.current_phase(led) == "seam" and led.get("seam_paused")
-        # Blocked-paused: a manual-driver run that is NOT at a seam and NOT done
+        handoff_paused = phase_grammar.current_phase(led) == "handoff" and led.get("handoff_paused")
+        # Blocked-paused: a manual-driver run that is NOT at a handoff and NOT done
         # (set by `pause`). Without this, a run paused on a human blocker would
         # be invisible to bare `/auto-resume` and need an explicit run-id.
         loop = led.get("loop") or {}
-        blocked_paused = loop.get("driver") == "manual" and not seam_paused
+        blocked_paused = loop.get("driver") == "manual" and not handoff_paused
         try:
             orphaned = ledger.is_orphaned(led)
         except Exception:
             orphaned = False
-        if seam_paused or blocked_paused or orphaned:
+        if handoff_paused or blocked_paused or orphaned:
             runs.append(run_id)
     return runs
 
@@ -114,7 +114,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
     fix-round-6 P1. A re-armed run becomes self-driven again, so the advisor-gate
     PreToolUse hooks must be able to own it — they match on
     ``driving_session_id == stdin.session_id``. Resume is the common cross-session
-    case (after a seam pause, a crash, or the next day from a fresh window), so
+    case (after a handoff pause, a crash, or the next day from a fresh window), so
     the stale arm-time id would never match the NEW driving session and BOTH gates
     (question redirect AND the destructive-action backstop) would fall through to
     ALLOW: a live self-driven run executing ``rm -rf`` / force-push with the
@@ -129,7 +129,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
        BOTH gates OPEN), and must NOT re-arm a self-driven run whose backstop is dark.
 
     2. OWNERSHIP-STEAL guard (review #5): the run is currently LIVE and self-driven
-       by a DIFFERENT session (driver=="self", not seam-paused, beat fresh enough
+       by a DIFFERENT session (driver=="self", not handoff-paused, beat fresh enough
        that ``is_orphaned`` is False). Re-recording would silently hand the backstop
        to THIS session while the ORIGINAL driver keeps running — going its backstop
        dark mid-run. Legitimate cross-session handoff (a paused / orphaned / stale
@@ -151,7 +151,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
     loop = led.get("loop") or {}
     run_is_live = (
         loop.get("driver") == "self"
-        and not led.get("seam_paused")
+        and not led.get("handoff_paused")
         and not ledger.is_orphaned(led)
     )
     if existing and existing != sid and run_is_live:
@@ -178,7 +178,7 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str, led: dict) -> int:
 
 
 def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
-    """Flip a paused seam -> work (if applicable), then arm a pulse."""
+    """Flip a paused handoff -> work (if applicable), then arm a pulse."""
     try:
         led = ledger.read_ledger(repo_root, run_id)
     except ledger.LedgerNotFound as exc:
@@ -194,16 +194,16 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
     rc = _rearm_owns_session(ledger, repo_root, run_id, led)
     if rc != 0:
         return rc
-    if phase == "seam":
-        # seam -> work: route through pulse.advance_to_phase so the recipe's
+    if phase == "handoff":
+        # handoff -> work: route through pulse.advance_to_phase so the recipe's
         # producer fires the same way it does on the auto-flip path (P0 #1
         # fix-pass A.2 — without this the manual resume would silently skip
         # emission and the work-loop would start with empty units). Legacy
         # ledgers (no recipe) fall through to set_loop inside the helper,
-        # preserving v0.1.x behavior. seam_paused=False is written by both
+        # preserving v0.1.x behavior. handoff_paused=False is written by both
         # paths inside the helper.
         pulse.advance_to_phase(repo_root, run_id, led, to_phase="work")
-        return _emit_rearm(run_id, "seam -> work; arm a fresh pulse chain")
+        return _emit_rearm(run_id, "handoff -> work; arm a fresh pulse chain")
     # Orphaned, or resuming a blocked-pause: re-arm cleanly off the durable
     # ledger. driver -> "self" reactivates the Stop hook; clear blocked_on (the
     # human acted, so the pause reason no longer applies). Clear backstop_latched
@@ -220,7 +220,7 @@ def _cmd_continue(ledger, repo_root: str, run_id: str) -> int:
 def _cmd_pause(ledger, repo_root: str, run_id: str, reason: str) -> int:
     """Pause a run blocked on a human/external action.
 
-    Flips driver -> "manual" (the Stop hook's SEAM/MANUAL carve-out then
+    Flips driver -> "manual" (the Stop hook's HANDOFF/MANUAL carve-out then
     declines to block this run — on-stop.py) and records the reason, WITHOUT
     marking the loop done. The run stays resumable: once the human does the
     blocked-on thing, `/auto-resume continue <run>` reactivates it.
@@ -266,8 +266,8 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
         the exact pre-satisfied state W inits with. The next pulse's next_plan_step
         returns "done" → enumerate_plan_units → plan→work, no re-derivation. We
         arm a pulse so the model enumerates the (already-in-context) plan's units.
-      * seam  — identical to `continue` (seam→work); delegate so there's one
-        code path for the seam advance.
+      * handoff  — identical to `continue` (handoff→work); delegate so there's one
+        code path for the handoff advance.
       * work  — no-op: the work-loop advances by unit verdicts, not by fiat;
         forcing it would skip unfinished units. Point the operator at the real
         levers (let units land, or `abort`).
@@ -282,8 +282,8 @@ def _cmd_advance(ledger, repo_root: str, run_id: str) -> int:
     if phase == "done":
         sys.stdout.write(f"resume: run {run_id!r} is already done; nothing to advance.\n")
         return 0
-    if phase == "seam":
-        # The seam advance IS continue (seam→work). One code path.
+    if phase == "handoff":
+        # The handoff advance IS continue (handoff→work). One code path.
         return _cmd_continue(ledger, repo_root, run_id)
     if phase == "work":
         sys.stdout.write(
@@ -400,7 +400,7 @@ def run(argv) -> int:
 
     if sub == "advance":
         # advance targets a LIVE run (like pause), not a resumable one — you
-        # advance a run that is mid-phase, not one parked at a seam.
+        # advance a run that is mid-phase, not one parked at a handoff.
         run_id = _resolve_run_or_disambiguate(
             ledger, repo_root, run_arg,
             candidates=[run_id for run_id, _ in iter_active_runs(repo_root)], label="active",

@@ -216,8 +216,8 @@ r2_len="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['r2_len'])" "$
 # After wave 1: exactly 3 dispatched; remaining ready == 7 (the 3 are now
 # 'dispatched', not pending). Wave 2 dispatches the next 3.
 # Each dispatched unit must have a non-null dispatched_at.
-disp_at_nulls="$(ledger_field "cap-run" 'sum(1 for u in L["units"] if u["state"]=="dispatched" and u["dispatched_at"] is None)')"
-dispatched_total="$(ledger_field "cap-run" 'sum(1 for u in L["units"] if u["state"]=="dispatched")')"
+disp_at_nulls="$(ledger_field "cap-run" 'sum(1 for u in L["steps"] if u["state"]=="dispatched" and u["dispatched_at"] is None)')"
+dispatched_total="$(ledger_field "cap-run" 'sum(1 for u in L["steps"] if u["state"]=="dispatched")')"
 if [ "$d1_count" = "3" ] && [ "$r2_len" = "7" ] && [ "$d2_count" = "3" ] \
    && [ "$dispatched_total" = "6" ] && [ "$disp_at_nulls" = "0" ]; then
   pass
@@ -248,7 +248,7 @@ n1="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['n1'])" "$resize")
 n2="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['n2'])" "$resize")"
 r1_len="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['r1_len'])" "$resize")"
 r2_len="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['r2_len'])" "$resize")"
-total_dispatched="$(ledger_field "resize-run" 'sum(1 for u in L["units"] if u["state"]=="dispatched")')"
+total_dispatched="$(ledger_field "resize-run" 'sum(1 for u in L["steps"] if u["state"]=="dispatched")')"
 # 16 ready, dispatch 8; remaining ready 8; cap shrinks to 2 -> dispatch 2 (6
 # remain pending). Total dispatched == 10.
 if [ "$r1_len" = "16" ] && [ "$n1" = "8" ] && [ "$r2_len" = "8" ] && [ "$n2" = "2" ] \
@@ -277,12 +277,12 @@ def counting_launch(uid, attempt=0):
 
 # First dispatch: pending -> dispatched, one launch.
 res1 = o.dispatch_batch(repo, run, ["U1"], 4, launch_fn=counting_launch)
-disp_at_1 = o.read_ledger(repo, run)["units"][0]["dispatched_at"]
+disp_at_1 = o.read_ledger(repo, run)["steps"][0]["dispatched_at"]
 
 # Second dispatch on the now-dispatched unit: must be rejected (idempotency),
 # no second launch, dispatched_at unchanged.
 res2 = o.dispatch_batch(repo, run, ["U1"], 4, launch_fn=counting_launch)
-disp_at_2 = o.read_ledger(repo, run)["units"][0]["dispatched_at"]
+disp_at_2 = o.read_ledger(repo, run)["steps"][0]["dispatched_at"]
 
 print(json.dumps({
     "res1": res1,
@@ -304,17 +304,17 @@ else
   fail "res1=$res1_status res2=$res2_status launch_count=$launch_count disp_at_stable=$disp_at_stable (expected dispatched / rejected:not-pending(dispatched) / 1 / True)"
 fi
 
-# ─── Scenario 6b: adapter_op validation (U12) ─────────────────────────────────
-# dispatch_batch rejects a unit whose declared adapter_op is not in
-# VALID_BACKEND_OPS — the op must NOT flow to launch. The adapter_op is injected
+# ─── Scenario 6b: backend_op validation (U12) ─────────────────────────────────
+# dispatch_batch rejects a unit whose declared backend_op is not in
+# VALID_BACKEND_OPS — the op must NOT flow to launch. The backend_op is injected
 # on `dispatch_context` (the durable home: _normalize_unit preserves
-# dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_unit)
+# dispatch_context but drops raw `invokes`). Uvalid carries a valid op (do_step)
 # and is the deliberate-fail CONTROL: same injected shape, valid value -> it
 # dispatches and launches, proving the guard keys on the op VALUE, not on the
 # unit's presence.
-it "adapter_op: unknown op -> rejected:bad-backend-op, not launched, stays pending; valid op dispatches (control)"
+it "backend_op: unknown op -> rejected:bad-backend-op, not launched, stays pending; valid op dispatches (control)"
 ledger_init "backend-op" \
-  '[{"id":"Uvalid","state":"pending","dispatch_context":{"adapter_op":"do_unit"}},{"id":"Ubad","state":"pending","dispatch_context":{"adapter_op":"totally-bogus-op"}}]' \
+  '[{"id":"Uvalid","state":"pending","dispatch_context":{"backend_op":"do_step"}},{"id":"Ubad","state":"pending","dispatch_context":{"backend_op":"totally-bogus-op"}}]' \
   >/dev/null 2>&1
 aop="$("$PY" - "$REPO" "backend-op" "$ORCH_PY" <<'PYEOF'
 import sys, importlib.util, json
@@ -328,7 +328,7 @@ def counting_launch(uid, attempt=0):
 
 res = dict(o.dispatch_batch(repo, run, ["Uvalid", "Ubad"], 4, launch_fn=counting_launch))
 led = o.read_ledger(repo, run)
-states = {u["id"]: u["state"] for u in led["units"]}
+states = {u["id"]: u["state"] for u in led["steps"]}
 print(json.dumps({
     "valid_status": res.get("Uvalid"),
     "bad_status": res.get("Ubad"),
@@ -336,7 +336,7 @@ print(json.dumps({
     "bad_state": states.get("Ubad"),
     "valid_launched": "Uvalid" in launches,
     "valid_state": states.get("Uvalid"),
-    "valid_in_ops": "do_unit" in o.VALID_BACKEND_OPS,
+    "valid_in_ops": "do_step" in o.VALID_BACKEND_OPS,
 }))
 PYEOF
 )"
@@ -459,10 +459,10 @@ p2=$!
 wait "$p1"; wait "$p2"
 # Both verdicts must have landed: U1 verdict-returned w/ a blocker finding,
 # U2 verdict-returned w/ a major finding; predicate counts reflect BOTH.
-st_u1="$(ledger_field "concurrent-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
-st_u2="$(ledger_field "concurrent-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
-sev_u1="$(ledger_field "concurrent-run" 'next((f["severity"] for u in L["units"] if u["id"]=="U1" for f in u["findings"]), "NONE")')"
-sev_u2="$(ledger_field "concurrent-run" 'next((f["severity"] for u in L["units"] if u["id"]=="U2" for f in u["findings"]), "NONE")')"
+st_u1="$(ledger_field "concurrent-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U1")')"
+st_u2="$(ledger_field "concurrent-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U2")')"
+sev_u1="$(ledger_field "concurrent-run" 'next((f["severity"] for u in L["steps"] if u["id"]=="U1" for f in u["findings"]), "NONE")')"
+sev_u2="$(ledger_field "concurrent-run" 'next((f["severity"] for u in L["steps"] if u["id"]=="U2" for f in u["findings"]), "NONE")')"
 blockers="$(ledger_field "concurrent-run" 'L["exit_predicate_result"]["blockers"]')"
 majors="$(ledger_field "concurrent-run" 'L["exit_predicate_result"]["majors"]')"
 if [ "$st_u1" = "verdict-returned" ] && [ "$st_u2" = "verdict-returned" ] \
@@ -501,8 +501,8 @@ def flaky_launch(uid, attempt=0):
 res = o.dispatch_batch(repo, run, ["U1","U2","U3","U4"], 4, launch_fn=flaky_launch)
 status = {uid: st for uid, st in res}
 led = m.read_ledger(repo, run)
-states = {u["id"]: u["state"] for u in led["units"]}
-u2 = next(u for u in led["units"] if u["id"] == "U2")
+states = {u["id"]: u["state"] for u in led["steps"]}
+u2 = next(u for u in led["steps"] if u["id"] == "U2")
 print(json.dumps({
     "launched": sorted(launched),
     "u1_status": status.get("U1"),
@@ -557,7 +557,7 @@ it "Bug #8: attempt counter increments on dispatch (the burnt-attempt record for
 # attempt 1 on its first dispatch (so a launch-failed unit's burnt attempt is
 # recorded, and a later retry would be attempt 2).
 ledger_init "attempt-bump" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
-a0="$(ledger_field "attempt-bump" 'L["units"][0]["attempt"]')"
+a0="$(ledger_field "attempt-bump" 'L["steps"][0]["attempt"]')"
 "$PY" - "$REPO" "attempt-bump" "$ORCH_PY" <<'PYEOF' >/dev/null
 import sys, importlib.util
 repo, run, orch_py = sys.argv[1:4]
@@ -565,7 +565,7 @@ spec = importlib.util.spec_from_file_location("dispatcher", orch_py)
 o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 o.dispatch_batch(repo, run, ["U1"], 4)
 PYEOF
-a1="$(ledger_field "attempt-bump" 'L["units"][0]["attempt"]')"
+a1="$(ledger_field "attempt-bump" 'L["steps"][0]["attempt"]')"
 if [ "$a0" = "0" ] && [ "$a1" = "1" ]; then
   pass
 else
@@ -636,7 +636,7 @@ print(json.dumps({
     "adv_after": adv_after.get("advanced"),
     "met": pred.get("met"),
     "majors": pred.get("majors"),
-    "all_terminal": pred.get("all_units_terminal"),
+    "all_terminal": pred.get("all_steps_terminal"),
 }))
 PYEOF
 )"
@@ -717,19 +717,19 @@ PYEOF
 }
 
 it "round-robin: all never-advanced → first by declaration order"
-assert_eq "plan-1" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+assert_eq "plan-1" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
 it "round-robin: a never-advanced unit beats an already-advanced one"
-assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+assert_eq "plan-2" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
 it "round-robin: all advanced → oldest last_advanced_at wins"
-assert_eq "plan-3" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:02Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:01Z"},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"}]}')"
+assert_eq "plan-3" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:02Z"},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:01Z"},{"id":"plan-3","phase":"plan","state":"dispatched","last_advanced_at":"2026-05-25T10:00:00Z"}]}')"
 
 it "round-robin: stalled plan unit excluded; next eligible wins (adversarial F3)"
-assert_eq "plan-2" "$(rr '{"units":[{"id":"plan-1","phase":"plan","state":"stalled","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
+assert_eq "plan-2" "$(rr '{"steps":[{"id":"plan-1","phase":"plan","state":"stalled","last_advanced_at":null},{"id":"plan-2","phase":"plan","state":"dispatched","last_advanced_at":null}]}')"
 
 it "round-robin: no eligible plan unit → None"
-assert_eq "None" "$(rr '{"units":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
+assert_eq "None" "$(rr '{"steps":[{"id":"w1","phase":"work","state":"dispatched"}]}')"
 
 # ════════════════════════════════════════════════════════════════════════════
 # U3 — should_escalate: the retry-budget predicate (R8 / KTD4). A pure read of
@@ -842,11 +842,11 @@ def chain(run, batch):
     if os.path.exists(p):
         os.unlink(p)
     m.init_ledger(repo, run, backend="ce", loop_phase="plan",
-                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   units=[{"id": "plan", "state": "pending", "phase": "plan"}])
     m.set_enumerated_units(repo, run, "plan", batch)
     led = m.read_ledger(repo, run)
-    work = e.plan_output_to_work_units(led, "work")
+    work = e.plan_output_to_work_steps(led, "work")
     wrun = run + "-w"
     wp = m.ledger_path(repo, wrun)
     if os.path.exists(wp):
@@ -854,7 +854,7 @@ def chain(run, batch):
     units = [{"id": w["id"], "state": "pending", "phase": "work",
               "depends_on": w["depends_on"]} for w in work]
     m.init_ledger(repo, wrun, backend="ce", loop_phase="work",
-                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   units=units)
     print(",".join(o.ready_units(repo, wrun)))
 

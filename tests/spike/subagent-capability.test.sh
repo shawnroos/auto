@@ -57,13 +57,13 @@ echo "subagent-capability.test.sh"
 # ─── 1. init from the CLI (R4 — the spike's closed gap) ──────────────────────
 it "a run + units can be created from the CLI (init)"
 "$PY" "$LEDGER_PY" init spike '[{"id":"U1"}]' ce work >/dev/null 2>&1
-created="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','spike');print(l['units'][0]['id'])" 2>/dev/null)"
+created="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','spike');print(l['steps'][0]['id'])" 2>/dev/null)"
 assert_eq "U1" "$created"
 
 # ─── 2. cross-process RMW (the tree-runtime foundation) ──────────────────────
 it "a SEPARATE process can read-modify-write the ledger (transition round-trip)"
 "$PY" "$LEDGER_PY" transition "$REPO" spike U1 dispatched >/dev/null 2>&1
-state="$("$PY" "$LEDGER_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin)['units'][0]['state'])")"
+state="$("$PY" "$LEDGER_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin)['steps'][0]['state'])")"
 assert_eq "dispatched" "$state"
 
 # ─── 3. force_skip edges are outside ALLOWED_TRANSITIONS ─────────────────────
@@ -86,7 +86,7 @@ s=importlib.util.spec_from_file_location("l",sys.argv[1]);m=importlib.util.modul
 pred = m.ledger_predicate
 skipped_clean = {"state": "terminal-skip", "findings": []}
 skipped_blocker = {"state": "terminal-skip", "findings": [{"severity": "blocker"}]}
-b, *_ = pred._count_severities_by_unit({"units": [skipped_blocker]})
+b, *_ = pred._count_severities_by_unit({"steps": [skipped_blocker]})
 print(f"{pred.unit_is_terminal(skipped_clean)}|{pred.unit_is_terminal(skipped_blocker)}|{b}")
 PYEOF
 )"

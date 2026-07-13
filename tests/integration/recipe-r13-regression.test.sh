@@ -4,7 +4,7 @@
 #
 # HONEST framing (build-surfaced 2026-05-25): a1's ledger is NOT literally
 # byte-identical to a v0.1.x ledger. v0.1.1 init'd with units=[] (the plan-loop
-# produced units later, off-ledger at the seam); a1 declares an explicit `plan`
+# produced units later, off-ledger at the handoff); a1 declares an explicit `plan`
 # unit (the representational change that makes the topology a recipe). So R13
 # asserts the BEHAVIORAL invariants that actually matter — the things a v0.1.x
 # operator would observe identically:
@@ -65,8 +65,8 @@ pr = led["exit_predicate_result"]
 print("%s|%s|%s|%s|%s|%s|%s|%s" % (
     rc,
     led["loop_phase"],
-    led["adapter"],
-    led["recipe"]["name"],
+    led["backend"],
+    led["workflow"]["name"],
     ",".join(led["phase_order"]),
     led["terminal_phase"],
     pr["met"],
@@ -78,11 +78,11 @@ PYEOF
 it "R13: bare /auto <plan> (default recipe) → plan phase, ce, recipe a1"
 res="$(run_auto PLAN)"
 # rc 0 | plan | ce | a1 | legacy grammar | work | not-met | gaps null
-assert_eq "0|plan|ce|a1|plan,seam,work|work|False|None" "$res"
+assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res"
 
 it "R13: explicit --recipe a1 produces the same ledger as the default"
 res_explicit="$(run_auto PLAN --recipe a1)"
-assert_eq "0|plan|ce|a1|plan,seam,work|work|False|None" "$res_explicit"
+assert_eq "0|plan|ce|a1|plan,handoff,work|work|False|None" "$res_explicit"
 
 it "R13: a1's single plan unit drives the plan-loop (one logical plan stream)"
 units="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
@@ -97,7 +97,7 @@ plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan])
 led = json.load(open(glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))[0]))
-plan_units = [u["id"] for u in led["units"] if u["phase"] == "plan"]
+plan_units = [u["id"] for u in led["steps"] if u["phase"] == "plan"]
 print(",".join(plan_units))
 PYEOF
 )"
@@ -116,8 +116,8 @@ plan = os.path.join(repo, "plan.md"); open(plan, "w").write("# plan\n")
 with contextlib.redirect_stdout(io.StringIO()):
     a.run([plan, "--recipe", "a2"])
 led = json.load(open(glob.glob(os.path.join(repo, ".claude", "auto", "*.json"))[0]))
-plan_units = sorted(u["id"] for u in led["units"] if u["phase"] == "plan")
-work_units = sorted(u["id"] for u in led["units"] if u["phase"] == "work")
+plan_units = sorted(u["id"] for u in led["steps"] if u["phase"] == "plan")
+work_units = sorted(u["id"] for u in led["steps"] if u["phase"] == "work")
 print("%s|%s" % (",".join(plan_units), ",".join(work_units)))
 PYEOF
 )"

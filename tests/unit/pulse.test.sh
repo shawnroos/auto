@@ -147,7 +147,7 @@ action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$
 delay="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['delay'])" "$res1")"
 prompt="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['prompt'])" "$res1")"
 advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res1")"
-st1="$(ledger_field "rearm-run" 'L["units"][0]["state"]')"
+st1="$(ledger_field "rearm-run" 'L["steps"][0]["state"]')"
 if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto:auto-pulse rearm-run" ] \
    && [ "$advanced" = "fix-applied" ] && [ "$st1" = "fixed" ]; then
   pass
@@ -211,8 +211,8 @@ print(json.dumps({
 }))
 PYEOF
 )"
-st_ua="$(ledger_field "stall-run" 'next(u["state"] for u in L["units"] if u["id"]=="Ua")')"
-st_uc="$(ledger_field "stall-run" 'next(u["state"] for u in L["units"] if u["id"]=="Uc")')"
+st_ua="$(ledger_field "stall-run" 'next(u["state"] for u in L["steps"] if u["id"]=="Ua")')"
+st_uc="$(ledger_field "stall-run" 'next(u["state"] for u in L["steps"] if u["id"]=="Uc")')"
 stalled_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['stalled']))" "$res3")"
 halted_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['halted']))" "$res3")"
 adv_unit="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced_unit'])" "$res3")"
@@ -255,9 +255,9 @@ print(json.dumps({
 PYEOF
 )"
 rc4=$?
-st4="$(ledger_field "raise-run" 'L["units"][0]["state"]')"
-err_call="$(ledger_field "raise-run" 'L["units"][0]["last_error"]["call"]')"
-err_msg_has="$(ledger_field "raise-run" '"RuntimeError" in (L["units"][0]["last_error"]["message"] or "")')"
+st4="$(ledger_field "raise-run" 'L["steps"][0]["state"]')"
+err_call="$(ledger_field "raise-run" 'L["steps"][0]["last_error"]["call"]')"
+err_msg_has="$(ledger_field "raise-run" '"RuntimeError" in (L["steps"][0]["last_error"]["message"] or "")')"
 # Ledger must still parse cleanly; no stray tempfile (atomic write held).
 tmp_left4="$(find "$REPO/.claude/auto" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
 adv4="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res4")"
@@ -295,7 +295,7 @@ it "pulse never dispatches / never writes verdicts: applies a fix, leaves findin
 ledger_init "no-dispatch-run" \
   '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"major","note":"fix me"}]},{"id":"U2","state":"pending"}]' \
   >/dev/null 2>&1
-findings_before="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
+findings_before="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["steps"] if u["id"]=="U1"), sort_keys=True)')"
 "$PY" - "$REPO" "no-dispatch-run" "$PULSE_PY" <<'PYEOF' >/dev/null
 import sys, importlib.util
 repo, run, pulse_py = sys.argv[1:4]
@@ -303,9 +303,9 @@ spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 t.dispatch_pulse(repo, run)
 PYEOF
-st_u1="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
-st_u2="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
-findings_after="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
+st_u1="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U1")')"
+st_u2="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U2")')"
+findings_after="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["steps"] if u["id"]=="U1"), sort_keys=True)')"
 # U1 fixed (fix applied); U2 still pending (NEVER dispatched by the pulse);
 # U1 findings unchanged (NO verdict written by the pulse).
 if [ "$st_u1" = "fixed" ] && [ "$st_u2" = "pending" ] && [ "$findings_before" = "$findings_after" ]; then
@@ -326,12 +326,12 @@ ledger_init "stateless-run" \
   >/dev/null 2>&1
 # First fresh process.
 CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "stateless-run" >/dev/null 2>&1
-st1_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
-st1_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
+st1_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U1")')"
+st1_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U2")')"
 # Second fresh process — must observe the first's mutation and advance the next.
 CLAUDE_AUTO_REPO="$REPO" bash "$PULSE_SH" "stateless-run" >/dev/null 2>&1
-st2_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
-st2_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
+st2_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U1")')"
+st2_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["steps"] if u["id"]=="U2")')"
 # After pulse 1: one of U1/U2 fixed, the other still verdict-returned.
 # After pulse 2: both fixed (the second process picked up where the first left).
 if [ "$st1_u1" = "fixed" ] && [ "$st1_u2" = "verdict-returned" ] \
@@ -349,7 +349,7 @@ fi
 # plan_step=...), three fresh-process pulses walk plan -> deepen -> review_plan.
 #
 # We use the REAL ce backend (its plan/deepen/review_plan ops are pure
-# envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
+# envelope-returning no-ops). One PENDING unit keeps all_steps_terminal==false
 # so the predicate never short-circuits the plan-loop to done. gaps_open stays
 # NULL (Bug #5 fix: the live envelope carries no gap_set, so the engine never
 # defaults it to 0 — the never-reviewed value is null, not zero), but the
@@ -638,7 +638,7 @@ ledger_init "phantom-run" \
   ce work >/dev/null 2>&1
 # Baseline: the phantom IS dispatched before the reaper runs (the swallowed-rescue
 # state the dispatcher P3 leaves behind).
-st_before="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+st_before="$(ledger_field "phantom-run" 'L["steps"][0]["state"]')"
 phantom_out="$("$PY" - "$REPO" "phantom-run" "$PULSE_PY" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util, datetime
 repo, run, pulse_py, ledger_py = sys.argv[1:5]
@@ -650,11 +650,11 @@ led = ledg.read_ledger(repo, run)
 now = datetime.datetime.now(datetime.timezone.utc)
 fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, now)
 after = ledg.read_ledger(repo, run)
-u = after["units"][0]
+u = after["steps"][0]
 print("%s,%s,%s" % (u["state"], (",".join(newly)) if newly else "-", u.get("last_error")))
 PYEOF
 )"
-st_after="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+st_after="$(ledger_field "phantom-run" 'L["steps"][0]["state"]')"
 # Before: dispatched (phantom). After the reaper: stalled, newly_stalled=[U1],
 # last_error null (plain timeout — NOT a backend-raise error object).
 if [ "$st_before" = "dispatched" ] && [ "$phantom_out" = "stalled,U1,None" ] \
@@ -671,12 +671,12 @@ it "deliberate-fail control: WITHOUT the reaper, the phantom stays dispatched fo
 ledger_init "phantom-noreap-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
   ce work >/dev/null 2>&1
-noreap_state="$(ledger_field "phantom-noreap-run" 'L["units"][0]["state"]')"
+noreap_state="$(ledger_field "phantom-noreap-run" 'L["steps"][0]["state"]')"
 assert_eq "dispatched" "$noreap_state"
 
 # ─── U6: plan-done enumerate→persist (the F4 producer wiring) ───────────────
 # At plan-done, advance_plan_loop calls the backend's enumerate_plan_units and
-# persists the result onto the plan unit's dispatch_context.enumerated_units, so
+# persists the result onto the plan unit's dispatch_context.enumerated_steps, so
 # the U5b producer can read it. Drive it with a fake backend whose next_plan_step
 # returns "done" and enumerate_plan_units returns a bare list.
 it "U6: plan-done persists enumerate_plan_units output to dispatch_context"
@@ -697,8 +697,8 @@ class FakeBackend:
 led = m.read_ledger(repo, run)
 result = t.pulse_advance.advance_plan_loop(repo, run, led, FakeBackend())
 after = m.read_ledger(repo, run)
-plan_unit = after["units"][0]
-enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_units") or []
+plan_unit = after["steps"][0]
+enum = (plan_unit.get("dispatch_context") or {}).get("enumerated_steps") or []
 print("%s,%s" % (result.get("advanced"),
                  ",".join(u["id"] for u in enum)))
 PYEOF
@@ -796,11 +796,11 @@ assert_eq "ok" "$guidance_work"
 # The two hand-rolled terminal-phase guards in pulse.py agreed ONLY because every
 # shipped recipe's terminal_phase == "work":
 #   Guard A (_try_predicate_met_shortcircuit): a DENYLIST — `phase != "plan" and
-#            phase != "seam"` — which stops at ANY phase that isn't plan/seam.
+#            phase != "handoff"` — which stops at ANY phase that isn't plan/handoff.
 #   Guard B (_try_post_advance_predicate_met): an ALLOWLIST — `phase == "work"` —
 #            which stops ONLY at work.
 # For a non-work terminal recipe (e.g. terminal_phase == "brainstorm") they
-# DIVERGE: Guard A over-fires (stops at any non-plan/seam phase, even non-terminal
+# DIVERGE: Guard A over-fires (stops at any non-plan/handoff phase, even non-terminal
 # ones) while Guard B under-fires (never stops at the real terminal). Routing both
 # through phase_grammar.is_terminal_phase(led, phase) makes them agree on the
 # recipe's ACTUAL terminal phase. This is behavior-changing for non-work recipes
@@ -845,7 +845,7 @@ PYEOF
 }
 
 BS_UNITS='[{"id":"U1","phase":"brainstorm","state":"verdict-returned","findings":[]}]'
-BS_ORDER='["plan","seam","brainstorm"]'
+BS_ORDER='["plan","handoff","brainstorm"]'
 
 # Sanity: the brainstorm-terminal fixture genuinely reaches met (so the guard
 # tests below exercise a real met predicate, not a vacuous one).
@@ -878,23 +878,23 @@ assert_eq "stop,done" "$(u5_guard u5b-main "$BS_UNITS" "$BS_ORDER" brainstorm br
 
 # Converse — brainstorm is NOT terminal (terminal=work) and a STALE met is cached
 # at the mid-run brainstorm phase. Guard A must NOT stop.
-# DELIBERATE-FAIL: pre-fix Guard A's denylist (`phase != plan and phase != seam`)
+# DELIBERATE-FAIL: pre-fix Guard A's denylist (`phase != plan and phase != handoff`)
 # over-fires and stops at the non-terminal brainstorm -> "stop,done". Post-fix it
 # routes through is_terminal_phase(brainstorm)==False -> "none,brainstorm".
 it "U5 converse: stale met at a NON-terminal phase (brainstorm, terminal=work) -> Guard A does NOT stop"
 assert_eq "none,brainstorm" \
-  "$(u5_guard u5-conv '[{"id":"U1","phase":"brainstorm","state":"dispatched"}]' '["plan","seam","brainstorm","work"]' work brainstorm brainstorm A 1)"
+  "$(u5_guard u5-conv '[{"id":"U1","phase":"brainstorm","state":"dispatched"}]' '["plan","handoff","brainstorm","work"]' work brainstorm brainstorm A 1)"
 
 # Regression — a shipped work-terminal recipe still stops exactly as before at the
 # work phase, through BOTH guards. is_terminal_phase(work)==True keeps the default
 # grammar's behavior byte-for-byte.
 it "U5 regression: work-terminal recipe -> Guard A stops at work (unchanged) -> done"
 assert_eq "stop,done" \
-  "$(u5_guard u5-reg-a '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work A 0)"
+  "$(u5_guard u5-reg-a '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","handoff","work"]' work work work A 0)"
 
 it "U5 regression: work-terminal recipe -> Guard B stops at work (unchanged) -> done"
 assert_eq "stop,done" \
-  "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","seam","work"]' work work work B 0)"
+  "$(u5_guard u5-reg-b '[{"id":"U1","state":"verdict-returned","findings":[]}]' '["plan","handoff","work"]' work work work B 0)"
 
 
 # ─── U1: watchdog_wakeup_delay — dispatch-time fallback heartbeat delay ───────
@@ -905,14 +905,14 @@ assert_eq "stop,done" \
 # ScheduleWakeup bound [60, 3600]. Returns None when nothing is dispatched (the
 # driver arms nothing). Pure over a ledger dict; no I/O, no on-disk ledger.
 
-# wwd <units-json>  — print watchdog_wakeup_delay({"units": <units-json>}).
+# wwd <units-json>  — print watchdog_wakeup_delay({"steps": <units-json>}).
 wwd() {
   "$PY" - "$PULSE_PY" "$1" <<'PYEOF'
 import sys, importlib.util, json
 pulse_py, units_json = sys.argv[1:3]
 spec = importlib.util.spec_from_file_location("pulse", pulse_py)
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-print(t.watchdog_wakeup_delay({"units": json.loads(units_json)}))
+print(t.watchdog_wakeup_delay({"steps": json.loads(units_json)}))
 PYEOF
 }
 
@@ -960,9 +960,9 @@ ledger_init "reap-match-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":1}]' "$DISP_R")" \
   >/dev/null 2>&1
 # Verify the fixture actually produced attempt 1 before asserting on the gate.
-attempt_match="$(ledger_field "reap-match-run" 'L["units"][0]["attempt"]')"
+attempt_match="$(ledger_field "reap-match-run" 'L["steps"][0]["attempt"]')"
 ret_match="$(reap "reap-match-run" "U1" 1)"
-st_match="$(ledger_field "reap-match-run" 'L["units"][0]["state"]')"
+st_match="$(ledger_field "reap-match-run" 'L["steps"][0]["state"]')"
 if [ "$attempt_match" = "1" ] && [ "$ret_match" = "True" ] && [ "$st_match" = "stalled" ]; then
   pass
 else
@@ -974,7 +974,7 @@ it "U2 reap_unit: no-op on an already-stalled unit (returns False, state unchang
 # is not a legal edge, so reap is a no-op, not a transition.
 ledger_init "reap-stalled-run" '[{"id":"U1","state":"stalled","attempt":1}]' >/dev/null 2>&1
 ret_stalled="$(reap "reap-stalled-run" "U1" 1)"
-st_stalled="$(ledger_field "reap-stalled-run" 'L["units"][0]["state"]')"
+st_stalled="$(ledger_field "reap-stalled-run" 'L["steps"][0]["state"]')"
 if [ "$ret_stalled" = "False" ] && [ "$st_stalled" = "stalled" ]; then
   pass
 else
@@ -984,7 +984,7 @@ fi
 it "U2 reap_unit: no-op on a verdict-returned unit (returns False, state unchanged)"
 ledger_init "reap-vr-run" '[{"id":"U1","state":"verdict-returned","findings":[],"attempt":1}]' >/dev/null 2>&1
 ret_vr="$(reap "reap-vr-run" "U1" 1)"
-st_vr="$(ledger_field "reap-vr-run" 'L["units"][0]["state"]')"
+st_vr="$(ledger_field "reap-vr-run" 'L["steps"][0]["state"]')"
 if [ "$ret_vr" = "False" ] && [ "$st_vr" = "verdict-returned" ]; then
   pass
 else
@@ -1000,9 +1000,9 @@ ledger_init "reap-super-run" \
   "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","attempt":2}]' "$DISP_S")" \
   >/dev/null 2>&1
 # Verify the fixture actually produced attempt 2 (the retry generation).
-cur_attempt="$(ledger_field "reap-super-run" 'L["units"][0]["attempt"]')"
+cur_attempt="$(ledger_field "reap-super-run" 'L["steps"][0]["attempt"]')"
 ret_super="$(reap "reap-super-run" "U1" 1)"
-st_super="$(ledger_field "reap-super-run" 'L["units"][0]["state"]')"
+st_super="$(ledger_field "reap-super-run" 'L["steps"][0]["state"]')"
 if [ "$cur_attempt" = "2" ] && [ "$ret_super" = "False" ] && [ "$st_super" = "dispatched" ]; then
   pass
 else
@@ -1035,7 +1035,7 @@ fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, n
 # A re-fire of the death path is also a no-op.
 r2 = t.pulse_advance.reap_unit(repo, run, "U1", 1)
 after = ledg.read_ledger(repo, run)
-print("%s,%s,%s,%s" % (r1, (",".join(newly) if newly else "-"), r2, after["units"][0]["state"]))
+print("%s,%s,%s,%s" % (r1, (",".join(newly) if newly else "-"), r2, after["steps"][0]["state"]))
 PYEOF
 )"
 # reap reaped once (True); the timeout path found nothing NEW (-); the re-fire is
@@ -1070,12 +1070,12 @@ t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
 # Reap the dispatched unit at its matching attempt -> stalled + reap_pending set.
 t.pulse_advance.reap_unit(repo, run, "U1", 1)
 led1 = ledg.read_ledger(repo, run)
-marker_after_reap = led1["units"][0].get("reap_pending")
+marker_after_reap = led1["steps"][0].get("reap_pending")
 awaiting_before = t.pulse_advance.units_awaiting_reap(led1)
 # Driver issues the model-side kill, then clears the marker.
 t.pulse_advance.clear_reap_pending(repo, run, "U1")
 led2 = ledg.read_ledger(repo, run)
-marker_after_clear = led2["units"][0].get("reap_pending")
+marker_after_clear = led2["steps"][0].get("reap_pending")
 awaiting_after = t.pulse_advance.units_awaiting_reap(led2)
 print("%s|%s|%s|%s" % (
     marker_after_reap,
@@ -1110,8 +1110,8 @@ fresh, halted, newly = t.pulse_advance.detect_and_halt_stalled(repo, run, led, n
 after = ledg.read_ledger(repo, run)
 awaiting = t.pulse_advance.units_awaiting_reap(after)
 print("%s,%s,%s" % (
-    after["units"][0]["state"],
-    after["units"][0].get("reap_pending"),
+    after["steps"][0]["state"],
+    after["steps"][0].get("reap_pending"),
     ",".join(awaiting) or "-",
 ))
 PYEOF
@@ -1152,7 +1152,7 @@ try:
 except Exception as e:  # noqa: BLE001 — the point is that NOTHING escapes.
     crashed = type(e).__name__
 after = ledg.read_ledger(repo, run)
-print("%s,%s,%s" % (crashed, after["units"][0]["state"], (",".join(newly) if newly else "-")))
+print("%s,%s,%s" % (crashed, after["steps"][0]["state"], (",".join(newly) if newly else "-")))
 PYEOF
 )"
 # No crash; the raced unit stays verdict-returned and is dropped from newly_stalled.

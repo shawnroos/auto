@@ -17,7 +17,7 @@
 #   6. Both new mutators are re-exported through the ledger FACADE (ledger.py).
 #   7. Doc-content checks on skills/auto/SKILL.md + commands/auto.md:
 #      escalation rule, pause routing, audit surfacing, and the fan-out
-#      two-seam instruction carrying BOTH (i) question-routing AND
+#      two-handoff instruction carrying BOTH (i) question-routing AND
 #      (ii) destructive-action avoidance.
 
 set -uo pipefail
@@ -130,7 +130,7 @@ ledger.append_advisor_audit(repo, "concur", kind="action",
     subject="rm -rf build/", classification="rm -rf", resolution="blocked-and-paused")
 L = ledger.read_ledger(repo, "concur")
 emit("concur_audit_len", len(L.get("advisor_audit", [])))
-emit("concur_unit_state", L["units"][0]["state"])
+emit("concur_unit_state", L["steps"][0]["state"])
 
 # ── 5. validation rejections ────────────────────────────────────────────────
 def rejects(fn):
@@ -207,7 +207,7 @@ has "$SKILL_MD" "advisor"
 it "SKILL.md documents the mechanical -> resolve / fork -> escalate classification"
 grep -qi "mechanical" "$SKILL_MD" && grep -qi "fork" "$SKILL_MD" && pass \
   || fail "SKILL.md missing mechanical/fork classification"
-it "SKILL.md documents pause-seam escalation for design forks"
+it "SKILL.md documents pause-handoff escalation for design forks"
 has "$SKILL_MD" "auto-resume.py pause"
 it "SKILL.md documents surfacing the advisor/action audit in the exit report"
 grep -qi "advisor_audit" "$SKILL_MD" && grep -qi "exit report" "$SKILL_MD" && pass \
@@ -215,7 +215,7 @@ grep -qi "advisor_audit" "$SKILL_MD" && grep -qi "exit report" "$SKILL_MD" && pa
 it "SKILL.md documents append_advisor_audit as the logging mutator"
 has "$SKILL_MD" "append_advisor_audit"
 
-# The two-seam (ii) requirement: the fan-out unit prompt MUST carry BOTH
+# The two-handoff (ii) requirement: the fan-out unit prompt MUST carry BOTH
 # question-routing AND destructive-action avoidance.
 it "SKILL.md fan-out instruction carries (i) question routing for fan-out units"
 grep -qi "do not call" "$SKILL_MD" && grep -qi "AskUserQuestion" "$SKILL_MD" && pass \
@@ -225,8 +225,8 @@ grep -qi "destructive" "$SKILL_MD" \
   && grep -qi "rm -rf" "$SKILL_MD" \
   && grep -qi "push --force" "$SKILL_MD" && pass \
   || fail "SKILL.md missing fan-out destructive-action constraint"
-it "SKILL.md names the two-seam split for fan-out units"
-grep -qi "two-seam" "$SKILL_MD" && pass || fail "SKILL.md missing two-seam split mention"
+it "SKILL.md names the two-handoff split for fan-out units"
+grep -qi "two-handoff" "$SKILL_MD" && pass || fail "SKILL.md missing two-handoff split mention"
 
 it "commands/auto.md adds advisor to allowed-tools"
 grep -qE "^allowed-tools:.*\badvisor\b" "$CMD_MD" && pass \

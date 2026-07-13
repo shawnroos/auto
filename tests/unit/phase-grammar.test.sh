@@ -56,18 +56,18 @@ PYEOF
 }
 
 # ─── Scenario 1: recipe-blind → legacy defaults ─────────────────────────────
-it "recipe-blind ledger → phase_order defaults to legacy [plan,seam,work]"
-assert_eq "plan,seam,work" "$(pg '{"loop_phase":"plan"}' order)"
+it "recipe-blind ledger → phase_order defaults to legacy [plan,handoff,work]"
+assert_eq "plan,handoff,work" "$(pg '{"loop_phase":"plan"}' order)"
 
 it "recipe-blind ledger → terminal_phase defaults to work"
 assert_eq "work" "$(pg '{"loop_phase":"plan"}' terminal)"
 
 # ─── Scenario 2: recipe ledger, default grammar ─────────────────────────────
 it "default-grammar recipe: current_phase reads loop_phase"
-assert_eq "seam" "$(pg '{"loop_phase":"seam","phase_order":["plan","seam","work"],"terminal_phase":"work"}' current)"
+assert_eq "handoff" "$(pg '{"loop_phase":"handoff","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' current)"
 
-it "default-grammar: next_phase_after_met(plan) → seam"
-assert_eq "seam" "$(pg '{"loop_phase":"plan","phase_order":["plan","seam","work"],"terminal_phase":"work"}' next plan)"
+it "default-grammar: next_phase_after_met(plan) → handoff"
+assert_eq "handoff" "$(pg '{"loop_phase":"plan","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' next plan)"
 
 # ─── Scenario 3: work-only (KTD-15) ─────────────────────────────────────────
 it "work-only: phase_order is [work]"
@@ -79,32 +79,32 @@ assert_eq "None" "$(pg '{"loop_phase":"work","phase_order":["work"],"terminal_ph
 # ─── Scenario 4: resume invariant — current_phase ≠ phase_order[0] ───────────
 it "resume invariant: current_phase reads loop_phase, NOT phase_order[0]"
 # A run whose start phase (phase_order[0]) is 'work' but is currently paused mid
-# 'seam' must report 'seam', not 'work'. (Synthetic: proves the helper never
+# 'handoff' must report 'handoff', not 'work'. (Synthetic: proves the helper never
 # substitutes phase_order[0] for the live loop_phase.)
-assert_eq "seam" "$(pg '{"loop_phase":"seam","phase_order":["work","seam"],"terminal_phase":"seam"}' current)"
+assert_eq "handoff" "$(pg '{"loop_phase":"handoff","phase_order":["work","handoff"],"terminal_phase":"handoff"}' current)"
 
 # ─── Scenario 5: is_terminal_phase ──────────────────────────────────────────
 it "is_terminal_phase: plan (non-terminal) → False"
-assert_eq "False" "$(pg '{"loop_phase":"plan","phase_order":["plan","seam","work"],"terminal_phase":"work"}' is_terminal plan)"
+assert_eq "False" "$(pg '{"loop_phase":"plan","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' is_terminal plan)"
 
 it "is_terminal_phase: work (terminal) → True"
-assert_eq "True" "$(pg '{"loop_phase":"work","phase_order":["plan","seam","work"],"terminal_phase":"work"}' is_terminal work)"
+assert_eq "True" "$(pg '{"loop_phase":"work","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' is_terminal work)"
 
 # Non-work terminal recipe (the shape pulse.py's two guards now route through):
 # is_terminal_phase must key on the recipe's DECLARED terminal, not the literal
 # "work". brainstorm IS terminal here; work is not even in the order.
 it "is_terminal_phase: brainstorm IS terminal for a brainstorm-terminal recipe"
-assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal brainstorm)"
+assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","handoff","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal brainstorm)"
 
 it "is_terminal_phase: a mid-run non-terminal phase (brainstorm, terminal=work) → False"
-assert_eq "False" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm","work"],"terminal_phase":"work"}' is_terminal brainstorm)"
+assert_eq "False" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","handoff","brainstorm","work"],"terminal_phase":"work"}' is_terminal brainstorm)"
 
 it "is_terminal_phase: phase=None defaults to current_phase (loop_phase) → True at terminal"
-assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","seam","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal)"
+assert_eq "True" "$(pg '{"loop_phase":"brainstorm","phase_order":["plan","handoff","brainstorm"],"terminal_phase":"brainstorm"}' is_terminal)"
 
 # ─── Scenario 6: next_phase_after_met at terminal ───────────────────────────
 it "next_phase_after_met(work) at terminal → None"
-assert_eq "None" "$(pg '{"loop_phase":"work","phase_order":["plan","seam","work"],"terminal_phase":"work"}' next work)"
+assert_eq "None" "$(pg '{"loop_phase":"work","phase_order":["plan","handoff","work"],"terminal_phase":"work"}' next work)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

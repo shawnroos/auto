@@ -5,7 +5,7 @@
 # momentarily unavailable — a single dispatch line with no graceful fallback.
 # The driver-side gap (a detector subprocess that won't run) is handled in
 # skills/auto-driver/SKILL.md (degrade to `raw`) and pinned by the smoke test.
-# This test pins the OTHER half at the seam we can drive deterministically: the
+# This test pins the OTHER half at the handoff we can drive deterministically: the
 # dispatch line surfaces a LEGIBLE non-zero failure rather than a silent stall.
 #
 # Scenarios:

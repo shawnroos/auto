@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS (U9 spike — docs/research/native-goal-mechanism-spike.md):
 #   Native `/goal` is a CLOSED, model-judged continuation loop. It consults the
-#   model's judgement, NOT any file or queryable predicate — there is no seam to
+#   model's judgement, NOT any file or queryable predicate — there is no handoff to
 #   feed it the ledger result. So auto ships its OWN thin Stop hook
 #   (on-stop.sh) whose verdict is DETERMINISTIC and engine-owned. This script
 #   writes the status that Stop hook reads. The consumer is on-stop.sh, NOT

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# auto v0.4.0 U3: seam-default flip lint.
+# auto v0.4.0 U3: handoff-default flip lint.
 #
-# v0.4.0 KTD-4: `/auto <plan>` now proceeds past the seam by default;
+# v0.4.0 KTD-4: `/auto <plan>` now proceeds past the handoff by default;
 # `--review-plan` opts in to the pause. The legacy `auto` positional still
 # parses (no-op vs the new default) so scripted callers keep working.
 #
 # Tests pin _parse_args directly so the bound between flag-string and
-# resolved {auto: bool} is checked without spawning a full run. The seam-
+# resolved {auto: bool} is checked without spawning a full run. The handoff-
 # default-acknowledged marker test exercises the once-per-host-repo
 # stderr notice path.
 
@@ -32,12 +32,12 @@ assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
 
 # ── HOME / sandbox isolation ───────────────────────────────────────────────
 ORIG_HOME="$HOME"
-SANDBOX="$(mktemp -d -t auto-seam-test.XXXXXX)"
+SANDBOX="$(mktemp -d -t auto-handoff-test.XXXXXX)"
 export HOME="$SANDBOX"
 cleanup() {
   export HOME="$ORIG_HOME"
   case "$SANDBOX" in
-    */auto-seam-test.*) rm -rf "$SANDBOX" ;;
+    */auto-handoff-test.*) rm -rf "$SANDBOX" ;;
   esac
 }
 trap cleanup EXIT
@@ -62,7 +62,7 @@ PYEOF
 it "v0.4.0 default: /auto <plan> (no token, no flag) → auto=True"
 assert_eq "True" "$(parse_arg /tmp/plan.md)"
 
-# ── Scenario 2: --review-plan opts in to the seam pause. ─────────────────
+# ── Scenario 2: --review-plan opts in to the handoff pause. ─────────────────
 it "/auto <plan> --review-plan → auto=False (opt-in to pause)"
 assert_eq "False" "$(parse_arg /tmp/plan.md --review-plan)"
 
@@ -81,11 +81,11 @@ it "--review-plan interleaved with --backend/--recipe → auto=False"
 assert_eq "False" "$(parse_arg /tmp/plan.md --backend native --review-plan --recipe a1)"
 
 # ── Scenario 6: back-compat stderr notice fires exactly once. ────────────
-# The notice is anchored at `<resolve_shared_dir>/.seam-default-acknowledged`.
+# The notice is anchored at `<resolve_shared_dir>/.handoff-default-acknowledged`.
 # In a hermetic test repo (git init + .claude/auto dir absent), the first
 # call should produce a stderr line; the second should be silent.
 it "back-compat notice: fires on first run, silent on second"
-test_repo="$(mktemp -d -t seam-notice.XXXXXX)"
+test_repo="$(mktemp -d -t handoff-notice.XXXXXX)"
 (
   cd "$test_repo"
   git init -q .
@@ -99,7 +99,7 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m._seam_default_notice()
+m._handoff_default_notice()
 PYEOF
 )"
 second="$(cd "$test_repo" && "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1 1>/dev/null
@@ -108,10 +108,10 @@ auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m._seam_default_notice()
+m._handoff_default_notice()
 PYEOF
 )"
-if echo "$first" | grep -q "seam-default FLIP" && [ -z "$second" ]; then
+if echo "$first" | grep -q "handoff-default FLIP" && [ -z "$second" ]; then
   pass
 else
   fail "first='$first' second='$second' — expected first non-empty, second empty"
@@ -121,14 +121,14 @@ rm -rf "$test_repo"
 # ── Scenario 7: notice degrades gracefully outside a git tree. ───────────
 # resolve_shared_dir() returns None outside git; the notice should swallow.
 it "back-compat notice: silent in a non-git dir (resolve_shared_dir → None)"
-nongit="$(mktemp -d -t seam-nongit.XXXXXX)"
+nongit="$(mktemp -d -t handoff-nongit.XXXXXX)"
 out="$(cd "$nongit" && "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1 1>/dev/null
 import sys, os, importlib.util
 auto_root = sys.argv[1]
 sys.path.insert(0, os.path.join(auto_root, "lib"))
 spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m._seam_default_notice()
+m._handoff_default_notice()
 PYEOF
 )"
 assert_eq "" "$out"
@@ -136,5 +136,5 @@ rm -rf "$nongit"
 
 # ── summary ────────────────────────────────────────────────────────────────
 echo ""
-echo "seam-default.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "handoff-default.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

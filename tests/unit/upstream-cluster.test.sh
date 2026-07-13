@@ -48,7 +48,7 @@ from _bootstrap import load_lib_module
 uc = load_lib_module("upstream-cluster")
 op = sys.argv[2]
 
-SPINE = ["brainstorm", "plan", "seam", "work"]
+SPINE = ["brainstorm", "plan", "handoff", "work"]
 
 
 def fmt(r):

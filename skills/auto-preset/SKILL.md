@@ -15,7 +15,7 @@ description: >
 
 # auto-preset (the one-shot preset dispatcher)
 
-A **preset** is the pure payload of a step — one `adapter_op` invocation plus an
+A **preset** is the pure payload of a step — one `backend_op` invocation plus an
 optional tuning `prompt_template`, promoted to a first-class named object
 (`lib/presets.py`). This skill runs one preset **one-shot**: grab it by name,
 point it at a target, propose a context-fit check, run it once, get the result
@@ -31,14 +31,14 @@ Read before running — the quality bar, not background:
 `skills/auto-preset/references/one-shot-verification.md` (how to derive criteria
 and the inline-resolution rule for each of the four types) and
 `skills/auto-design/references/verification-taxonomy.md` (the exact criterion
-shape). The thin lib seams this skill drives live in `lib/presets.py` and
+shape). The thin lib entry points this skill drives live in `lib/presets.py` and
 `lib/preset_oneshot.py`.
 
 ## What stays true throughout
 
 - **Driver-orchestrated, engine untouched.** No pulse, no `ScheduleWakeup`, no
   `/goal`, no re-arm. The skill drives synchronously start to finish.
-- **One preset = one step.** Exactly one `adapter_op` invocation. A multi-step
+- **One preset = one step.** Exactly one `backend_op` invocation. A multi-step
   reusable sequence is a *flow* of containers (Phase-2, deferred), not a preset.
 - **Verification is generated, never stored.** The ratified criteria live only on
   this run — they are NEVER written back to the preset JSON (R2/A2). A preset
@@ -49,7 +49,7 @@ shape). The thin lib seams this skill drives live in `lib/presets.py` and
 
 ## The one-shot flow (F1)
 
-The lib seams are driven through each module's CLI (`_cli`/`__main__`, the house
+The lib entry points are driven through each module's CLI (`_cli`/`__main__`, the house
 pattern — see `lib/verification.py`), as one-liners. **JSON args are single-quoted**
 so the shell hands the whole document through as one argv element.
 
@@ -65,7 +65,7 @@ Prints `OK` for a valid resolved preset, or `INVALID: <message>` (an unknown nam
 or a bad shape). `load_preset` resolves the workspace tier
 (`<repo>/.claude/auto/presets/`) first, then the built-in seeds — first-wins.
 Shipped seeds today: `tuned-review` (a tuned `review`) and `scoped-build` (a scoped
-`do_unit`).
+`do_step`).
 
 **Unknown preset name → clear error, then point multi-step reuse at the flow
 arc (R-D).** `load_preset` raises `PresetError` listing what it searched —
@@ -108,15 +108,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/lib/preset_oneshot.py" launch "<preset-name>" "$P
 The `launch` op re-loads and re-validates the preset (fail closed) before
 building the descriptor.
 
-The descriptor always names `adapter_op`. When the preset declares a
+The descriptor always names `backend_op`. When the preset declares a
 `prompt_template`, the descriptor carries `prompt_template_body` (the template
 text) — **fold that body into the launched sub-agent's prompt** so the tuning
 travels with the preset. When there is no `prompt_template`, the descriptor is
 the plain op invocation — launch it exactly as a normal op (regression-safe).
 
-Map `adapter_op` → the skill/agent you launch the same way the driver launch map
+Map `backend_op` → the skill/agent you launch the same way the driver launch map
 does (`skills/auto/SKILL.md` §4): a `review` op launches the review agent against
-the target; a `do_unit` op launches the build agent. **Launch it ONCE as an
+the target; a `do_step` op launches the build agent. **Launch it ONCE as an
 awaited sub-agent** and wait for its result. If any ratified criterion is a
 `model_judge`, instruct the sub-agent to self-grade against it and return a
 pass/fail alongside its output.
@@ -171,7 +171,7 @@ bound, nothing to resume.** Report and stop.
 - It does not compose presets into a flow or swap a container's preset — that
   is the deferred Phase-2 composition arc (R6/R7/R8).
 - It does not touch the backend (KTD-5): the `prompt_template` is folded at the
-  DRIVER launch, never via an `backend.do_unit` / `backend.review` edit.
+  DRIVER launch, never via an `backend.do_step` / `backend.review` edit.
 - It does not run a multi-step sequence. One preset is one step; point
   multi-step reuse at the deferred flow arc (step 1).
 

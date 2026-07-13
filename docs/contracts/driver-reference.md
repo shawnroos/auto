@@ -169,7 +169,7 @@ the session until the loop's `met` is satisfied:
   per invariant I-1).
 - Ensure `loop.driver` reflects the live chain state the Stop hook
   reads: `"self"` while a pulse chain self-paces, `"manual"` when
-  paused at a seam or awaiting resume. The pulse maintains this; the
+  paused at a handoff or awaiting resume. The pulse maintains this; the
   driver confirms it on arm or resume.
 - Activate the goal/status so the Stop hook engages. Never let a run
   proceed un-goaled.
@@ -187,7 +187,7 @@ Each pulse returns a JSON INTENT. The action's handling is phase-aware:
 |----------|-------|----------------------|
 | `rearm`  | `plan` | issue `ScheduleWakeup(intent.delay, intent.prompt)` — plan-loop runs backend steps inline, no background wake needed |
 | `rearm`  | `work` | yield to the harness re-invocation on next verdict AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` (delay clamped to `[60, 3600]s`) so a pulse fires even while work is in flight — a verdict landing first makes it a no-op. The LONG-delay (1200s+) ScheduleWakeup still applies when no background work is in flight and no ready units to dispatch (genuinely stalled) |
-| `stop`   | any   | chain ends; do NOT re-arm. If `reason == "predicate-met*"`, emit report; if `reason == "seam-pause"`, surface seam |
+| `stop`   | any   | chain ends; do NOT re-arm. If `reason == "predicate-met*"`, emit report; if `reason == "handoff-pause"`, surface handoff |
 | `noop`   | any   | another live pulse holds the lock (double-drive guard); do nothing; do NOT re-arm |
 
 Never re-arm on `stop` or `noop`. Never short-poll in the work-loop —
@@ -209,18 +209,18 @@ next step.** Re-arm on `rearm` until the plan predicate (`gaps_open
 
 ---
 
-## 6. Seam — the true pause
+## 6. Handoff — the true pause
 
 When the plan predicate is met:
 
-- **Not `auto`:** the pulse writes `loop_phase = "seam"`, `seam_paused
+- **Not `auto`:** the pulse writes `loop_phase = "handoff"`, `handoff_paused
   = true`, `loop.driver = "manual"`, and returns `action == "stop"`,
-  `reason == "seam-pause"`. The self-pace chain ends; the session can
+  `reason == "handoff-pause"`. The self-pace chain ends; the session can
   exit. Surface the plan + parallelism analysis and the resume
   options.
-  - `/auto-resume continue <run>` transitions `seam → work` and arms
+  - `/auto-resume continue <run>` transitions `handoff → work` and arms
     a fresh pulse chain.
-  - `/auto-resume abort <run>` transitions `seam → done`.
+  - `/auto-resume abort <run>` transitions `handoff → done`.
 - **`auto` (default in v0.4.0):** the pulse that closes the plan
   predicate flips `plan → work` directly and keeps re-arming. The
   v0.4.0 default is `auto: True`; `--review-plan` opts back in to the
@@ -230,10 +230,10 @@ When the plan predicate is met:
 
 | from | to | trigger |
 |------|-----|---------|
-| plan | seam | plan predicate met AND not auto |
+| plan | handoff | plan predicate met AND not auto |
 | plan | work | plan predicate met AND auto |
-| seam | work | `/auto-resume continue` |
-| seam | done | `/auto-resume abort` |
+| handoff | work | `/auto-resume continue` |
+| handoff | done | `/auto-resume abort` |
 | work | done | work predicate met (pulse sets it) |
 
 ---
@@ -309,14 +309,14 @@ the driver applies this per stalled node:
    clears `last_error`) to re-dispatch. If True (`attempt ≥ 2`) →
    `bash lib/auto-resume.py pause <run> "<unit> wedged after 2
    attempts"` to escalate to the operator instead of looping forever
-   (the §4.5-style pause seam; `driver=manual`, resumable).
+   (the §4.5-style pause handoff; `driver=manual`, resumable).
 
 `detect_and_halt_stalled` already halts a stalled node's transitive
 dependents, so the policy runs **per stalled node while independent
 siblings keep advancing** — a single wedged branch never freezes the
 whole wave.
 
-**Nested `do_unit` reap.** A `do_unit` fan-out agent is not its own
+**Nested `do_step` reap.** A `do_step` fan-out agent is not its own
 ledger row (KTD-5), so a wedged nested agent is reaped through its
 **parent** fan-out unit: the parent flips to `stalled` and its entire
 fan-out wave is reaped and re-dispatched together (coarse-grained v1;
@@ -331,26 +331,26 @@ whose marker is still set. An **uncleared marker on a later pulse means
 that is otherwise invisible, since the kill itself is model-side and
 Python owns only the marker.
 
-### Work-unit `adapter_op` → invocation (the model-facing dispatch label)
+### Work-unit `backend_op` → invocation (the model-facing dispatch label)
 
 `dispatcher.dispatch_batch` is backend-agnostic: it flips the unit
 `pending → dispatched` and calls the driver-injected `launch_fn`; it
 NEVER consults the backend. So the DRIVER must map each work unit's
-`invokes.adapter_op` to the ce skill it launches in the background
+`invokes.backend_op` to the ce skill it launches in the background
 `Agent`. The CE backend (`lib/backend-ce.py`) exposes two work-loop ops,
 and the dispatch label differs per op:
 
-| `invokes.adapter_op` | launch this skill | used by |
+| `invokes.backend_op` | launch this skill | used by |
 |----------------------|-------------------|---------|
-| `do_unit`            | `/ce-work <unit-id>` | `a1` / `w` / `pipeline` work units (the default) |
+| `do_step`            | `/ce-work <unit-id>` | `a1` / `w` / `pipeline` work units (the default) |
 | `review`             | `/ce-code-review`    | `review.json` off-spine unit (U11) |
 
-`review.json`'s single unit carries `adapter_op: "review"` — a work unit
+`review.json`'s single unit carries `backend_op: "review"` — a work unit
 that runs a single review/fix loop to a P3-only terminal verdict (the
 work-loop's own exit predicate, KTD-1), so it must dispatch as
 `/ce-code-review`, NOT `/ce-work`. Defaulting every work unit to
 `/ce-work` would run the wrong skill for an off-spine review run. The
-backend's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
+backend's `do_step()` returns `"invocation": "/ce-work %s"` and `review()`
 is the PARSE half (it maps the returned findings onto the shared severity
 scale); the launch label for `review` is `/ce-code-review`, set here.
 
@@ -363,7 +363,7 @@ helpers in `lib/preset_oneshot.py` back this; the skill owns all control
 flow (KTD-3), and drives both through each module's CLI (`_cli`/`__main__`):
 
 - `build_oneshot_launch(preset, repo)` — the driver-side launch
-  descriptor: the preset's `adapter_op`, plus the `prompt_template` body
+  descriptor: the preset's `backend_op`, plus the `prompt_template` body
   when the preset declares one (KTD-5 — the tuning folds at the DRIVER
   launch, never via a backend edit). The template resolves workspace-repo
   first, then the built-in root.
@@ -444,7 +444,7 @@ the exit report. Two `kind` values exist (`lib/ledger.py::ExitReason.KINDS`):
   `advance_iteration_loop` (typically malformed iteration block or
   corrupted gate verdict). Surface `error.type` + `error.message`;
   recommend inspecting the ledger's `iteration` block.
-- `recipe-bug` — a `LedgerError` subclass (`UnknownUnit`,
+- `workflow-bug` — a `LedgerError` subclass (`UnknownUnit`,
   `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
   Surface `error.type` + `error.message`; recommend inspecting the
   recipe JSON against `docs/contracts/recipe-format.md`.
@@ -532,7 +532,7 @@ See `docs/contracts/batch-sidecar-schema.md` for the sidecar format.
 ## 10. Invariants the driver must respect
 
 - **Read, never re-derive.** Use `exit_predicate_result.met` and
-  `all_units_terminal` straight from the ledger. Re-deriving the
+  `all_steps_terminal` straight from the ledger. Re-deriving the
   predicate in the driver is a regression — the engine recomputes it
   atomically on every write.
 - **Never re-arm past completion.** Re-arm ONLY on `action ==
@@ -595,7 +595,7 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
    It returns one JSON line: `{state, ce_step, recipe_or_entry, entry, is_spine,
    kind, confidence, escalate}`.
 3. **Escalate-or-dispatch (PRE-DISPATCH GATE):** if `escalate` is true OR the
-   state is ambiguous, escalate to the operator via the **pause seam** BEFORE
+   state is ambiguous, escalate to the operator via the **pause handoff** BEFORE
    dispatch — surface the candidate recommendation + why you're unsure and ask
    one `AskUserQuestion`; create NO run. This is NOT "via the gate": the advisor
    gate (PreToolUse hook) fires only once a LIVE self-driven run exists, and
@@ -672,7 +672,7 @@ alone, independent of the driver/staleness checks.
 matches and the gate never fires. Reads are lock-free (the atomic-rename
 invariant gives a consistent snapshot). Fan-out sub-agents have their OWN
 `session_id` and are out of hook scope **by design** — they carry the
-prompt-embedded two-seam instruction instead (KTD-5; set by the driver when it
+prompt-embedded two-handoff instruction instead (KTD-5; set by the driver when it
 builds the unit prompt).
 
 > **⛔ Session-id parity — REQUIRED, UNPROVEN pre-release gate (round-1/round-2 P2).
@@ -811,7 +811,7 @@ acknowledged residual (fix-round-5 P2): they do NOT flow through the Bash
 and the hook is wired to the `Bash`/`Write` tool names only, so an MCP tool name
 never reaches it at all. Gating MCP-write tools would be a tool-name interception
 change beyond v0.6.0's detect-and-escalate scope; fan-out units carry the
-prompt-embedded two-seam instruction (KTD-5) covering the destructive set instead.
+prompt-embedded two-handoff instruction (KTD-5) covering the destructive set instead.
 
 ### Audit (KTD-5)
 
@@ -826,7 +826,7 @@ NEVER read by any predicate.
 
 On a spine run, when a review verdict's findings **cluster on a single upstream
 phase**, auto detects it and **escalates the cluster to the operator** via the
-existing pause seam. v0.6.0 ships the *detection* half only — there is **no
+existing pause handoff. v0.6.0 ships the *detection* half only — there is **no
 autonomous backward edge**: `loop_phase` is never moved backward, no rebound
 counter, no new persisted ledger field. (The autonomous rebound is deferred to
 v0.7.0.)
@@ -858,10 +858,10 @@ producer populates the tags, the classifier returns "no cluster" (degrade-safe).
 the work-loop). On a positive detection,
 `_escalate_upstream_cluster` calls `ledger.set_loop(driver="manual",
 blocked_on=<message>)` — the SAME mechanism `auto-resume.py pause` uses — and
-returns `seam_pause: True` so the pulse short-circuits before re-stamping
+returns `handoff_pause: True` so the pulse short-circuits before re-stamping
 `driver="self"` and re-arming (which would otherwise immediately undo the pause).
 The `blocked_on` message names the upstream phase and the converging roles. From
-the seam the operator revisits the upstream artifact; `/auto-resume continue`
+the handoff the operator revisits the upstream artifact; `/auto-resume continue`
 will re-detect the same cluster and re-pause (the upstream flaw is unchanged),
 so the run does not get past the cluster on its own — autonomous rebound is
 v0.7.0.
@@ -1021,16 +1021,16 @@ construction.
 
 ### Gate attachment: a1/w vs a2/a4/custom (KTD-4 — the load-bearing wiring split)
 
-The v0.7.0 typed `verification` array rides on `iteration.gate_unit`, which must
+The v0.7.0 typed `verification` array rides on `iteration.gate_step`, which must
 name a **declared** unit (`recipe-format.md` §6, §11). `a2`/`a4` declare structural
 gate units (`judge` / `compare`); `a1`/`w` do not — their work units are emitted at
-runtime by `plan_output_to_work_units` with dynamic ids that can't be enumerated.
+runtime by `plan_output_to_work_steps` with dynamic ids that can't be enumerated.
 Adding an iteration block + gate unit to a1/w would be a new built-in topology,
 which is out of scope. So gating attaches differently by shape:
 
 - **`a1` / `w`** — **no iteration gate point.** What the chooser/notice surfaces for
   them is a *description of the inherent review-to-P3 exit predicate*
-  (`blockers == 0 ∧ majors == 0 ∧ all_units_terminal`), for visibility only — **not**
+  (`blockers == 0 ∧ majors == 0 ∧ all_steps_terminal`), for visibility only — **not**
   a new `verification` block. R2's "at each gate point" is vacuously satisfied
   (a1/w have no iteration gate point). The notice names that predicate, not a literal
   programmatic check.
@@ -1111,7 +1111,7 @@ later pulse reads the landed verdict straight off disk. So a verdict lands even
 though the dispatching turn has exited — the durability property the whole tree
 runtime rests on, and the reason the boss context stays flat (it never reads
 sub-agent prose back in). `tests/integration/tree-dispatch.test.sh` proves this
-seam end-to-end deterministically (dispatch in one process, `record-verdict` in a
+handoff end-to-end deterministically (dispatch in one process, `record-verdict` in a
 separate process, converge in a third), plus attempt-identity (Bug #6), stale
 rejection (AE3 / `StaleVerdict`), the Bug #8 launch-failure guard, and the RISK-7
 alive-vs-past-threshold reap boundary.

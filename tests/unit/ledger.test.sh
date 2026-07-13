@@ -17,8 +17,8 @@
 #   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
 #   6. I-2: 3 units, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
-#      dispatched -> met==false (all_units_terminal false)
-#   7. I-2 closure: unit `fixed` with a stale blocker -> all_units_terminal==false
+#      dispatched -> met==false (all_steps_terminal false)
+#   7. I-2 closure: unit `fixed` with a stale blocker -> all_steps_terminal==false
 #   8. I-3: liveness/orphan predicate (manual / stale-beat / healthy-slow)
 #   9. state grammar: every documented transition holds; undocumented rejected
 #  10. fence: no production file enables a TEST_NO_* hatch
@@ -86,8 +86,8 @@ print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-units> <adapter_scale> [phase]  — like ledger_init but
-# threads adapter_scale (the ledger_init helper above is fixed at the default
+# init_scale <run> <json-units> <backend_scale> [phase]  — like ledger_init but
+# threads backend_scale (the ledger_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
 ledger_init_scale() {
   local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
@@ -121,7 +121,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z")
 m.record_verdict(repo, run, "U1", [])
 PYEOF
-  st="$(ledger_field "$run" 'L["units"][0]["state"]')"
+  st="$(ledger_field "$run" 'L["steps"][0]["state"]')"
   assert_eq "verdict-returned" "$st"
 else
   fail "ledger file not created at $LP"
@@ -146,7 +146,7 @@ repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 def boom(L):
-    L["units"][0]["state"] = "dispatched"
+    L["steps"][0]["state"] = "dispatched"
     raise RuntimeError("simulated interruption mid-RMW")
 try:
     m._with_locked_ledger(repo, run, boom)
@@ -155,7 +155,7 @@ except RuntimeError:
 PYEOF
 # Prior ledger must still be valid JSON, state unchanged (still pending), and
 # no leftover .ledger.* tempfile in the dispatch dir.
-st="$(ledger_field "atomic-run" 'L["units"][0]["state"]')"
+st="$(ledger_field "atomic-run" 'L["steps"][0]["state"]')"
 tmp_left="$(find "$REPO/.claude/auto" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$st" = "pending" ] && [ "$tmp_left" = "0" ]; then
   pass
@@ -177,7 +177,7 @@ repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 def bump(L):
-    u = L["units"][0]
+    u = L["steps"][0]
     cur = len(u["findings"])
     # read-then-write with a yield in between to widen the race window.
     import time; time.sleep(0.01)
@@ -192,7 +192,7 @@ PYEOF
 it "locked: 6 concurrent writers all land (findings count == 6, no lost update)"
 ledger_init "race-locked" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
 race_writers "race-locked" 6
-cnt="$(ledger_field "race-locked" 'len(L["units"][0]["findings"])')"
+cnt="$(ledger_field "race-locked" 'len(L["steps"][0]["findings"])')"
 assert_eq "6" "$cnt"
 
 it "deliberate-fail: NO_LOCK writers lose updates (count < 6 at least once / 12 iters)"
@@ -201,7 +201,7 @@ for iter in $(seq 1 12); do
   rm -f "$REPO/.claude/auto/race-nolock.json" "$REPO/.claude/auto/race-nolock.lock"
   ledger_init "race-nolock" '[{"id":"U1","state":"pending"}]' >/dev/null 2>&1
   CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_NO_LOCK=1 race_writers "race-nolock" 6
-  c="$(ledger_field "race-nolock" 'len(L["units"][0]["findings"])')"
+  c="$(ledger_field "race-nolock" 'len(L["steps"][0]["findings"])')"
   [ "$c" -lt 6 ] && saw_lost=1 && break
 done
 if [ "$saw_lost" = "1" ]; then
@@ -244,7 +244,7 @@ met_stale="$(ledger_field "i1-norecomp" 'L["exit_predicate_result"]["met"]')"
 assert_eq "True" "$met_stale"
 
 # ─── Scenario 6: I-2 stalled-dependency false-done guard ─────────────────────
-it "I-2: stalled U_a with un-dispatched dependents U_b/U_c -> met==false (all_units_terminal false)"
+it "I-2: stalled U_a with un-dispatched dependents U_b/U_c -> met==false (all_steps_terminal false)"
 ledger_init "i2-run" \
   '[{"id":"Ua","state":"pending"},{"id":"Ub","state":"pending","depends_on":["Ua"]},{"id":"Uc","state":"pending","depends_on":["Ua"]}]' \
   >/dev/null 2>&1
@@ -258,15 +258,15 @@ m.transition(repo, run, "Ua", "dispatched")
 m.transition(repo, run, "Ua", "stalled")
 PYEOF
 met="$(ledger_field "i2-run" 'L["exit_predicate_result"]["met"]')"
-aut="$(ledger_field "i2-run" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut="$(ledger_field "i2-run" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 if [ "$met" = "False" ] && [ "$aut" = "False" ]; then
   pass
 else
-  fail "met=$met all_units_terminal=$aut (expected False / False)"
+  fail "met=$met all_steps_terminal=$aut (expected False / False)"
 fi
 
 # ─── Scenario 7: I-2 closure — fixed with a stale blocker is NOT terminal ────
-it "I-2 closure: a 'fixed' unit with a stale blocker -> all_units_terminal==false"
+it "I-2 closure: a 'fixed' unit with a stale blocker -> all_steps_terminal==false"
 ledger_init "i2-closure" '[{"id":"U1","state":"verdict-returned"}]' >/dev/null 2>&1
 # Record a blocker verdict, then a pulse applies a fix: verdict-returned -> fixed.
 # Per §4.2 the fix does NOT clear findings, so the stale blocker remains.
@@ -278,12 +278,12 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"open"}])
 m.transition(repo, run, "U1", "fixed")  # fix applied; findings untouched.
 PYEOF
-state="$(ledger_field "i2-closure" 'L["units"][0]["state"]')"
-aut="$(ledger_field "i2-closure" 'L["exit_predicate_result"]["all_units_terminal"]')"
+state="$(ledger_field "i2-closure" 'L["steps"][0]["state"]')"
+aut="$(ledger_field "i2-closure" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 if [ "$state" = "fixed" ] && [ "$aut" = "False" ]; then
   pass
 else
-  fail "state=$state all_units_terminal=$aut (expected fixed / False)"
+  fail "state=$state all_steps_terminal=$aut (expected fixed / False)"
 fi
 
 # ─── Scenario 8: I-3 liveness / orphan predicate ─────────────────────────────
@@ -342,7 +342,7 @@ for i,(frm,to) in enumerate(edges):
     m.init_ledger(repo, run, backend="ce", units=[{"id":"U1","state":frm}])
     try:
         m.transition(repo, run, "U1", to)
-        new = m.read_ledger(repo, run)["units"][0]["state"]
+        new = m.read_ledger(repo, run)["steps"][0]["state"]
         if new != to: ok = False
     except m.InvalidTransition:
         ok = False
@@ -376,7 +376,7 @@ for i,(frm,to) in enumerate(bad):
         all_rejected = False  # should have raised
     except m.InvalidTransition:
         # also confirm the ledger was NOT mutated
-        if m.read_ledger(repo, run)["units"][0]["state"] != frm:
+        if m.read_ledger(repo, run)["steps"][0]["state"] != frm:
             all_rejected = False
 print("all-rejected" if all_rejected else "FAIL")
 PYEOF
@@ -439,7 +439,7 @@ fi
 # Under backend_scale="blocker-only" (native), majors are ADVISORY: a unit whose
 # ONLY finding is a major is terminal, and a work run with majors>0 / blockers==0
 # reaches met==true. A blocker, by contrast, still gates. recompute_predicate
-# reads adapter_scale (the fix); unit_is_terminal uses the SAME scale so the two
+# reads backend_scale (the fix); unit_is_terminal uses the SAME scale so the two
 # cannot disagree about done-ness.
 #
 # Verify-RED (neutralize BOTH sites of the fix, then run, then restore):
@@ -450,7 +450,7 @@ fi
 # Both limbs are load-bearing: with only the major finding present, the unit is
 # terminal ONLY because majors don't gate (limb 1), and met is True ONLY because
 # no_majors is vacuously True under blocker-only (limb 2). Neutralizing either
-# limb flips this test RED (unit non-terminal -> all_units_terminal False, OR
+# limb flips this test RED (unit non-terminal -> all_steps_terminal False, OR
 # no_majors False) — confirmed independently in the verify pass.
 it "Bug #3: blocker-only + major-only verdict -> met==True (majors advisory, not gating)"
 ledger_init_scale "scale-major" \
@@ -458,13 +458,13 @@ ledger_init_scale "scale-major" \
   blocker-only >/dev/null 2>&1
 met_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["met"]')"
 majors_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["majors"]')"
-aut_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_major="$(ledger_field "scale-major" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 # Two-part claim: the major finding is GENUINELY present (majors==1) AND the
 # scale gates it out (met==True, unit terminal). A regression flips one or both.
 if [ "$met_major" = "True" ] && [ "$majors_major" = "1" ] && [ "$aut_major" = "True" ]; then
   pass
 else
-  fail "met=$met_major majors=$majors_major all_units_terminal=$aut_major (expected True/1/True)"
+  fail "met=$met_major majors=$majors_major all_steps_terminal=$aut_major (expected True/1/True)"
 fi
 
 it "Bug #3: blocker-only + blocker verdict -> met==False (blockers always gate)"
@@ -473,12 +473,12 @@ ledger_init_scale "scale-blocker" \
   blocker-only >/dev/null 2>&1
 met_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["met"]')"
 blk_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["blockers"]')"
-aut_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_blk="$(ledger_field "scale-blocker" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 # blocker present (blockers==1), unit NOT terminal, met False.
 if [ "$met_blk" = "False" ] && [ "$blk_blk" = "1" ] && [ "$aut_blk" = "False" ]; then
   pass
 else
-  fail "met=$met_blk blockers=$blk_blk all_units_terminal=$aut_blk (expected False/1/False)"
+  fail "met=$met_blk blockers=$blk_blk all_steps_terminal=$aut_blk (expected False/1/False)"
 fi
 
 # ─── Scenario 12: Bug #3 control — three-tier (CE/default) majors GATE ────────
@@ -491,12 +491,12 @@ ledger_init_scale "tier-major" \
   three-tier >/dev/null 2>&1
 met_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["met"]')"
 majors_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["majors"]')"
-aut_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_tm="$(ledger_field "tier-major" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 # Same major finding as scale-major, opposite verdict because the scale gates it.
 if [ "$met_tm" = "False" ] && [ "$majors_tm" = "1" ] && [ "$aut_tm" = "False" ]; then
   pass
 else
-  fail "met=$met_tm majors=$majors_tm all_units_terminal=$aut_tm (expected False/1/False)"
+  fail "met=$met_tm majors=$majors_tm all_steps_terminal=$aut_tm (expected False/1/False)"
 fi
 
 it "Bug #3 control: three-tier + minor-only verdict -> met==True (minors never gate)"
@@ -505,15 +505,15 @@ ledger_init_scale "tier-minor" \
   three-tier >/dev/null 2>&1
 met_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["met"]')"
 minors_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["minors"]')"
-aut_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_tn="$(ledger_field "tier-minor" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 if [ "$met_tn" = "True" ] && [ "$minors_tn" = "1" ] && [ "$aut_tn" = "True" ]; then
   pass
 else
-  fail "met=$met_tn minors=$minors_tn all_units_terminal=$aut_tn (expected True/1/True)"
+  fail "met=$met_tn minors=$minors_tn all_steps_terminal=$aut_tn (expected True/1/True)"
 fi
 
 # ─── Scenario 13: Bug #4 — vacuous work-phase exit guard ──────────────────────
-# all_units_terminal = all([]) is vacuously True. WITHOUT the non-empty `units`
+# all_steps_terminal = all([]) is vacuously True. WITHOUT the non-empty `steps`
 # conjunct (has_units) in recompute_predicate, an auto plan->work flip with ZERO
 # dispatched units would declare met==True before any fan-out. The guard makes a
 # work-phase ledger with units==[] NOT met. A contrasting work run WITH one
@@ -526,26 +526,26 @@ fi
 it "Bug #4: work phase with ZERO units -> met==False (vacuous-exit guard; all([])==True is NOT done)"
 ledger_init "vacuous-run" '[]' ce work >/dev/null 2>&1
 met_vac="$(ledger_field "vacuous-run" 'L["exit_predicate_result"]["met"]')"
-aut_vac="$(ledger_field "vacuous-run" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_vac="$(ledger_field "vacuous-run" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 phase_vac="$(ledger_field "vacuous-run" 'L["loop_phase"]')"
-# all_units_terminal is vacuously True (all([])), yet met must be False because
+# all_steps_terminal is vacuously True (all([])), yet met must be False because
 # the work-loop requires at least one unit. The guard is what breaks the tie.
 if [ "$met_vac" = "False" ] && [ "$aut_vac" = "True" ] && [ "$phase_vac" = "work" ]; then
   pass
 else
-  fail "met=$met_vac all_units_terminal=$aut_vac phase=$phase_vac (expected False/True/work)"
+  fail "met=$met_vac all_steps_terminal=$aut_vac phase=$phase_vac (expected False/True/work)"
 fi
 
 it "Bug #4 contrast: work phase WITH one terminal unit -> met==True (guard is the empty-set check, not a blanket work-phase false)"
 ledger_init "nonvacuous-run" '[{"id":"U1","state":"verdict-returned","findings":[]}]' ce work >/dev/null 2>&1
 met_nv="$(ledger_field "nonvacuous-run" 'L["exit_predicate_result"]["met"]')"
-aut_nv="$(ledger_field "nonvacuous-run" 'L["exit_predicate_result"]["all_units_terminal"]')"
+aut_nv="$(ledger_field "nonvacuous-run" 'L["exit_predicate_result"]["all_steps_terminal"]')"
 # Identical work phase, one terminal defect-free unit -> met True. Proves the
 # vacuous test's False comes from the empty-set guard, not from "work never met".
 if [ "$met_nv" = "True" ] && [ "$aut_nv" = "True" ]; then
   pass
 else
-  fail "met=$met_nv all_units_terminal=$aut_nv (expected True/True)"
+  fail "met=$met_nv all_steps_terminal=$aut_nv (expected True/True)"
 fi
 
 # ─── Scenario 14: Bug #6 — stall+retry verdict clobber (attempt-identity) ─────
@@ -574,17 +574,17 @@ m.init_ledger(repo, run, backend="ce", loop_phase="work",
 
 # Attempt 1: dispatch (attempt -> 1). Simulate the dispatcher's bump.
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
-a1 = m.read_ledger(repo, run)["units"][0]["attempt"]
+a1 = m.read_ledger(repo, run)["steps"][0]["attempt"]
 # A stalls.
 m.transition(repo, run, "U1", "stalled")
 # Operator retries: stalled -> pending (clears last_error).
 m.transition(repo, run, "U1", "pending")
 # Attempt 2: re-dispatch (attempt -> 2). Agent B.
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:20:00Z", attempt=2)
-a2 = m.read_ledger(repo, run)["units"][0]["attempt"]
+a2 = m.read_ledger(repo, run)["steps"][0]["attempt"]
 # Agent B (attempt 2) self-writes a CLEAN verdict.
 m.record_verdict(repo, run, "U1", [], attempt=2)
-after_b = m.read_ledger(repo, run)["units"][0]
+after_b = m.read_ledger(repo, run)["steps"][0]
 sev_b = "clean" if not after_b["findings"] else after_b["findings"][0]["severity"]
 
 # Agent A (still alive, attempt 1) self-writes a STALE blocker verdict. MUST be
@@ -594,7 +594,7 @@ try:
     m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-from-A"}], attempt=1)
 except m.StaleVerdict:
     rejected = "yes"
-after_a = m.read_ledger(repo, run)["units"][0]
+after_a = m.read_ledger(repo, run)["steps"][0]
 # B's clean verdict must survive: findings still empty, state still verdict-returned.
 survived = "clean" if not after_a["findings"] else after_a["findings"][0]["severity"]
 print("%s,%s,%s,%s,%s" % (a1, a2, sev_b, rejected, survived))
@@ -629,7 +629,7 @@ m.record_verdict(repo, run, "U1", [], attempt=2)  # B clean.
 clobbered = "no"
 try:
     m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-from-A"}], attempt=1)
-    after = m.read_ledger(repo, run)["units"][0]
+    after = m.read_ledger(repo, run)["steps"][0]
     if after["findings"] and after["findings"][0]["severity"] == "blocker":
         clobbered = "yes"
 except m.StaleVerdict:
@@ -664,11 +664,11 @@ m.init_ledger(repo, run, backend="ce", loop_phase="work",
 # Attempt 1 dispatch, then a plain timeout stall (last_error stays null).
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 m.transition(repo, run, "U1", "stalled")
-le_before = m.read_ledger(repo, run)["units"][0]["last_error"]
+le_before = m.read_ledger(repo, run)["steps"][0]["last_error"]
 # The slow-but-healthy review finishes and self-writes a clean verdict for its
 # CURRENT attempt (1). Recovery must accept it.
 m.record_verdict(repo, run, "U1", [], attempt=1)
-after = m.read_ledger(repo, run)["units"][0]
+after = m.read_ledger(repo, run)["steps"][0]
 le_after = after["last_error"]
 print("%s,%s,%s,%s" % (after["state"], "null" if le_before is None else le_before,
                        "null" if le_after is None else le_after,
@@ -709,7 +709,7 @@ try:
     m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-A"}], attempt=1)
 except m.StaleVerdict:
     outcome = "rejected-stale"
-after = m.read_ledger(repo, run)["units"][0]
+after = m.read_ledger(repo, run)["steps"][0]
 # Unit must remain `dispatched` (B in flight) — A's stale verdict had NO effect.
 print("%s,%s" % (outcome, after["state"]))
 PYEOF
@@ -737,7 +737,7 @@ try:
 except m.InvalidTransition:
     outcome = "lost-invalid-transition"
 # Without recovery the unit is STILL stalled (verdict discarded).
-state = m.read_ledger(repo, run)["units"][0]["state"]
+state = m.read_ledger(repo, run)["steps"][0]["state"]
 print("%s,%s" % (outcome, state))
 PYEOF
 )"
@@ -763,7 +763,7 @@ try:
 except m.LedgerExists:
     # Original must be untouched: still the ce backend + the original unit.
     led = m.read_ledger(repo, run)
-    print("rejected:%s:%s" % (led["adapter"], led["units"][0]["id"]))
+    print("rejected:%s:%s" % (led["backend"], led["steps"][0]["id"]))
 PYEOF
 )"
 assert_eq "rejected:ce:U1" "$second"
@@ -823,13 +823,13 @@ m.init_ledger(repo, run, backend="ce", loop_phase="work",
 m.transition(repo, run, "U1", "dispatched", dispatched_at="2026-05-21T14:00:00Z", attempt=1)
 # First verdict (attempt 1): a blocker. Unit -> verdict-returned, met False.
 m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"first-pass"}], attempt=1)
-first = m.read_ledger(repo, run)["units"][0]
+first = m.read_ledger(repo, run)["steps"][0]
 # A re-review of the SAME attempt finds the blocker resolved -> clean verdict.
 # This is the verdict-returned -> verdict-returned self-edge; equal attempt is
 # ACCEPTED and the findings are OVERWRITTEN (latest-only, §4.2).
 m.record_verdict(repo, run, "U1", [], attempt=1)
 second = m.read_ledger(repo, run)
-u = second["units"][0]
+u = second["steps"][0]
 print("%s,%s,%s,%s" % (
     first["state"],
     "clean" if not u["findings"] else u["findings"][0]["severity"],
@@ -869,7 +869,7 @@ try:
     m.record_verdict(repo, run, "U1", [{"severity":"blocker","note":"stale-self"}], attempt=1)
 except m.StaleVerdict:
     outcome = "rejected-stale"
-u = m.read_ledger(repo, run)["units"][0]
+u = m.read_ledger(repo, run)["steps"][0]
 print("%s,%s" % (outcome, "clean" if not u["findings"] else u["findings"][0]["severity"]))
 PYEOF
 )"
@@ -908,9 +908,9 @@ repo = tempfile.mkdtemp(); run = "v01x"
 # Hand-write a legacy-shaped ledger: exactly the v0.1.x keys, no v0.2.0 fields.
 legacy = {
     "run_id": run, "loop_phase": "work", "plan_step": None,
-    "seam_paused": False, "adapter": "ce", "adapter_scale": "three-tier",
+    "handoff_paused": False, "backend": "ce", "backend_scale": "three-tier",
     "exit_predicate_result": {}, "loop": {"driver": "self", "last_beat_at": "x"},
-    "units": [{"id": "U1", "state": "verdict-returned", "depends_on": [],
+    "steps": [{"id": "U1", "state": "verdict-returned", "depends_on": [],
                "dispatched_at": None, "verdict_at": None,
                "stall_threshold_seconds": 600, "last_error": None,
                "attempt": 0, "findings": [{"severity": "blocker"}]}],
@@ -923,7 +923,7 @@ led = m.read_ledger(repo, run)
 pr = m.recompute_predicate(led)  # recompute against the legacy-shaped dict
 # Predicate must evaluate exactly as v0.1.1: a blocker means not-met.
 # The legacy file has NO new top-level keys (read returns it verbatim).
-has_new = any(k in led for k in ("recipe", "phase_order", "terminal_phase"))
+has_new = any(k in led for k in ("workflow", "phase_order", "terminal_phase"))
 print("%s,%s,%s" % (pr["met"], pr["blockers"], has_new))
 PYEOF
 )"
@@ -939,7 +939,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 import tempfile
 repo = tempfile.mkdtemp(); run = "defs"
 m.init_ledger(repo, run, backend="ce", units=[{"id": "U1"}])
-u = m.read_ledger(repo, run)["units"][0]
+u = m.read_ledger(repo, run)["steps"][0]
 # additive per-unit fields read as their documented defaults.
 print("%s,%s,%s,%s" % (
     u.get("phase"), u.get("plan_step"), u.get("dispatch_context"),
@@ -959,11 +959,11 @@ import tempfile
 repo = tempfile.mkdtemp(); run = "rcp"
 m.init_ledger(repo, run, backend="ce",
               recipe={"name": "a1", "source_tier": "built-in"},
-              phase_order=["plan", "seam", "work"], terminal_phase="work",
+              phase_order=["plan", "handoff", "work"], terminal_phase="work",
               units=[{"id": "U1"}])
 led = m.read_ledger(repo, run)
 print("%s,%s,%s" % (
-    led["recipe"]["name"], led["phase_order"][2], led["terminal_phase"]))
+    led["workflow"]["name"], led["phase_order"][2], led["terminal_phase"]))
 PYEOF
 )"
 assert_eq "a1,work,work" "$toplevel"
@@ -977,7 +977,7 @@ import tempfile
 repo = tempfile.mkdtemp(); run = "bad"
 try:
     m.init_ledger(repo, run, backend="ce",
-                  phase_order=["plan", "seam", "work"], terminal_phase="nope",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="nope",
                   units=[{"id": "U1"}])
     print("accepted")
 except m.LedgerError:
@@ -1028,9 +1028,9 @@ crit = [{"id": "c1", "type": "programmatic", "check": "x"},
 m.init_ledger(repo, run, backend="ce", loop_phase="work",
               units=[{"id": "G1", "state": "pending", "verification": crit},
                      {"id": "U1", "state": "pending"}],
-              iteration={"gate_unit": "G1"})
+              iteration={"gate_step": "G1"})
 L = m.read_ledger(repo, run)
-by = {u["id"]: u for u in L["units"]}
+by = {u["id"]: u for u in L["steps"]}
 gate_ok = by["G1"].get("verification") == crit
 # the non-gate unit must NOT have grown a verification key (regression).
 legacy_clean = "verification" not in by["U1"]
@@ -1101,7 +1101,7 @@ it "init: units passed as JSON are normalized (state=pending, phase set, attempt
 CLAUDE_AUTO_REPO="$REPO" "$PY" "$LEDGER_CLI" init clinorm '[{"id":"n1"}]' ce plan \
   >/dev/null 2>&1
 assert_eq "pending|True|True" \
-  "$(ledger_field clinorm '"%s|%s|%s" % (L["units"][0]["state"], "phase" in L["units"][0], "attempt" in L["units"][0])')"
+  "$(ledger_field clinorm '"%s|%s|%s" % (L["steps"][0]["state"], "phase" in L["steps"][0], "attempt" in L["steps"][0])')"
 
 # ── U4: the `describe` self-orientation verb ────────────────────────────────
 # describe emits the stable operating contract as ONE JSON object so a driving

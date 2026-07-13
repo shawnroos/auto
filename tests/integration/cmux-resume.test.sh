@@ -16,7 +16,7 @@
 #     NO-OPS (no spawn). This is the load-bearing guard.
 #   - non-orphaned run (driver==self, fresh last_beat_at) -> no spawn.
 #   - done run -> no spawn.
-#   - seam-paused run -> no spawn (intentional orphan; never arm work uninvited).
+#   - handoff-paused run -> no spawn (intentional orphan; never arm work uninvited).
 #   - OPT-IN: scan is a no-op unless CLAUDE_AUTO_RESUME_ENABLE=1.
 #   - runaway guard: a fresh in-flight sentinel -> no second spawn.
 #
@@ -209,17 +209,17 @@ reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"
 assert_empty "$(log_text)"
 
-# ─── seam-paused run -> no spawn (intentional orphan; awaiting confirmation) ──
-it "seam-paused run: no spawn (intentional orphan; never arm work uninvited)"
-REPO="$(mkrepo seam)"
+# ─── handoff-paused run -> no spawn (intentional orphan; awaiting confirmation) ──
+it "handoff-paused run: no spawn (intentional orphan; never arm work uninvited)"
+REPO="$(mkrepo handoff)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-# seam phase + driver=manual -> is_orphaned() would be TRUE, but seam_paused
+# handoff phase + driver=manual -> is_orphaned() would be TRUE, but handoff_paused
 # excludes it from auto-resume.
-L.init_ledger(repo,"seamrun",backend="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
-L.set_loop(repo,"seamrun",driver="manual")
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 reset_log
 CLAUDE_AUTO_RESUME_ENABLE=1 bash "$CMUX_SOCKET_SH" scan "$REPO"

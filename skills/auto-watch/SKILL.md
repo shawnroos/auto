@@ -1,7 +1,7 @@
 ---
 name: auto-watch
 description: >
-  Render the live auto agent tree — driver → work unit → do_unit fan-out agent —
+  Render the live auto agent tree — driver → work unit → do_step fan-out agent —
   with each node's age against its stall threshold and its attempt count, then
   overlay live-agent status from the harness. Use when the driver or operator
   wants to SEE what a run has dispatched, what is nested under a fan-out unit, and
@@ -15,7 +15,7 @@ description: >
 # auto-watch (the agent-tree watch view)
 
 A legible, at-a-glance picture of a live auto run's agent tree: the driver, the
-work units it dispatched, and the `do_unit` fan-out agents nested under their
+work units it dispatched, and the `do_step` fan-out agents nested under their
 producer parents — each annotated with how long it has been in flight against its
 stall threshold and which attempt it is on. Its purpose is supervision *legibility*
 (R6, AE5): surface a wedged or dead node — top-level or nested — as a distinct,
@@ -25,12 +25,12 @@ over-age node so the driver's reap→retry→escalate policy (`skills/auto/SKILL
 Two halves, deliberately split (KTD5):
 
 - **Structure + age — from the ledger, deterministic.** `lib/watch_tree.py`
-  reads the run's ledger and renders the tree: declaration order, `do_unit`
+  reads the run's ledger and renders the tree: declaration order, `do_step`
   children nested under the parent they depend on, dispatched nodes annotated
   `age=Ns/Ts` with an `OVER-AGE` flag past threshold and `attempt=K`. Pure and
   byte-deterministic (`now` is passed in), so the same ledger always renders the
   same tree.
-- **Liveness — from the task tools, model-side.** Nested `do_unit` agents carry
+- **Liveness — from the task tools, model-side.** Nested `do_step` agents carry
   their OWN `session_id` and are not reachable by the ledger alone, so overlay
   their live process status from `TaskList` / `Monitor`, mapping each task back
   to its unit id.
@@ -77,7 +77,7 @@ The ledger shows what the run BELIEVES is dispatched; the task tools show what i
 actually alive. Overlay them so a node the ledger still calls `dispatched` but
 whose agent has died (or wedged) is visible:
 
-1. Call **`TaskList`** for the run's dispatched agents. Nested `do_unit` agents
+1. Call **`TaskList`** for the run's dispatched agents. Nested `do_step` agents
    carry their own `session_id`, so map each task back to its unit id (by the
    unit id baked into the dispatch, per `skills/auto/SKILL.md` §4 / KTD-5).
 2. For a node the ledger calls `dispatched` but that has no live task — or one

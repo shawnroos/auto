@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto regression test: /auto-resume stdout contract.
 #
-# The re-arm paths (`continue` seam→work, `advance` plan→enumerate) MUST emit
+# The re-arm paths (`continue` handoff→work, `advance` plan→enumerate) MUST emit
 # exactly ONE JSON object on stdout and NOTHING on stderr. This guards the
 # driver-facing contract documented in skills/auto/SKILL.md §2 and
 # commands/auto-resume.md: the driver parses the WHOLE of stdout with json.loads,
@@ -66,8 +66,8 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         break
 
 if scenario == "continue":
-    # seam→work continue.
-    ledger.set_loop(repo, run_id, loop_phase="seam", seam_paused=True, driver="manual")
+    # handoff→work continue.
+    ledger.set_loop(repo, run_id, loop_phase="handoff", handoff_paused=True, driver="manual")
     fn = lambda: resume._cmd_continue(ledger, repo, run_id)
 elif scenario == "advance":
     # plan→enumerate advance.
@@ -93,8 +93,8 @@ print("%s|%s|%s|%s" % (stdout_is_one_json, stderr_clean, is_arm, rc))
 PYEOF
 }
 
-# ─── continue (seam→work): one JSON object on stdout, clean stderr ──────────────
-it "continue(seam→work): stdout is exactly one arm-pulse JSON object, stderr clean"
+# ─── continue (handoff→work): one JSON object on stdout, clean stderr ──────────────
+it "continue(handoff→work): stdout is exactly one arm-pulse JSON object, stderr clean"
 res="$(run_scenario continue)"
 IFS='|' read -r c_json c_err c_arm c_rc <<EOF
 $res

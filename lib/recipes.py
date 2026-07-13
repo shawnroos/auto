@@ -42,6 +42,9 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 recipe_validate = load_lib_module("recipe_validate")
+# U6 (KTD-1): the format-v1 → v2 read shim. DAG root, pure stdlib, imports no
+# sibling — so this edge closes no cycle.
+format_compat = load_lib_module("format_compat")
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from recipe_validate (the validation DAG root). Every name is listed
@@ -89,14 +92,14 @@ A1_BUILTIN = {
     "name": "a1",
     "version": "1",
     "description": "Classic CE Stack — plan, build, review, fix to P3-only exit. The v0.1.x default workflow.",
-    "default_adapter": "ce",
-    "phase_order": ["plan", "seam", "work"],
+    "default_backend": "ce",
+    "phase_order": ["plan", "handoff", "work"],
     "terminal_phase": "work",
     "phase_transitions": [
-        {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+        {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
     ],
-    "units": [
-        {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}  # format-v1 key; flips in U6
+    "steps": [
+        {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}}
     ],
 }
 
@@ -188,7 +191,13 @@ def resolve(name: str, repo_root: str):
         if os.path.isfile(path):
             try:
                 with open(path) as f:
-                    return json.load(f), tier
+                    # U6 (KTD-1): upgrade a format-v1 workflow file to v2 IN MEMORY,
+                    # right after json.load and BEFORE validate() — the validator now
+                    # expects v2 keys. auto never writes a user's workflow file back,
+                    # so acceptance of v1-keyed files is INDEFINITE: the file upgrades
+                    # on every resolve, forever. Pure + idempotent, so a v2 file is a
+                    # no-op pass-through.
+                    return format_compat.upgrade_workflow(json.load(f)), tier
             except (OSError, ValueError) as e:
                 _bad(f"recipe {name!r} at {path} failed to load: {e}")
     if name == "a1":
@@ -232,7 +241,7 @@ def unit_for(recipe_unit: dict, recipe: dict) -> dict:
     ``ledger.init_ledger`` expects). Merges recipe-side ``invokes`` metadata
     (``prompt_template`` etc.) into ``dispatch_context`` — RE-VALIDATING the
     path bound (the second enforcement point; the first is ``validate``). The
-    ``adapter_op`` stays in ``dispatch_context`` so the backend reads it via the
+    ``backend_op`` stays in ``dispatch_context`` so the backend reads it via the
     unit at dispatch.
     """
     inv = dict(recipe_unit.get("invokes") or {})
@@ -244,3 +253,66 @@ def unit_for(recipe_unit: dict, recipe: dict) -> dict:
         "depends_on": list(recipe_unit.get("depends_on") or []),
         "dispatch_context": inv,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CLI — the opt-in `migrate` verb (U6 / KTD-1).
+#
+# Read-compat for v1-keyed workflow files is INDEFINITE (resolve() upgrades them
+# in memory on every read), so migrating a file is never REQUIRED. This verb
+# exists for users who want their own files modernized on disk — e.g. so the JSON
+# they edit by hand matches the current contract.
+
+
+def migrate(path: str) -> bool:
+    """Rewrite a format-v1 workflow file at ``path`` to v2, in place, atomically.
+
+    Returns True if the file changed, False if it was already v2 (a no-op —
+    running this twice is idempotent, because ``upgrade_workflow`` is).
+
+    Atomic = mkstemp + os.replace in the target dir, so a crash mid-write leaves
+    the original intact rather than a half-written workflow.
+    """
+    import tempfile
+
+    with open(path) as f:
+        before = json.load(f)
+    after = format_compat.upgrade_workflow(before)
+    if after == before:
+        return False
+
+    target_dir = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".workflow.", suffix=".json", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(after, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def _cli(argv):
+    if len(argv) < 2 or argv[0] != "migrate":
+        sys.stderr.write("usage: recipes.py migrate <path-to-workflow.json>\n")
+        return 2
+    path = argv[1]
+    try:
+        changed = migrate(path)
+    except (OSError, ValueError) as e:
+        sys.stderr.write(f"auto: migrate failed for {path!r}: {e}\n")
+        return 1
+    sys.stdout.write(
+        f"migrated {path} to format v2\n" if changed
+        else f"{path} is already format v2 (no change)\n"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))

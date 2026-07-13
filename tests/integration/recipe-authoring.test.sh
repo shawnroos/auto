@@ -46,11 +46,11 @@ op = sys.argv[2]
 A4_SHAPED = {
     "name": "my-pair", "version": "1",
     "description": "two builders clarity vs perf, comparator picks",
-    "phase_order": ["plan", "seam", "work"], "terminal_phase": "work",
+    "phase_order": ["plan", "handoff", "work"], "terminal_phase": "work",
     "phase_transitions": [
-        {"from": "plan", "to": "work", "emitter": "plan_output_to_paired_builders"}],
-    "units": [{"id": "plan", "phase": "plan", "depends_on": [],
-               "invokes": {"adapter_op": "next_plan_step"}}],
+        {"from": "plan", "to": "work", "producer": "plan_output_to_paired_builders"}],
+    "steps": [{"id": "plan", "phase": "plan", "depends_on": [],
+               "invokes": {"backend_op": "next_plan_step"}}],
 }
 
 if op == "ae3-validates":
@@ -82,7 +82,7 @@ elif op == "write-roundtrip":
 elif op == "invalid-not-written":
     # A draft that fails validation must NOT be written.
     bad = {"name": "bad", "version": "1",
-           "units": [{"id": "u", "phase": "plan",
+           "steps": [{"id": "u", "phase": "plan",
                       "invokes": {"prompt_template": "../../etc/passwd"}}]}
     try:
         recipes.validate(bad)

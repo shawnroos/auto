@@ -80,7 +80,7 @@ ALLOWED_FUNCTIONS=(
   # collapsed into the _VERBS registry with per-verb _h_* handlers (no function
   # over 40 LOC), both back under budget without a waiver.
   "lib/ledger_core.py:init_ledger:231"
-  # (_try_iteration_check waiver retired: the recipe-bug + iteration-crash
+  # (_try_iteration_check waiver retired: the workflow-bug + iteration-crash
   # except branches were collapsed into the shared `_wedge_done_stop` helper,
   # bringing the function back under the 120-LOC budget — decompose, don't bump.)
   # advance_iteration_loop is the v0.3.0 U4 entry point — bound check,
@@ -90,7 +90,7 @@ ALLOWED_FUNCTIONS=(
   # spread the dispatch across helpers without making it smaller.
   "lib/pulse_advance.py:advance_iteration_loop:133"
   # dispatch_batch is the parallel fan-out driver — bounds + slot selection
-  # + backend routing + verdict-write. U12 added the per-unit adapter_op
+  # + backend routing + verdict-write. U12 added the per-unit backend_op
   # validation guard (reject an unknown op before launch), +8 LOC over the
   # prior 132 waiver. The guard is cohesive with the other per-unit
   # pre-filters (not-pending / over-cap) it sits beside. Decomposition

@@ -17,13 +17,19 @@ U17 (v0.9.0) split lib/recipes.py (~981 LOC) BY CONCERN: this file holds the
 validation family (the `_validate_*` helpers + `_bad`, `_check_prompt_template`,
 `validate`, `_lint_verification_placement`, `validate_and_lint`), and lib/recipes.py
 keeps the thin three-tier REGISTRY facade (resolve / list_available /
-load_and_validate / unit_for / workspace_recipe_path). This module is the DAG
-ROOT — it imports NO sibling lib module (pure stdlib), exactly like
-`ledger_core` in the ledger split — so `RecipeError` lives HERE and the facade
-re-exports it, giving `RecipeError` importable from both modules with no cycle.
+load_and_validate / unit_for / workspace_recipe_path). This module is a DAG
+ROOT — so `RecipeError` lives HERE and the facade re-exports it, giving
+`RecipeError` importable from both modules with no cycle.
 `_BUILTIN_DIR` / `_builtin_names` live here too because `validate_and_lint`'s
 description-spoofing guard needs them; the facade re-imports `_BUILTIN_DIR` for
 its `_tier_dirs`.
+
+U6 (concept-vocabulary rename): the ONE sibling edge — `format_compat`, the
+format-v1→v2 shim. `format_compat` is ITSELF a DAG root (pure stdlib, imports no
+sibling), so this is a leaf edge that closes no cycle and the root property is
+preserved. It exists because the authoring WRITE gate (`validate_and_lint`) does
+not go through the read chokepoints: a model following authoring-skill prose
+hands it a v1-keyed draft, which the now-v2 validator would otherwise reject.
 """
 
 from __future__ import annotations
@@ -31,7 +37,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from typing import NoReturn
+
+# Sibling load via the standard bootstrap loader (the house idiom — see
+# lib/recipes.py): this module is loaded by file path from several sites
+# (spec_from_file_location does NOT add lib/ to sys.path), so a plain
+# `import format_compat` is not guaranteed to resolve.
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
+format_compat = load_lib_module("format_compat")
 
 # Recipe-name regex (v0.2.0 fix-pass B / P0 #4 — round-1 security+correctness+
 # adversarial all flagged the same path-traversal fingerprint). The recipe NAME
@@ -53,20 +71,20 @@ _RECIPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # two are cross-checked by a U5b test that asserts this set equals the registry.
 V1_PRODUCER_NAMES = frozenset(
     {
-        "plan_output_to_work_units",
-        "judge_winner_to_work_units",
+        "plan_output_to_work_steps",
+        "judge_winner_to_work_steps",
         "plan_output_to_paired_builders",
         # v0.3.0 (U3): iterate_template materializes new units from a recipe-
         # declared emit_templates entry when the gate unit verdicts "iterate".
         # Added atomically with the REGISTRY entry in lib/unit_emitters.py so the
         # symmetry test stays green; U5 reserved this name but deferred the add.
         "iterate_template",
-        # v0.6.0 (U8): brainstorm_output_to_plan_unit fires on arrival at `plan`
+        # v0.6.0 (U8): brainstorm_output_to_plan_step fires on arrival at `plan`
         # from `brainstorm` in the spine recipe (recipes/pipeline.json), reading
         # the brainstorm unit's requirements-doc output and emitting the single
         # plan unit. Added atomically with the unit_emitters.REGISTRY entry so the
         # symmetry test (set(REGISTRY) == V1_PRODUCER_NAMES) stays green.
-        "brainstorm_output_to_plan_unit",
+        "brainstorm_output_to_plan_step",
     }
 )
 
@@ -74,10 +92,10 @@ V1_PRODUCER_NAMES = frozenset(
 # dropped the literal allow-list (`_V1_ALLOWED_PHASE_ORDERS`) — phase_order is
 # now validated structurally (every element a non-empty string, members cross-
 # checked downstream), so arbitrary spines like
-# ["brainstorm","plan","seam","work"] validate. These two constants survive:
+# ["brainstorm","plan","handoff","work"] validate. These two constants survive:
 # `_DEFAULT_PHASE_ORDER` is the recipe-blind default, `_WORK_ONLY_PHASE_ORDER`
 # still anchors the work-only empty-units guard below.
-_DEFAULT_PHASE_ORDER = ["plan", "seam", "work"]
+_DEFAULT_PHASE_ORDER = ["plan", "handoff", "work"]
 _WORK_ONLY_PHASE_ORDER = ["work"]
 
 # Only this top-level key is reserved-but-ignored (R3). Every other unknown
@@ -105,11 +123,11 @@ _KNOWN_TOPLEVEL = frozenset(
         "name",
         "version",
         "description",
-        "default_adapter",
+        "default_backend",
         "phase_order",
         "terminal_phase",
         "phase_transitions",
-        "units",
+        "steps",
         # v0.3.0 (U5): outcomes-gated iteration. Both fields are ADDITIVE — a
         # v0.2.x recipe that declares neither still validates (R7). The
         # validator block below cross-checks shape, gate_unit references, the
@@ -120,7 +138,7 @@ _KNOWN_TOPLEVEL = frozenset(
         # loose). Recipes that use a non-iterate producer to produce concrete
         # unit ids consumed by a structural unit's depends_on must DECLARE
         # those ids here. The validator then accepts depends_on members that
-        # are EITHER in units[], OR in expected_emit_outputs, OR plausibly
+        # are EITHER in steps[], OR in expected_emit_outputs, OR plausibly
         # produced by iterate_template's id math (`{id_prefix}{N}` shape).
         # Prior carve-out accepted any depends_on string starting with an
         # emit_template id_prefix — `"build-typo"` would pass against
@@ -156,10 +174,10 @@ _KNOWN_VERIFICATION_KEYS_HUMAN = frozenset({"id", "type", "prompt"})
 # subprocesses per pulse is a footgun, not a feature.
 _MAX_VERIFICATION_CRITERIA = 16
 # v0.3.0 (U5): the field set an emit_templates ENTRY may carry. Same depth as
-# `_KNOWN_UNIT_KEYS` for `units[]` — mechanical reject of unknown inner keys so
+# `_KNOWN_UNIT_KEYS` for `steps[]` — mechanical reject of unknown inner keys so
 # a typo in a template ("invoke" vs "invokes") doesn't silently no-op at emit.
 _KNOWN_EMIT_TEMPLATE_KEYS = frozenset({"phase", "invokes", "id_prefix"})
-_KNOWN_ITERATION_KEYS = frozenset({"gate_unit", "emit_template", "bound"})
+_KNOWN_ITERATION_KEYS = frozenset({"gate_step", "emit_template", "bound"})
 _KNOWN_ITERATION_BOUND_KEYS = frozenset({"max_attempts", "max_wall_seconds"})
 
 
@@ -230,7 +248,7 @@ def _validate_plan_presatisfied(recipe: dict, phase_order: list, pts: list) -> N
             "plan_presatisfied requires a 'plan' phase in phase_order "
             f"(the satisfied state lives there); got {phase_order!r}"
         )
-    plan_unit_count = sum(1 for u in recipe["units"] if u.get("phase") == "plan")
+    plan_unit_count = sum(1 for u in recipe["steps"] if u.get("phase") == "plan")
     if plan_unit_count != 1:
         _bad(
             "plan_presatisfied requires exactly one plan-phase unit (the "
@@ -257,7 +275,7 @@ def _validate_toplevel(recipe: dict) -> None:
             _bad(f"unknown top-level field: {k!r}")
 
     # Required fields.
-    for req in ("name", "version", "units"):
+    for req in ("name", "version", "steps"):
         if req not in recipe:
             _bad(f"missing required field: {req!r}")
     if not isinstance(recipe["name"], str) or not recipe["name"]:
@@ -276,7 +294,7 @@ def _validate_toplevel(recipe: dict) -> None:
             f"a recipe under this name would be shadowed by the alias→stem rewrite "
             f"(lib/recipes.py::_ALIASES); rename it"
         )
-    if not isinstance(recipe["units"], list):
+    if not isinstance(recipe["steps"], list):
         _bad("units must be a list")
 
 
@@ -286,7 +304,7 @@ def _validate_phase_order(recipe: dict) -> list:
     # phase_order: default if absent. v0.6.0 (U6) replaced the literal allow-list
     # gate with a STRUCTURAL rule (every element a non-empty string); the
     # phase-membership invariants are enforced downstream, unlocking arbitrary
-    # spines like ["brainstorm","plan","seam","work"] (KTD-2/3).
+    # spines like ["brainstorm","plan","handoff","work"] (KTD-2/3).
     phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
     if not isinstance(phase_order, list) or not phase_order:
         _bad(f"phase_order must be a non-empty list: {phase_order!r}")
@@ -474,7 +492,7 @@ def _validate_units(recipe: dict, phase_order: list) -> set:
     # Units: each must have id + phase ∈ phase_order; depends_on references
     # existing unit ids; invokes well-formed; prompt_template path-bounded.
     unit_ids = set()
-    for u in recipe["units"]:
+    for u in recipe["steps"]:
         if not isinstance(u, dict):
             _bad("each unit must be a JSON object")
         for uk in u:
@@ -537,7 +555,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
 
     v0.3.0 (U6): emit_template id_prefixes are forward-reference targets. A
     structurally-declared unit (e.g., A4's `compare` after U6) may name a
-    builder id like `build-clarity` in its `depends_on` even though no `units[]`
+    builder id like `build-clarity` in its `depends_on` even though no `steps[]`
     entry has that exact id yet — the matching builder is materialized at run
     time by a producer. Two emit-shapes are legitimate: (a) iterate_template
     materializes `{id_prefix}{N}`; (b) a non-iterate producer produces
@@ -568,7 +586,7 @@ def _validate_depends_on(recipe: dict, unit_ids: set, emit_prefixes: set,
                 return True
         return False
 
-    for u in recipe["units"]:
+    for u in recipe["steps"]:
         for d in u.get("depends_on", []):
             if d in unit_ids:
                 continue
@@ -592,16 +610,16 @@ def _validate_phase_transitions(recipe: dict, phase_order: list) -> None:
     for pt in pts:
         if not isinstance(pt, dict):
             _bad("each phase_transitions entry must be an object")
-        for fld in ("from", "to", "emitter"):
+        for fld in ("from", "to", "producer"):
             if fld not in pt:
                 _bad(f"phase_transitions entry missing {fld!r}")
         if pt["from"] not in phase_order or pt["to"] not in phase_order:
             _bad(
                 f"phase_transitions from/to must be members of phase_order: {pt!r}"
             )
-        if pt["emitter"] not in V1_PRODUCER_NAMES:
+        if pt["producer"] not in V1_PRODUCER_NAMES:
             _bad(
-                f"unknown producer {pt['emitter']!r} — V1 recipes may only name "
+                f"unknown producer {pt['producer']!r} — V1 recipes may only name "
                 f"one of {sorted(V1_PRODUCER_NAMES)}"
             )
 
@@ -633,7 +651,7 @@ def _validate_emit_templates(recipe: dict, phase_order: list) -> None:
                     f"phase_order {phase_order!r}"
                 )
             tinv = tmpl["invokes"]
-            # Mirror existing `units[].invokes` validation depth: invokes must be
+            # Mirror existing `steps[].invokes` validation depth: invokes must be
             # a dict; prompt_template path-bounded if present. We don't constrain
             # inner keys (no whitelist) — `_KNOWN_UNIT_KEYS` doesn't constrain
             # `invokes`'s inner keys either. The backend contract bounds those.
@@ -664,16 +682,16 @@ def _validate_iteration(recipe: dict, phase_order: list, unit_ids: set,
                 )
         # gate_unit is required and must reference a unit_id OR an
         # emit_templates entry's id_prefix. The latter is a defensive carve-out
-        # per round-3 P2 #21 — A4's `compare` lands in `units[]` explicitly per
+        # per round-3 P2 #21 — A4's `compare` lands in `steps[]` explicitly per
         # U6, so the carve-out is forward-looking insurance for future recipes.
-        if "gate_unit" not in iteration:
-            _bad("iteration: missing required field 'gate_unit'")
-        gate = iteration["gate_unit"]
+        if "gate_step" not in iteration:
+            _bad("iteration: missing required field 'gate_step'")
+        gate = iteration["gate_step"]
         if not isinstance(gate, str) or not gate:
-            _bad("iteration.gate_unit must be a non-empty string")
+            _bad("iteration.gate_step must be a non-empty string")
         if gate not in unit_ids and gate not in emit_prefixes:
             _bad(
-                f"iteration.gate_unit {gate!r} not in units[] (ids: "
+                f"iteration.gate_step {gate!r} not in steps[] (ids: "
                 f"{sorted(unit_ids)!r}) and not declared as an emit_templates "
                 f"id_prefix (prefixes: {sorted(emit_prefixes)!r})"
             )
@@ -743,7 +761,7 @@ def _validate_work_only_gap(recipe: dict, phase_order: list) -> None:
     enumerate_plan_units op) is NOT WIRED in v0.2.0; that ships in v0.2.1
     (KTD-15). Reject mechanically here rather than ship a recipe whose only
     failure mode is silent re-arming."""
-    if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["units"]:
+    if phase_order == _WORK_ONLY_PHASE_ORDER and not recipe["steps"]:
         _bad(
             "v0.2.0 work-only recipes require pre-declared units; init-time "
             "enumeration ships in v0.2.1 (KTD-15). A recipe with "
@@ -803,7 +821,7 @@ def _lint_verification_placement(recipe: dict, units: list) -> list:
     """v0.7.0 (U2/R3): warn when a `verification` block can never be evaluated.
 
     validate() accepts the block on ANY unit (additive, shape-checked there), but
-    only the iteration.gate_unit's block is ever evaluated (resolve_gate_verification
+    only the iteration.gate_step's block is ever evaluated (resolve_gate_verification
     reads the gate unit). So a non-empty block on a non-gate unit — or anywhere when
     the recipe declares no iteration block at all — is dead config. Warn, don't
     reject (KTD-2): the field loads fine; this is editorial.
@@ -811,12 +829,12 @@ def _lint_verification_placement(recipe: dict, units: list) -> list:
     out = []
     iteration = recipe.get("iteration")
     if isinstance(iteration, dict):
-        gate_unit = iteration.get("gate_unit")
+        gate_unit = iteration.get("gate_step")
         for u in units:
             if u.get("verification") and u.get("id") != gate_unit:
                 out.append(
                     f"unit {u.get('id')!r} carries a verification block but is not "
-                    f"the iteration.gate_unit ({gate_unit!r}) — only the gate unit's "
+                    f"the iteration.gate_step ({gate_unit!r}) — only the gate unit's "
                     f"verification is evaluated, so these criteria never run; move "
                     f"them onto {gate_unit!r} or make {u.get('id')!r} the gate"
                 )
@@ -851,7 +869,26 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
     extension stripped if present). When omitted (the engine's load path), the
     name-stem check is skipped — only the skill needs it, since the skill is
     the one choosing the write path.
+
+    U6 — the authoring WRITE-path shim (KTD-1 / F5). The read chokepoints protect
+    ``resolve()``, but this WRITE gate does not go through them: a model following
+    authoring-skill prose (whose examples still show format-v1 keys until U8) hands
+    us a v1-keyed draft, which the now-v2 validator would reject. So we validate an
+    internally-UPGRADED COPY. (See the workflow contract's "Legacy keys" appendix
+    for the full v1→v2 key map.)
+
+    Two properties this deliberately preserves:
+      * The return signature is UNCHANGED — still the warnings LIST.
+      * The caller's draft is NOT mutated (``upgrade_workflow`` is pure).
+
+    CONSEQUENCE: a workflow file the authoring flow writes may persist **v1-keyed
+    on disk** — the shim never rewrites the caller's draft. That is SAFE: the
+    read-compat path (``resolve()`` → ``upgrade_workflow``) is INDEFINITE, so the
+    file upgrades in memory every time it is later resolved. One shim, rather than
+    chasing every authoring-skill prose example across auto-author-recipe /
+    auto-design / auto-launch; it composes with the U8 skill-prose flip.
     """
+    recipe = format_compat.upgrade_workflow(recipe)
     validate(recipe)  # hard errors first
     warnings = []
     # P2-15: name-stem mismatch warning (skill-only path; engine load doesn't
@@ -867,14 +904,14 @@ def validate_and_lint(recipe: dict, *, filename: str | None = None):
                 f"name is {declared!r}; rename one to match the other"
             )
     phase_order = recipe.get("phase_order", _DEFAULT_PHASE_ORDER)
-    units = recipe.get("units", [])
+    units = recipe.get("steps", [])
     emit_targets = {pt.get("to") for pt in recipe.get("phase_transitions", [])}
     units_by_phase = {}
     for u in units:
         units_by_phase.setdefault(u.get("phase"), []).append(u)
     for ph in phase_order:
-        if ph == "seam":
-            continue  # seam is a pass-through; never holds units
+        if ph == "handoff":
+            continue  # handoff is a pass-through; never holds units
         if not units_by_phase.get(ph) and ph not in emit_targets:
             warnings.append(
                 f"phase {ph!r} has no units and no producer targets it — it will "

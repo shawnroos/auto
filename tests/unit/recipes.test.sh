@@ -106,8 +106,8 @@ elif op == "review-vs-w-distinct":
         rev = json.load(f)
     with open(os.path.join(auto_root, "recipes", "w.json")) as f:
         w = json.load(f)
-    rev_op = rev["units"][0]["invokes"].get("adapter_op")
-    w_op = w["units"][0]["invokes"].get("adapter_op")
+    rev_op = rev["steps"][0]["invokes"].get("backend_op")
+    w_op = w["steps"][0]["invokes"].get("backend_op")
     print("review:%s|w:%s|distinct:%s" % (rev_op, w_op, rev_op != w_op))
 elif op == "validate-firsterr":
     # Pin the LOAD-BEARING first-error-wins order across the validate()
@@ -128,7 +128,7 @@ elif op == "validate-firsterr":
         elif "phase_order" in m or "terminal_phase" in m:
             print("phase_order")
         elif "unit" in m:
-            print("units")
+            print("steps")
         else:
             print("other:" + m)
 elif op == "verification-cap":
@@ -139,7 +139,7 @@ elif op == "verification-cap":
     # criteria as a shell JSON string is unwieldy, so build it here.
     crits = [{"id": "c%d" % i, "type": "human"} for i in range(17)]
     recipe = {"name": "x", "version": "1",
-              "units": [{"id": "g", "phase": "plan", "invokes": {},
+              "steps": [{"id": "g", "phase": "plan", "invokes": {},
                          "verification": crits}]}
     print(vresult(recipe))
 PYEOF
@@ -155,7 +155,7 @@ assert_eq "True,valid" "$(rec a1-no-drift)"
 
 # ─── Scenario 3: validate rejections ────────────────────────────────────────
 it "unknown top-level field rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[],"bogus":1}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[],"bogus":1}')"
 
 # Order-preserving decomposition (M-? regression): a doubly-malformed recipe
 # must surface the EARLIER sub-validator's error. validate() runs
@@ -163,13 +163,13 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[],
 # order; the 58 single-violation tests below cannot catch a transposition, so
 # pin two cross-block boundaries explicitly.
 it "validate order: unknown top-level field + bad phase_order -> top-level error wins (toplevel before phase_order)"
-assert_eq "toplevel-unknown" "$(rec validate-firsterr '{"name":"x","version":"1","units":[],"bogus":1,"phase_order":[]}')"
+assert_eq "toplevel-unknown" "$(rec validate-firsterr '{"name":"x","version":"1","steps":[],"bogus":1,"phase_order":[]}')"
 
 it "validate order: bad terminal_phase + malformed unit -> phase_order error wins (phase_order before units)"
-assert_eq "phase_order" "$(rec validate-firsterr '{"name":"x","version":"1","phase_order":["work"],"terminal_phase":"nope","units":[{"bad":"unit"}]}')"
+assert_eq "phase_order" "$(rec validate-firsterr '{"name":"x","version":"1","phase_order":["work"],"terminal_phase":"nope","steps":[{"bad":"unit"}]}')"
 
 it "reserved python_hook accepted (R3)"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[],"python_hook":"x"}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[],"python_hook":"x"}')"
 
 # v0.6.0 U6: the literal allow-list gate is gone — a multi-phase grammar that
 # is STRUCTURALLY sound (non-empty-string phases, terminal_phase ∈ phase_order)
@@ -178,33 +178,33 @@ assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[],"py
 # non-empty here (each unit's phase ∈ phase_order) so the work-only empty-units
 # guard is not in play.
 it "U6: structurally-sound non-default phase_order now VALIDATES (literal allow-list dropped)"
-assert_eq "valid" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","units":[{"id":"s","phase":"work_sketch","invokes":{}}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"a3","version":"1","phase_order":["work_sketch","review","plan","work_refine"],"terminal_phase":"work_refine","steps":[{"id":"s","phase":"work_sketch","invokes":{}}]}')"
 
 it "work-only phase_order [work] accepted when units are pre-declared (KTD-15)"
-assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[{"id":"u1","phase":"work","invokes":{}}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[{"id":"u1","phase":"work","invokes":{}}]}')"
 
 # Fix-pass D (P1 #6): a work-only recipe with NO pre-declared units is
 # unrunnable in v0.2.0 — init-time enumeration ships in v0.2.1 (KTD-15).
 # validate() must hard-reject this shape so the engine never creates a
 # zero-unit ledger that re-arms forever without dispatching.
 it "fix-pass D: work-only phase_order [work] with empty units REJECTED (v0.2.1 reservation)"
-assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[]}')"
 
 # Deliberate-fail proof: the new rule must NOT fire on the default phase_order
 # with empty units (still a vacuous run, but a different — and lint-warned —
 # shape, not the work-only init-time gap). Surfaces a false-positive if the
 # check ever broadens too far.
 it "fix-pass D: default phase_order with empty units NOT rejected by the work-only rule"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[]}')"
 
 it "unregistered producer name rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"plan","phase":"plan","invokes":{}}],"phase_transitions":[{"from":"plan","to":"work","emitter":"nope"}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"plan","phase":"plan","invokes":{}}],"phase_transitions":[{"from":"plan","to":"work","producer":"nope"}]}')"
 
 it "prompt_template path traversal rejected (security Finding 1)"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"u","phase":"plan","invokes":{"prompt_template":"../../etc/passwd"}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"u","phase":"plan","invokes":{"prompt_template":"../../etc/passwd"}}]}')"
 
 it "depends_on referencing unknown unit rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"u","phase":"plan","depends_on":["ghost"],"invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"u","phase":"plan","depends_on":["ghost"],"invokes":{}}]}')"
 
 it "missing required field (units) rejected"
 assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
@@ -219,40 +219,40 @@ assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1"}')"
 # `verification` array varies, so a valid/rejected verdict isolates the criterion
 # validator. Covers AE1 (schema half).
 it "U2: programmatic exit_zero criterion → valid"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"tests-green","type":"programmatic","argv":["bash","tests/run.sh"],"check":"exit_zero","timeout_sec":120}]}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"tests-green","type":"programmatic","argv":["bash","tests/run.sh"],"check":"exit_zero","timeout_sec":120}]}]}')"
 
 it "U2: programmatic stdout_contains criterion → valid"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"has-ok","type":"programmatic","argv":["echo","ok"],"check":{"stdout_contains":"ok"}}]}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"has-ok","type":"programmatic","argv":["echo","ok"],"check":{"stdout_contains":"ok"}}]}]}')"
 
 it "U2: advisor_judge criterion → valid"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"design-sound","type":"advisor_judge","rubric_ref":"verification-rubric"}]}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"design-sound","type":"advisor_judge","rubric_ref":"verification-rubric"}]}]}')"
 
 it "U2: model_judge criterion → valid"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"reads-clean","type":"model_judge"}]}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"reads-clean","type":"model_judge"}]}]}')"
 
 it "U2: human criterion → valid"
-assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"owner-signoff","type":"human","prompt":"Sign off?"}]}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"owner-signoff","type":"human","prompt":"Sign off?"}]}]}')"
 
 it "U2: unknown criterion type → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"telepathic"}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"telepathic"}]}]}')"
 
 it "U2: programmatic missing argv → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","check":"exit_zero"}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","check":"exit_zero"}]}]}')"
 
 it "U2: programmatic with malformed check (unknown check key) → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","argv":["true"],"check":{"stdout_startswith":"x"}}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"programmatic","argv":["true"],"check":{"stdout_startswith":"x"}}]}]}')"
 
 it "U2: unknown key for criterion type (human carrying argv) → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"human","prompt":"ok","argv":["true"]}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1","type":"human","prompt":"ok","argv":["true"]}]}]}')"
 
 it "U2: verification over the 16-criteria cap (17 entries) → rejected"
 assert_eq "rejected" "$(rec verification-cap)"
 
 it "U2: criterion missing type → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1"}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"c1"}]}]}')"
 
 it "U2: duplicate criterion id within a unit → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","units":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"dup","type":"human"},{"id":"dup","type":"human"}]}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","steps":[{"id":"g","phase":"plan","invokes":{},"verification":[{"id":"dup","type":"human"},{"id":"dup","type":"human"}]}]}')"
 
 # Regression anchor: the four built-ins (none carry a `verification` array) MUST
 # still validate after the additive U2 field — proves no regression (AE1).
@@ -263,28 +263,28 @@ assert_eq "a1:valid,a2:valid,a4:valid,w:valid" "$(rec validate-builtins)"
 # U6 replaced the `phase_order not in _V1_ALLOWED_PHASE_ORDERS` literal gate
 # with a STRUCTURAL rule: every element a non-empty string, members cross-
 # checked downstream (terminal_phase / unit phase / phase_transitions). The
-# spine ["brainstorm","plan","seam","work"] must now validate; a1/a2/a4/w must
+# spine ["brainstorm","plan","handoff","work"] must now validate; a1/a2/a4/w must
 # STILL validate unchanged (Scenario 1 above covers the four built-ins).
 it "U6: brainstorm-rooted spine phase_order validates (structural rule unlocks it)"
-assert_eq "valid" "$(rec validate-json '{"name":"pipeline","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","emitter":"brainstorm_output_to_plan_unit"},{"from":"plan","to":"work","emitter":"plan_output_to_work_units"}],"units":[{"id":"brainstorm","phase":"brainstorm","invokes":{"adapter_op":"brainstorm"}}]}')"
+assert_eq "valid" "$(rec validate-json '{"name":"pipeline","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","producer":"brainstorm_output_to_plan_step"},{"from":"plan","to":"work","producer":"plan_output_to_work_steps"}],"steps":[{"id":"brainstorm","phase":"brainstorm","invokes":{"backend_op":"brainstorm"}}]}')"
 
 it "U6: terminal_phase not in phase_order → rejected (downstream member-check intact)"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"ship","units":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"ship","steps":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
 
 it "U6: a unit whose phase is not in phase_order → rejected"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","units":[{"id":"u","phase":"deploy","invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"work","steps":[{"id":"u","phase":"deploy","invokes":{}}]}')"
 
 it "U6: phase_order with a non-string element → rejected (structural)"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan",3,"work"],"terminal_phase":"work","units":[{"id":"u","phase":"plan","invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan",3,"work"],"terminal_phase":"work","steps":[{"id":"u","phase":"plan","invokes":{}}]}')"
 
 it "U6: phase_order with an empty-string element → rejected (structural)"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan","","work"],"terminal_phase":"work","units":[{"id":"u","phase":"plan","invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["plan","","work"],"terminal_phase":"work","steps":[{"id":"u","phase":"plan","invokes":{}}]}')"
 
 it "U6: work-only empty-units guard STILL fires (regression — guard retained)"
-assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","units":[]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"w-test","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[]}')"
 
 it "U6: phase_transitions naming an unregistered producer STILL rejected on a spine"
-assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","seam","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","emitter":"nope"}],"units":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
+assert_eq "rejected" "$(rec validate-json '{"name":"x","version":"1","phase_order":["brainstorm","plan","handoff","work"],"terminal_phase":"work","phase_transitions":[{"from":"brainstorm","to":"plan","producer":"nope"}],"steps":[{"id":"b","phase":"brainstorm","invokes":{}}]}')"
 
 # ─── v0.6.0 U7: pipeline.json (the brainstorm-rooted spine) validates+resolves ─
 it "U7: pipeline.json validates"
@@ -300,7 +300,7 @@ assert_eq "valid" "$(rec validate-recipe-file review)"
 it "U11: review.json resolves through the three-tier registry (built-in)"
 assert_eq "review:built-in:valid" "$(rec resolve-recipe-file review)"
 
-it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_unit)"
+it "U11: review.json is MEANINGFULLY distinct from w.json (review op vs do_step)"
 assert_eq "review:review|w:next_plan_step|distinct:True" "$(rec review-vs-w-distinct)"
 
 # ─── Scenario 5: topology-render ────────────────────────────────────────────
@@ -339,8 +339,8 @@ if op == "list-fresh":
 elif op == "shadow":
     # AE2: a workspace recipe named "a1" SHADOWS the built-in.
     repo = mk_workspace_repo([{"name": "a1", "version": "1",
-        "phase_order": ["plan","seam","work"], "terminal_phase": "work",
-        "units": [{"id":"plan","phase":"plan","invokes":{}}], "description": "WS"}])
+        "phase_order": ["plan","handoff","work"], "terminal_phase": "work",
+        "steps": [{"id":"plan","phase":"plan","invokes":{}}], "description": "WS"}])
     recipe, tier = recipes.resolve("a1", repo)
     # workspace wins; and a1 appears ONCE in list_available, tagged workspace.
     a1_entries = [(n, t) for n, t in recipes.list_available(repo) if n == "a1"]
@@ -413,7 +413,7 @@ elif op == "validate-traversal-name":
     # recipe-file dict. Defense in depth — a recipe with the right shape but a
     # malicious name should fail validation.
     try:
-        recipes.validate({"name": "../evil", "version": "1", "units": []})
+        recipes.validate({"name": "../evil", "version": "1", "steps": []})
         print("NO-RAISE")
     except recipes.RecipeError as e:
         print("raised" if "invalid recipe name" in str(e) else "raised-wrong-message")
@@ -429,15 +429,15 @@ elif op == "unit-for-traversal":
 
 elif op == "unit-for-merge":
     u = recipes.unit_for({"id": "u", "phase": "work",
-        "invokes": {"adapter_op": "do_unit", "prompt_template": "p/x.md"}}, {})
-    print("%s,%s,%s" % (u["id"], u["dispatch_context"]["adapter_op"],
+        "invokes": {"backend_op": "do_step", "prompt_template": "p/x.md"}}, {})
+    print("%s,%s,%s" % (u["id"], u["dispatch_context"]["backend_op"],
                         u["dispatch_context"]["prompt_template"]))
 
 elif op == "lint-empty-phase":
     # validate_and_lint warns on a phase with no units + no producer targeting it.
     warns = recipes.validate_and_lint({"name": "x", "version": "1",
-        "phase_order": ["plan","seam","work"], "terminal_phase": "work",
-        "units": [{"id":"plan","phase":"plan","invokes":{}}]})
+        "phase_order": ["plan","handoff","work"], "terminal_phase": "work",
+        "steps": [{"id":"plan","phase":"plan","invokes":{}}]})
     # work phase has no units and (no phase_transitions) no producer → a warning.
     print("warned" if any("work" in w for w in warns) else "no-warning")
 PYEOF
@@ -476,7 +476,7 @@ it "unit_for re-validates prompt_template traversal (2nd enforcement point)"
 assert_eq "raised" "$(reg unit-for-traversal)"
 
 it "unit_for merges invokes into dispatch_context"
-assert_eq "u,do_unit,p/x.md" "$(reg unit-for-merge)"
+assert_eq "u,do_step,p/x.md" "$(reg unit-for-merge)"
 
 it "validate_and_lint warns: phase with no units + no producer"
 assert_eq "warned" "$(reg lint-empty-phase)"
@@ -508,9 +508,9 @@ def vresult(d):
 def a2_v030():
     return {
         "name": "a2", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan-1", "phase": "plan", "invokes": {}},
             {"id": "plan-2", "phase": "plan", "invokes": {}},
             {"id": "plan-3", "phase": "plan", "invokes": {}},
@@ -518,17 +518,17 @@ def a2_v030():
              "depends_on": ["plan-1","plan-2","plan-3"], "invokes": {}},
         ],
         "phase_transitions": [
-            {"from": "plan", "to": "work", "emitter": "judge_winner_to_work_units"}
+            {"from": "plan", "to": "work", "producer": "judge_winner_to_work_steps"}
         ],
         "iteration": {
-            "gate_unit": "judge",
+            "gate_step": "judge",
             "emit_template": "plan-candidate",
             "bound": {"max_attempts": 5, "max_wall_seconds": 1800},
         },
         "emit_templates": {
             "plan-candidate": {
                 "phase": "plan",
-                "invokes": {"adapter_op": "next_plan_step"},
+                "invokes": {"backend_op": "next_plan_step"},
                 "id_prefix": "plan-",
             }
         },
@@ -578,7 +578,7 @@ elif op == "w-still-valid":
 
 elif op == "gate-unit-ghost":
     r = a2_v030()
-    r["iteration"]["gate_unit"] = "ghost"
+    r["iteration"]["gate_step"] = "ghost"
     print(vresult(r))
 
 elif op == "emit-template-missing":
@@ -649,19 +649,19 @@ elif op == "u6-depends-on-id-prefix-valid":
     # MUST accept this AFTER the recipe declares them in expected_emit_outputs.
     r = {
         "name": "u6-fwdref", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["build-clarity", "build-perf"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
         "expected_emit_outputs": ["build-clarity", "build-perf"],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -674,18 +674,18 @@ elif op == "u6-depends-on-unrelated-rejected":
     # forward reference."
     r = {
         "name": "u6-bad", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["totally-unrelated"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -699,18 +699,18 @@ elif op == "f4-build-typo-rejected":
     # `build-typo` matches NEITHER, so it must reject.
     r = {
         "name": "f4-typo", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["build-typo"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -722,18 +722,18 @@ elif op == "f4-iterate-shape-accepted":
     # must validate WITHOUT requiring expected_emit_outputs.
     r = {
         "name": "f4-iterate", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["build-1", "build-2"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -745,18 +745,18 @@ elif op == "f4-bare-prefix-rejected":
     # off-by-one in the iterate-shape check.
     r = {
         "name": "f4-bare", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["build-"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -765,9 +765,9 @@ elif op == "f4-eeo-rejects-non-list":
     # F4 shape: expected_emit_outputs must be a list of non-empty strings.
     r = {
         "name": "f4-eeo-bad", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [{"id": "plan", "phase": "plan", "invokes": {}}],
+        "steps": [{"id": "plan", "phase": "plan", "invokes": {}}],
         "expected_emit_outputs": "build-clarity",  # str, not list
     }
     print(vresult(r))
@@ -775,25 +775,25 @@ elif op == "f4-eeo-rejects-non-list":
 elif op == "g3-doc-claim-parity-without-eeo":
     # G3 (API-R2-1): doc-claim ↔ validator-behavior parity check (§8 of
     # docs/contracts/recipe-format.md). The doc says depends_on members are
-    # accepted iff (a) in units[], (b) iterate-shape, OR (c) in
+    # accepted iff (a) in steps[], (b) iterate-shape, OR (c) in
     # expected_emit_outputs. Toggle pair: same recipe, depends_on names
-    # `unicorn` (not in units[], not iterate-shape, NOT in EEO) → must reject.
+    # `unicorn` (not in steps[], not iterate-shape, NOT in EEO) → must reject.
     r = {
         "name": "g3-no-eeo", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["unicorn"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
         # NO expected_emit_outputs declared, and `unicorn` isn't iterate-shape
         # against any declared id_prefix.
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -805,19 +805,19 @@ elif op == "g3-doc-claim-parity-with-eeo":
     # exactly what the validator enforces.
     r = {
         "name": "g3-with-eeo", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["unicorn"],
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
         "expected_emit_outputs": ["unicorn"],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
@@ -837,33 +837,33 @@ elif op == "g1-isdigit-unicode-superscript":
     # `raised:ValueError` shape instead of `rejected`).
     r = {
         "name": "g1-isdigit-trap", "version": "1",
-        "phase_order": ["plan", "seam", "work"],
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
             {"id": "compare", "phase": "work",
              "depends_on": ["build-²"],  # 'build-²' — isdigit True, int raises
-             "invokes": {"adapter_op": "review"}}
+             "invokes": {"backend_op": "review"}}
         ],
-        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+        "iteration": {"gate_step": "compare", "emit_template": "bias-builder",
                       "bound": {"max_attempts": 4}},
         "emit_templates": {"bias-builder": {
-            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "phase": "work", "invokes": {"backend_op": "do_step"},
             "id_prefix": "build-"}}
     }
     print(vresult(r))
 
 elif op == "verif-on-gate":
-    # R3: verification on the iteration.gate_unit ("judge") → no warning.
+    # R3: verification on the iteration.gate_step ("judge") → no warning.
     r = a2_v030()
-    r["units"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate unit
+    r["steps"][3]["verification"] = [_verif()]  # index 3 is the "judge" gate unit
     print(lint_verif(r))
 
 elif op == "verif-off-gate":
     # R3: verification on a non-gate unit (iteration present) → exactly one warning
     # naming the unit + the gate.
     r = a2_v030()
-    r["units"][0]["verification"] = [_verif()]  # plan-1 is not the gate unit
+    r["steps"][0]["verification"] = [_verif()]  # plan-1 is not the gate unit
     print(lint_verif(r))
 
 elif op == "verif-no-iteration":
@@ -872,14 +872,14 @@ elif op == "verif-no-iteration":
     # the pairing rule is one-directional).
     r = a2_v030()
     del r["iteration"]
-    r["units"][3]["verification"] = [_verif()]
+    r["steps"][3]["verification"] = [_verif()]
     print(lint_verif(r))
 
 elif op == "verif-two-off-gate":
     # R3: two non-gate units each carrying verification → one warning each.
     r = a2_v030()
-    r["units"][0]["verification"] = [_verif()]  # plan-1
-    r["units"][1]["verification"] = [_verif()]  # plan-2
+    r["steps"][0]["verification"] = [_verif()]  # plan-1
+    r["steps"][1]["verification"] = [_verif()]  # plan-2
     print(lint_verif(r))
 
 elif op == "verif-none":
@@ -945,7 +945,7 @@ assert_eq "valid" "$(itr a1-still-valid)"
 it "U5 R7: W (no iteration, no emit_templates) still validates"
 assert_eq "valid" "$(itr w-still-valid)"
 
-it "U5 error: iteration.gate_unit references nonexistent unit ('ghost') → rejected"
+it "U5 error: iteration.gate_step references nonexistent unit ('ghost') → rejected"
 assert_eq "rejected" "$(itr gate-unit-ghost)"
 
 it "U5 error: iteration.emit_template references missing template key → rejected"
@@ -978,7 +978,7 @@ assert_eq "warned" "$(itr lint-max-wall-short)"
 # ── v0.3.0 U6: depends_on may forward-reference emit_template id_prefixes ──
 # This carve-out (mirror of the gate_unit carve-out) is mandated by U6's
 # "compare is structural" contract — A4's `compare` declares
-# depends_on: [build-clarity, build-perf] in units[], but those concrete ids
+# depends_on: [build-clarity, build-perf] in steps[], but those concrete ids
 # don't exist at validate-time; they're materialized by the bias-builder
 # emit_template (id_prefix "build-").
 it "U6 carve-out: depends_on forward-refs an emit_template id_prefix → valid"
@@ -990,7 +990,7 @@ assert_eq "rejected" "$(itr u6-depends-on-unrelated-rejected)"
 # ── v0.3.0 F4: depends_on carve-out tightened (ADV-2 + maint-4) ─────────────
 # The prior carve-out accepted ANY depends_on string starting with an
 # emit_template id_prefix — `"build-typo"` would pass against id_prefix
-# `"build-"`. F4 narrows to: in units[], OR iterate-shape ({id_prefix}{N}),
+# `"build-"`. F4 narrows to: in steps[], OR iterate-shape ({id_prefix}{N}),
 # OR explicitly declared in expected_emit_outputs.
 #
 # DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
@@ -1011,7 +1011,7 @@ assert_eq "rejected" "$(itr f4-eeo-rejects-non-list)"
 
 # ── G3 (API-R2-1): doc-claim ↔ validator-behavior parity check ─────────────
 # docs/contracts/recipe-format.md §8 documents `expected_emit_outputs`. The
-# doc claims depends_on members are accepted iff (a) in units[], (b)
+# doc claims depends_on members are accepted iff (a) in steps[], (b)
 # iterate-shape, OR (c) in expected_emit_outputs. These two tests are a
 # toggle pair on branch (c) — same recipe, only `expected_emit_outputs`
 # differs. If the doc and validator ever drift on this contract, one of
@@ -1044,7 +1044,7 @@ assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
 it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
 assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
 
-# ── v0.7.0 U2 (R3): verification must live on the iteration.gate_unit ────────
+# ── v0.7.0 U2 (R3): verification must live on the iteration.gate_step ────────
 # validate() accepts `verification` on any unit (additive, load must still
 # succeed), but only the gate unit's block is evaluated. validate_and_lint warns
 # when a non-empty block sits off the gate, or when there's no iteration block at
@@ -1085,12 +1085,12 @@ assert_eq "spoof:0" "$(itr spoof-self-match)"
 it "U2: all six shipped built-ins stay spoof-warning-free under the widened scan"
 assert_eq "clean" "$(itr spoof-builtins-clean)"
 
-# ── U12: every shipped recipe's declared adapter_op ∈ VALID_BACKEND_OPS ───────
+# ── U12: every shipped recipe's declared backend_op ∈ VALID_BACKEND_OPS ───────
 # The build-time counterpart to dispatcher.dispatch_batch's runtime guard: a
 # typo in a shipped recipe JSON is caught here, before it can ship. Enumerates
-# EVERY `adapter_op` across recipes/*.json (exhaustive, not a sample) and asserts
+# EVERY `backend_op` across recipes/*.json (exhaustive, not a sample) and asserts
 # the set is a subset of dispatcher.VALID_BACKEND_OPS.
-it "U12: every shipped recipe adapter_op is in dispatcher.VALID_BACKEND_OPS"
+it "U12: every shipped recipe backend_op is in dispatcher.VALID_BACKEND_OPS"
 opcheck="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import sys, os, json, glob, importlib.util
 auto_root = sys.argv[1]
@@ -1101,8 +1101,8 @@ o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 def walk_ops(node):
     if isinstance(node, dict):
         inv = node.get("invokes")
-        if isinstance(inv, dict) and "adapter_op" in inv:
-            yield inv["adapter_op"]
+        if isinstance(inv, dict) and "backend_op" in inv:
+            yield inv["backend_op"]
         for v in node.values():
             yield from walk_ops(v)
     elif isinstance(node, list):

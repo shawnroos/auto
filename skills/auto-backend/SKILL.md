@@ -64,7 +64,7 @@ You implement six ops. Four drive the plan-loop; two drive the work-loop.
 
 ### Work-loop ops (NOT called by the pulse)
 
-5. **`do_unit(unit) -> dispatch_handle`** — called by the **dispatcher**, not
+5. **`do_step(unit) -> dispatch_handle`** — called by the **dispatcher**, not
    the pulse. Dispatch one unit for execution and return an **opaque correlation
    token** (e.g. a Task id) the dispatcher uses to track the in-flight agent.
 
@@ -94,7 +94,7 @@ per-call decisions:
 
 - **A severity mapping table** — your native vocabulary → `blocker`/`major`/`minor`.
   Example shape (CE): `P0 → blocker`, `P1/P2 → major`, `P3 → minor`.
-- **An `adapter_scale`** — recorded in the ledger so the predicate evaluator knows
+- **An `backend_scale`** — recorded in the ledger so the predicate evaluator knows
   which logic applies:
   - `"three-tier"` — you reliably produce all three severities.
   - `"blocker-only"` — you reliably produce `blocker` but your major/minor
@@ -106,7 +106,7 @@ If your backend's `review` relies on a model judging findings against a rubric
 (rather than a deterministic command like `/ce-code-review`), run a **rubric probe
 BEFORE writing the backend**: give a reviewer the blocker/major/minor rubric and
 ~five representative findings, and check whether it tags them consistently across
-three tiers. Three outcomes set your `adapter_scale`:
+three tiers. Three outcomes set your `backend_scale`:
 
 - **Reliable** → ship `"three-tier"`.
 - **Partial** (blocker solid, major/minor fuzzy) → ship `"blocker-only"`.
@@ -129,10 +129,10 @@ time `review` runs; the engine's re-enqueue-and-re-review loop handles closure.
 You never write an exit predicate. You supply inputs; the engine computes:
 
 - **Plan-loop done:** empty gap-set (`gaps_open == 0`).
-- **Work-loop done:** `blockers == 0 AND majors == 0 AND all_units_terminal == true`.
+- **Work-loop done:** `blockers == 0 AND majors == 0 AND all_steps_terminal == true`.
 
 Get the severities right and the engine's predicate handles the rest. The
-`all_units_terminal` conjunct is purely engine-side (it guards against stalled or
+`all_steps_terminal` conjunct is purely engine-side (it guards against stalled or
 not-yet-reviewed units) — your backend does not influence it beyond returning
 verdicts.
 
@@ -142,10 +142,10 @@ verdicts.
 - [ ] `deepen(plan) -> plan` (no-op allowed)
 - [ ] `review_plan(plan) -> gap_set` (length is the open-gap count)
 - [ ] `next_plan_step(ledger) -> token` (returns `"done"` once `gaps_open == 0`)
-- [ ] `do_unit(unit) -> dispatch_handle` (opaque token; called by dispatcher)
+- [ ] `do_step(unit) -> dispatch_handle` (opaque token; called by dispatcher)
 - [ ] `review(unit) -> findings[]` (severities translated to the shared scale)
 - [ ] A declared severity mapping table
-- [ ] A declared `adapter_scale` (`"three-tier"` or `"blocker-only"`; native runs a rubric probe first)
+- [ ] A declared `backend_scale` (`"three-tier"` or `"blocker-only"`; native runs a rubric probe first)
 - [ ] No ledger writes from any op — return data only
 
 ## References

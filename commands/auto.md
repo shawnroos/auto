@@ -76,7 +76,7 @@ While a self-driven run owns this session, a PreToolUse hook denies any
 `AskUserQuestion` and redirects the driver to consult the `advisor` tool, then
 classify the question itself: a mechanical clarification is resolved
 autonomously; a substantive design/architecture fork is escalated to the
-operator via the pause seam. A second PreToolUse hook deterministically pauses
+operator via the pause handoff. A second PreToolUse hook deterministically pauses
 the run on an irreversible/destructive Bash/Write (the CLAUDE.md-anchored set).
 Both gates fire ONLY for the driving session (matched by `driving_session_id`,
 recorded at arm time) — a concurrent standalone ce-skill in the same worktree
@@ -85,9 +85,9 @@ appended to the ledger's `advisor_audit` record and surfaced in the exit
 report. `advisor` is in `allowed-tools` for this reason. Full behavior:
 `skills/auto/SKILL.md` §4.6.
 
-## v0.4.0 seam-default flip (KTD-4)
+## v0.4.0 handoff-default flip (KTD-4)
 
-`/auto <plan>` now PROCEEDS past the plan→work seam by default. Pass
+`/auto <plan>` now PROCEEDS past the plan→work handoff by default. Pass
 `--review-plan` to opt in to the pause for first-pass plans where you
 want to inspect the planned units before work fans out. The legacy
 `auto` positional token still parses (no-op against the new default)

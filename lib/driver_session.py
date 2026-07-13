@@ -7,7 +7,7 @@ by every code path that records ``driving_session_id`` on a ledger:
   * lib/auto.py        — records it at arm time (init_ledger).
   * lib/auto-resume.py — RE-records it on the resume/re-arm path so a run
                          resumed from a DIFFERENT interactive session (after a
-                         seam pause, a crash, or the next day from a fresh
+                         handoff pause, a crash, or the next day from a fresh
                          Claude Code window) hands ownership to the NEW session
                          instead of keeping the stale arm-time id (fix-round-6
                          P1).

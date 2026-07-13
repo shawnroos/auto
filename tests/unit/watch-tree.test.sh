@@ -2,8 +2,8 @@
 # auto U4 unit test: lib/watch_tree.py — the deterministic agent-tree renderer.
 #
 # render_agent_tree(ledger, now) turns a live ledger into a compact ASCII tree
-# of driver -> work unit -> do_unit fan-out agent, annotating each dispatched
-# node with age-vs-threshold + attempt, and nesting do_unit children under their
+# of driver -> work unit -> do_step fan-out agent, annotating each dispatched
+# node with age-vs-threshold + attempt, and nesting do_step children under their
 # producer parent. It is PURE (now is passed in as an ISO-8601 string, never
 # datetime.now()) so a fixed ledger + fixed now yields byte-identical output.
 #
@@ -12,7 +12,7 @@
 # are fully controlled (no wall-clock).
 #
 # Scenarios (mapped to the U4 plan):
-#   1. nests a do_unit child under its parent fan-out unit
+#   1. nests a do_step child under its parent fan-out unit
 #   2. flags a past-threshold dispatched node as over-age (age > threshold)
 #   3. shows the attempt count for a dispatched node
 #   4. BYTE-IDENTICAL output for a fixed ledger + fixed now (determinism)
@@ -57,16 +57,16 @@ def unit(uid, **kw):
          "stall_threshold_seconds": kw.get("stall_threshold_seconds", 600)}
     if "dispatched_at" in kw:
         u["dispatched_at"] = kw["dispatched_at"]
-    if kw.get("do_unit"):
-        # Materialized do_unit units carry adapter_op on dispatch_context (the
+    if kw.get("do_step"):
+        # Materialized do_step units carry backend_op on dispatch_context (the
         # invokes->dispatch_context merge in recipes.unit_for). The renderer also
-        # honors a raw `invokes.adapter_op`, but dispatch_context is the on-disk
+        # honors a raw `invokes.backend_op`, but dispatch_context is the on-disk
         # shape (init_ledger's _normalize_unit drops a bare `invokes`).
-        u["dispatch_context"] = {"adapter_op": "do_unit"}
+        u["dispatch_context"] = {"backend_op": "do_step"}
     return u
 
 def ledger(units, run_id="run-x"):
-    return {"run_id": run_id, "units": units}
+    return {"run_id": run_id, "steps": units}
 
 def indent_of(line):
     return len(line) - len(line.lstrip())
@@ -78,12 +78,12 @@ def node_line(out, uid):
     return None
 
 if op == "nest":
-    # A fan-out parent (dispatched) with one do_unit child depending on it, plus
+    # A fan-out parent (dispatched) with one do_step child depending on it, plus
     # an independent root sibling. The child must render INDENTED under the parent.
     led = ledger([
         unit("parent", state="dispatched", dispatched_at="2026-07-08T11:59:00Z", attempt=1),
         unit("child", state="dispatched", dispatched_at="2026-07-08T11:59:00Z",
-             attempt=1, depends_on=["parent"], do_unit=True),
+             attempt=1, depends_on=["parent"], do_step=True),
         unit("sibling", state="pending"),
     ])
     out = watch_tree.render_agent_tree(led, NOW)
@@ -122,7 +122,7 @@ elif op == "determinism":
     led = ledger([
         unit("parent", state="dispatched", dispatched_at="2026-07-08T11:00:00Z", attempt=1),
         unit("child", state="dispatched", dispatched_at="2026-07-08T11:59:00Z",
-             attempt=2, depends_on=["parent"], do_unit=True),
+             attempt=2, depends_on=["parent"], do_step=True),
         unit("judge", state="verdict-returned", depends_on=["parent"]),
     ])
     a = watch_tree.render_agent_tree(led, NOW)
@@ -143,7 +143,7 @@ PYEOF
 
 echo "watch-tree.test.sh"
 
-it "nests a do_unit child under its parent fan-out unit"
+it "nests a do_step child under its parent fan-out unit"
 assert_eq "nested" "$(wt nest)"
 
 it "flags a past-threshold dispatched node as over-age; a fresh node is not flagged"

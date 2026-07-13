@@ -201,7 +201,7 @@ def set_loop(
     run_id,
     *,
     loop_phase=None,
-    seam_paused=None,
+    handoff_paused=None,
     driver=None,
     beat=False,
     plan_step=ledger_core._UNSET,
@@ -237,8 +237,8 @@ def set_loop(
     def mutate(ledger):
         if loop_phase is not None:
             ledger["loop_phase"] = loop_phase
-        if seam_paused is not None:
-            ledger["seam_paused"] = bool(seam_paused)
+        if handoff_paused is not None:
+            ledger["handoff_paused"] = bool(handoff_paused)
         if plan_step is not ledger_core._UNSET:
             ledger["plan_step"] = plan_step
         loop = ledger.setdefault("loop", {})
@@ -436,7 +436,7 @@ def _sanitize_enumerated_depends_on(enumerated, existing_ids):
 
 def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     """Persist a plan unit's ``enumerate_plan_units`` output onto its
-    ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
+    ``dispatch_context.enumerated_steps`` (v0.2.0 U6, the producer-persist).
 
     Called at plan-done with the backend's enumerated work-unit list. The
     phase-transition producer (U5b) reads it from here when emitting work units —
@@ -452,7 +452,7 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
     own id (self), or that participates in a cycle would leave the materialized
     work unit permanently un-``_is_ready`` (``dep is None -> False``, or a
     mutually-unsatisfiable cycle): never ready, never dispatched, dispatch-timeout
-    never fires, ``all_units_terminal`` false FOREVER → a silent full-run
+    never fires, ``all_steps_terminal`` false FOREVER → a silent full-run
     livelock. The recipe-authored path already rejects unknown-id references at
     author time (``recipes._validate_depends_on``).
 
@@ -470,15 +470,17 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
 
     def mutate(ledger):
         unit = ledger_core._find_unit(ledger, unit_id)
-        existing_ids = {u.get("id") for u in ledger.get("units", [])}
+        existing_ids = {u.get("id") for u in ledger.get("steps", [])}
         sanitized, dropped = _sanitize_enumerated_depends_on(
             enumerated, existing_ids
         )
         dc = unit.setdefault("dispatch_context", {})
-        dc["enumerated_units"] = list(sanitized)
+        dc["enumerated_steps"] = list(sanitized)
         if dropped:
+            # U6: the forensic dropped-edge record keys the offending node as
+            # `step` (v1 spelled it `unit`; format_compat maps it on read).
             dc["dropped_depends_on_edges"] = [
-                {"unit": u, "dep": d, "reason": r} for (u, d, r) in dropped
+                {"step": u, "dep": d, "reason": r} for (u, d, r) in dropped
             ]
             sys.stderr.write(
                 f"auto: dropped {len(dropped)} invalid model-emitted depends_on "
@@ -495,15 +497,15 @@ def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
 
 
 def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
-    """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_unit_id``
+    """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_step_id``
     (v0.2.0 round-2 P0 fix — fix-pass I).
 
-    A2's ``judge_winner_to_work_units`` producer needs to know which plan unit won.
-    The original design read it from ``findings[].winner_unit_id``, but
+    A2's ``judge_winner_to_work_steps`` producer needs to know which plan unit won.
+    The original design read it from ``findings[].winner_step_id``, but
     ``record_verdict`` normalizes findings to ``{severity, note}`` only —
     stripping the winner before the producer ever runs. Production A2 was
     unrunnable end-to-end. dispatch_context is the right home: same channel as
-    ``enumerated_units``, preserved by ``transition()`` and the verdict-write
+    ``enumerated_steps``, preserved by ``transition()`` and the verdict-write
     path, and findings stay narrow.
 
     The judge agent (or its launcher) calls THIS mutator alongside
@@ -532,7 +534,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
         # contract to "winner must be SOME OTHER unit" and surfaces the
         # malformed case as the LedgerError it deserves.
         existing_ids = {
-            u.get("id") for u in ledger.get("units", [])
+            u.get("id") for u in ledger.get("steps", [])
         } - {judge_unit_id}
         if winner_id not in existing_ids:
             raise ledger_core.LedgerError(
@@ -541,7 +543,7 @@ def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
                 f"known: {sorted(i for i in existing_ids if i)!r}"
             )
         dc = judge.setdefault("dispatch_context", {})
-        dc["winner_unit_id"] = winner_id
+        dc["winner_step_id"] = winner_id
         return winner_id
 
     return ledger_core._with_locked_ledger(repo_root, run_id, mutate)
@@ -618,7 +620,7 @@ def set_bound_override(
 
     Writes ``dispatch_context.bound_override = {bound: <bound_type>,
     original_decision: <original>, at: <iso>}`` on the gate unit. Mirrors the
-    ``winner_unit_id`` precedent — operator-diagnostic data lives on
+    ``winner_step_id`` precedent — operator-diagnostic data lives on
     ``dispatch_context``, not on findings or a top-level field. The operator
     on ``/auto-status`` reads from here (R9 surface).
 
@@ -677,7 +679,7 @@ def set_driving_session_id(repo_root, run_id, session_id):
     ``init_ledger`` at arm time (lib/auto.py) AND the resume re-arm path
     (lib/auto-resume.py::_rearm_owns_session, fix-round-6 P1). The resume caller
     RE-records the field so a run resumed from a DIFFERENT interactive session
-    (after a seam pause, a crash, or a fresh window the next day) hands ownership
+    (after a handoff pause, a crash, or a fresh window the next day) hands ownership
     to the new driving session instead of keeping the stale arm-time id — without
     which BOTH advisor-gate hooks would fall through to ALLOW on resume. NOTE the
     None-clears-the-field semantics is a fail-OPEN footgun on the re-arm path:
@@ -776,7 +778,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
     via the standard locked-RMW path. Called by F2's try/except in
     ``lib/pulse.py`` BEFORE force-marking the loop done, so ``/auto-status`` of
     a crashed run can distinguish a wedge-marked-done from a clean exit. ``kind``
-    is a short tag (e.g. ``"iteration-check-failed"``, ``"recipe-bug"``);
+    is a short tag (e.g. ``"iteration-check-failed"``, ``"workflow-bug"``);
     ``error`` is a dict carrying at minimum ``{"type": ..., "message": ...}``
     so the operator surface can render the original exception type.
 
@@ -787,7 +789,7 @@ def set_exit_reason(repo_root, run_id, kind: str, error: dict):
     Validating at the write boundary closes the convention-only gap H left
     (the named-constants tuple was advisory; this is mechanism). Accepts the
     enum member directly (e.g. ``ExitReason.RECIPE_BUG``) or its string
-    value (e.g. ``"recipe-bug"``) — StrEnum membership matches both.
+    value (e.g. ``"workflow-bug"``) — StrEnum membership matches both.
     """
     try:
         kind_enum = ledger_core.ExitReason(kind)  # raises ValueError on bad input

@@ -6,20 +6,20 @@
 # WHY THIS TEST EXISTS (round-2 P2, lib/backend-ce.py):
 # recipes.test.sh already pins that review.json validates / resolves / is
 # distinct from w. But the DISPATCH path was never driven: review.json's work
-# unit carries `dispatch_context.adapter_op == "review"` (NOT "do_unit"), and the
-# DRIVER — not the backend, not the dispatcher — maps that adapter_op to the
-# skill it launches (`review` → /ce-code-review; `do_unit` → /ce-work). This test
+# unit carries `dispatch_context.backend_op == "review"` (NOT "do_step"), and the
+# DRIVER — not the backend, not the dispatcher — maps that backend_op to the
+# skill it launches (`review` → /ce-code-review; `do_step` → /ce-work). This test
 # drives the real engine end-to-end so the off-spine review path is locked, not
 # inferred:
 #   * init via `--recipe review` enters at `work` with one `review` unit whose
-#     dispatch_context.adapter_op is "review" (the model-facing dispatch label —
+#     dispatch_context.backend_op is "review" (the model-facing dispatch label —
 #     driver-reference.md §7, SKILL.md §4);
 #   * a clean (P3-only) verdict drives the single phase to `loop_phase == "done"`;
 #   * the run NEVER leaves `work` for another phase (single-phase, no spine).
 #
 # DELIBERATE-FAIL CONTROL (feedback_new_tests_need_deliberate_fail_smoke_check):
 # the SECOND scenario records a GATING (blocker) verdict instead of a clean one.
-# The work-loop MUST then NOT reach `done` (all_units_terminal == false) — proving
+# The work-loop MUST then NOT reach `done` (all_steps_terminal == false) — proving
 # the `done` in scenario 1 is caused by the clean verdict, not an artifact of the
 # single-unit recipe.
 
@@ -49,7 +49,7 @@ export CLAUDE_AUTO_TEST_NO_STALENESS_CHECK=1
 
 # Drive review.json: init at work, dispatch the review unit, record a verdict
 # (clean if clean=1 else a blocker), pulse once, read back. Prints a CSV:
-#   adapter_op | entry_phase | phase_order | loop_phase_after | unit_state
+#   backend_op | entry_phase | phase_order | loop_phase_after | unit_state
 drive_review() {
   clean="${1:-1}"
   "$PY" - "$AUTO_ROOT" "$clean" <<'PYEOF'
@@ -84,10 +84,10 @@ def ld():
         return json.load(fh)
 
 entry = ld()
-review_unit = next(u for u in entry["units"] if u["id"] == "review")
-# The model-facing dispatch label: adapter_op lands on dispatch_context (the
+review_unit = next(u for u in entry["steps"] if u["id"] == "review")
+# The model-facing dispatch label: backend_op lands on dispatch_context (the
 # canonical write path strips it off `invokes`). review → /ce-code-review.
-adapter_op = (review_unit.get("dispatch_context") or {}).get("adapter_op")
+backend_op = (review_unit.get("dispatch_context") or {}).get("backend_op")
 entry_phase = entry.get("loop_phase")
 phase_order = ",".join(entry.get("phase_order") or [])
 
@@ -99,15 +99,15 @@ findings = [] if clean else [{"severity": "blocker", "note": "flaw"}]
 ledger.record_verdict(repo, run_id, "review", findings)
 
 # Step 3: pulse once. Single-phase work loop — a clean verdict drives it to done;
-# a blocker leaves it at work (all_units_terminal == false). No auto-advance to
+# a blocker leaves it at work (all_steps_terminal == false). No auto-advance to
 # another phase under any verdict (phase_order is just ["work"]).
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 
 after = ld()
-unit_state = next(u for u in after["units"] if u["id"] == "review")["state"]
+unit_state = next(u for u in after["steps"] if u["id"] == "review")["state"]
 print("%s|%s|%s|%s|%s" % (
-    adapter_op, entry_phase, phase_order, after.get("loop_phase"), unit_state))
+    backend_op, entry_phase, phase_order, after.get("loop_phase"), unit_state))
 PYEOF
 }
 
@@ -115,10 +115,10 @@ echo "review-recipe.test.sh"
 
 # ─── Scenario 1: clean verdict → single phase drives to done ──────────────────
 res="$(drive_review 1)"
-IFS='|' read -r adapter_op entry_phase phase_order loop_phase unit_state <<< "$res"
+IFS='|' read -r backend_op entry_phase phase_order loop_phase unit_state <<< "$res"
 
-it "review unit carries dispatch_context.adapter_op == 'review' (the dispatch label → /ce-code-review)"
-assert_eq "review" "$adapter_op"
+it "review unit carries dispatch_context.backend_op == 'review' (the dispatch label → /ce-code-review)"
+assert_eq "review" "$backend_op"
 
 it "review.json enters at the work phase (off-spine, no plan phase)"
 assert_eq "work" "$entry_phase"

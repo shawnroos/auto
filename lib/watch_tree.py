@@ -2,13 +2,13 @@
 """auto U4: the deterministic agent-tree renderer (the watch-the-tree view).
 
 `render_agent_tree(ledger, now)` turns a live ledger into a compact ASCII tree
-of the driver → work unit → `do_unit` fan-out agent, annotating each dispatched
+of the driver → work unit → `do_step` fan-out agent, annotating each dispatched
 node with its age against the stall threshold + its attempt count, and nesting
-`do_unit` fan-out children under their producer parent. It mirrors
+`do_step` fan-out children under their producer parent. It mirrors
 lib/topology-render.py's deterministic-string idioms — declaration-order
 traversal, stable formatting, pure stdlib — so tests can pin exact output.
 
-STRUCTURE comes from the ledger (the `depends_on` DAG + the `do_unit` backend-op
+STRUCTURE comes from the ledger (the `depends_on` DAG + the `do_step` backend-op
 marker); LIVE-agent status is overlaid model-side by the skill (skills/auto-watch)
 from the harness TaskList/Monitor tools. This module owns only the structural,
 deterministic half (KTD5).
@@ -66,21 +66,21 @@ def _seconds_between(start_iso, now_dt) -> int:
 
 
 def _backend_op(unit) -> str:
-    """The unit's adapter_op — read from `dispatch_context` (the materialized
+    """The unit's backend_op — read from `dispatch_context` (the materialized
     on-disk shape, where recipes.unit_for merged `invokes`) or from a raw
     `invokes` (a recipe-shaped unit). '' when neither carries one."""
     for holder_key in ("dispatch_context", "invokes"):
         holder = unit.get(holder_key)
-        if isinstance(holder, dict) and holder.get("adapter_op"):  # format-v1 key; flips in U6
-            return holder["adapter_op"]  # format-v1 key; flips in U6
+        if isinstance(holder, dict) and holder.get("backend_op"):
+            return holder["backend_op"]
     return ""
 
 
 def _is_fanout_child(unit) -> bool:
-    """True for a `do_unit` fan-out agent — the node that nests under the producer
-    parent it depends on. The `do_unit` marker on the CHILD is the reliable,
+    """True for a `do_step` fan-out agent — the node that nests under the producer
+    parent it depends on. The `do_step` marker on the CHILD is the reliable,
     ledger-visible signal that its parent is the fan-out unit (KTD5)."""
-    return _backend_op(unit) == "do_unit"
+    return _backend_op(unit) == "do_step"
 
 
 def _threshold(unit) -> int:
@@ -111,7 +111,7 @@ def render_agent_tree(ledger: dict, now: str) -> str:
     so it stays pure and byte-deterministic for a fixed ledger + `now`).
 
     Layout: an `agent-tree: <run_id>` header, a blank line, then each root unit as
-    a `• <id>  [<status>]` bullet in DECLARATION order, with `do_unit` fan-out
+    a `• <id>  [<status>]` bullet in DECLARATION order, with `do_step` fan-out
     children nested one indent deeper under the producer parent they depend on
     (recursively; also declaration order). A dispatched node's status is annotated
     with age-vs-threshold, an OVER-AGE flag past threshold, and its attempt; other
@@ -120,7 +120,7 @@ def render_agent_tree(ledger: dict, now: str) -> str:
     When NOTHING is dispatched there is no live agent to watch, so the whole tree
     collapses to the header + an empty-tree sentinel (`(no dispatched units)`).
     """
-    units = ledger.get("units") or []
+    units = ledger.get("steps") or []
     run_id = ledger.get("run_id") or "?"
     header = f"{_HEADER_PREFIX}: {run_id}"
 
@@ -130,9 +130,9 @@ def render_agent_tree(ledger: dict, now: str) -> str:
 
     now_dt = _parse_iso(now)
 
-    # Fan-out nesting from the depends_on DAG: a do_unit child nests under the
+    # Fan-out nesting from the depends_on DAG: a do_step child nests under the
     # first EXISTING unit it depends on (its producer parent). Every other unit —
-    # empty depends_on, a fan-in judge, a non-do_unit dependent — is a root.
+    # empty depends_on, a fan-in judge, a non-do_step dependent — is a root.
     by_id = {u.get("id"): u for u in units}
     children_of: dict = {}
     child_ids: set = set()

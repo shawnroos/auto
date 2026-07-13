@@ -93,8 +93,8 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 # property under test is the former, so we set [].
 if not empty_plan:
     ledger.set_enumerated_units(repo, run_id, "plan",
-        [{"id": "task-1", "invokes": {"adapter_op": "do_unit"}},
-         {"id": "task-2", "invokes": {"adapter_op": "do_unit"}}])
+        [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
+         {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
 else:
     ledger.set_enumerated_units(repo, run_id, "plan", [])
 
@@ -111,13 +111,13 @@ if producer_off:
     ledger.transition_and_emit = _noop
     pulse.ledger.transition_and_emit = _noop  # pulse imports ledger as a module
 
-# Step 3: pulse. auto=True so _maybe_seam takes the auto-flip branch.
+# Step 3: pulse. auto=True so _maybe_handoff takes the auto-flip branch.
 with contextlib.redirect_stdout(io.StringIO()):
     with contextlib.redirect_stderr(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = json.load(open(os.path.join(repo, ".claude", "auto", f"{run_id}.json")))
-work_units = [u for u in led["units"] if u.get("phase") == "work"]
+work_units = [u for u in led["steps"] if u.get("phase") == "work"]
 work_ids = sorted(u["id"] for u in work_units)
 compare = next((u for u in work_units if u["id"] == "compare"), None)
 compare_deps = ",".join(sorted(compare["depends_on"])) if compare else ""
@@ -149,7 +149,7 @@ esac
 # ─── Scenario 2: deliberate-fail — empty enumerated_units → no builders ─────
 it "fix-pass C T3 DELIBERATE-FAIL: empty enumerated_units → producer returns [], no builders (compare structural remains)"
 res_empty="$(drive_a4 1 0)"
-# v0.3.0 U6: compare is now STRUCTURAL (declared in a4.json's units[]) so it
+# v0.3.0 U6: compare is now STRUCTURAL (declared in a4.json's steps[]) so it
 # is on the ledger from init regardless of producer output. Empty enumerated_units
 # returns [] from the producer; transition_and_emit appends no builders then
 # advances loop_phase to "work". So:

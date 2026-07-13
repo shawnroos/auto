@@ -22,7 +22,7 @@ _DEFAULT_WIDTH = 60
 
 def _phase_units(recipe: dict, phase: str) -> list:
     """Unit ids declared for `phase`, in declaration order (stable)."""
-    return [u["id"] for u in recipe.get("units", []) if u.get("phase") == phase]
+    return [u["id"] for u in recipe.get("steps", []) if u.get("phase") == phase]
 
 
 def _producer_for_arrival(recipe: dict, to_phase: str):
@@ -30,14 +30,14 @@ def _producer_for_arrival(recipe: dict, to_phase: str):
 
     Recipes declare producers by their `to` phase (the phase whose units the
     producer produces) — e.g. A1's `{from: plan, to: work}` fires when the run
-    reaches the work phase, even though phase_order routes plan → seam → work.
-    Keying on `to` (not the exact adjacent pair) is what makes the seam a
+    reaches the work phase, even though phase_order routes plan → handoff → work.
+    Keying on `to` (not the exact adjacent pair) is what makes the handoff a
     pass-through: the producer is attached to the arrow ENTERING its target phase.
-    U5b's seam-handler consumes it the same way (advance INTO X → run X's producer).
+    U5b's handoff-handler consumes it the same way (advance INTO X → run X's producer).
     """
     for pt in recipe.get("phase_transitions", []):
         if pt.get("to") == to_phase:
-            return pt.get("emitter")
+            return pt.get("producer")
     return None
 
 
@@ -52,7 +52,7 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
     width = max(24, int(width_hint or _DEFAULT_WIDTH))
     name = recipe.get("name", "?")
     desc = recipe.get("description", "")
-    phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
+    phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
     terminal = recipe.get("terminal_phase", "work")
 
     lines = []
@@ -78,7 +78,7 @@ def render(recipe: dict, width_hint: int = _DEFAULT_WIDTH) -> str:
         if units:
             for uid in units:
                 deps = next(
-                    (u.get("depends_on", []) for u in recipe.get("units", []) if u["id"] == uid),
+                    (u.get("depends_on", []) for u in recipe.get("steps", []) if u["id"] == uid),
                     [],
                 )
                 dep_note = f"  ← {', '.join(deps)}" if deps else ""

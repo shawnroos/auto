@@ -55,7 +55,7 @@ ledger_core = load_lib_module("ledger_core")
 def gating_severities(scale: str = "three-tier") -> tuple:
     """The SINGLE source of truth for which severities GATE the loop, scale-aware.
 
-    This is the one place that maps ``adapter_scale`` -> the gating-severity tuple.
+    This is the one place that maps ``backend_scale`` -> the gating-severity tuple.
     EVERY consumer that asks "does this finding block terminality / done /
     dependency-satisfaction?" MUST route through here rather than hardcoding
     ``GATING_SEVERITIES`` or a ``("blocker", "major")`` literal — that hardcoding
@@ -70,8 +70,8 @@ def gating_severities(scale: str = "three-tier") -> tuple:
         (surfaced at exit, never blocking). Unknown -> three-tier is the safe
         default (gates more, never under-blocks).
 
-    The corresponding ``ledger`` field is ``adapter_scale``; read it once per call
-    site (e.g. ``ledger.get("adapter_scale", "three-tier")``) and pass it in.
+    The corresponding ``ledger`` field is ``backend_scale``; read it once per call
+    site (e.g. ``ledger.get("backend_scale", "three-tier")``) and pass it in.
 
     Test-only deliberate-fail hatch ``CLAUDE_AUTO_TEST_FORCE_THREETIER_GATING``:
     when set to ``"1"`` this helper IGNORES ``scale`` and always returns the
@@ -121,7 +121,7 @@ def _count_severities_by_unit(ledger: dict) -> tuple:
     no mutation, byte-equivalent tallies.
     """
     blockers = majors = minors = 0
-    for unit in ledger.get("units", []):
+    for unit in ledger.get("steps", []):
         for finding in unit.get("findings") or []:
             sev = finding.get("severity")
             if sev == "blocker":
@@ -169,26 +169,26 @@ def _compute_terminality(ledger: dict) -> dict:
 
     v0.2.0 fix-pass A.1 (correctness P0 #3 / api-contract AC-2): the work-loop
     exit predicate's terminal check is scoped to the units in the CURRENT phase,
-    not the global unit set. Pre-v0.2.0 (units=[] in the plan phase, the seam
+    not the global unit set. Pre-v0.2.0 (units=[] in the plan phase, the handoff
     synthesized work units), the global all() was equivalent. v0.2.0 declares
     plan units explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
     plan units stay `pending` after plan-done is reached (the plan-loop's
     advance is recorded in plan_step, not via a unit state transition). A global
-    all_units_terminal would block work-met forever. Scoping by phase makes each
+    all_steps_terminal would block work-met forever. Scoping by phase makes each
     phase have its own terminality. terminal_phase from the recipe gates which
     phase's units count for run-exit (AC-2 — the doc promised this but the code
-    didn't honor it). Global all_units_terminal is retained for the
+    didn't honor it). Global all_steps_terminal is retained for the
     exit_predicate_result reporting field (downstream consumers may want it).
     """
     phase_grammar = ledger_core._lazy_load("phase-grammar")
-    scale = ledger.get("adapter_scale", "three-tier")  # format-v1 key; flips in U6
+    scale = ledger.get("backend_scale", "three-tier")
     current_phase = phase_grammar.current_phase(ledger)
     terminal_phase = ledger.get("terminal_phase") or "work"
     all_units_terminal_global = all(
-        unit_is_terminal(u, scale) for u in ledger.get("units", [])
+        unit_is_terminal(u, scale) for u in ledger.get("steps", [])
     )
     current_phase_units = [
-        u for u in ledger.get("units", []) if u.get("phase") == current_phase
+        u for u in ledger.get("steps", []) if u.get("phase") == current_phase
     ]
     return {
         "current_phase": current_phase,
@@ -211,19 +211,19 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
 
       * ``loop_phase == "plan"`` — plan-loop exit is ``gaps_open == 0 AND
         plan_step == "review_plan"`` (backend-contract §5 + schema §3.1). There
-        are no work units yet, so ``all_units_terminal`` is NOT a requirement in
+        are no work units yet, so ``all_steps_terminal`` is NOT a requirement in
         the plan phase. The ``plan_step == "review_plan"`` conjunct mirrors the
         backend coherence guard one-to-one: a DEFAULT ``gaps_open == 0`` BEFORE
         any review has run (at ``plan`` / ``deepen`` / ``null``) must NOT
         short-circuit the loop to met (schema §3.1) — only a completed
         ``review_plan`` whose gap-set is empty closes the plan loop.
-      * otherwise (``"work"`` / ``"seam"`` / ``"done"``) — the work-loop exit,
-        SCALE-AWARE on ``adapter_scale`` (§2.2 ``met`` row):
+      * otherwise (``"work"`` / ``"handoff"`` / ``"done"``) — the work-loop exit,
+        SCALE-AWARE on ``backend_scale`` (§2.2 ``met`` row):
           - ``"three-tier"`` (CE; the default for any missing/unknown value):
-            ``blockers == 0 AND majors == 0 AND all_units_terminal AND units``.
+            ``blockers == 0 AND majors == 0 AND all_steps_terminal AND units``.
           - ``"blocker-only"`` (native): majors are advisory (surfaced at exit,
-            not gating), so ``blockers == 0 AND all_units_terminal AND units``.
-        The ``units`` (non-empty) conjunct closes the vacuous-exit hole: a work
+            not gating), so ``blockers == 0 AND all_steps_terminal AND units``.
+        The ``steps`` (non-empty) conjunct closes the vacuous-exit hole: a work
         phase with ZERO dispatched units must NOT declare done (``all([]) ==
         True`` would otherwise short-circuit it before any fan-out). A *plan*
         phase with no units is fine — it never reaches this branch.
@@ -250,13 +250,13 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
             and ledger.get("plan_step") == "review_plan"
         )
     else:
-        # Work-loop exit, SCALE-AWARE (Bug #3 — adapter_scale was stored but never
-        # read). The native backend declares adapter_scale="blocker-only": its
+        # Work-loop exit, SCALE-AWARE (Bug #3 — backend_scale was stored but never
+        # read). The native backend declares backend_scale="blocker-only": its
         # majors are advisory (surfaced at exit) and do NOT gate the loop, so a
         # native run with majors>0 / blockers==0 must still be able to exit.
         # CE (or any missing/unknown value) defaults to the three-tier gate where
         # majors DO gate. Unknown → three-tier is the safe default (gates more,
-        # never under-blocks). I-2: all_units_terminal stays required either way.
+        # never under-blocks). I-2: all_steps_terminal stays required either way.
         # `scale` is read once above and also drives unit_is_terminal so the
         # terminality check and the met predicate agree on whether majors gate.
         # Whether majors gate is decided by the SINGLE helper (the one source of
@@ -285,7 +285,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
         eval_phase_units = (
             current_phase_units
             if current_phase != "done"
-            else [u for u in ledger.get("units", []) if u.get("phase") == terminal_phase]
+            else [u for u in ledger.get("steps", []) if u.get("phase") == terminal_phase]
         )
         all_terminal_in_eval_phase = all(
             unit_is_terminal(u, scale) for u in eval_phase_units
@@ -304,7 +304,7 @@ def _evaluate_met(ledger: dict, counts: tuple, gaps_open, term: dict) -> bool:
 def recompute_predicate(ledger: dict) -> dict:
     """Compute ``exit_predicate_result`` purely from the ledger's current state.
 
-    Counts findings across all units, computes ``all_units_terminal``, and sets
+    Counts findings across all units, computes ``all_steps_terminal``, and sets
     ``met`` PHASE-AWARELY (I-2, contract §5). See the B7 helpers
     (``_count_severities_by_unit``, ``_read_cached_gaps_open``,
     ``_compute_terminality``, ``_evaluate_met``, ``_compute_iteration_pending``)
@@ -345,7 +345,7 @@ def recompute_predicate(ledger: dict) -> dict:
         "majors": majors,
         "minors": minors,
         "gaps_open": gaps_open,
-        "all_units_terminal": bool(term["all_units_terminal_global"]),
+        "all_steps_terminal": bool(term["all_units_terminal_global"]),
         "iteration_pending": iteration_pending,
     }
 
@@ -377,7 +377,7 @@ def _compute_iteration_pending(ledger: dict) -> bool:
 
 
 def is_orphaned(ledger: dict, now=None) -> bool:
-    """I-3 orphan predicate (§5), excluding seam-paused surfacing (U7's concern).
+    """I-3 orphan predicate (§5), excluding handoff-paused surfacing (U7's concern).
 
     Resumable iff current phase != "done" AND (driver == "manual" OR last_beat_at
     older than GRACE_SECONDS).

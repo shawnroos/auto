@@ -19,7 +19,7 @@ set them deliberately rather than inherit silent defaults.
 - **A wall-time cap** when the work is open-ended: `iteration.bound.max_wall_seconds`
   (cumulative *active* wall time). Breach forces exit the same way.
 - **An explicit exit predicate.** Auto's deterministic predicate —
-  `blockers == 0 AND majors == 0 AND all_units_terminal` ("only P3 findings
+  `blockers == 0 AND majors == 0 AND all_steps_terminal` ("only P3 findings
   remain") — is the run's single source of truth for done. Typed verification
   criteria are gate conditions layered on top; they never replace it.
 
@@ -46,7 +46,7 @@ guard yet."
 - Is the work bounded enough that `max_attempts` alone suffices, or does it need
   a wall-time cap too?
 - Where should a human be in the loop? (A `human` verification criterion routes
-  through the pause seam — use it for irreversible or judgment-heavy gates.)
+  through the pause handoff — use it for irreversible or judgment-heavy gates.)
 - What is the single condition that means "done" — and is it the deterministic
   predicate, or does it need extra typed criteria?
 

@@ -4,7 +4,7 @@
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-native.py`, prefers a module-level ``Backend`` factory, and
 calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_unit(unit) / review(unit)``.
+deepen(ledger) / review_plan(ledger) / do_step(unit) / review(unit)``.
 
 The pure logic (severity validation + the plan-step state machine) is here so
 pulse.py can import it; the bash sibling ``backend-native.sh`` mirrors it as a
@@ -106,7 +106,7 @@ def _next_plan_step(ledger):
 class Backend:
     """The object pulse.py's ``resolve_backend`` instantiates. Exposes the six
     ops as methods. `next_plan_step` and `deepen` are fully pure; `plan /
-    review_plan / do_unit / review` are the live-invocation seam (PREPARE an
+    review_plan / do_step / review` are the live-invocation handoff (PREPARE an
     envelope/rubric the model acts on, PARSE the structured result)."""
 
     name = BACKEND_NAME
@@ -122,7 +122,7 @@ class Backend:
 
         Native counterpart of the CE op. Prepare-only: the model reads the
         reviewed prose plan and returns a list of unit dicts; the engine persists
-        them to the plan unit's dispatch_context.enumerated_units (U6) and the
+        them to the plan unit's dispatch_context.enumerated_steps (U6) and the
         producers (U5b) shape them into ledger units. The producer the producers
         read — resolves the F4 gap.
 
@@ -159,14 +159,14 @@ class Backend:
         }
 
     # ── work-loop ops ──────────────────────────────────────────────────────
-    def do_unit(self, unit):
+    def do_step(self, unit):
         """PREPARE a native edit / Task dispatch. Returns an opaque
         dispatch_handle the dispatcher (U10) correlates the in-flight agent
         with; U10 defines the correlation contract over this shape."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
         return {
             "backend": BACKEND_NAME,
-            "op": "do_unit",
+            "op": "do_step",
             "unit_id": unit_id,
             "invocation": "native-task %s" % unit_id,
         }

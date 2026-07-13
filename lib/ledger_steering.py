@@ -157,7 +157,7 @@ def add_unit(repo_root, run_id, unit_id, depends_on=None, phase=None):
     deps = list(depends_on or [])
 
     def mutate(ledger):
-        units = ledger.setdefault("units", [])
+        units = ledger.setdefault("steps", [])
         existing_ids = {u.get("id") for u in units}
         # DUPLICATE id: reject before any write — a colliding id is corruption
         # (ambiguous _find_unit), not a stall we can repair by dropping.
@@ -225,7 +225,7 @@ def reshape_deps(repo_root, run_id, unit_id, depends_on):
 
     def mutate(ledger):
         unit = ledger_core._find_unit(ledger, unit_id)  # raises UnknownUnit
-        units = ledger.get("units", [])
+        units = ledger.get("steps", [])
         all_ids = {u.get("id") for u in units}
         # UNKNOWN-dep guard: every proposed edge must name a real unit, else the
         # reshaped unit can never become ready.

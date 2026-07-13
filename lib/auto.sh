@@ -12,7 +12,7 @@
 # subcommands, so the argument string is PARSED HERE — never in the .md body,
 # per memory `feedback_slash_command_arg_substitution`):
 #   <plan-or-spec>            required: start a run from this plan/spec file.
-#   ... auto                  skip the plan->work seam pause (pulse gets --auto).
+#   ... auto                  skip the plan->work handoff pause (pulse gets --auto).
 #   ... --backend ce|native   workflow backend (default ce).
 #   ... --goal "<text>"       compound deliberate-stop goal (default: the loop's
 #                             own exit predicate).

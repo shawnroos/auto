@@ -112,13 +112,13 @@ def atomic_write(path, recipe):
 
 def a2_variant(slug, *, description, with_verification=True):
     """A run-scoped a2 variant: distinct stem name, the operator-edited
-    advisor_judge gate attached to the EXISTING iteration.gate_unit (`judge`)."""
+    advisor_judge gate attached to the EXISTING iteration.gate_step (`judge`)."""
     r = load_builtin("a2")
     r["name"] = "a2-" + slug
     r["description"] = description
     if with_verification:
-        for u in r["units"]:
-            if u["id"] == r["iteration"]["gate_unit"]:  # 'judge'
+        for u in r["steps"]:
+            if u["id"] == r["iteration"]["gate_step"]:  # 'judge'
                 u["verification"] = [
                     {"id": "design-sound", "type": "advisor_judge",
                      "rubric_ref": "verification-rubric"}
@@ -146,9 +146,9 @@ if op == "compile-a2":
     readback = "valid"  # load_and_validate raises on failure
     _, vtier = recipes.resolve(draft["name"], repo)
     _, btier = recipes.resolve("a2", repo)
-    gate = rb["iteration"]["gate_unit"]
+    gate = rb["iteration"]["gate_step"]
     gate_has_verif = any(
-        u["id"] == gate and u.get("verification") for u in rb["units"]
+        u["id"] == gate and u.get("verification") for u in rb["steps"]
     )
     print(
         f"warnings={len(warnings)} readback={readback} "
@@ -162,23 +162,23 @@ elif op == "custom-validates":
         "name": "spike-" + sys.argv[4],
         "version": "1",
         "description": "Custom spike-before-build loop (launch-compile test provenance).",
-        "default_adapter": "ce",
-        "phase_order": ["plan", "seam", "work"],
+        "default_backend": "ce",
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
         "phase_transitions": [
-            {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+            {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
         ],
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [],
-             "invokes": {"adapter_op": "next_plan_step"}},
+             "invokes": {"backend_op": "next_plan_step"}},
             {"id": "spike-gate", "phase": "work", "depends_on": [],
-             "invokes": {"adapter_op": "review", "prompt_template": "gate.md"},
+             "invokes": {"backend_op": "review", "prompt_template": "gate.md"},
              "verification": [
                  {"id": "spike-validates", "type": "programmatic",
                   "argv": ["bash", "spike.sh"], "check": "exit_zero"}
              ]},
         ],
-        "iteration": {"gate_unit": "spike-gate", "bound": {"max_attempts": 3}},
+        "iteration": {"gate_step": "spike-gate", "bound": {"max_attempts": 3}},
     }
     print(f"custom={vresult(custom)}")
 
@@ -188,7 +188,7 @@ elif op == "a1w-nocompile":
     a1 = load_builtin("a1"); w = load_builtin("w")
     print(
         f"a1_iter={int('iteration' in a1)} w_iter={int('iteration' in w)} "
-        f"a1_gate={a1.get('iteration', {}).get('gate_unit', 'none')}"
+        f"a1_gate={a1.get('iteration', {}).get('gate_step', 'none')}"
     )
 
 elif op == "desc-warning":
@@ -228,12 +228,12 @@ elif op == "teardown":
     atomic_write(path, draft)
 
     recipe, tier = recipes.load_and_validate(draft["name"], repo)
-    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("units", [])]
-    phase_order = recipe.get("phase_order", ["plan", "seam", "work"])
+    init_units = [recipes.unit_for(u, recipe) for u in recipe.get("steps", [])]
+    phase_order = recipe.get("phase_order", ["plan", "handoff", "work"])
     run_id = "teardown-" + slug
     ledger.init_ledger(
         repo, run_id,
-        backend=recipe.get("default_adapter", "ce"),
+        backend=recipe.get("default_backend", "ce"),
         units=init_units,
         loop_phase=phase_order[0],
         recipe={"name": recipe["name"], "source_tier": tier},
@@ -259,7 +259,7 @@ elif op == "teardown":
 
     # ...yet read_ledger still carries the persisted topology...
     led = ledger.read_ledger(repo, run_id)
-    led_units = sorted(u["id"] for u in led.get("units", []))
+    led_units = sorted(u["id"] for u in led.get("steps", []))
     expected = sorted(u["id"] for u in init_units)
     topo_ok = int(led_units == expected)
 

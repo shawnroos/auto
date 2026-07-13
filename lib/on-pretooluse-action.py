@@ -4,7 +4,7 @@
 The deterministic destructive-action backstop (KTD-4/5). On a Bash tool call,
 under the SAME live-run + session_id ownership gate as the question hook, match
 the `command` against the CLAUDE.md-anchored irreversible/destructive set and
-ESCALATE via the pause seam. Write tool calls reach this hook (the plugin
+ESCALATE via the pause handoff. Write tool calls reach this hook (the plugin
 matches both) but only their `command` field is classified — which Write never
 sets — so Write is effectively a no-op here (round-4 P2: Write `content` is NOT
 scanned; see ``_command_text``).
@@ -40,7 +40,7 @@ do NOT flow through the Bash `command` channel this classifier reads (their
 tool_input carries no `command`), and the hook is wired to Bash/Write tool names
 only, so an MCP tool name never reaches it. Gating MCP-write tools is a tool-name
 interception change beyond v0.6.0's detect-and-escalate scope; fan-out units carry
-the prompt-embedded two-seam instruction instead. The classifier is a
+the prompt-embedded two-handoff instruction instead. The classifier is a
 deterministic minimum-set backstop, not a comprehensive sandbox.
 
 PATH-SCOPING (drive-friction fix — narrows the rm family ONLY): the `rm -rf`/
@@ -449,7 +449,7 @@ def _owning_run_id(repo_root: str, session_id):
 
 
 def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
-    """Halt the owned run via the pause seam (the fail-closed mechanism).
+    """Halt the owned run via the pause handoff (the fail-closed mechanism).
 
     Routes through the shared ledger.apply_pause core (import-topology facade
     discipline): set_loop driver="manual" + blocked_on, WITHOUT marking the loop

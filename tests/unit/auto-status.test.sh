@@ -112,11 +112,11 @@ run_status() {
 PLAIN_RUN="plain-run"
 PLAIN_EXPR='{
   "run_id": "plain-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "work", "driver": "self"},
-  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
-  "units": [{"id": "u1", "state": "dispatched", "phase": "work"}],
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": False},
+  "steps": [{"id": "u1", "state": "dispatched", "phase": "work"}],
   "iteration": None,
   "iteration_attempts": 0,
   "iteration_emit_count": 0,
@@ -128,15 +128,15 @@ PLAIN_EXPR='{
 ITER_RUN="iter-run"
 ITER_EXPR='{
   "run_id": "iter-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "work", "driver": "self"},
-  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False, "iteration_pending": True},
-  "units": [
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": False, "iteration_pending": True},
+  "steps": [
     {"id": "writer", "state": "verdict-returned", "phase": "work"},
     {"id": "judge", "state": "verdict-returned", "phase": "work", "dispatch_context": {"decision": "iterate"}}
   ],
-  "iteration": {"gate_unit": "judge", "bound": {"max_attempts": 5, "max_wall_seconds": 900}},
+  "iteration": {"gate_step": "judge", "bound": {"max_attempts": 5, "max_wall_seconds": 900}},
   "iteration_attempts": 3,
   "iteration_emit_count": 7,
   "active_wall_seconds": 412.5,
@@ -147,12 +147,12 @@ ITER_EXPR='{
 NOWALL_RUN="nowall-run"
 NOWALL_EXPR='{
   "run_id": "nowall-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "work", "driver": "self"},
-  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
-  "units": [{"id": "judge", "state": "verdict-returned", "phase": "work"}],
-  "iteration": {"gate_unit": "judge", "bound": {"max_attempts": 5}},
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": False},
+  "steps": [{"id": "judge", "state": "verdict-returned", "phase": "work"}],
+  "iteration": {"gate_step": "judge", "bound": {"max_attempts": 5}},
   "iteration_attempts": 1,
   "iteration_emit_count": 2,
   "active_wall_seconds": 0,
@@ -165,11 +165,11 @@ NOWALL_EXPR='{
 BO_RUN="bound-override-run"
 BO_EXPR='{
   "run_id": "bound-override-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "done", "driver": "self"},
-  "exit_predicate_result": {"met": True, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": True},
-  "units": [
+  "exit_predicate_result": {"met": True, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": True},
+  "steps": [
     {"id": "judge", "state": "verdict-returned", "phase": "work",
      "dispatch_context": {"bound_override": {"bound": "max_attempts", "original_decision": "iterate", "at": "2026-05-26T11:00:00Z"}}}
   ],
@@ -192,7 +192,7 @@ it "iteration section OMITTED on non-iteration ledger (a1/W shape)"
 assert_not_contains "$PLAIN_OUT" "  iteration:" "iteration: heading"
 
 it "no iteration sub-fields leak on non-iteration ledger"
-assert_not_contains "$PLAIN_OUT" "    gate_unit:" "gate_unit"
+assert_not_contains "$PLAIN_OUT" "    gate_unit:" "gate_step"
 
 it "no bound_exit sub-bullet on non-iteration ledger"
 assert_not_contains "$PLAIN_OUT" "        bound_exit:" "bound_exit"
@@ -204,7 +204,7 @@ it "iteration: heading rendered when ledger has iteration block"
 assert_contains "$ITER_OUT" "  iteration:" "heading"
 
 it "gate_unit rendered with the configured gate id"
-assert_contains "$ITER_OUT" "    gate_unit: judge" "gate_unit"
+assert_contains "$ITER_OUT" "    gate_unit: judge" "gate_step"
 
 it "attempts rendered as <current> / <max>"
 assert_contains "$ITER_OUT" "    attempts: 3 / 5" "attempts"
@@ -291,11 +291,11 @@ assert_not_contains "$KS_UNSET_OUT" "kill_switch" "kill_switch off"
 CORRUPT_ITER_RUN="corrupt-iter-run"
 CORRUPT_ITER_EXPR='{
   "run_id": "corrupt-iter-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "work", "driver": "self"},
-  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
-  "units": [{"id": "u1", "state": "dispatched", "phase": "work"}],
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": False},
+  "steps": [{"id": "u1", "state": "dispatched", "phase": "work"}],
   "iteration": "broken",
   "iteration_attempts": 0,
   "iteration_emit_count": 0,
@@ -312,11 +312,11 @@ assert_contains "$CORRUPT_ITER_OUT" "iteration: <shape error:" "shape-error line
 STRING_ATTEMPTS_RUN="string-attempts-run"
 STRING_ATTEMPTS_EXPR='{
   "run_id": "string-attempts-run",
-  "adapter": "ce",
-  "adapter_scale": "three-tier",
+  "backend": "ce",
+  "backend_scale": "three-tier",
   "loop": {"loop_phase": "work", "driver": "self"},
-  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_units_terminal": False},
-  "units": [{"id": "u1", "state": "dispatched", "phase": "work"}],
+  "exit_predicate_result": {"met": False, "blockers": 0, "majors": 0, "minors": 0, "gaps_open": 0, "all_steps_terminal": False},
+  "steps": [{"id": "u1", "state": "dispatched", "phase": "work"}],
   "iteration": None,
   "iteration_attempts": "five",
   "iteration_emit_count": 0,

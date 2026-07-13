@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""auto U7: resurrection / seam surfacing behind on-session-start.sh.
+"""auto U7: resurrection / handoff surfacing behind on-session-start.sh.
 
 Scans every ledger under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
 Classification (schema §5 I-3), in order:
   * loop_phase == "done"                          -> skip (no line).
-  * loop_phase == "seam" AND seam_paused == true  -> seam-specific hint
-    (checked BEFORE the time-based orphan branch — seam is the INTENTIONAL
+  * loop_phase == "handoff" AND handoff_paused == true  -> handoff-specific hint
+    (checked BEFORE the time-based orphan branch — handoff is the INTENTIONAL
     orphan).
   * else is_orphaned(ledger) (driver == "manual" OR last_beat_at older than
     GRACE_SECONDS)                                -> generic resume hint.
@@ -46,11 +46,11 @@ def surfacing_lines(repo_root: str):
         if phase == "done":
             continue
 
-        # Seam pause is the INTENTIONAL orphan — check it BEFORE the time-based
+        # Handoff pause is the INTENTIONAL orphan — check it BEFORE the time-based
         # orphan branch (schema §5 I-3).
-        if phase == "seam" and led.get("seam_paused"):
+        if phase == "handoff" and led.get("handoff_paused"):
             lines.append(
-                f"loop {run_id} paused at seam (plan complete; awaiting "
+                f"loop {run_id} paused at handoff (plan complete; awaiting "
                 f"work-loop confirmation) — /auto-resume continue {run_id} | "
                 f"abort {run_id}"
             )

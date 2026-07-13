@@ -286,7 +286,7 @@ try:
             # a=active, b=done (filtered), c=active → expect "a-run c-run".
             write(os.path.join(adir, "a.json"), '{"run_id": "a-run", "loop_phase": "work"}')
             write(os.path.join(adir, "b.json"), '{"run_id": "b-run", "loop_phase": "done"}')
-            write(os.path.join(adir, "c.json"), '{"run_id": "c-run", "loop_phase": "seam"}')
+            write(os.path.join(adir, "c.json"), '{"run_id": "c-run", "loop_phase": "handoff"}')
             print(" ".join(rid for rid, _ in b.iter_active_runs(tmp)))
         elif scenario == "all_done":
             # Every run is done → active scan is empty.

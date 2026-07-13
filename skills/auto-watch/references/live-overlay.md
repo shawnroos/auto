@@ -3,14 +3,14 @@
 `lib/watch_tree.py` renders the run's STRUCTURE from the ledger. This reference
 covers the model-side overlay: reconciling each rendered node against the harness
 task tools (`TaskList` / `Monitor`) so a dead or wedged agent — including a nested
-`do_unit` agent with its own `session_id` — is visible in the view (R6, AE5).
+`do_step` agent with its own `session_id` — is visible in the view (R6, AE5).
 
 ## Why an overlay is needed
 
 - The ledger records what the run BELIEVES: a unit is `dispatched` from the
   `pending → dispatched` transition until a verdict lands. It does not know the
   agent's OS-process reality.
-- A nested `do_unit` fan-out agent carries its OWN `session_id` (`skills/auto/SKILL.md`
+- A nested `do_step` fan-out agent carries its OWN `session_id` (`skills/auto/SKILL.md`
   §4 / KTD-5) and is not a ledger row of its own in the general case, so neither
   the ledger nor a PreToolUse hook can reach it. The task tools can.
 - The two failure classes the watch view must surface both live in the gap
@@ -31,12 +31,12 @@ task tools (`TaskList` / `Monitor`) so a dead or wedged agent — including a ne
 | `stalled` | (already reaped) | awaiting retry / escalation per §4 policy |
 | non-dispatched (`pending`/`verdict-returned`/`fixed`/`terminal-skip`) | n/a | not live; shown for tree shape only |
 
-## Resolving nested `do_unit` agents
+## Resolving nested `do_step` agents
 
 1. `TaskList` returns the run's live agents; each carries the `session_id` and the
    unit id baked into its dispatch.
 2. Match each task to the rendered node by unit id — that is how a nested
-   `do_unit` agent (own `session_id`) is placed against the tree the ledger
+   `do_step` agent (own `session_id`) is placed against the tree the ledger
    produced.
 3. `Monitor` a specific agent's `session_id` when you need finer liveness detail
    than `TaskList`'s summary (e.g. confirming a suspected wedge before reaping).

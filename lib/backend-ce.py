@@ -4,7 +4,7 @@
 This is the module pulse.py (U4) imports. `resolve_backend` (pulse.py:170-197)
 loads `lib/backend-ce.py`, prefers a module-level ``Backend`` factory if present,
 and calls the six ops on it: ``next_plan_step(ledger) / plan(ledger) /
-deepen(ledger) / review_plan(ledger) / do_unit(unit) / review(unit)``.
+deepen(ledger) / review_plan(ledger) / do_step(unit) / review(unit)``.
 
 The pure, contract-load-bearing logic (severity mapping + the plan-step state
 machine) is implemented HERE in Python so pulse.py can import it directly. The
@@ -19,7 +19,7 @@ sub-state, schema §3.1) to compute the next step. The pulse persists the execut
 step via `set_loop(plan_step=step)` after each plan-loop advance
 (pulse_advance.py), so a fresh-process pulse reads the real sub-state — the loop
 advances plan → deepen → review_plan → done and does not livelock. (Historical
-note: an earlier U6b/U3 seam had no schema field for this; the gap was closed
+note: an earlier U6b/U3 handoff had no schema field for this; the gap was closed
 when `plan_step` became a validated field — see ledger_core.py's PLAN_STEPS.)
 
 DECLARED SEVERITY MAPPING (contract §3.1, fixed property):
@@ -79,7 +79,7 @@ def _bound_plan_path(ledger):
     dispatch_context.plan_path at init (the schema has no top-level slot for it).
     Returns it, or None for a1-style runs where the plan was produced in-session.
     """
-    for u in ledger.get("units", []):
+    for u in ledger.get("steps", []):
         if u.get("phase") == "plan":
             return iteration.read_plan_path(u)
     return None
@@ -104,8 +104,8 @@ class Backend:
 
     The four plan-loop ops receive the ledger dict (pulse.py:347 calls
     ``op(ledger_dict)``). `next_plan_step` is fully pure. `plan / deepen /
-    review_plan` and the work-loop `do_unit / review` are the live-invocation
-    seam: a CLI/model cannot *run* /ce-plan etc., so each prepares an invocation
+    review_plan` and the work-loop `do_step / review` are the live-invocation
+    handoff: a CLI/model cannot *run* /ce-plan etc., so each prepares an invocation
     envelope the model executes and parses the structured result back onto the
     contract shape. The PARSE halves (map_findings, gap-set passthrough) are
     pure; what is NOT faked is a live command result.
@@ -124,7 +124,7 @@ class Backend:
         The producer the producers read. At plan-done the engine calls this to turn
         the reviewed plan into a work-unit list. Prepare-only: returns an envelope
         the MODEL executes (reads the plan, returns `[{id, invokes, ...}]`); the
-        engine persists it onto the plan unit's `dispatch_context.enumerated_units`
+        engine persists it onto the plan unit's `dispatch_context.enumerated_steps`
         (U6) and the producers (U5b) shape it into ledger units. v0.4.3 (KTD-15):
         for a plan_presatisfied run (W), the bound plan path (`_bound_plan_path`)
         is surfaced so the envelope names WHICH plan; omitted for a1.
@@ -170,12 +170,12 @@ class Backend:
     # ── spine entry op (v0.6.0 / U7) ─────────────────────────────────────────
     def brainstorm(self, unit):
         """PREPARE /ce-brainstorm for the spine's brainstorm-entry unit
-        (recipes/pipeline.json declares ``invokes.adapter_op: "brainstorm"``).
+        (recipes/pipeline.json declares ``invokes.backend_op: "brainstorm"``).
 
-        Prepare-only, mirroring ``do_unit``: the model runs /ce-brainstorm,
+        Prepare-only, mirroring ``do_step``: the model runs /ce-brainstorm,
         records the requirements-doc path on the unit's
         ``dispatch_context.requirements_doc``, and self-writes verdict-returned;
-        the engine then fires the U8 ``brainstorm_output_to_plan_unit`` producer
+        the engine then fires the U8 ``brainstorm_output_to_plan_step`` producer
         on advance to plan. Without this op the spine's brainstorm unit resolved
         to nothing and could never be worked to terminal (round-1 P1)."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
@@ -187,14 +187,14 @@ class Backend:
         }
 
     # ── work-loop ops ──────────────────────────────────────────────────────
-    def do_unit(self, unit):
+    def do_step(self, unit):
         """PREPARE /ce-work for a unit. Returns an opaque dispatch_handle the
         dispatcher (U10) uses to correlate the in-flight agent; U10 defines
         the correlation contract over this shape."""
         unit_id = unit.get("id") if isinstance(unit, dict) else unit
         return {
             "backend": BACKEND_NAME,
-            "op": "do_unit",
+            "op": "do_step",
             "unit_id": unit_id,
             "invocation": "/ce-work %s" % unit_id,
         }

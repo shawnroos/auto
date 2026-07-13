@@ -6,7 +6,7 @@ Typed verification lets a recipe gate unit carry checkable done-conditions that
 steer the gate's advance/iterate decision. It is **additive**: a unit without a
 `verification` block behaves exactly as pre-v0.7.0 (a1/a2/a4/w unaffected). It
 never replaces auto's deterministic exit predicate — verification only steers a
-gate; the predicate (`blockers == 0 AND majors == 0 AND all_units_terminal`,
+gate; the predicate (`blockers == 0 AND majors == 0 AND all_steps_terminal`,
 i.e. "only P3 findings remain") stays the run's single source of truth.
 
 ## 1. The `verification` block
@@ -27,7 +27,7 @@ array over the cap.
 | `programmatic` | `argv` (non-empty list[str]), `check` | `timeout_sec` (positive int) | engine, in-process |
 | `model_judge` | — | `rubric_ref` (str) | driver / work agent |
 | `advisor_judge` | — | `rubric_ref` (str) | driver (consults `advisor`) |
-| `human` | — | `prompt` (str) | driver (pause seam) |
+| `human` | — | `prompt` (str) | driver (pause handoff) |
 
 `check` is one of: `"exit_zero"` | `{"stdout_contains": str}` | `{"stdout_equals": str}`.
 

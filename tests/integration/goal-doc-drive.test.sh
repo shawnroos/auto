@@ -7,7 +7,7 @@
 #   - next step clear   -> materialize a unit via a steering verb, keep driving
 #                          (driver stays self, Stop hook keeps blocking)
 #   - next step unclear -> hand back via auto-resume pause (driver -> manual),
-#                          Stop hook's SEAM/MANUAL carve-out allows the stop
+#                          Stop hook's HANDOFF/MANUAL carve-out allows the stop
 #
 # Exercises the REAL on-stop.py + ledger + auto-resume, wired as the plugin wires
 # them. The goal doc's PROSE cannot fake completion: `met` is computed from real
@@ -118,7 +118,7 @@ out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_eq "block" "$(jget "$out" decision)"   # still self-driven here -> blocks
 CLAUDE_AUTO_REPO="$REPO" "$PY" "$RESUME_PY" pause goaldoc "next step is ambiguous — handing back" >/dev/null 2>&1
 assert_eq "manual" "$(rd_loop "$REPO" goaldoc driver)"
-it "AE4: after hand-back the Stop hook ALLOWS the stop (SEAM/MANUAL carve-out)"
+it "AE4: after hand-back the Stop hook ALLOWS the stop (HANDOFF/MANUAL carve-out)"
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_empty "$(jget "$out" decision)"
 
@@ -128,7 +128,7 @@ REPO="$(mk_run gd-add goaldoc '[{"id":"U1","state":"verdict-returned","findings"
 export CLAUDE_AUTO_REPO="$REPO"
 "$PY" "$LEDGER_PY" add-unit goaldoc U2 >/dev/null
 unset CLAUDE_AUTO_REPO
-state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','goaldoc');print(next(x['state'] for x in l['units'] if x['id']=='U2'))")"
+state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','goaldoc');print(next(x['state'] for x in l['steps'] if x['id']=='U2'))")"
 assert_eq "pending" "$state"
 it "R15: while the new unit is pending+driver=self, the Stop hook BLOCKS (keep driving)"
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"

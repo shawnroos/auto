@@ -2,27 +2,27 @@
   "name": "a2",
   "version": "1",
   "description": "Parallel Theories + Judge — run N competing plans from one goal, build all, a judge picks the winner. v0.3.0: judge is also the iteration gate; gate verdict.decision=iterate re-spawns plan candidates up to the bound.",
-  "default_adapter": "ce",
-  "phase_order": ["plan", "seam", "work"],
+  "default_backend": "ce",
+  "phase_order": ["plan", "handoff", "work"],
   "terminal_phase": "work",
   "phase_transitions": [
-    {"from": "plan", "to": "work", "emitter": "judge_winner_to_work_units"}
+    {"from": "plan", "to": "work", "producer": "judge_winner_to_work_steps"}
   ],
-  "units": [
-    {"id": "plan-1", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}},
-    {"id": "plan-2", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}},
-    {"id": "plan-3", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}},
-    {"id": "judge", "phase": "work", "depends_on": ["plan-1", "plan-2", "plan-3"], "invokes": {"adapter_op": "review", "prompt_template": "judge.md"}}
+  "steps": [
+    {"id": "plan-1", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}},
+    {"id": "plan-2", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}},
+    {"id": "plan-3", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}},
+    {"id": "judge", "phase": "work", "depends_on": ["plan-1", "plan-2", "plan-3"], "invokes": {"backend_op": "review", "prompt_template": "judge.md"}}
   ],
   "iteration": {
-    "gate_unit": "judge",
+    "gate_step": "judge",
     "emit_template": "plan-candidate",
     "bound": {"max_attempts": 5, "max_wall_seconds": 900}
   },
   "emit_templates": {
     "plan-candidate": {
       "phase": "plan",
-      "invokes": {"adapter_op": "next_plan_step"},
+      "invokes": {"backend_op": "next_plan_step"},
       "id_prefix": "plan-"
     }
   }

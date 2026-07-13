@@ -37,7 +37,7 @@ bare recipe STEM ("pipeline"), not the filename — auto.py resolves it via
 `recipes.load_and_validate(name, repo)` → f"{name}.json" (same as a1/w/review).
 
 WHY debug/optimize are SKILL recs (not recipes): the CE backend exposes only
-plan/deepen/review_plan/enumerate_plan_units/do_unit/review (lib/backend-ce.py),
+plan/deepen/review_plan/enumerate_plan_units/do_step/review (lib/backend-ce.py),
 so a `debug.json`/`optimize.json` recipe would be a non-functional stub. Only
 `review.json` (the `review` op exists) is a real off-spine recipe. debug/optimize
 follow the `ce-ideate` precedent — recommend the skill, no auto-wrap.

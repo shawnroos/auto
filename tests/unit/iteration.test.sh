@@ -64,15 +64,15 @@ def make_led(decision, attempts=0, active_wall_seconds=0,
     if max_wall_seconds is not None:
         bound["max_wall_seconds"] = max_wall_seconds
     return {
-        "units": [judge],
-        "iteration": {"gate_unit": "judge", "bound": bound},
+        "steps": [judge],
+        "iteration": {"gate_step": "judge", "bound": bound},
         "iteration_attempts": attempts,
         "active_wall_seconds": active_wall_seconds,
     }
 
 def make_verif_led(crits, dispatch_context=None):
     """A minimal ledger with one gate unit 'g' carrying a verification block."""
-    return {"units": [{"id": "g", "phase": "work", "state": "verdict-returned",
+    return {"steps": [{"id": "g", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": dispatch_context or {},
                        "verification": crits}]}
 
@@ -139,7 +139,7 @@ elif op == "bound-wall":
 
 elif op == "no-decision":
     led = make_led(decision=None)
-    rd = iteration.read_decision(led["units"][0])
+    rd = iteration.read_decision(led["steps"][0])
     r = iteration.evaluate_decision(led, "judge")
     print(json.dumps({
         "read_decision": rd,
@@ -164,14 +164,14 @@ elif op == "decisions-constant":
 # pending-bool surface compute_pending_state exposes.
 
 elif op == "pending-no-iteration-block":
-    print(iteration.compute_pending_state({"units": []}))
+    print(iteration.compute_pending_state({"steps": []}))
 
 elif op == "pending-no-gate-unit-named":
-    led = {"units": [], "iteration": {"bound": {}}}
+    led = {"steps": [], "iteration": {"bound": {}}}
     print(iteration.compute_pending_state(led))
 
 elif op == "pending-gate-not-found":
-    led = {"units": [], "iteration": {"gate_unit": "ghost", "bound": {}}}
+    led = {"steps": [], "iteration": {"gate_step": "ghost", "bound": {}}}
     print(iteration.compute_pending_state(led))
 
 elif op == "pending-decision-not-iterate":
@@ -253,7 +253,7 @@ elif op == "pending-kill-switch-on":
 # discriminator can distinguish the raise (DF state) from the False return.
 
 elif op == "pending-iteration-non-dict-string":
-    led = {"units": [], "iteration": "broken-string"}
+    led = {"steps": [], "iteration": "broken-string"}
     try:
         v = iteration.compute_pending_state(led)
         print(f"returned:{v}")
@@ -261,7 +261,7 @@ elif op == "pending-iteration-non-dict-string":
         print(f"raised:{type(e).__name__}")
 
 elif op == "pending-iteration-non-dict-list":
-    led = {"units": [], "iteration": ["broken", "list"]}
+    led = {"steps": [], "iteration": ["broken", "list"]}
     try:
         v = iteration.compute_pending_state(led)
         print(f"returned:{v}")
@@ -277,9 +277,9 @@ elif op == "pending-bound-non-dict":
     # blocks the very ledger writes F2 needs to mark the loop done. The
     # isinstance guard degrades to False, keeping the ledger writable.
     led = {
-        "units": [{"id": "judge", "phase": "work",
+        "steps": [{"id": "judge", "phase": "work",
                    "dispatch_context": {"decision": "iterate"}}],
-        "iteration": {"gate_unit": "judge", "bound": "corrupted-string"},
+        "iteration": {"gate_step": "judge", "bound": "corrupted-string"},
     }
     try:
         v = iteration.compute_pending_state(led)
@@ -339,7 +339,7 @@ assert_eq "False" "$(run_iter pending-no-iteration-block)"
 it "compute_pending_state: no gate_unit named in iteration block → False"
 assert_eq "False" "$(run_iter pending-no-gate-unit-named)"
 
-it "compute_pending_state: gate unit id not present in units[] → False"
+it "compute_pending_state: gate unit id not present in steps[] → False"
 assert_eq "False" "$(run_iter pending-gate-not-found)"
 
 it "compute_pending_state: gate decision != 'iterate' → False"
@@ -395,7 +395,7 @@ assert_eq "True" "$(run_iter pending-kill-switch-on)"
 # ledger writes F2 (lib/pulse.py) needs to force-mark the loop done.
 #
 # The DF cycle: comment out the isinstance check in iteration.py → these tests
-# go RED with "raised:AttributeError" (the iteration_block.get('gate_unit')
+# go RED with "raised:AttributeError" (the iteration_block.get('gate_step')
 # line crashes on a str/list). With the fix, both return "returned:False".
 
 it "compute_pending_state: iteration='broken-string' (non-dict scalar) → returns False (no raise)"
@@ -446,7 +446,7 @@ sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 iteration = load_lib_module("iteration")
 
-unit = {"dispatch_context": {"enumerated_units": [{"id": "w1"}]}}
+unit = {"dispatch_context": {"enumerated_steps": [{"id": "w1"}]}}
 
 # 1. misspelled key -> KeyError (loud), NOT a silent None.
 try:
@@ -456,7 +456,7 @@ except KeyError:
     typo = "raised"
 
 # 2. declared-but-absent key -> None (real-miss semantics preserved).
-absent = iteration.read_dc(unit, "winner_unit_id")
+absent = iteration.read_dc(unit, "winner_step_id")
 
 # 3. named accessor reads the declared key.
 named = iteration.read_enumerated_units(unit)

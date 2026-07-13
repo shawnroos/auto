@@ -1,10 +1,10 @@
 ---
 name: auto
 description: >
-  Drive an auto run: chain the plan-loop → seam → work-loop using the
+  Drive an auto run: chain the plan-loop → handoff → work-loop using the
   self-pacing pulse (lib/pulse.py), the agent-managed dispatcher
   (lib/dispatcher.py), and a deliberate-stop /goal binding. Use when
-  invoked via /auto, when continuing after a seam, or when resuming a
+  invoked via /auto, when continuing after a handoff, or when resuming a
   run. This skill IS the driving agent: arms the pulse chain, decides
   the work-loop fan-out cap per wave (resizable in flight), reads the
   ledger's cached exit predicate to know when the loop is done. NEVER
@@ -41,7 +41,7 @@ Auto's deliberate-stop is its OWN Stop hook (`lib/on-stop.py` via
 `lib/goal-status.py`), which reads the ledger's `exit_predicate_result`.
 This "goal" is the ledger predicate — **not** the native `/goal`
 command. Do NOT run native `/goal`: it is model-judged with no external
-predicate seam (U9 spike), so auto can neither feed it the verdict nor
+predicate handoff (U9 spike), so auto can neither feed it the verdict nor
 clear it — a native `/goal` set alongside a run will re-prompt "Goal not
 yet met… continuing" on every turn and auto cannot stop it (only
 `/goal clear` can). Binding is automatic: ensure the run's ledger exists
@@ -80,14 +80,14 @@ agent-native answer to a harness limit, not a workaround bolted on.
     the Stop hook keeps the session held).
   - **unclear →** hand back: `python3 lib/auto-resume.py pause <run>
     "<why the next step is unclear>"`, which flips `driver → manual`.
-    The Stop hook's SEAM/MANUAL carve-out then treats that as a valid
+    The Stop hook's HANDOFF/MANUAL carve-out then treats that as a valid
     stop point. Do NOT guess a step you cannot justify.
 - **The human steers by editing the goal doc (R17).** That is auto's
   human-in-the-loop channel — the driving session's `AskUserQuestion`
   is denied by the PreToolUse gate. The boss re-reads the doc each pulse
   and picks up the edit; the operator never needs a live prompt.
 
-Test the crisp seam (what the boss WROTE — a unit-create or a manual
+Test the crisp handoff (what the boss WROTE — a unit-create or a manual
 pause), never the fuzzy judgment. Full contract: `driver-reference.md`.
 
 ## 2. Arm the pulse chain
@@ -108,7 +108,7 @@ dispatch:
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay |
 | `rearm`  | `work` | YIELD for the next verdict (harness re-invokes) AND, at dispatch, arm ONE watchdog-heartbeat `ScheduleWakeup(watchdog_wakeup_delay(ledger), intent.prompt)` so a pulse fires even while work is in flight. A verdict landing first makes the heartbeat pulse a no-op. Delay clamps to `[60, 3600]s`. LONG ScheduleWakeup (1200s+) still applies when no work in flight AND no ready units (genuinely stalled) |
-| `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `seam-pause` → surface seam (§3) |
+| `stop`   | any   | chain ends; do NOT re-arm. `predicate-met*` → report (§5); `handoff-pause` → surface handoff (§3) |
 | `noop`   | any   | another live pulse holds the lock; do nothing |
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop.
@@ -137,13 +137,13 @@ pulse — once units are stashed — flips `plan → work`. Do NOT read the
 envelope as "done planning, start building" and skip the re-arm: skipping
 it leaves the run at `plan` with the work-loop never armed.
 
-## 3. Seam
+## 3. Handoff
 
 When plan predicate met:
 
 - **Not `auto`** (operator passed `--review-plan`): pulse writes
-  `loop_phase = "seam"`, `seam_paused = true`, returns `stop`,
-  `reason == "seam-pause"`. Surface the plan + parallelism analysis.
+  `loop_phase = "handoff"`, `handoff_paused = true`, returns `stop`,
+  `reason == "handoff-pause"`. Surface the plan + parallelism analysis.
   Resume via `/auto-resume continue <run>` (→ work) or
   `/auto-resume abort <run>` (→ done).
 - **`auto`** (v0.4.0 default): pulse that closes plan predicate flips
@@ -158,8 +158,8 @@ IS the wake signal. Per wave:
 2. Decide cap for THIS wave (16 idle / 3 grinding / 1 to serialize —
    no fixed constant).
 3. `dispatcher.dispatch_batch(repo, run, units, cap, launch_fn=...)`.
-   `launch_fn` maps each unit's `invokes.adapter_op` to the skill it
-   launches: `do_unit` → `/ce-work <unit-id>` (the default — `a1`/`w`/
+   `launch_fn` maps each unit's `invokes.backend_op` to the skill it
+   launches: `do_step` → `/ce-work <unit-id>` (the default — `a1`/`w`/
    `pipeline`); `review` → `/ce-code-review` (the `review.json`
    off-spine unit, U11). `dispatch_batch` never consults the backend, so
    THIS mapping is the driver's job — see `driver-reference.md` §7.
@@ -218,7 +218,7 @@ it there), apply this per stalled node:
 dependents, so this policy runs **per stalled node while independent
 siblings keep advancing** — one wedged branch never freezes the wave.
 
-**Nested `do_unit` reap.** A `do_unit` fan-out agent is not its own
+**Nested `do_step` reap.** A `do_step` fan-out agent is not its own
 ledger row (KTD-5), so a wedged nested agent is reaped through its
 **parent** fan-out unit: the parent flips to `stalled` and its whole
 fan-out wave is reaped + re-dispatched together (coarse-grained v1 —
@@ -268,7 +268,7 @@ and redirects you here. Do NOT stop to ask the operator. Instead:
      default) → **resolve autonomously** and proceed.
    - **Substantive design/architecture fork** (which architecture, "is this
      scope right?", a premise/positioning call) → **escalate via the pause
-     seam** (§4.5): `bash lib/auto-resume.py pause <run> "<the fork>"`, one
+     handoff** (§4.5): `bash lib/auto-resume.py pause <run> "<the fork>"`, one
      line, then **stop** — not a yield. This composes with §4.5: pause is the
      ONLY sanctioned human-wall stop.
    - **When unsure between the two, treat it as a fork and escalate** — the
@@ -288,7 +288,7 @@ re-derives the exit predicate. The gate fires ONLY for THIS driving session
 (matched by `driving_session_id`, recorded at arm time); a concurrent
 standalone ce-skill in the same worktree is never intercepted.
 
-**Two-seam split — fan-out units (KTD-5).** Work-loop `do_unit` agents get
+**Two-handoff split — fan-out units (KTD-5).** Work-loop `do_step` agents get
 their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
 destructive backstop) can reach them. When you construct a fan-out unit prompt
 (§4 step 3), bake in all THREE constraints:
@@ -302,7 +302,7 @@ destructive backstop) can reach them. When you construct a fan-out unit prompt
     in ANY flag position, `reset --hard`, `checkout .` / `restore .`,
     `clean -f`/`-fdx`, `branch -D`, `rm -rf`, `npm publish`, `gh release create`,
     `gh repo delete`, `gh release delete`, `gh pr merge --admin`). If one is
-    needed, pause-escalate instead." `do_unit` is the MOST likely locus of
+    needed, pause-escalate instead." `do_step` is the MOST likely locus of
     destructive Bash (branch cleanup, file delete, force-push), and the action
     hook cannot gate it — so the constraint MUST ride in the prompt.
   - **(iii) self-termination on no-progress:** "If you cannot make progress
@@ -323,7 +323,7 @@ resolve such a gate via `lib/iteration.py::resolve_gate_verification`, which run
 the `programmatic` criteria in-process and returns a `{signal, pending_judges}`.
 
 When `pending_judges` is non-empty and contains an `advisor_judge` criterion,
-the DRIVER (this session — not the fan-out `do_unit` agent) renders it, reusing
+the DRIVER (this session — not the fan-out `do_step` agent) renders it, reusing
 the §4.6 pattern:
 
 1. **Consult the `advisor`** with the deliverable + the criterion's `rubric_ref`
@@ -332,7 +332,7 @@ the §4.6 pattern:
    input to your judgment, exactly as in §4.6.
 3. **Re-resolve** by calling `resolve_gate_verification(... judge_verdicts={...})`
    with the verdicts you rendered (a `human` criterion routes through the §4.5
-   pause seam instead). When no judges remain pending the call yields a
+   pause handoff instead). When no judges remain pending the call yields a
    non-None `signal`.
 4. **Commit** the signal as the gate's decision via
    `ledger_mutators.set_verdict_decision(repo, run, gate_unit_id, signal)` — the
@@ -383,9 +383,9 @@ Each pulse, on a `rearm` intent in the work phase:
 2. **Spawn ONE background `Agent` per dispatched unit.** Build each prompt to
    carry: the **unit id**; its **`attempt` generation** (from this dispatch — the
    agent passes it back so a superseded attempt's verdict is rejected as stale,
-   AE3); the **backend invocation** (map `invokes.adapter_op` → skill per §4
+   AE3); the **backend invocation** (map `invokes.backend_op` → skill per §4
    step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
-   two-seam constraints — question routing, destructive-action avoidance,
+   two-handoff constraints — question routing, destructive-action avoidance,
    self-termination on no-progress); and the instruction to **self-write its
    verdict on completion** via `bash lib/ledger.py record-verdict <run> <unit>
    '<json-findings>' <attempt>`.
@@ -455,7 +455,7 @@ predicate is met (provisional sidecars ignored). Mechanism:
 ## Invariants
 
 - **Read, never re-derive.** `exit_predicate_result.met` /
-  `all_units_terminal` come straight from the ledger.
+  `all_steps_terminal` come straight from the ledger.
 - **Re-arm only on `action == "rearm"`.** `stop` and `noop` end the
   chain.
 - **Driver owns cap; engine owns advance.** Never hardcode

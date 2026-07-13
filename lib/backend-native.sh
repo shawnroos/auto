@@ -2,7 +2,7 @@
 # auto U6b: the native Claude backend.
 #
 # Implements the LOCKED backend contract (docs/contracts/backend-contract.md):
-# the six ops `plan / deepen / review_plan / next_plan_step / do_unit / review`,
+# the six ops `plan / deepen / review_plan / next_plan_step / do_step / review`,
 # mapping a bare native-Claude workflow (prose plan, native edit/Task, self-review
 # against an injected rubric) onto the engine's fixed interface.
 #
@@ -47,10 +47,10 @@
 # ════════════════════════════════════════════════════════════════════════════
 #
 # ── THE LIVE-INVOCATION BOUNDARY (read before wiring this into the engine) ──
-# `plan`, `review_plan`, `do_unit`, and `review` correspond to live native model
+# `plan`, `review_plan`, `do_step`, and `review` correspond to live native model
 # actions (write a prose plan; review + list gaps; native edit/Task; self-review
 # against the rubric). A CLI cannot perform a model action, so each of those ops
-# is a two-part shape, honored at the seam, not faked:
+# is a two-part shape, honored at the handoff, not faked:
 #   1. PREPARE — emit the invocation envelope / rubric the model should act on.
 #   2. PARSE   — validate the model's structured output onto the contract shape.
 # The PARSE half (severity validation, gap-set passthrough) is pure and unit-

@@ -10,8 +10,8 @@
 # subcommand is PARSED HERE from the argument string — never in the .md body,
 # per memory `feedback_slash_command_arg_substitution`):
 #   [<run>]              default `continue`: arm a fresh pulse chain (flips a
-#                        paused seam -> work first if needed).
-#   continue <run>       explicit continue (seam -> work, arm a pulse).
+#                        paused handoff -> work first if needed).
+#   continue <run>       explicit continue (handoff -> work, arm a pulse).
 #   abort <run>          flip the run to loop_phase="done" (cancellation).
 #   retry <run> <unit>   stalled unit -> pending; clears last_error.
 #   skip <run> <unit>    stalled unit -> terminal-skip (counts as terminal).

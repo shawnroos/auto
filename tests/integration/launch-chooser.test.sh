@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto launch-chooser U7: AE1–AE6 acceptance harness (end-to-end).
 #
-# Maps the six Acceptance Examples onto the REAL deterministic seams the launch
+# Maps the six Acceptance Examples onto the REAL deterministic entry points the launch
 # chooser drives — `lib/launch-gate.py::classify_launch` (the tier), the in-tree
 # router `lib/recommender.py::recommend` (the agreement cross-check), the one
 # renderer `lib/topology-render.py::render_comparison` (the contrast block), and
@@ -14,7 +14,7 @@
 # chaining is what makes this acceptance-level rather than a restatement of the
 # U2 ladder / U5 compile unit tests.
 #
-# The two scenarios with NO executable seam — AE6's "silent-apply by
+# The two scenarios with NO executable handoff — AE6's "silent-apply by
 # construction" and the freeform "not /ce-plan-and-end" replacement — are the
 # only grep-asserted checks (the chooser prose itself is asserted in U3/U4).
 #
@@ -36,7 +36,7 @@
 #   AE5  shape override a2→a4 → a4-<slug> compiles, gate_unit `compare` (distinct
 #        from a2's `judge`), resolves at workspace.
 #   AE6  self-driven/headless ownership signal → silent-apply by construction,
-#        no question path (asserts the entry guard prose, the only headless seam).
+#        no question path (asserts the entry guard prose, the only headless handoff).
 #   single-confirm  (0.85,0.70,builtin,[],True) → confirm; contrast block prints
 #        the a1 card; router agrees.
 #   freeform behavior change  clear-intent-no-plan → a1@plan (the loop dispatch
@@ -175,8 +175,8 @@ def builtin_variant(builtin, slug, *, description):
     r = load_builtin(builtin)
     r["name"] = builtin + "-" + slug
     r["description"] = description
-    gate_unit = r["iteration"]["gate_unit"]
-    for u in r["units"]:
+    gate_unit = r["iteration"]["gate_step"]
+    for u in r["steps"]:
         if u["id"] == gate_unit:
             u["verification"] = [
                 {"id": "design-sound", "type": "advisor_judge",
@@ -192,23 +192,23 @@ def custom_spike(slug):
         "name": "spike-" + slug,
         "version": "1",
         "description": "Custom spike-before-build loop (U7 acceptance provenance).",
-        "default_adapter": "ce",
-        "phase_order": ["plan", "seam", "work"],
+        "default_backend": "ce",
+        "phase_order": ["plan", "handoff", "work"],
         "terminal_phase": "work",
         "phase_transitions": [
-            {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+            {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
         ],
-        "units": [
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [],
-             "invokes": {"adapter_op": "next_plan_step"}},
+             "invokes": {"backend_op": "next_plan_step"}},
             {"id": "spike-gate", "phase": "work", "depends_on": [],
-             "invokes": {"adapter_op": "review", "prompt_template": "gate.md"},
+             "invokes": {"backend_op": "review", "prompt_template": "gate.md"},
              "verification": [
                  {"id": "spike-validates", "type": "programmatic",
                   "argv": ["bash", "spike.sh"], "check": "exit_zero"}
              ]},
         ],
-        "iteration": {"gate_unit": "spike-gate", "bound": {"max_attempts": 3}},
+        "iteration": {"gate_step": "spike-gate", "bound": {"max_attempts": 3}},
     }
 
 
@@ -231,12 +231,12 @@ def compile_variant(builtin, slug):
     rb, _ = recipes.load_and_validate(draft["name"], repo)   # raises on bad read-back
     _, vtier = recipes.resolve(draft["name"], repo)
     _, btier = recipes.resolve(builtin, repo)
-    gate = rb["iteration"]["gate_unit"]
-    gate_has_verif = any(u["id"] == gate and u.get("verification") for u in rb["units"])
+    gate = rb["iteration"]["gate_step"]
+    gate_has_verif = any(u["id"] == gate and u.get("verification") for u in rb["steps"])
     return {
         "warnings": len(warnings), "readback": "valid",
         "resolve_variant": vtier, "resolve_builtin": btier,
-        "gate_unit": gate, "gate_has_verif": int(bool(gate_has_verif)),
+        "gate_step": gate, "gate_has_verif": int(bool(gate_has_verif)),
         "stem": draft["name"],
     }
 
@@ -244,7 +244,7 @@ def compile_variant(builtin, slug):
 if op == "ae3-compile-a2":
     r = compile_variant("a2", sys.argv[4])
     print("warnings={warnings} readback={readback} resolve_variant={resolve_variant} "
-          "resolve_builtin={resolve_builtin} gate_unit={gate_unit} "
+          "resolve_builtin={resolve_builtin} gate_step={gate_step} "
           "gate_has_verif={gate_has_verif} stem={stem}".format(**r))
 
 elif op == "ae3-render":
@@ -272,10 +272,10 @@ elif op == "ae5-override-a4":
     # Shape override a2→a4: the compiled variant is a4-<slug>, gate_unit `compare`
     # — distinct from a2's `judge` (the dispatch shape differs by construction).
     a4 = compile_variant("a4", sys.argv[4])
-    a2_gate = load_builtin("a2")["iteration"]["gate_unit"]
-    print("resolve_variant={resolve_variant} gate_unit={gate_unit} "
+    a2_gate = load_builtin("a2")["iteration"]["gate_step"]
+    print("resolve_variant={resolve_variant} gate_step={gate_step} "
           "gate_has_verif={gate_has_verif} stem={stem}".format(**a4)
-          + " a2_gate=%s differs=%s" % (a2_gate, int(a4["gate_unit"] != a2_gate)))
+          + " a2_gate=%s differs=%s" % (a2_gate, int(a4["gate_step"] != a2_gate)))
 
 elif op == "ae1ae2-nocompile":
     # a1/w declare NO iteration block → nothing to attach a typed gate to → the
@@ -284,8 +284,8 @@ elif op == "ae1ae2-nocompile":
     a1 = load_builtin("a1"); w = load_builtin("w")
     print("a1_iter=%d w_iter=%d a1_gate=%s w_gate=%s"
           % (int("iteration" in a1), int("iteration" in w),
-             a1.get("iteration", {}).get("gate_unit", "none"),
-             w.get("iteration", {}).get("gate_unit", "none")))
+             a1.get("iteration", {}).get("gate_step", "none"),
+             w.get("iteration", {}).get("gate_step", "none")))
 
 elif op == "confirm-render":
     # Single-confirm tier still prints the contrast block (one card here).
@@ -326,7 +326,7 @@ assert_eq "none" "$(field a1_gate "$NC")"
 
 it "AE1: the a1 skip notice names the review-to-P3 exit predicate, not a literal programmatic check (KTD-4)"
 # The R9 notice for a1/w is the inherent exit predicate, surfaced for visibility —
-# the only headless surface is the SKILL prose that defines it. (Executable seam
+# the only headless surface is the SKILL prose that defines it. (Executable handoff
 # is the skip tier above; this pins the notice CLAIM to the real file.)
 assert_contains "$(cat "$LAUNCH_SKILL")" "review-clean to P3"
 
@@ -361,7 +361,7 @@ assert_eq "workspace" "$(field resolve_variant "$AE3")"
 it "AE3: the canonical built-in a2 stays built-in (the variant does not shadow it)"
 assert_eq "built-in" "$(field resolve_builtin "$AE3")"
 it "AE3: the verification rides a2's declared gate_unit 'judge'"
-assert_eq "judge" "$(field gate_unit "$AE3")"
+assert_eq "judge" "$(field gate_step "$AE3")"
 it "AE3: the gate unit carries the operator-edited advisor_judge verification array"
 assert_eq "1" "$(field gate_has_verif "$AE3")"
 
@@ -394,7 +394,7 @@ AE5="$(drv ae5-override-a4 override)"
 it "AE5: the a4 override variant resolves at tier workspace"
 assert_eq "workspace" "$(field resolve_variant "$AE5")"
 it "AE5: the a4 variant's gate rides a4's declared gate_unit 'compare'"
-assert_eq "compare" "$(field gate_unit "$AE5")"
+assert_eq "compare" "$(field gate_step "$AE5")"
 it "AE5: a4's gate_unit differs from a2's 'judge' (gates re-derived for a4, not a2)"
 assert_eq "1" "$(field differs "$AE5")"
 it "AE5: the a4 variant carries the typed verification array"
@@ -403,7 +403,7 @@ assert_eq "1" "$(field gate_has_verif "$AE5")"
 # ════════════════════════════════════════════════════════════════════════════
 # AE6 — a self-driven / headless run → no chooser; the recommendation is applied
 #   silently. Covers R11. The "silent-apply by construction" guard has no
-#   executable seam (no live AskUserQuestion headless), so this asserts the entry
+#   executable handoff (no live AskUserQuestion headless), so this asserts the entry
 #   guard prose that routes self-driven runs out of the question path.
 # ════════════════════════════════════════════════════════════════════════════
 LAUNCH_TXT="$(cat "$LAUNCH_SKILL")"

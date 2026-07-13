@@ -42,15 +42,15 @@ op = sys.argv[2]
 # one programmatic criterion + one advisor_judge criterion.
 def recipe(prog_argv):
     return {
-        "name": "vgate", "version": "1", "default_adapter": "ce",
+        "name": "vgate", "version": "1", "default_backend": "ce",
         "phase_order": ["plan", "work"], "terminal_phase": "work",
         "phase_transitions": [{"from": "plan", "to": "work",
-                               "emitter": "plan_output_to_work_units"}],
-        "units": [
+                               "producer": "plan_output_to_work_steps"}],
+        "steps": [
             {"id": "plan", "phase": "plan", "depends_on": [],
-             "invokes": {"adapter_op": "next_plan_step"}},
+             "invokes": {"backend_op": "next_plan_step"}},
             {"id": "gate", "phase": "work", "depends_on": [],
-             "invokes": {"adapter_op": "do_unit"},
+             "invokes": {"backend_op": "do_step"},
              "verification": [
                  {"id": "tests", "type": "programmatic",
                   "argv": prog_argv, "check": "exit_zero"},
@@ -60,9 +60,9 @@ def recipe(prog_argv):
     }
 
 def led_from(recipe_dict):
-    # minimal ledger mirror of the gate unit (engine reads units[])
-    gate = next(u for u in recipe_dict["units"] if u["id"] == "gate")
-    return {"units": [{"id": "gate", "phase": "work", "state": "verdict-returned",
+    # minimal ledger mirror of the gate unit (engine reads steps[])
+    gate = next(u for u in recipe_dict["steps"] if u["id"] == "gate")
+    return {"steps": [{"id": "gate", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": {}, "verification": gate["verification"]}]}
 
 if op == "validates":

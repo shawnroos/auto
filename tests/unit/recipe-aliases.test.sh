@@ -130,7 +130,7 @@ elif op == "reserved-reject":
     # the stem's recipe. The bare stems (a1/w) are NOT reserved and stay valid.
     def vresult(name):
         try:
-            recipes.validate({"name": name, "version": "1", "units": []})
+            recipes.validate({"name": name, "version": "1", "steps": []})
             return "%s:valid" % name
         except recipes.RecipeError:
             return "%s:rejected" % name

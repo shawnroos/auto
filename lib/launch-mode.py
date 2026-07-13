@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""auto launch-chooser: the deterministic interactive-vs-headless seam (R11/KTD-5).
+"""auto launch-chooser: the deterministic interactive-vs-headless handoff (R11/KTD-5).
 
 skills/auto-launch §0 must decide **silent-apply** (a self-driven / headless run)
 vs **show-the-chooser** (an interactive human-typed `/auto`) — the load-bearing
@@ -7,7 +7,7 @@ guard that keeps a self-driven run out of the `AskUserQuestion` path *by
 construction* (AE6), not by relying on the PreToolUse advisor-gate denial. Prior
 to this module that decision lived entirely in skill prose; this folds it into
 ONE shell-callable check that prints exactly `headless` / `interactive`, so the
-guard has an executable seam a test can pin (agent-native hardening).
+guard has an executable handoff a test can pin (agent-native hardening).
 
 `headless` (→ silent-apply) IFF either:
   - `CLAUDE_CODE_SESSION_ID` is unset/empty — a truly headless / env-less context

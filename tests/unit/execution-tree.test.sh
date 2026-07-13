@@ -13,7 +13,7 @@
 #      (build-clarity/build-perf synthesized from expected_emit_outputs) then
 #      {compare}. Asserting the builders appear PROVES expansion happened.
 #   3. cap=1 serializes a2's 3-wide parallel wave into 3 ordered waves.
-#   4. a fan-out unit nests its expanded do_unit children under the producer parent.
+#   4. a fan-out unit nests its expanded do_step children under the producer parent.
 #   5. substrate heuristic: "workflow-script" for a bounded parallel-fan-in loop;
 #      "subagent-tree" for a ce-work/review dispatch loop (a2/a4).
 
@@ -55,19 +55,19 @@ def fmt_waves(res):
     return "|".join(",".join(sorted(w)) for w in res["waves"])
 
 # A minimal bounded parallel-fan-in loop with NO ce-work/review backend op —
-# the branch a2/a4 don't exercise (both carry review/do_unit). Single-phase +
+# the branch a2/a4 don't exercise (both carry review/do_step). Single-phase +
 # bounded + no ce-dispatch → workflow-script routing label.
 def wfs_recipe():
     return {
         "name": "wfs", "version": "1",
         "phase_order": ["work"], "terminal_phase": "work",
-        "units": [
+        "steps": [
             {"id": "map-1", "phase": "work", "depends_on": [], "invokes": {}},
             {"id": "map-2", "phase": "work", "depends_on": [], "invokes": {}},
             {"id": "reduce", "phase": "work",
              "depends_on": ["map-1", "map-2"], "invokes": {}},
         ],
-        "iteration": {"gate_unit": "reduce", "bound": {"max_attempts": 3}},
+        "iteration": {"gate_step": "reduce", "bound": {"max_attempts": 3}},
     }
 
 if op == "a2-waves":
@@ -99,7 +99,7 @@ assert_eq "plan-1,plan-2,plan-3|judge" "$(et a2-waves)"
 
 # ─── Scenario 2: a4 emit-template expansion (builders synthesized) ───────────
 # A raw frontier walk over a4 yields only {plan} (compare depends on producer-
-# produced build-clarity/build-perf which are NOT in units[]). The builders
+# produced build-clarity/build-perf which are NOT in steps[]). The builders
 # appearing in wave 2 proves the expected_emit_outputs expansion ran.
 it "derive_execution_tree(a4, cap=16): {plan} then paired builders then {compare}"
 assert_eq "plan|build-clarity,build-perf|compare" "$(et a4-waves)"
@@ -108,12 +108,12 @@ assert_eq "plan|build-clarity,build-perf|compare" "$(et a4-waves)"
 it "derive_execution_tree(a2, cap=1): 3 ordered plan waves then {judge}"
 assert_eq "plan-1|plan-2|plan-3|judge" "$(et a2-cap1)"
 
-# ─── Scenario 4: fan-out do_unit children nest under the producer parent ─────
+# ─── Scenario 4: fan-out do_step children nest under the producer parent ─────
 it "a4: build-clarity/build-perf nest under their producer parent (plan)"
 assert_eq "plan:build-clarity,build-perf" "$(et a4-nesting)"
 
 # ─── Scenario 5: substrate selection heuristic (both branches) ──────────────
-it "substrate: a4 (do_unit + review dispatch) → subagent-tree"
+it "substrate: a4 (do_step + review dispatch) → subagent-tree"
 assert_eq "subagent-tree" "$(et substrate a4)"
 
 it "substrate: a2 (review fan-in dispatch) → subagent-tree"

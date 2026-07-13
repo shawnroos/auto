@@ -10,7 +10,7 @@ OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     <repo>/.claude/auto/*.json:
       * current phase != "done"                         (run not finished)
       * loop.driver == "self"                           (a live pulse chain, not
-                                                          a seam/manual pause)
+                                                          a handoff/manual pause)
       * loop.last_beat_at fresher than
         ledger.DRIVER_SELF_STALE_SECONDS (3900s)        (not a dead chain)
       * ledger.driving_session_id == stdin session_id   (THIS session drives it)
@@ -120,7 +120,7 @@ def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
     """Scan <repo>/.claude/auto/*.json for a live self-driven run owning ``session_id``.
 
     Per-worktree glob only — fan-out sub-runs have their OWN session_id and are
-    out of this hook's scope by design (KTD-5 two-seam split: they carry the
+    out of this hook's scope by design (KTD-5 two-handoff split: they carry the
     prompt-embedded instruction instead). No batch-sidecar walk.
     """
     if not session_id:

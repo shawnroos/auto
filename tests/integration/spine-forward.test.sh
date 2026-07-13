@@ -9,7 +9,7 @@
 # findings cluster on an upstream spine phase (weighting reviewer-role
 # DIVERSITY over raw count), auto must NOT ratchet fix passes against a gap the
 # current phase can't close — it escalates the cluster to the operator via the
-# EXISTING pause seam (driver=manual + blocked_on). The autonomous backward edge
+# EXISTING pause handoff (driver=manual + blocked_on). The autonomous backward edge
 # (rebound) is deferred to v0.7.0; this test asserts v0.6.0's narrow contract:
 #   * forward advance works (the spine recipe's producers fire on arrival), AND
 #   * on a detected cluster the run PAUSES (driver=manual, blocked_on names the
@@ -86,7 +86,7 @@ def ld():
 # Sanity: entered at brainstorm with the full spine phase_order.
 entry = ld()
 forward_ok = (entry.get("loop_phase") == "brainstorm"
-              and entry.get("phase_order") == ["brainstorm", "plan", "seam", "work"])
+              and entry.get("phase_order") == ["brainstorm", "plan", "handoff", "work"])
 
 # Step 2: forward advance brainstorm → plan through the REAL per-pulse path
 # (round-1 P1 fix: this leg used to hand-call advance_to_phase, which masked the
@@ -94,11 +94,11 @@ forward_ok = (entry.get("loop_phase") == "brainstorm"
 # while the test stayed green). Prime the brainstorm unit verdict-returned with
 # its requirements-doc output, then drive dispatch_pulse exactly as the plan→work
 # leg below does. dispatch_pulse's brainstorm branch fires the U8
-# brainstorm_output_to_plan_unit producer on advance to plan (producer-driven, not
+# brainstorm_output_to_plan_step producer on advance to plan (producer-driven, not
 # predicate-met). If the brainstorm trigger is missing this goes RED (the
 # deliberate-fail control for the wiring).
 led = ld()
-for u in led["units"]:
+for u in led["steps"]:
     if u["id"] == "brainstorm":
         u["state"] = "verdict-returned"
         u.setdefault("dispatch_context", {})["requirements_doc"] = "docs/brainstorms/x.md"
@@ -107,7 +107,7 @@ with open(path, "w") as fh:
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
-plan_units = [u["id"] for u in led["units"] if u["phase"] == "plan"]
+plan_units = [u["id"] for u in led["steps"] if u["phase"] == "plan"]
 forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_units) == 1
 
 # Step 3: forward advance plan → work. Prime plan-done (enumerated units +
@@ -116,13 +116,13 @@ forward_ok = forward_ok and led.get("loop_phase") == "plan" and len(plan_units) 
 plan_uid = plan_units[0]
 ledger.set_enumerated_units(
     repo, run_id, plan_uid,
-    [{"id": "w-alpha", "invokes": {"adapter_op": "do_unit"}}])
+    [{"id": "w-alpha", "invokes": {"backend_op": "do_step"}}])
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 with contextlib.redirect_stdout(io.StringIO()):
     pulse.dispatch_pulse(repo, run_id, auto=True)
 led = ld()
-work_units = [u["id"] for u in led["units"] if u["phase"] == "work"]
+work_units = [u["id"] for u in led["steps"] if u["phase"] == "work"]
 forward_ok = forward_ok and led.get("loop_phase") == "work" and "w-alpha" in work_units
 
 # Step 4: bring the work unit to verdict-returned with a GATING finding (so the
@@ -132,11 +132,11 @@ ledger.transition(repo, run_id, w_uid, "dispatched")
 ledger.record_verdict(repo, run_id, w_uid, [{"severity": "blocker", "note": "flaw"}])
 
 # Inject (or not) the role-tagged upstream cluster on dispatch_context —
-# the `decision`/`winner_unit_id` channel, since findings[] is normalized to
+# the `decision`/`winner_step_id` channel, since findings[] is normalized to
 # {severity, note}. 3 DISTINCT roles attributing to the upstream `plan` phase.
 if inject_cluster:
     led = ld()
-    for u in led["units"]:
+    for u in led["steps"]:
         if u["id"] == w_uid:
             u.setdefault("dispatch_context", {})["cluster_findings"] = [
                 {"role": "adversarial", "phase": "plan"},
@@ -242,10 +242,10 @@ IFS='|' read -r forward reason phase driver phase_unchanged blocked_named keys <
 it "spine recipe advances brainstorm → plan → work forward (producer-driven)"
 assert_eq "yes" "$forward"
 
-it "injected upstream cluster PAUSES the run (pulse stop reason = seam-pause)"
-assert_eq "seam-pause" "$reason"
+it "injected upstream cluster PAUSES the run (pulse stop reason = handoff-pause)"
+assert_eq "handoff-pause" "$reason"
 
-it "escalation flips driver=manual (the existing pause seam)"
+it "escalation flips driver=manual (the existing pause handoff)"
 assert_eq "manual" "$driver"
 
 it "NO backward loop_phase move (stays at work — rebound is v0.7.0, KTD-6)"
@@ -266,10 +266,10 @@ assert_eq "yes" "$f2"
 
 it "DELIBERATE-FAIL: WITHOUT a cluster the work-loop does NOT pause (drives a fix)"
 # No cluster → the work-loop applies the fix and re-arms (driver stays self,
-# the pulse re-arms rather than stopping on seam-pause). If this branch ALSO
-# showed seam-pause/manual, the pause in scenario 1 would be a priming artifact.
+# the pulse re-arms rather than stopping on handoff-pause). If this branch ALSO
+# showed handoff-pause/manual, the pause in scenario 1 would be a priming artifact.
 case "${reason2}:${driver2}" in
-  seam-pause:manual) fail "control paused without a cluster — scenario 1's pause is an artifact" ;;
+  handoff-pause:manual) fail "control paused without a cluster — scenario 1's pause is an artifact" ;;
   *) pass ;;
 esac
 

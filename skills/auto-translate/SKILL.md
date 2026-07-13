@@ -3,7 +3,7 @@ name: auto-translate
 description: >
   Translate a designed loop (from auto-design) or a recipe (from
   auto-author-recipe) into an execution tree — ordered parallel waves sized from
-  the recipe's depends_on DAG and the active fan-out cap, fan-out do_unit children
+  the recipe's depends_on DAG and the active fan-out cap, fan-out do_step children
   nested under their producer parent, and a substrate routing decision
   (native subagent-tree = executable, workflow-script = an inert label deferred to
   the parked RFC). Use when the user says "translate this loop", "what's the
@@ -16,7 +16,7 @@ description: >
 # auto-translate (loop/recipe → execution tree)
 
 An **execution tree** is the runnable shape of a recipe: which units run in
-parallel, in what wave order, which fan-out `do_unit` children nest under which
+parallel, in what wave order, which fan-out `do_step` children nest under which
 parent, and which substrate the loop targets. This skill derives that tree from a
 recipe and shows it — it does NOT invent a new artifact and it does NOT dispatch.
 It calls one pure helper (`lib/execution_tree.py::derive_execution_tree`) and
@@ -25,7 +25,7 @@ reports the result. (R9, R10, R11.)
 It sits DOWNSTREAM of loop design: hand it a recipe that `auto-design` /
 `auto-author-recipe` already wrote (or a built-in like `a2` / `a4`). It composes
 with the dependency engine (`lib/dispatcher.py::ready_units` / `dispatch_batch`)
-and the two-seam `do_unit` split rather than replacing them — the same readiness
+and the two-handoff `do_step` split rather than replacing them — the same readiness
 frontier drives both the preview here and the real run.
 
 ## What stays true throughout
@@ -83,10 +83,10 @@ substrate, emitted, preview}` — pure and deterministic. It:
 
 - **expands producer-produced units first** — recipes like `a4` declare their paired
   builders in `expected_emit_outputs` (materialized at runtime by a phase-boundary
-  producer, NOT in `units[]`), so the derivation synthesizes placeholder nodes for
+  producer, NOT in `steps[]`), so the derivation synthesizes placeholder nodes for
   them before the frontier walk. `a2`'s parallel units are static — no expansion.
 - **walks ordered waves** from the expanded `depends_on` DAG, bounding each to `cap`.
-- **nests fan-out `do_unit` children** under their producer parent.
+- **nests fan-out `do_step` children** under their producer parent.
 - **routes a substrate** (step 4).
 
 ### 3. Show the topology preview
@@ -105,14 +105,14 @@ Report the routing decision and what it means:
   (`lib/dispatcher.py::dispatch_batch`). A loop with per-unit ce-work/`review`
   dispatch or long-lived verdicts routes here.
 - **`workflow-script`** — an **inert routing label** for a self-contained bounded
-  parallel-fan-in loop (single-phase, no `do_unit`/`review` op, an engine-enforced
+  parallel-fan-in loop (single-phase, no `do_step`/`review` op, an engine-enforced
   `iteration.bound`). Say plainly that it is **not runnable this run** — it is a
   preview + annotation, deferred to the parked workflow-substrate RFC's re-entry.
   Do not imply a compiled script exists.
 
 The predicate is concrete (single-phase + no ce-work/review backend op + bounded →
 `workflow-script`; else `subagent-tree`) — see the module docstring for the exact
-rule. `a2` and `a4` both carry a `review` op (a4 also `do_unit`), so both route to
+rule. `a2` and `a4` both carry a `review` op (a4 also `do_step`), so both route to
 `subagent-tree`.
 
 ### 5. Report

@@ -49,7 +49,7 @@ fail() {
 # Order matters for readability only — the lint runs an unordered grep.
 REQUIRED=(
   # v0.2.0 ledger surface (covered by U8's doc lock)
-  "recipe"
+  "workflow"
   "phase_order"
   "terminal_phase"
   # v0.3.0 iteration surface (covered by U8 + F3's AC-1 closure)

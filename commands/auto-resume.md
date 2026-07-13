@@ -20,8 +20,8 @@ then invoke the script with exactly that form:
 
 | Canonical                  | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
-| `continue [<run>]`         | Re-acquire, arm a fresh pulse chain, flip paused seam to `work`.     |
-| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a pulse to enumerate work units. At a seam: same as `continue`. In the work phase: no-op. |
+| `continue [<run>]`         | Re-acquire, arm a fresh pulse chain, flip paused handoff to `work`.     |
+| `advance [<run>]`          | Declare the current phase satisfied and move on. In the plan phase: mark the plan done (skip re-planning) and arm a pulse to enumerate work units. At a handoff: same as `continue`. In the work phase: no-op. |
 | `pause <run> [why]`        | Blocked on a human/external action — flip to manual, record why, stay resumable. NOT a cancellation. |
 | `abort <run>`              | Flip the run to `done` with a cancellation marker. **Destructive.** |
 | `retry <run> <unit>`       | Reset stalled unit to pending, clear `last_error`.                  |

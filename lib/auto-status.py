@@ -95,7 +95,7 @@ def _should_render_iteration(led: dict) -> bool:
         return True
     if wall_f > 0:
         return True
-    units = led.get("units")
+    units = led.get("steps")
     if not isinstance(units, list):
         units = []
     for u in units:
@@ -114,7 +114,7 @@ def _render_iteration_section(led: dict) -> None:
     via ``_should_render_iteration``.
 
     Fields (per F1 task):
-      • gate_unit — ledger["iteration"]["gate_unit"]
+      • gate_unit — ledger["iteration"]["gate_step"]
       • attempts  — iteration_attempts / iteration["bound"]["max_attempts"]
       • wall_time — active_wall_seconds / iteration["bound"].get("max_wall_seconds", "—")
       • emit_count — iteration_emit_count (monotonic counter)
@@ -153,7 +153,7 @@ def _render_iteration_section(led: dict) -> None:
 
         sys.stdout.write("  iteration:\n")
 
-        gate_unit = iteration_block.get("gate_unit") or "—"
+        gate_unit = iteration_block.get("gate_step") or "—"
         sys.stdout.write(f"    gate_unit: {gate_unit}\n")
 
         attempts = led.get("iteration_attempts", 0)
@@ -241,20 +241,20 @@ def _print_skip_reason(unit: dict, state: str) -> None:
 def _print_run(ledger, run_id: str, led: dict) -> None:
     loop = led.get("loop") or {}
     epr = led.get("exit_predicate_result") or {}
-    units = led.get("units") or []
+    units = led.get("steps") or []
 
     sys.stdout.write(f"run: {run_id}\n")
     phase = phase_grammar.current_phase(led)
     line = f"  loop_phase: {phase}"
     if phase == "plan":
         line += f"  (plan_step={led.get('plan_step')})"
-    if led.get("seam_paused"):
-        line += "  [seam_paused]"
+    if led.get("handoff_paused"):
+        line += "  [handoff_paused]"
     sys.stdout.write(line + "\n")
 
     # v0.3.0 G2 / AN-W1: surface exit_reason on a done run so the operator can
     # tell a clean exit from a wedge that F2 force-marked done after an
-    # iteration-check crash or a recipe-bug raise. Quiet when the run is live
+    # iteration-check crash or a workflow-bug raise. Quiet when the run is live
     # or finished cleanly (exit_reason==None).
     er = led.get("exit_reason")
     if phase == "done" and isinstance(er, dict):
@@ -265,8 +265,8 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         )
 
     sys.stdout.write(
-        f"  backend: {led.get('adapter', '?')} "
-        f"(scale={led.get('adapter_scale', '?')})\n"
+        f"  backend: {led.get('backend', '?')} "
+        f"(scale={led.get('backend_scale', '?')})\n"
     )
     sys.stdout.write(
         f"  driver: {loop.get('driver', '?')}    "
@@ -276,13 +276,13 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     # Cached exit predicate — READ, never re-derive.
     sys.stdout.write(
         "  exit_predicate: met={met}  blockers={b}  majors={m}  "
-        "minors={n}  gaps_open={g}  all_units_terminal={t}\n".format(
+        "minors={n}  gaps_open={g}  all_steps_terminal={t}\n".format(
             met=epr.get("met"),
             b=epr.get("blockers"),
             m=epr.get("majors"),
             n=epr.get("minors"),
             g=epr.get("gaps_open"),
-            t=epr.get("all_units_terminal"),
+            t=epr.get("all_steps_terminal"),
         )
     )
 
@@ -299,10 +299,10 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     else:
         sys.stdout.write(f"  units ({len(units)}):\n")
         # Scale-aware terminality (Bug #3): the [terminal] marker must match the
-        # cached predicate's gating decision, so read this run's adapter_scale and
+        # cached predicate's gating decision, so read this run's backend_scale and
         # pass it through — a blocker-only run's major-only unit shows [terminal],
         # consistent with met. Scale-blind here would mislabel it [active].
-        scale = led.get("adapter_scale", "three-tier")
+        scale = led.get("backend_scale", "three-tier")
         for u in units:
             try:
                 terminal = ledger.unit_is_terminal(u, scale)

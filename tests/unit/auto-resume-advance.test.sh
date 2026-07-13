@@ -7,7 +7,7 @@
 # re-deriving finished work. Phase-aware:
 #   * plan  → mark satisfied (plan_step=review_plan, gaps_open=0) + arm a pulse;
 #             the next pulse enumerates straight to work, no re-planning.
-#   * seam  → identical to continue (seam→work).
+#   * handoff  → identical to continue (handoff→work).
 #   * work  → no-op (work advances by unit verdicts, not by fiat).
 
 set -uo pipefail
@@ -78,12 +78,12 @@ if scenario == "plan":
     is_arm = '"action": "arm-pulse"' in emitted or '"action":"arm-pulse"' in emitted
     # Then a pulse (model stashed the enumerated units) → should reach work.
     ledger.set_enumerated_units(repo, run_id, "plan", [
-        {"id": "u-x", "invokes": {"adapter_op": "do_unit"}},
+        {"id": "u-x", "invokes": {"backend_op": "do_step"}},
     ])
     with contextlib.redirect_stdout(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
     led2 = read()
-    work = sorted(u["id"] for u in led2["units"] if u.get("phase") == "work")
+    work = sorted(u["id"] for u in led2["steps"] if u.get("phase") == "work")
     print("%s|%s|%s|%s|%s" % (
         led.get("plan_step"), epr.get("gaps_open"), is_arm,
         led2["loop_phase"], ",".join(work),
@@ -98,9 +98,9 @@ elif scenario == "work":
     after = read()["loop_phase"]
     print("%s|%s|%s" % (before, after, rc))
 
-elif scenario == "seam":
-    # Put the run at a paused seam, then advance → behaves like continue (→work).
-    ledger.set_loop(repo, run_id, loop_phase="seam", seam_paused=True, driver="manual")
+elif scenario == "handoff":
+    # Put the run at a paused handoff, then advance → behaves like continue (→work).
+    ledger.set_loop(repo, run_id, loop_phase="handoff", handoff_paused=True, driver="manual")
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = resume._cmd_advance(ledger, repo, run_id)
@@ -180,9 +180,9 @@ EOF
 [ "$b_before" = "work" ] && [ "$b_after" = "work" ] && [ "$b_rc" = "0" ] \
   && pass || fail "expected work|work|0, got ${res_w}"
 
-# ─── seam advance: behaves like continue (→ work, arms pulse) ────────────────
-it "advance(seam): flips seam→work and arms a pulse (== continue)"
-res_s="$(run_scenario seam)"
+# ─── handoff advance: behaves like continue (→ work, arms pulse) ────────────────
+it "advance(handoff): flips handoff→work and arms a pulse (== continue)"
+res_s="$(run_scenario handoff)"
 IFS='|' read -r s_phase s_arm <<EOF
 $res_s
 EOF

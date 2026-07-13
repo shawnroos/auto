@@ -92,7 +92,7 @@ import sys, importlib.util
 repo, run, ledger_py = sys.argv[1:4]
 spec = importlib.util.spec_from_file_location("ledger", ledger_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(m.read_ledger(repo, run)["units"][0]["state"])
+print(m.read_ledger(repo, run)["steps"][0]["state"])
 PYEOF
 }
 

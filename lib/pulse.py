@@ -7,14 +7,14 @@ pulse reads ALL loop state from the disk ledger (the durable source of truth) �
 it runs in a subprocess and treats conversation context as irrelevant, so it is
 safe under the non-stateless re-injection of a `ScheduleWakeup`-fired pulse.
 
-THE RE-ARM BOUNDARY (read this — it is the load-bearing seam):
+THE RE-ARM BOUNDARY (read this — it is the load-bearing handoff):
 
     `ScheduleWakeup` is a MODEL TOOL, not a CLI. pulse.py CANNOT call it.
     Instead, pulse.py COMPUTES the re-arm intent and emits it on stdout as a
     JSON object:
 
         {"action": "rearm",  "delay": 60, "prompt": "/auto:auto-pulse <run>", ...}
-        {"action": "stop",   "reason": "predicate-met" | "seam-pause", ...}
+        {"action": "stop",   "reason": "predicate-met" | "handoff-pause", ...}
         {"action": "noop",   "reason": "lock-held-by-live-pulse"}
 
     The shell/driver layer (the model driving the pulse) reads this and, when
@@ -70,7 +70,7 @@ ledger = load_ledger()
 # can't sneak back in.
 phase_grammar = load_lib_module("phase-grammar")
 # B4: the advance + stall-detection logic (advance_plan_loop / advance_work_loop
-# / advance_iteration_loop / detect_and_halt_stalled / _maybe_seam / …) and the
+# / advance_iteration_loop / detect_and_halt_stalled / _maybe_handoff / …) and the
 # guidance + report builders (_operator_guidance_for / _build_report / …) live
 # in sibling modules. pulse.py is the dispatcher that orchestrates them; the
 # dependency is one-way (pulse.py → pulse_advance → pulse_guidance; no back-edge).
@@ -103,7 +103,7 @@ def watchdog_wakeup_delay(ledger_dict):
     """
     delays = [
         int(u.get("stall_threshold_seconds") or ledger.DEFAULT_STALL_THRESHOLD_SECONDS)
-        for u in ledger_dict.get("units", [])
+        for u in ledger_dict.get("steps", [])
         if u.get("state") == "dispatched"
     ]
     if not delays:
@@ -125,12 +125,12 @@ PulseError = pulse_advance.PulseError
 # PRODUCTION re-exports (U18: the test-only alias block was deleted). The pure
 # advance/stall helpers (advance_plan_loop, advance_work_loop,
 # advance_brainstorm_loop, advance_iteration_loop, detect_and_halt_stalled,
-# _maybe_seam) live in pulse_advance; internal callers in this file already reach
+# _maybe_handoff) live in pulse_advance; internal callers in this file already reach
 # them through the qualified module name (pulse_advance.X) so the dependency stays
 # grep-visible, and the tests now reach them the same way (t.pulse_advance.X).
 # Only two genuine cross-module re-exports survive here:
 #   * advance_to_phase — lib/auto-resume.py calls pulse.advance_to_phase on the
-#     manual seam→work resume path (a production dependency).
+#     manual handoff→work resume path (a production dependency).
 #   * _iteration_guidance_prefix — the guidance-surface re-export.
 advance_to_phase = pulse_advance.advance_to_phase
 _iteration_guidance_prefix = pulse_guidance._iteration_guidance_prefix
@@ -144,7 +144,7 @@ _iteration_guidance_prefix = pulse_guidance._iteration_guidance_prefix
 # driving this run" guard: held for the WHOLE pulse, acquired NON-BLOCKING, so a
 # second concurrent pulse returns a no-op instead of queueing behind the first.
 # It is process-bound — released on exit (clean OR crash), so a cleanly-exited
-# seam/predicate-met pulse leaves NO stale wedge.
+# handoff/predicate-met pulse leaves NO stale wedge.
 
 
 def _pulse_lock_path(repo_root: str, run_id: str) -> str:
@@ -316,7 +316,7 @@ def dispatch_pulse(
     The returned dict's `action` is one of:
       * "noop"  — another live pulse holds the lock (double-drive guard); no
                   ledger mutation happened this pulse.
-      * "stop"  — the chain ends (predicate met, or a seam pause). The driver
+      * "stop"  — the chain ends (predicate met, or a handoff pause). The driver
                   does NOT issue a ScheduleWakeup.
       * "rearm" — the driver SHOULD issue ScheduleWakeup(delay, prompt) for the
                   next pulse.
@@ -373,10 +373,10 @@ def _pulse_body_inner(
     load-bearing and unchanged from the pre-B6 inline body:
 
       0. iteration check  (KTD §A: BEFORE the predicate-met short-circuit)
-      1. predicate-met short-circuit  (work/seam → done)
+      1. predicate-met short-circuit  (work/handoff → done)
       2. detect + halt stalls         (always; computes halted/newly-stalled)
-      3. the ONE advance              (plan/work/seam dispatch, try/except)
-         + seam-pause short-circuit
+      3. the ONE advance              (plan/work/handoff dispatch, try/except)
+         + handoff-pause short-circuit
       4. predicate-met-after-advance  (work → done)
       5. build the rearm intent
 
@@ -409,7 +409,7 @@ def _pulse_body_inner(
     if advance_intent is not None:
         return advance_intent
 
-    if (intent := _try_seam_pause(advance_result, run_id)) is not None:
+    if (intent := _try_handoff_pause(advance_result, run_id)) is not None:
         return intent
 
     # Persist the beat (liveness) BEFORE signalling re-arm (R10). The advance
@@ -431,7 +431,7 @@ def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
                      message, now_iso):
     """Mark a crashed iteration check done+manual and build its stop intent.
 
-    The shared body of ``_try_iteration_check``'s two crash branches (recipe-bug
+    The shared body of ``_try_iteration_check``'s two crash branches (workflow-bug
     and iteration-check-failed): persist ``exit_reason`` FIRST (so /auto-status
     can tell a wedge-marked-done from a clean exit), then flip
     ``loop_phase=done`` + ``driver=manual`` (so liveness checks don't treat the
@@ -478,7 +478,7 @@ def _try_iteration_check(
 
     v0.3.0 U4 / KTD §A: iteration check fires BEFORE the predicate-met
     short-circuit below. Without this, A2's judge writing verdict-returned
-    makes the work-loop's all_units_terminal=True (with iteration_pending
+    makes the work-loop's all_steps_terminal=True (with iteration_pending
     not yet composed), and the short-circuit would exit as "done" before
     any iteration logic runs. The check is side-effect-free on a1/W
     ledgers (early-return at step 1). When iteration drives the run, this
@@ -504,11 +504,11 @@ def _try_iteration_check(
     try:
         iteration_result = pulse_advance.advance_iteration_loop(repo_root, run_id, led)
     except (ledger.UnknownUnit, ledger.InvalidTransition, ledger.StaleVerdict) as exc:
-        # v0.3.0 G2 / rel-r2-2: recipe-bug LedgerError subclasses signal a
+        # v0.3.0 G2 / rel-r2-2: workflow-bug LedgerError subclasses signal a
         # mis-built caller (unknown gate unit id, illegal transition, stale
         # verdict), NOT a torn ledger. Convert to a stop intent — same shape
         # as the generic-Exception branch below — so the operator gets a rearm
-        # signal with reason="recipe-bug" rather than _cli swallowing the
+        # signal with reason="workflow-bug" rather than _cli swallowing the
         # raise with no JSON. ORDER MATTERS: this branch MUST precede the
         # bare LedgerError catch below (these classes are subclasses of
         # LedgerError; Python matches the first parent in source order).
@@ -516,7 +516,7 @@ def _try_iteration_check(
             repo_root, run_id, exc,
             exit_reason=ledger.ExitReason.RECIPE_BUG,
             reason_value=ledger.ExitReason.RECIPE_BUG.value,
-            message=f"recipe-bug: {type(exc).__name__}: {exc}",
+            message=f"workflow-bug: {type(exc).__name__}: {exc}",
             now_iso=now_iso,
         ), led
     except ledger.LedgerError:
@@ -558,7 +558,7 @@ def _try_iteration_check(
                 prompt=rearm_prompt,
                 advance={
                     "advanced": "iterate-step",
-                    "gate": (led_now.get("iteration") or {}).get("gate_unit"),
+                    "gate": (led_now.get("iteration") or {}).get("gate_step"),
                 },
                 stalled=[],
                 halted=[],
@@ -578,13 +578,13 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
     """Step 1 — predicate-met short-circuit. Returns intent or None.
 
     Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
-    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
+    preempt the handoff). I-3: keep liveness honest by NOT stamping a beat for
     the terminal `done` exit but flipping driver to manual so an orphan
     check never mistakes a finished run for a live self-paced one.
-      * WORK-met (or seam) → done (terminal exit, emit report).
-      * PLAN-met → fall through to the plan branch so `_maybe_seam` routes
-        it to seam (manual) or work (auto); `done` is NEVER a plan exit.
-    A seam-phase pulse has its own branch below (re-affirm pause).
+      * WORK-met (or handoff) → done (terminal exit, emit report).
+      * PLAN-met → fall through to the plan branch so `_maybe_handoff` routes
+        it to handoff (manual) or work (auto); `done` is NEVER a plan exit.
+    A handoff-phase pulse has its own branch below (re-affirm pause).
 
     v0.3.0 / KTD §A: the short-circuit is BOTH composed at the predicate
     layer (`recompute_predicate` AND-NOTs iteration_pending into `met` at
@@ -608,7 +608,7 @@ def _try_predicate_met_shortcircuit(repo_root, run_id, led, *, phase):
         # Terminal-phase predicate met: mark the run done + manual; finished, not
         # orphaned. Route the phase decision through phase_grammar (KTD-3) so a
         # non-work-terminal recipe stops at ITS terminal phase — the old denylist
-        # (`phase != "plan" and phase != "seam"`) over-fired at any non-plan/seam
+        # (`phase != "plan" and phase != "handoff"`) over-fired at any non-plan/handoff
         # phase, which only matched the terminal for work-terminal recipes.
         ledger.set_loop(
             repo_root, run_id, loop_phase="done", driver="manual", beat=True
@@ -623,13 +623,13 @@ def _dispatch_phase_advance(
 ):
     """Step 3 — the ONE advance, inside try/except.
 
-    Returns (advance_result, terminal_intent_or_None). A seam-phase pulse
+    Returns (advance_result, terminal_intent_or_None). A handoff-phase pulse
     short-circuits with a terminal intent; every other phase returns an
     advance_result for the dispatcher to carry forward. No refreshed `led` is
     returned: the caller's downstream steps (beat re-stamp, post-advance
     predicate, rearm intent) all re-read the ledger by (repo_root, run_id)
     themselves, so a passed-out snapshot was never consumed. The plan branch
-    still re-reads `led` for its OWN `_maybe_seam` call below.
+    still re-reads `led` for its OWN `_maybe_handoff` call below.
 
     On a raise: atomically record last_error + mark stalled; the ledger is
     never half-written (each ledger.py mutation is its own atomic RMW).
@@ -638,14 +638,14 @@ def _dispatch_phase_advance(
     try:
         if phase == "plan":
             if backend is None:
-                backend = resolve_backend(led.get("adapter"))  # "adapter": format-v1 key; flips in U6
+                backend = resolve_backend(led.get("backend"))
             advance_result = pulse_advance.advance_plan_loop(
                 repo_root, run_id, led, backend
             )
             # Plan predicate just (re)computed on the prior write; re-read to see
             # whether the plan step closed the gaps.
             led = ledger.read_ledger(repo_root, run_id)
-            advance_result = pulse_advance._maybe_seam(
+            advance_result = pulse_advance._maybe_handoff(
                 repo_root, run_id, led, auto=auto, advance_result=advance_result
             )
         elif phase == "brainstorm":
@@ -665,18 +665,18 @@ def _dispatch_phase_advance(
             advance_result = pulse_advance.advance_work_loop(
                 repo_root, run_id, led, halted_ids
             )
-        elif phase == "seam":
-            # A seam pulse should not normally fire (the seam does not re-arm),
+        elif phase == "handoff":
+            # A handoff pulse should not normally fire (the handoff does not re-arm),
             # but if one does, re-affirm the pause and stop.
             ledger.set_loop(
                 repo_root,
                 run_id,
-                loop_phase="seam",
-                seam_paused=True,
+                loop_phase="handoff",
+                handoff_paused=True,
                 driver="manual",
                 beat=True,
             )
-            return advance_result, _stop_intent(run_id, "seam-pause")
+            return advance_result, _stop_intent(run_id, "handoff-pause")
         else:
             advance_result = {"advanced": "none", "reason": f"phase={phase}"}
     except Exception as exc:  # noqa: BLE001 — convert ANY raise into a recorded stall.
@@ -684,7 +684,7 @@ def _dispatch_phase_advance(
         message = f"{type(exc).__name__}: {exc}"
         # Find the unit that was in flight (best-effort: the most recently
         # dispatched unit). For a plan-step raise with no unit dispatched, we
-        # still record the error on the run via the seam/manual path.
+        # still record the error on the run via the handoff/manual path.
         in_flight = pulse_guidance._most_recently_dispatched(led)
         recorded = False
         if in_flight is not None:
@@ -702,14 +702,14 @@ def _dispatch_phase_advance(
     return advance_result, None
 
 
-def _try_seam_pause(advance_result, run_id):
-    """Step 3b — seam-pause short-circuit. Returns intent or None.
+def _try_handoff_pause(advance_result, run_id):
+    """Step 3b — handoff-pause short-circuit. Returns intent or None.
 
-    If a seam pause was decided, _maybe_seam already wrote the ledger and
+    If a handoff pause was decided, _maybe_handoff already wrote the ledger and
     signalled it; surface as a stop (no re-arm).
     """
-    if isinstance(advance_result, dict) and advance_result.get("seam_pause"):
-        return _stop_intent(run_id, "seam-pause", advance=advance_result)
+    if isinstance(advance_result, dict) and advance_result.get("handoff_pause"):
+        return _stop_intent(run_id, "handoff-pause", advance=advance_result)
     return None
 
 
@@ -722,9 +722,9 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
     predicate routes to `done`, decided by phase_grammar.is_terminal_phase
     (KTD-3) so a non-work-terminal recipe stops at ITS terminal phase (the old
     `phase == "work"` allowlist never stopped a non-work terminal). A plan pulse
-    already routed through `_maybe_seam` (seam/auto-flip); never let the
+    already routed through `_maybe_handoff` (handoff/auto-flip); never let the
     post-advance met-check turn a met PLAN predicate into `done` (that would
-    skip the seam). After an auto-flip the ledger phase is now "work", but this
+    skip the handoff). After an auto-flip the ledger phase is now "work", but this
     pulse STARTED in plan, so we gate on the start-of-pulse `phase` to leave the
     just-flipped work loop to its own first work pulse.
     """
@@ -792,7 +792,7 @@ def _cli(argv):
         default=os.environ.get("CLAUDE_AUTO_REPO", os.getcwd()),
         help="repo root (defaults to $CLAUDE_AUTO_REPO or cwd)",
     )
-    parser.add_argument("--auto", action="store_true", help="auto-skip the seam")
+    parser.add_argument("--auto", action="store_true", help="auto-skip the handoff")
     parser.add_argument(
         "--delay",
         type=int,

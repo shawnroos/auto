@@ -79,9 +79,9 @@ DECISIONS = ("advance", "iterate", "exit")
 DISPATCH_CONTEXT_KEYS = frozenset({
     "decision",
     "decision_payload",
-    "winner_unit_id",
+    "winner_step_id",
     "judge_verdicts",
-    "enumerated_units",
+    "enumerated_steps",
     "bound_override",
     "requirements_doc",
     "plan_path",
@@ -126,12 +126,12 @@ def read_decision(unit: dict):
 # `DISPATCH_CONTEXT_KEYS` and are reachable via `read_dc` without a named alias.
 def read_enumerated_units(unit: dict):
     """The plan unit's enumerated work-unit list (producer-persist), or None."""
-    return read_dc(unit, "enumerated_units")
+    return read_dc(unit, "enumerated_steps")
 
 
 def read_winner_unit_id(unit: dict):
     """The judge gate's chosen winner unit id, or None."""
-    return read_dc(unit, "winner_unit_id")
+    return read_dc(unit, "winner_step_id")
 
 
 def read_judge_verdicts(unit: dict):
@@ -166,13 +166,13 @@ def _find_gate_unit(ledger: dict, gate_unit_id: str) -> dict:
     recipe bug (validator should have caught it) and must surface loudly, not
     return None which would let the iteration check silently no-op.
     """
-    for u in ledger.get("units", []):
+    for u in ledger.get("steps", []):
         if u.get("id") == gate_unit_id:
             return u
     raise KeyError(
         f"iteration.evaluate_decision: gate_unit_id {gate_unit_id!r} not in "
-        f"ledger.units; known ids: "
-        f"{sorted(u.get('id') for u in ledger.get('units', []))!r}"
+        f"ledger.steps; known ids: "
+        f"{sorted(u.get('id') for u in ledger.get('steps', []))!r}"
     )
 
 
@@ -357,7 +357,7 @@ def compute_pending_state(ledger: dict) -> bool:
 
     True iff:
         - The run declares an ``iteration`` block.
-        - The block names a ``gate_unit`` that exists in ``units[]``.
+        - The block names a ``gate_step`` that exists in ``steps[]``.
         - The gate unit's ``dispatch_context.decision == "iterate"``.
         - Neither bound is breached (``iteration_attempts < max_attempts``
           AND ``active_wall_seconds < max_wall_seconds``).
@@ -406,11 +406,11 @@ def compute_pending_state(ledger: dict) -> bool:
     iteration_block = iter_block_raw
     if not iteration_block:
         return False
-    gate_unit_id = iteration_block.get("gate_unit")
+    gate_unit_id = iteration_block.get("gate_step")
     if not gate_unit_id:
         return False
     gate_unit = None
-    for u in ledger.get("units", []):
+    for u in ledger.get("steps", []):
         if u.get("id") == gate_unit_id:
             gate_unit = u
             break

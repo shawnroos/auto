@@ -42,7 +42,7 @@ def load(n,p):
     s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
 ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
 ledger.init_ledger(repo, "rF", backend="ce",
-                   units=[{"id":"plan","phase":"plan","invokes":{"adapter_op":"next_plan_step"}}],
+                   units=[{"id":"plan","phase":"plan","invokes":{"backend_op":"next_plan_step"}}],
                    loop_phase="plan")
 PYEOF
 
@@ -61,8 +61,8 @@ PYEOF
 
 # ─── set-enumerated-units persists via the CLI (repo auto-resolved) ──────────
 it "ledger.sh set-enumerated-units persists onto the plan unit (run-id only)"
-bash "$LEDGER_SH" set-enumerated-units rF plan '[{"id":"w1","invokes":{"adapter_op":"do_unit"}}]' >/dev/null 2>&1
-got="$(read_field '[u for u in led["units"] if u["phase"]=="plan"][0]["dispatch_context"].get("enumerated_units")')"
+bash "$LEDGER_SH" set-enumerated-units rF plan '[{"id":"w1","invokes":{"backend_op":"do_step"}}]' >/dev/null 2>&1
+got="$(read_field '[u for u in led["steps"] if u["phase"]=="plan"][0]["dispatch_context"].get("enumerated_steps")')"
 case "$got" in
   *"w1"*) pass ;;
   *) fail "enumerated_units not persisted via CLI: ${got}" ;;
@@ -104,8 +104,8 @@ bash "$LEDGER_SH" transition "$REPO" rF plan dispatched >/dev/null 2>&1
 # ─── record-verdict round-trips findings into the ledger (run-id only) ───────
 it "ledger.sh record-verdict persists findings + flips the unit to verdict-returned"
 bash "$LEDGER_SH" record-verdict rF plan '[{"severity":"blocker","note":"boom"}]' >/dev/null 2>&1
-got_state="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["state"]')"
-got_note="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["findings"][0]["note"]')"
+got_state="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["state"]')"
+got_note="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["findings"][0]["note"]')"
 if [ "$got_state" = "verdict-returned" ] && [ "$got_note" = "boom" ]; then
   pass
 else
@@ -115,13 +115,13 @@ fi
 # ─── set-verdict-decision persists the gate decision (run-id only) ───────────
 it "ledger.sh set-verdict-decision persists dispatch_context.decision (run-id only)"
 bash "$LEDGER_SH" set-verdict-decision rF plan advance >/dev/null 2>&1
-got_dec="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["dispatch_context"].get("decision")')"
+got_dec="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["dispatch_context"].get("decision")')"
 [ "$got_dec" = "advance" ] && pass || fail "decision not persisted via CLI: ${got_dec}"
 
 # ─── set-verdict-decision carries an optional JSON payload ───────────────────
 it "ledger.sh set-verdict-decision persists an optional decision_payload"
 bash "$LEDGER_SH" set-verdict-decision rF plan iterate '{"emit_count":2}' >/dev/null 2>&1
-got_pl="$(read_field '[u for u in led["units"] if u["id"]=="plan"][0]["dispatch_context"]["decision_payload"]["emit_count"]')"
+got_pl="$(read_field '[u for u in led["steps"] if u["id"]=="plan"][0]["dispatch_context"]["decision_payload"]["emit_count"]')"
 [ "$got_pl" = "2" ] && pass || fail "decision_payload not persisted: ${got_pl}"
 
 # ─── deliberate-fail: non-array findings rejected (rc != 0) ──────────────────

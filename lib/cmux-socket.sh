@@ -37,11 +37,11 @@
 #      back-to-back invocations inside that window would otherwise double-spawn.
 #      The sentinel closes that window.
 #
-# SEAM EXCLUSION: a seam-paused run (loop_phase=="seam" AND seam_paused==true) is
+# HANDOFF EXCLUSION: a handoff-paused run (loop_phase=="handoff" AND handoff_paused==true) is
 # the INTENTIONAL "awaiting human confirmation" orphan — is_orphaned() returns
 # true for it (its driver is "manual"), but auto-resuming it would arm WORK
-# before the operator confirmed. We skip seam-paused runs explicitly (parity with
-# on-session-start.py's seam-before-orphan ordering).
+# before the operator confirmed. We skip handoff-paused runs explicitly (parity with
+# on-session-start.py's handoff-before-orphan ordering).
 #
 # INTEGRATION GAP (RAISED, not silently worked around): U8's scope forbids
 # editing on-session-start.py, which is where U7's orphan scan lives. So this
@@ -115,8 +115,8 @@ PYEOF
 }
 
 # auto::resumable_orphans <repo>
-#   Print run-ids that are AUTO-RESUMABLE: is_orphaned()==true AND NOT seam-
-#   paused. A seam-paused run is is_orphaned()==true but is the intentional
+#   Print run-ids that are AUTO-RESUMABLE: is_orphaned()==true AND NOT handoff-
+#   paused. A handoff-paused run is is_orphaned()==true but is the intentional
 #   "awaiting confirmation" orphan — excluded so we never arm work uninvited.
 #   A malformed ledger is skipped (never aborts the scan of its siblings).
 auto::resumable_orphans() {
@@ -131,9 +131,9 @@ L = load_ledger()
 # iter_worktree_ledgers owns the glob + safe-load + non-dict skip + run_id
 # derivation (the scan scaffold that was copy-pasted across the hooks).
 for run_id, led in iter_worktree_ledgers(repo):
-    # Seam-paused is the INTENTIONAL orphan (awaiting human confirmation) — never
-    # auto-resume it (parity with on-session-start.py seam-before-orphan order).
-    if led.get("loop_phase") == "seam" and led.get("seam_paused"):
+    # Handoff-paused is the INTENTIONAL orphan (awaiting human confirmation) — never
+    # auto-resume it (parity with on-session-start.py handoff-before-orphan order).
+    if led.get("loop_phase") == "handoff" and led.get("handoff_paused"):
         continue
     try:
         if not L.is_orphaned(led):

@@ -40,7 +40,7 @@ dispatch table. The contract in brief:
 |----------|-------|-------------|
 | `rearm`  | `plan` | `ScheduleWakeup(intent.delay, intent.prompt)` — short delay; then run the prepared plan-loop invocation and feed results back |
 | `rearm`  | `work` | YIELD; the harness re-invokes you when a verdict lands. LONG `ScheduleWakeup` (1200s+) ONLY when no work is in flight AND no ready units |
-| `stop`   | any   | the chain ends — do NOT re-arm. `predicate-met*` → report; `seam-pause` → surface the seam |
+| `stop`   | any   | the chain ends — do NOT re-arm. `predicate-met*` → report; `handoff-pause` → surface the handoff |
 | `noop`   | any   | another live pulse holds the lock — do nothing |
 
 Never re-arm on `stop` / `noop`. Never short-poll the work-loop. The

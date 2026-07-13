@@ -11,9 +11,9 @@
 # claims a transition the code doesn't enforce).
 #
 # CONTRACT (KTD §A+§B+§D — v0.3.0 U6):
-#   The a2 recipe declares iteration.gate_unit="judge", iteration.emit_template
+#   The a2 recipe declares iteration.gate_step="judge", iteration.emit_template
 #   ="plan-candidate", iteration.bound={max_attempts:5, max_wall_seconds:900}.
-#   plus emit_templates.plan-candidate={phase:"plan", invokes:{adapter_op:
+#   plus emit_templates.plan-candidate={phase:"plan", invokes:{backend_op:
 #   "next_plan_step"}, id_prefix:"plan-"}. auto.run + init_ledger thread these
 #   onto the ledger at init (U6 plumbing). Subsequent pulses drive:
 #     - judge decision=advance → standard flow (matches v0.2.x A2 GREEN).
@@ -97,18 +97,18 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 led0 = ledger.read_ledger(repo, run_id)
 assert led0.get("iteration"), f"iteration block missing on ledger after init: {sorted(led0.keys())!r}"
 assert led0.get("emit_templates"), "emit_templates missing on ledger after init"
-assert led0["iteration"]["gate_unit"] == "judge", led0["iteration"]
+assert led0["iteration"]["gate_step"] == "judge", led0["iteration"]
 assert led0["iteration_emit_count"] == 3, f"iteration_emit_count={led0['iteration_emit_count']!r}"  # F0: init_ledger seeds from max numeric suffix matching id_prefix; a2 has plan-1/2/3 + id_prefix='plan-' → seed=3 (production-faithful — the test no longer rigs this)
 
 # Step 2: prime plan units' enumerated_units (needed for GREEN's downstream
 # producer), set gaps_open=0 + plan_step=review_plan so predicate composition
 # is at "plan-met" (modulo iteration_pending).
 ledger.set_enumerated_units(repo, run_id, "plan-1",
-    [{"id": "wA-1", "invokes": {"adapter_op": "do_unit"}}])
+    [{"id": "wA-1", "invokes": {"backend_op": "do_step"}}])
 ledger.set_enumerated_units(repo, run_id, "plan-2",
-    [{"id": "wB-1", "invokes": {"adapter_op": "do_unit"}}])
+    [{"id": "wB-1", "invokes": {"backend_op": "do_step"}}])
 ledger.set_enumerated_units(repo, run_id, "plan-3",
-    [{"id": "wC-1", "invokes": {"adapter_op": "do_unit"}}])
+    [{"id": "wC-1", "invokes": {"backend_op": "do_step"}}])
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
@@ -137,7 +137,7 @@ ledger.record_verdict(repo, run_id, "judge",
 if scenario == "green":
     # GREEN: gate says advance. iteration logic does NOT fire (advance_iteration_loop
     # returns {"action":"advance"} and the caller falls through). The standard
-    # flow needs a winner_unit_id for the judge_winner_to_work_units producer.
+    # flow needs a winner_unit_id for the judge_winner_to_work_steps producer.
     ledger.set_verdict_decision(repo, run_id, "judge", "advance")
     ledger.set_winner_unit_id(repo, run_id, "judge", "plan-1")
 elif scenario == "iterate":
@@ -159,8 +159,8 @@ with contextlib.redirect_stdout(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = ledger.read_ledger(repo, run_id)
-judge = next(u for u in led["units"] if u["id"] == "judge")
-new_plans = sorted(u["id"] for u in led["units"]
+judge = next(u for u in led["steps"] if u["id"] == "judge")
+new_plans = sorted(u["id"] for u in led["steps"]
                    if u.get("phase") == "plan" and u["id"] not in ("plan-1", "plan-2", "plan-3"))
 bound_override_present = "bound_override" in (judge.get("dispatch_context") or {})
 print("%s|%d|%s|%s|%s" % (
@@ -182,7 +182,7 @@ res="$(drive_a2 green)"
 #   - loop_phase: standard advance path (the predicate-met short-circuit lifts
 #     to "done" since iteration_pending=False). For A2 with no new winner units
 #     emitted prior to this pulse, the work predicate met=True only if all
-#     pending work units terminal; here judge_winner_to_work_units emits plan-1's
+#     pending work units terminal; here judge_winner_to_work_steps emits plan-1's
 #     enumerated set (wA-1 — pending) so met=False and loop stays in work.
 #   - iteration_attempts: 0 (no iterate decision honored).
 #   - new_plans: "" (no iteration emission).
@@ -227,7 +227,7 @@ esac
 # iterate_template's first emit produced `plan-1` — which collides with the
 # recipe-declared `plan-1` unit, raising LedgerError in _apply_emit. The
 # previous version of THIS test rigged the counter to 3 post-init, masking
-# the bug. F0 closes it: init_ledger now scans units[] for the max numeric
+# the bug. F0 closes it: init_ledger now scans steps[] for the max numeric
 # suffix matching any emit_templates[*].id_prefix and seeds to that.
 #
 # This DF probes BOTH directions of the contract:
@@ -259,7 +259,7 @@ with tempfile.TemporaryDirectory() as repo:
                {"id":"plan-2","phase":"plan"},
                {"id":"plan-3","phase":"plan"},
                {"id":"judge","phase":"work","depends_on":["plan-1","plan-2","plan-3"]}],
-        iteration={"gate_unit":"judge","emit_template":"pc",
+        iteration={"gate_step":"judge","emit_template":"pc",
                    "bound":{"max_attempts":5}},
         emit_templates={"pc":{"phase":"plan","invokes":{},"id_prefix":"plan-"}})
     assert led_a["iteration_emit_count"] == 3, f"(a) expected 3, got {led_a['iteration_emit_count']}"
@@ -272,7 +272,7 @@ with tempfile.TemporaryDirectory() as repo:
 
     # (c) a4-shape: word-suffixed units (build-clarity/build-perf) + id_prefix
     # 'build-' → expect seed=0 (isdigit() filters non-numeric suffixes).
-    # NOTE: a4's actual production recipe has NO 'build-*' units in units[] —
+    # NOTE: a4's actual production recipe has NO 'build-*' units in steps[] —
     # those are emitted by plan_output_to_paired_builders. This synthetic
     # scenario probes the F0 isdigit guard directly.
     led_c = ledger.init_ledger(
@@ -281,7 +281,7 @@ with tempfile.TemporaryDirectory() as repo:
                {"id":"build-clarity","phase":"work","depends_on":["plan"]},
                {"id":"build-perf","phase":"work","depends_on":["plan"]},
                {"id":"compare","phase":"work","depends_on":["build-clarity","build-perf"]}],
-        iteration={"gate_unit":"compare","emit_template":"bb",
+        iteration={"gate_step":"compare","emit_template":"bb",
                    "bound":{"max_attempts":4}},
         emit_templates={"bb":{"phase":"work","invokes":{},"id_prefix":"build-"}})
     assert led_c["iteration_emit_count"] == 0, f"(c) expected 0, got {led_c['iteration_emit_count']}"
@@ -324,7 +324,7 @@ with tempfile.TemporaryDirectory() as repo:
         repo, "df-g1-unicode", backend="ce",
         units=[{"id":"plan-²","phase":"plan"},
                {"id":"judge","phase":"work","depends_on":["plan-²"]}],
-        iteration={"gate_unit":"judge","emit_template":"pc",
+        iteration={"gate_step":"judge","emit_template":"pc",
                    "bound":{"max_attempts":3}},
         emit_templates={"pc":{"phase":"plan","invokes":{},"id_prefix":"plan-"}})
     # isdecimal('²') == False → suffix NOT counted → seed stays at 0

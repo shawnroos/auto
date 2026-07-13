@@ -40,7 +40,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/lib/launch-mode.sh"
 
 It prints exactly `headless` or `interactive`, folding the
 `driving_session_id` ownership check (the same signal the advisor gate in
-`commands/auto.md` / `skills/auto/SKILL.md` §4.6 matches on) into one seam: it is
+`commands/auto.md` / `skills/auto/SKILL.md` §4.6 matches on) into one handoff: it is
 `headless` when no `CLAUDE_CODE_SESSION_ID` is present, or when this session
 already owns a live self-driven run; `interactive` otherwise (a human-typed
 `/auto` with no live self-driven run of its own). The chooser is for the
@@ -115,12 +115,12 @@ decide. Keep one claim per criterion; the array is capped at ≤ 16.
   with dynamic ids, so they carry **no `verification` block**. What the
   chooser/notice surfaces for them is a *description of the inherent
   review-to-P3 exit predicate* (`blockers == 0 AND majors == 0 AND
-  all_units_terminal` — "only P3 findings remain"), for visibility only — not a
+  all_steps_terminal` — "only P3 findings remain"), for visibility only — not a
   new typed gate. R2's "at each gate point" is vacuously satisfied (a1/w have no
   iteration gate point).
 - **`a2` / `a4` / custom have a declared gate unit** (`judge` / `compare` /
   the custom's own), so typed `verification` attaches via the existing
-  `iteration.gate_unit` mechanism.
+  `iteration.gate_step` mechanism.
 
 ## 4. Compute `router_agrees`, then call the ladder (KTD-1 / KTD-5)
 
@@ -221,12 +221,12 @@ The full chooser:
   Dispatch the built-in directly via the standard grammar, e.g.
   `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto.sh" "<spec> --recipe <name>"`. The exit predicate is surfaced in
   the notice only; **no workspace recipe is written**. a1/w have no declared
-  `iteration.gate_unit`, so there is nothing for a typed `verification` array to
+  `iteration.gate_step`, so there is nothing for a typed `verification` array to
   ride on — compiling a variant would be a no-op file that only risks shadowing.
 - **a2 / a4 / custom with non-default (operator-edited) gates** → the **inline
   gate-compilation step (§6.1)**. The operator's confirmed `verification` array
   must reach the engine, and the only mechanism that carries it is a recipe whose
-  `iteration.gate_unit` names the declared gate (`judge` / `compare` / the
+  `iteration.gate_step` names the declared gate (`judge` / `compare` / the
   custom's own). So compile a validated run-scoped recipe, dispatch it, then tear
   it down once the ledger is initialized.
 
@@ -243,7 +243,7 @@ backends. The mechanics:
 
 1. **Build the draft.** Start from the chosen shape's built-in topology (or the
    composed custom from `auto-design`). Attach the confirmed `verification` array
-   to the unit named by the recipe's existing `iteration.gate_unit`
+   to the unit named by the recipe's existing `iteration.gate_step`
    (`a2`→`judge`, `a4`→`compare`, custom→its declared gate). Do not add a new
    gate point or producer — the typed array rides on the *existing* mechanism
    (`recipe-format.md` §11 + §6).

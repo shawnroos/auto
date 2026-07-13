@@ -2,14 +2,14 @@
 # auto U6b unit test: the native + CE backends' pure surface.
 #
 # WHAT IS TESTED (and what is NOT):
-#   The backends' live-Claude ops (plan / do_unit / native review / /ce-*
+#   The backends' live-Claude ops (plan / do_step / native review / /ce-*
 #   invocations) PREPARE an envelope the model runs and PARSE its structured
 #   result. A unit test cannot invoke a slash command or a model, so we test the
 #   PURE parts that carry the contract's correctness load:
 #     - CE severity mapping (P0->blocker, P1/P2->major, P3->minor) — deterministic
 #     - native finding validation (on-scale passthrough; off-scale rejected)
 #     - next_plan_step state machines + the §4.1 coherence guard
-#     - the declared adapter_scale (rubric-probe fixture)
+#     - the declared backend_scale (rubric-probe fixture)
 #   The work-loop "exit predicate" is the engine's (ledger.py §I-2). We do NOT
 #   import it (U6b must not touch ledger.py); we assert the backend SUPPLIES the
 #   right inputs by computing `blockers + majors == 0` inline over the mapped
@@ -17,7 +17,7 @@
 #
 # SCENARIOS (mapped to the U6b plan):
 #   1. Rubric probe (GATING): the 5 representative findings + their tags are a
-#      fixture; assert the chosen adapter_scale outcome (native = blocker-only).
+#      fixture; assert the chosen backend_scale outcome (native = blocker-only).
 #   2. CE happy path: {1 P0, 2 P2, 3 P3} -> {1 blocker, 2 major, 3 minor};
 #      predicate false (blocker present).
 #   3. Native happy path: reviewer output tagged on the rubric -> same scale,
@@ -53,7 +53,7 @@ PYEOF
 
 # work_predicate_met <findings-json> -> "true" if blockers+majors == 0, else "false".
 #   Mirrors the gating half of the engine's I-2 predicate (blockers==0 AND
-#   majors==0). The engine ALSO requires all_units_terminal; we exercise only
+#   majors==0). The engine ALSO requires all_steps_terminal; we exercise only
 #   the severity-supplied half here (that is the backend's contribution).
 work_predicate_met() {
   local b m
@@ -82,9 +82,9 @@ ledger_fixture() {
 
 # ════════════════════════════════════════════════════════════════════════════
 # 1. RUBRIC PROBE (gating) — the 5 representative findings + tags as a fixture.
-#    Assert the chosen adapter_scale outcome. Per the probe recorded at the top
+#    Assert the chosen backend_scale outcome. Per the probe recorded at the top
 #    of backend-native.sh, the major/minor boundary HEDGED on 2 of 5 findings ->
-#    outcome = partial -> adapter_scale = "blocker-only".
+#    outcome = partial -> backend_scale = "blocker-only".
 # ════════════════════════════════════════════════════════════════════════════
 
 # The fixture: probe findings with the honest tags from backend-native.sh.
@@ -108,7 +108,7 @@ auto_test::assert_eq "2" "$(count_severity "$PROBE_VALID" minor)"
 
 auto_test::it "rubric probe OUTCOME: native declares backend_scale=blocker-only (partial)"
 # DELIBERATE-FAIL NOTE (memory feedback_new_tests_need_deliberate_fail_smoke_check):
-# flip CLAUDE_AUTO_NATIVE_ADAPTER_SCALE in backend-native.sh to "three-tier"
+# flip the BACKEND_SCALE constant in backend-native.py to "three-tier"
 # and this assertion goes RED — verified during authoring.
 auto_test::assert_eq "blocker-only" "$(bash "$NATIVE" backend-scale)"
 

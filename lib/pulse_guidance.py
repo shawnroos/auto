@@ -161,11 +161,11 @@ def _iteration_guidance_prefix(led):
     pulse, that payload was the iterate that the engine overrode to exit.
     """
     iter_block = led.get("iteration") or {}
-    gate_id = iter_block.get("gate_unit")
+    gate_id = iter_block.get("gate_step")
     if not gate_id:
         return ""
     gate = next(
-        (u for u in led.get("units", []) if u.get("id") == gate_id), None
+        (u for u in led.get("steps", []) if u.get("id") == gate_id), None
     )
     if gate is None:
         return ""
@@ -257,7 +257,7 @@ def _build_report(led):
     """Exit report — emit the minors list for a work-loop (R6)."""
     pred = led.get("exit_predicate_result") or {}
     minors = []
-    for u in led.get("units", []):
+    for u in led.get("steps", []):
         for f in u.get("findings") or []:
             if f.get("severity") == "minor":
                 minors.append({"unit": u.get("id"), "note": f.get("note", "")})
@@ -267,14 +267,14 @@ def _build_report(led):
         "majors": pred.get("majors", 0),
         "minors": pred.get("minors", 0),
         "minor_findings": minors,
-        "all_units_terminal": pred.get("all_units_terminal", False),
+        "all_steps_terminal": pred.get("all_steps_terminal", False),
     }
 
 
 def _most_recently_dispatched(led):
     best_id = None
     best_at = None
-    for u in led.get("units", []):
+    for u in led.get("steps", []):
         if u.get("state") != "dispatched":
             continue
         at = ledger.parse_iso(u.get("dispatched_at"))

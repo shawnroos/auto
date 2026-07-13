@@ -37,8 +37,8 @@ writing. Never invent a recipe shape that wouldn't pass `validate`.
      already written? (plan-loop → a `plan`-phase unit + a `phase_transitions`
      producer; already-written → the work-only shape, `phase_order: ["work"]`)
 2. **Compile** the answers into a recipe dict. Choose the producer from the V1
-   registry by intent: one plan → one set of work units = `plan_output_to_work_units`;
-   N competing plans + judge = `judge_winner_to_work_units`; two biased builders +
+   registry by intent: one plan → one set of work units = `plan_output_to_work_steps`;
+   N competing plans + judge = `judge_winner_to_work_steps`; two biased builders +
    comparator = `plan_output_to_paired_builders`. (These are the only V1 producer
    names `validate` accepts; non-default `phase_order` other than `["work"]` is
    rejected until v0.2.1.)
@@ -51,7 +51,7 @@ writing. Never invent a recipe shape that wouldn't pass `validate`.
 **Entry B — reverse-derive from a completed run** ("save the run that just
 finished"):
 1. Read the run's ledger at `<repo>/.claude/auto/<run-id>.json`.
-2. Extract its topology: the `units` (id, phase, depends_on, invokes →
+2. Extract its topology: the `steps` (id, phase, depends_on, invokes →
    dispatch_context), `phase_order`, `terminal_phase`, and any
    `phase_transitions` it carried.
 3. Propose a recipe name; show the rendered topology; confirm.
@@ -85,7 +85,7 @@ wins" / "stop after at most N rounds," reach for `iteration`.
 **What to elicit:**
 
 1. **Which unit is the gate?** Usually the judge / comparator / reviewer that
-   already exists in the topology — name its id under `iteration.gate_unit`.
+   already exists in the topology — name its id under `iteration.gate_step`.
 2. **Does iterating spawn siblings?** If yes, declare an `emit_templates[<name>]`
    entry with `{phase, invokes, id_prefix}` and reference it via
    `iteration.emit_template = "<name>"`. The new units land in the template's
@@ -106,7 +106,7 @@ must reference a real unit (or an `emit_templates` id_prefix); when
 **Typed verification criteria (v0.7.0).** The gate unit may also carry an
 optional `verification` array — typed pass/fail criteria the engine resolves to
 drive the gate's `verdict.decision` (programmatic checks and/or judge criteria).
-It belongs on the unit named by `iteration.gate_unit`; criteria placed on any
+It belongs on the unit named by `iteration.gate_step`; criteria placed on any
 other unit are never evaluated (`validate_and_lint` surfaces that as a warning —
 the same lint layer step 2 above shows). Do not restate the field rules here —
 `skills/auto-design/references/verification-taxonomy.md` and

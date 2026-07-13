@@ -4,7 +4,7 @@
 # ledger→pulse path.
 #
 # WHY THIS TEST EXISTS (memory feedback_plan_documents_transition_code_doesnt_wire_it):
-# After U6, a4's `compare` unit is declared structurally in units[] (with
+# After U6, a4's `compare` unit is declared structurally in steps[] (with
 # depends_on: [build-clarity, build-perf] forward-referencing the bias-builder
 # emit_template id_prefix). The plan_output_to_paired_builders producer no
 # longer synthesizes compare — it only emits the two builders. This test
@@ -13,9 +13,9 @@
 # the iteration gate.
 #
 # CONTRACT (KTD §A+§C+§D — v0.3.0 U6):
-#   a4 declares iteration.gate_unit="compare", iteration.emit_template=
+#   a4 declares iteration.gate_step="compare", iteration.emit_template=
 #   "bias-builder", iteration.bound={max_attempts:4, max_wall_seconds:1200}.
-#   plus emit_templates.bias-builder={phase:"work", invokes:{adapter_op:"do_unit"},
+#   plus emit_templates.bias-builder={phase:"work", invokes:{backend_op:"do_step"},
 #   id_prefix:"build-"}. compare is structural with depends_on the bias-builder
 #   prefix references. auto.run + init_ledger thread iteration+emit_templates
 #   onto the ledger (U6 plumbing).
@@ -90,22 +90,22 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
 # Sanity: U6 plumbing alive — iteration block on ledger, compare structural.
 led0 = ledger.read_ledger(repo, run_id)
 assert led0.get("iteration"), f"iteration block missing on ledger after init: {sorted(led0.keys())!r}"
-assert led0["iteration"]["gate_unit"] == "compare", led0["iteration"]
+assert led0["iteration"]["gate_step"] == "compare", led0["iteration"]
 assert led0.get("emit_templates", {}).get("bias-builder"), led0.get("emit_templates")
-# Compare structural: in units[] from init (NOT producer-synthesized).
-unit_ids_at_init = sorted(u["id"] for u in led0["units"])
-assert "compare" in unit_ids_at_init, f"compare not in initial units[]: {unit_ids_at_init!r}"
+# Compare structural: in steps[] from init (NOT producer-synthesized).
+unit_ids_at_init = sorted(u["id"] for u in led0["steps"])
+assert "compare" in unit_ids_at_init, f"compare not in initial steps[]: {unit_ids_at_init!r}"
 
 # Step 2: prime the plan unit's enumerated_units (the producer passes these to
 # each builder's dispatch_context as plan_items). Set gaps_open=0 + plan_step=
 # review_plan so plan-met fires.
 ledger.set_enumerated_units(repo, run_id, "plan",
-    [{"id": "task-1", "invokes": {"adapter_op": "do_unit"}},
-     {"id": "task-2", "invokes": {"adapter_op": "do_unit"}}])
+    [{"id": "task-1", "invokes": {"backend_op": "do_step"}},
+     {"id": "task-2", "invokes": {"backend_op": "do_step"}}])
 ledger.set_gaps_open(repo, run_id, 0)
 ledger.set_loop(repo, run_id, plan_step="review_plan")
 
-# Step 3: pulse auto=True → _maybe_seam auto-flips → plan_output_to_paired_builders
+# Step 3: pulse auto=True → _maybe_handoff auto-flips → plan_output_to_paired_builders
 # emits build-clarity + build-perf (NOT compare — structural). loop_phase=work.
 # iteration_emit_count increments to 2 (one per emitted builder).
 with contextlib.redirect_stdout(io.StringIO()):
@@ -118,7 +118,7 @@ with contextlib.redirect_stdout(io.StringIO()):
 # the first iterate-emit produces `build-<counter+1>` = "build-1" (no collision
 # with build-clarity / build-perf because the suffix is numeric vs word).
 led1 = ledger.read_ledger(repo, run_id)
-builders_now = sorted(u["id"] for u in led1["units"] if u["id"].startswith("build-"))
+builders_now = sorted(u["id"] for u in led1["steps"] if u["id"].startswith("build-"))
 assert builders_now == ["build-clarity", "build-perf"], builders_now
 assert led1["iteration_emit_count"] == 0, f"counter={led1['iteration_emit_count']!r}"
 
@@ -158,8 +158,8 @@ with contextlib.redirect_stdout(io.StringIO()):
         pulse.dispatch_pulse(repo, run_id, auto=True)
 
 led = ledger.read_ledger(repo, run_id)
-compare = next(u for u in led["units"] if u["id"] == "compare")
-new_builders = sorted(u["id"] for u in led["units"]
+compare = next(u for u in led["steps"] if u["id"] == "compare")
+new_builders = sorted(u["id"] for u in led["steps"]
                       if u["id"].startswith("build-")
                       and u["id"] not in ("build-clarity", "build-perf"))
 bound_override_present = "bound_override" in (compare.get("dispatch_context") or {})

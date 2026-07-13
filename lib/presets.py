@@ -4,7 +4,7 @@
 A *preset* is the pure `invokes` payload of a step, promoted to a first-class
 named object:
 
-    {"name", "version", "description", "invokes": {"adapter_op", "prompt_template"?}}
+    {"name", "version", "description", "invokes": {"backend_op", "prompt_template"?}}
 
 It carries NO verification gate (R2) — a preset is payload, never payload+gate.
 The container concerns `phase` and `depends_on` are NOT a preset's business
@@ -55,6 +55,9 @@ from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sy
 # imports a heavy sibling, so this module stays light.
 _recipe_validate = load_lib_module("recipe_validate")
 _backend_ops = load_lib_module("backend_ops")
+# U6 (KTD-1): the format-v1 → v2 read shim. DAG root, pure stdlib, imports no
+# sibling — so this edge closes no cycle.
+_format_compat = load_lib_module("format_compat")
 
 _check_prompt_template = _recipe_validate._check_prompt_template
 _validate_recipe_name = _recipe_validate._validate_recipe_name
@@ -66,13 +69,13 @@ VALID_BACKEND_OPS = _backend_ops.VALID_BACKEND_OPS
 _BUILTIN_DIR = os.path.join(os.path.dirname(_LIB_DIR), "presets")
 
 # A preset is a closed object: exactly these top-level keys are known. `invokes`
-# is a closed sub-object of {adapter_op, prompt_template}. `verification`,
+# is a closed sub-object of {backend_op, prompt_template}. `verification`,
 # `phase`, and `depends_on` are NOT merely "unknown" — they are named explicitly
 # in the reject list so the error message is precise about WHY (R2 / the
 # preset-vs-container boundary), rather than a generic "unknown field".
 _KNOWN_TOPLEVEL = frozenset({"name", "version", "description", "invokes"})
 _FORBIDDEN_TOPLEVEL = frozenset({"verification", "phase", "depends_on"})
-_KNOWN_INVOKES_KEYS = frozenset({"adapter_op", "prompt_template"})  # "adapter_op": format-v1 key; flips in U6
+_KNOWN_INVOKES_KEYS = frozenset({"backend_op", "prompt_template"})
 
 
 class PresetError(Exception):
@@ -115,7 +118,15 @@ def load_preset(name: str, repo: str) -> dict:
         # next; a present-but-unreadable/unparseable file is a hard error.
         try:
             with open(path) as f:
-                return json.load(f)
+                # U6 (KTD-1): upgrade a format-v1 preset to v2 IN MEMORY, right
+                # after json.load and BEFORE validate_preset — whose known-key set
+                # is now `backend_op` only, so a user's pre-rename preset (carrying
+                # the legacy op key + op value; see format_compat) would otherwise
+                # HARD-FAIL and abort `/auto --preset <name>`. Presets are
+                # user-authorable and auto never writes them back, so read-compat is
+                # INDEFINITE, exactly as for workflow files. Pure + idempotent: a v2
+                # preset passes through unchanged.
+                return _format_compat.upgrade_preset(json.load(f))
         except FileNotFoundError:
             continue
         except (OSError, ValueError) as e:
@@ -138,8 +149,8 @@ def validate_preset(obj) -> tuple:
         explicitly (R2 + the preset-vs-container boundary)
       - name is a non-empty, filename-safe string (reuses the recipe name guard)
       - version / description are non-empty strings
-      - invokes is an object of {adapter_op, prompt_template?}
-      - adapter_op is required and ∈ VALID_BACKEND_OPS (the shared leaf)
+      - invokes is an object of {backend_op, prompt_template?}
+      - backend_op is required and ∈ VALID_BACKEND_OPS (the shared leaf)
       - prompt_template, when present, is path-bounded via `_check_prompt_template`
         (relative, no `..`, no leading `/`) — the SAME check recipes use
     """
@@ -190,12 +201,12 @@ def validate_preset(obj) -> tuple:
                         f"invokes: unknown field {ik!r}; known: "
                         f"{sorted(_KNOWN_INVOKES_KEYS)}"
                     )
-            op = inv.get("adapter_op")  # format-v1 key; flips in U6
+            op = inv.get("backend_op")
             if not isinstance(op, str) or not op:
-                errors.append("invokes.adapter_op must be a non-empty string")
+                errors.append("invokes.backend_op must be a non-empty string")
             elif op not in VALID_BACKEND_OPS:
                 errors.append(
-                    f"invokes.adapter_op {op!r} not in the closed set "
+                    f"invokes.backend_op {op!r} not in the closed set "
                     f"{sorted(VALID_BACKEND_OPS)}"
                 )
             if "prompt_template" in inv:

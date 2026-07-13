@@ -42,7 +42,7 @@ assert_eq "a1:built-in,a2:built-in,a4:built-in,pipeline:built-in,review:built-in
 it "AE2: a workspace recipe named a1 shadows the built-in (workspace, one row)"
 ws="$(mktemp -d)"; mkdir -p "$ws/.claude/auto/recipes"
 cat > "$ws/.claude/auto/recipes/a1.json" <<'JSON'
-{"name":"a1","version":"1","phase_order":["plan","seam","work"],"terminal_phase":"work","units":[{"id":"plan","phase":"plan","invokes":{}}],"description":"WS override"}
+{"name":"a1","version":"1","phase_order":["plan","handoff","work"],"terminal_phase":"work","steps":[{"id":"plan","phase":"plan","invokes":{}}],"description":"WS override"}
 JSON
 a1row="$(CLAUDE_AUTO_REPO="$ws" bash "$LIST_SH" | awk -F'\t' '$1=="a1"{print $1":"$2; n++} END{print "count="n}')"
 # a1 appears once, tagged workspace.
@@ -62,7 +62,7 @@ wt="$(mktemp -d)"
 ( cd "$wt" && git init -q && git config user.email t@t && git config user.name t )
 mkdir -p "$wt/.claude/auto/recipes" "$wt/sub/deep"
 cat > "$wt/.claude/auto/recipes/wtonly.json" <<'JSON'
-{"name":"wtonly","version":"1","phase_order":["work"],"terminal_phase":"work","units":[{"id":"u","phase":"work","invokes":{}}],"description":"worktree recipe"}
+{"name":"wtonly","version":"1","phase_order":["work"],"terminal_phase":"work","steps":[{"id":"u","phase":"work","invokes":{}}],"description":"worktree recipe"}
 JSON
 tier="$(cd "$wt/sub/deep" && unset CLAUDE_AUTO_REPO && bash "$LIST_SH" | awk -F'\t' '$1=="wtonly"{print $2}')"
 assert_eq "workspace" "$tier"

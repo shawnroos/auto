@@ -17,8 +17,8 @@
 #   5. I-1: met==true ledger + new blocker -> same snapshot has met==false;
 #      NO_RECOMPUTE hatch proves the I-1 test goes RED without recompute
 #   6. I-2: 3 units, U_b/U_c depend on U_a, U_a stalled, U_b/U_c never
-#      dispatched -> met==false (all_units_terminal false)
-#   7. I-2 closure: unit `fixed` with a stale blocker -> all_units_terminal==false
+#      dispatched -> met==false (all_steps_terminal false)
+#   7. I-2 closure: unit `fixed` with a stale blocker -> all_steps_terminal==false
 #   8. I-3: liveness/orphan predicate (manual / stale-beat / healthy-slow)
 #   9. state grammar: every documented transition holds; undocumented rejected
 #  10. fence: no production file enables a TEST_NO_* hatch
@@ -86,8 +86,8 @@ print(eval(expr))
 PYEOF
 }
 
-# init_scale <run> <json-units> <adapter_scale> [phase]  — like ledger_init but
-# threads adapter_scale (the ledger_init helper above is fixed at the default
+# init_scale <run> <json-units> <backend_scale> [phase]  — like ledger_init but
+# threads backend_scale (the ledger_init helper above is fixed at the default
 # "three-tier"; the Bug #3 scale-aware scenarios need "blocker-only" too).
 ledger_init_scale() {
   local run="$1" units_json="$2" scale="$3" phase="${4:-work}"
@@ -159,7 +159,7 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
     if extra_units:
         units.extend(extra_units)
     m.init_ledger(repo, run, backend="ce", loop_phase="work",
-                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   units=units)
     # Use _with_locked_ledger to seed iteration block + bump gate to the
     # desired state (the public init API doesn't accept iteration yet — that
@@ -169,11 +169,11 @@ def fresh(run, *, iteration=True, gate_state="verdict-returned",
             bound = {"max_attempts": max_attempts}
             if max_wall is not None:
                 bound["max_wall_seconds"] = max_wall
-            L["iteration"] = {"gate_unit": "judge", "bound": bound}
+            L["iteration"] = {"gate_step": "judge", "bound": bound}
         L["iteration_attempts"] = attempts
         L["active_wall_seconds"] = active_wall
         # Walk the gate unit to the requested state via grammar-valid edges.
-        u = L["units"][0]
+        u = L["steps"][0]
         if gate_state == "verdict-returned":
             u["state"] = "dispatched"  # then record_verdict will edge it.
     m._with_locked_ledger(repo, run, seed)
@@ -210,9 +210,9 @@ elif op == "backward-compat-defaults":
     run = "v02x"
     legacy = {
         "run_id": run, "loop_phase": "work", "plan_step": None,
-        "seam_paused": False, "adapter": "ce", "adapter_scale": "three-tier",
+        "handoff_paused": False, "backend": "ce", "backend_scale": "three-tier",
         "exit_predicate_result": {}, "loop": {"driver": "self", "last_beat_at": "x"},
-        "units": [{"id": "U1", "state": "verdict-returned", "depends_on": [],
+        "steps": [{"id": "U1", "state": "verdict-returned", "depends_on": [],
                    "dispatched_at": None, "verdict_at": None,
                    "stall_threshold_seconds": 600, "last_error": None,
                    "attempt": 0, "findings": []}],
@@ -235,7 +235,7 @@ elif op == "set_verdict_decision-happy":
     m.set_verdict_decision(repo, "u2-svd-happy", "judge", "iterate",
                             payload={"emit_count": 2})
     after = m.read_ledger(repo, "u2-svd-happy")
-    judge = after["units"][0]
+    judge = after["steps"][0]
     print(json.dumps({
         "decision": judge["dispatch_context"].get("decision"),
         "payload": judge["dispatch_context"].get("decision_payload"),
@@ -268,7 +268,7 @@ elif op == "set_bound_override-happy":
     led = fresh("u2-sbo-happy")
     m.set_bound_override(repo, "u2-sbo-happy", "judge", "max_attempts", "iterate")
     after = m.read_ledger(repo, "u2-sbo-happy")
-    bo = after["units"][0]["dispatch_context"].get("bound_override") or {}
+    bo = after["steps"][0]["dispatch_context"].get("bound_override") or {}
     print(json.dumps({
         "bound": bo.get("bound"),
         "original_decision": bo.get("original_decision"),
@@ -311,7 +311,7 @@ elif op == "reset_for_iteration-happy":
     m.reset_for_iteration(repo, "u2-r4i-happy", "judge",
                           ["plan-1", "plan-2", "plan-3"])
     after = m.read_ledger(repo, "u2-r4i-happy")
-    judge = after["units"][0]
+    judge = after["steps"][0]
     dc = judge.get("dispatch_context") or {}
     print(json.dumps({
         "state": judge["state"],
@@ -493,7 +493,7 @@ assert_eq \
 # A dangling id, a self-edge, or a cycle in the model's per-item depends_on
 # would leave the materialized work unit permanently un-_is_ready → a SILENT
 # full-run livelock (never ready, never dispatched, dispatch-timeout never
-# fires, all_units_terminal false forever). set_enumerated_units is the single
+# fires, all_steps_terminal false forever). set_enumerated_units is the single
 # chokepoint where runtime model output enters the ledger; it DROPS invalid
 # edges (recording dispatch_context.dropped_depends_on_edges) rather than
 # raising (a raise would materialize zero work units — also a stall). Valid
@@ -515,7 +515,7 @@ def setup(run):
     if os.path.exists(p):
         os.unlink(p)
     m.init_ledger(repo, run, backend="ce", loop_phase="plan",
-                  phase_order=["plan", "seam", "work"], terminal_phase="work",
+                  phase_order=["plan", "handoff", "work"], terminal_phase="work",
                   units=[{"id": "plan", "state": "pending", "phase": "plan"}])
 
 
@@ -523,10 +523,10 @@ def report(run, enumerated):
     setup(run)
     m.set_enumerated_units(repo, run, "plan", enumerated)
     L = m.read_ledger(repo, run)
-    plan = next(u for u in L["units"] if u["id"] == "plan")
+    plan = next(u for u in L["steps"] if u["id"] == "plan")
     dc = plan["dispatch_context"]
-    deps = {it["id"]: it.get("depends_on", []) for it in dc["enumerated_units"]}
-    dropped = [[x["unit"], x["dep"], x["reason"]]
+    deps = {it["id"]: it.get("depends_on", []) for it in dc["enumerated_steps"]}
+    dropped = [[x["step"], x["dep"], x["reason"]]
                for x in dc.get("dropped_depends_on_edges", [])]
     print(json.dumps({"deps": deps, "dropped": dropped}, sort_keys=True))
 

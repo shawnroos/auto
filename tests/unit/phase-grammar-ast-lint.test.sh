@@ -21,6 +21,11 @@
 #   - lib/ledger_emitters.py   — transition_and_emit / _apply_emit / _emit_units_core
 #                                / atomic_iterate_step WRITE/READ-for-default the
 #                                field during emission; not a phase-DECISION.
+#   - lib/format_compat.py     — the format-v1→v2 read shim (U6) names the key in
+#                                its VALUE-map table: the retired v1 phase value is
+#                                rewritten to "handoff" under the loop_phase key on
+#                                read. It rewrites the field's VALUE; it makes no
+#                                phase-DECISION and compares nothing.
 # These three lib/ledger_*.py modules are the B5 split of the former ledger.py —
 # the loop_phase WRITE/CONSTRUCT sites moved into them. The facade ledger.py only
 # re-exports NAMES and is NOT allowed (it has no literal).
@@ -56,7 +61,7 @@ auto_root = sys.argv[1]
 extra = sys.argv[2] if len(sys.argv) > 2 else None
 
 ALLOWED = {"phase-grammar.py", "ledger_core.py", "ledger_mutators.py",
-           "ledger_emitters.py", "ledger_steering.py"}
+           "ledger_emitters.py", "ledger_steering.py", "format_compat.py"}
 LITERAL = "loop_phase"
 
 def offenders_in(path):

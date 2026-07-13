@@ -2,13 +2,13 @@
 # auto U7 integration test: the hooks + resume + goal-status surface.
 #
 # Exercises the REAL ledger.py + the U7 scripts wired exactly as the plugin
-# manifest / command body wire them. The ONLY injected seam is the repo path
+# manifest / command body wire them. The ONLY injected handoff is the repo path
 # (a sandbox tmp repo) and the Stop event JSON (fed on stdin, as the harness
 # would). Nothing is mocked — every ledger write goes through ledger.py's I-1
 # atomic chokepoint; every classification goes through the real hook scripts.
 #
 # Per U9 spike (docs/research/native-goal-mechanism-spike.md): native /goal is a
-# closed model-judged loop with no external predicate seam, so auto
+# closed model-judged loop with no external predicate handoff, so auto
 # ships its OWN Stop hook. These tests assert THAT hook's deterministic verdict.
 #
 # SELF-CONTAINED harness (inline it/pass/fail) mirroring tests/unit/pulse.test.sh
@@ -17,20 +17,20 @@
 # Scenarios (U7 plan):
 #   on-session-start:
 #     - orphaned ledger (driver==manual / last_beat_at>GRACE) -> resume hint
-#     - seam_paused -> seam-specific hint (continue/abort)
+#     - handoff_paused -> handoff-specific hint (continue/abort)
 #     - done -> skipped (no line)
 #     - no active run -> fast no-op (no output)
 #     - malformed ledger -> never exits non-zero
 #   on-stop:
 #     - predicate unmet (driver=self) -> blocks (decision JSON)
 #     - met -> allows stop (no decision)
-#     - all_units_terminal gate: counters zero but a stalled unit lurking -> blocked
-#     - seam-paused (driver=manual) -> ALLOWS stop (engine's own stop-point signal)
+#     - all_steps_terminal gate: counters zero but a stalled unit lurking -> blocked
+#     - handoff-paused (driver=manual) -> ALLOWS stop (engine's own stop-point signal)
 #     - stop_hook_active==true -> ALLOWS stop (loop-safety; no inescapable block)
 #   goal-status freshness:
 #     - met flips true->false (re-review reopens) -> status reflects it (no stale done)
 #   resume subcommands:
-#     - continue: seam -> work + arm-pulse intent
+#     - continue: handoff -> work + arm-pulse intent
 #     - abort: -> done
 #     - retry: stalled -> pending + clears last_error
 #     - skip: stalled -> terminal-skip
@@ -137,20 +137,20 @@ PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
 assert_contains "$out" "loop staleorphan can be resumed"
 
-# ─── on-session-start: seam_paused -> seam-specific hint ──────────────────────
-it "on-session-start: seam_paused surfaces the seam-specific continue/abort hint"
-REPO="$(mkrepo seam)"
+# ─── on-session-start: handoff_paused -> handoff-specific hint ──────────────────────
+it "on-session-start: handoff_paused surfaces the handoff-specific continue/abort hint"
+REPO="$(mkrepo handoff)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"seamrun",backend="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
-L.set_loop(repo,"seamrun",driver="manual")
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.set_loop(repo,"handoffrun",driver="manual")
 PYEOF
 out="$("$PY" "$ON_SESSION_PY" "$REPO")"
-assert_contains "$out" "paused at seam"
-it "on-session-start: seam hint offers BOTH continue and abort"
-assert_contains "$out" "/auto-resume continue seamrun"
+assert_contains "$out" "paused at handoff"
+it "on-session-start: handoff hint offers BOTH continue and abort"
+assert_contains "$out" "/auto-resume continue handoffrun"
 
 # ─── on-session-start: done -> skipped (no line) ──────────────────────────────
 it "on-session-start: a done run is skipped (no surfacing line)"
@@ -228,7 +228,7 @@ PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── on-stop: all_units_terminal gate (counters zero, stalled unit lurking) ───
+# ─── on-stop: all_steps_terminal gate (counters zero, stalled unit lurking) ───
 it "on-stop: counters zero but a stalled unit lurks -> still BLOCKED (I-2 gate)"
 REPO="$(mkrepo stop-stalled)"
 pyledger "$REPO" <<'PYEOF'
@@ -236,7 +236,7 @@ import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # A dispatched unit -> stalled (NOT terminal). No findings anywhere, so
-# blockers==majors==0, but all_units_terminal==false => met==false.
+# blockers==majors==0, but all_steps_terminal==false => met==false.
 L.init_ledger(repo,"lurking",backend="ce",loop_phase="work",units=[{"id":"U1","state":"dispatched"}])
 L.transition(repo,"lurking","U1","stalled")
 PYEOF
@@ -245,17 +245,17 @@ assert_eq "block" "$(jget "$out" decision)"
 it "on-stop: the stalled-unit block reason cites units-not-terminal (not findings)"
 assert_contains "$out" "units not yet terminal"
 
-# ─── on-stop: seam-paused (driver=manual) -> ALLOWS stop ──────────────────────
-# The seam pause is the engine's OWN signal that this is a valid stop-point
+# ─── on-stop: handoff-paused (driver=manual) -> ALLOWS stop ──────────────────────
+# The handoff pause is the engine's OWN signal that this is a valid stop-point
 # (it emits action:"stop" + driver:"manual"). The Stop hook must respect it.
-it "on-stop: seam-paused run (driver=manual) ALLOWS stop (no self-conflict)"
-REPO="$(mkrepo stop-seam)"
+it "on-stop: handoff-paused run (driver=manual) ALLOWS stop (no self-conflict)"
+REPO="$(mkrepo stop-handoff)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"seamstop",backend="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
-L.set_loop(repo,"seamstop",driver="manual")
+L.init_ledger(repo,"handoffstop",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.set_loop(repo,"handoffstop",driver="manual")
 PYEOF
 out="$(printf '{}' | "$PY" "$ON_STOP_PY" "$REPO")"
 assert_empty "$out"
@@ -380,14 +380,14 @@ assert_eq "False" "$(jget "$out2" done)"
 it "goal-status: the reopened status carries the reopened blocker in its reason"
 assert_contains "$out2" "1 blocker"
 
-# ─── resume continue: seam -> work + arm-pulse intent ──────────────────────────
-it "resume continue: flips seam -> work"
+# ─── resume continue: handoff -> work + arm-pulse intent ──────────────────────────
+it "resume continue: flips handoff -> work"
 REPO="$(mkrepo resume-continue)"
 pyledger "$REPO" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_ledger(repo,"contrun",backend="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
+L.init_ledger(repo,"contrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
 L.set_loop(repo,"contrun",driver="manual")
 PYEOF
 # fix-round-6 P1: continue RE-records driving_session_id, so it needs the
@@ -401,8 +401,8 @@ it "resume continue: emits an arm-pulse intent for the model to fire /auto:auto-
 assert_eq "arm-pulse" "$(jget "$out" action)"
 it "resume continue: the arm-pulse prompt is NAMESPACED (/auto:auto-pulse, not bare)"
 assert_eq "/auto:auto-pulse contrun" "$(jget "$out" prompt)"
-it "resume continue: clears seam_paused on the seam->work flip"
-sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['seam_paused'])")"
+it "resume continue: clears handoff_paused on the handoff->work flip"
+sp="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','contrun')['handoff_paused'])")"
 assert_eq "False" "$sp"
 
 # ─── resume abort: -> done ────────────────────────────────────────────────────
@@ -459,10 +459,10 @@ L.init_ledger(repo,"retryrun",backend="ce",loop_phase="work",units=[{"id":"U1","
 L.transition(repo,"retryrun","U1","stalled",last_error={"call":"plan","message":"boom","at":"2026-01-01T00:00:00Z"})
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" retry retryrun U1 >/dev/null
-state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['units'][0]['state'])")"
+state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['steps'][0]['state'])")"
 assert_eq "pending" "$state"
 it "resume retry: clears last_error on the stalled -> pending edge"
-le="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['units'][0]['last_error'])")"
+le="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','retryrun')['steps'][0]['last_error'])")"
 assert_eq "None" "$le"
 
 # ─── resume skip: stalled -> terminal-skip ────────────────────────────────────
@@ -476,7 +476,7 @@ L.init_ledger(repo,"skiprun",backend="ce",loop_phase="work",units=[{"id":"U1","s
 L.transition(repo,"skiprun","U1","stalled")
 PYEOF
 CLAUDE_AUTO_REPO="$REPO" bash "$RESUME_SH" skip skiprun U1 >/dev/null
-state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','skiprun')['units'][0]['state'])")"
+state="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','skiprun')['steps'][0]['state'])")"
 assert_eq "terminal-skip" "$state"
 
 # ─── resume ambiguous: >1 resumable, none given -> disambiguation prompt ──────

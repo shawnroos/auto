@@ -15,7 +15,7 @@
 # Assertions read back via read_ledger + iteration.read_decision.
 #
 # The advisor verdict is INJECTED as data (no live `advisor`) — exactly the
-# fake-verdict seam (resolve_gate_verification's judge_verdicts arg + persisted
+# fake-verdict handoff (resolve_gate_verification's judge_verdicts arg + persisted
 # dispatch_context.judge_verdicts). The live advisor consult stays session-
 # verified by nature (KTD-5); this covers the deterministic write leg only.
 #
@@ -94,7 +94,7 @@ def init(run, verification, dispatch_context=None):
     if dispatch_context is not None:
         unit["dispatch_context"] = dispatch_context
     ledger.init_ledger(repo, run, backend="ce", loop_phase="work",
-                       units=[unit], iteration={"gate_unit": "gate"})
+                       units=[unit], iteration={"gate_step": "gate"})
 
 def drive(run, caller_verdicts=None):
     """Mirror §4.7 steps 3-5 against the on-disk ledger. Returns the signal."""
@@ -108,7 +108,7 @@ def drive(run, caller_verdicts=None):
     ledger.set_verdict_decision(repo, run, "gate", signal)
     # step 5: audit ONLY when a judge criterion resolved the gate. signal is
     # non-None => pending_judges empty => every judge crit contributed a verdict.
-    gate = next(u for u in L["units"] if u["id"] == "gate")
+    gate = next(u for u in L["steps"] if u["id"] == "gate")
     for c in (gate.get("verification") or []):
         if c.get("type") in JUDGE_TYPES:
             ledger.append_advisor_audit(
@@ -119,7 +119,7 @@ def drive(run, caller_verdicts=None):
     return res
 
 def decision_of(run):
-    gate = next(u for u in ledger.read_ledger(repo, run)["units"] if u["id"] == "gate")
+    gate = next(u for u in ledger.read_ledger(repo, run)["steps"] if u["id"] == "gate")
     return iteration.read_decision(gate)
 
 def audits(run):

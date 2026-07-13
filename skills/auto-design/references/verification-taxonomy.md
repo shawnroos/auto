@@ -70,7 +70,7 @@ registry, no CLI shell-out, no cross-vendor egress.
 
 ### 4. human
 
-A checkpoint only a human can clear — routes through auto's pause seam.
+A checkpoint only a human can clear — routes through auto's pause handoff.
 
 ```
 { "id": "owner-signoff", "type": "human", "prompt": "..." }   # prompt optional
@@ -96,7 +96,7 @@ the literal "decision").
   `iteration.bound`; breach forces `exit`).
 - Non-programmatic criteria with no supplied verdict come back as
   `pending_judges` — the driver satisfies them (`advisor_judge` by consulting
-  `advisor`; `human` via the pause seam) and feeds `{criterion_id, status}` data
+  `advisor`; `human` via the pause handoff) and feeds `{criterion_id, status}` data
   back into a single `aggregate` call. `iteration.py` then commits one
   decision write.
 

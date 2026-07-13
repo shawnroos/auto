@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto launch-chooser: lib/launch-mode.{py,sh} — the deterministic
-# interactive-vs-headless seam (R11 / AE6 / KTD-5).
+# interactive-vs-headless handoff (R11 / AE6 / KTD-5).
 #
 # The chooser silent-applies (never enters AskUserQuestion) for a self-driven /
 # headless run, and shows for an interactive operator. This pins that decision
@@ -39,7 +39,7 @@ OTHER="sess-OTHER-9999"
 write_ledger() {
   cat > "${LEDGERS}/$1" <<JSON
 {"loop_phase": "$3", "loop": {"driver": "$2"}, "driving_session_id": "$4",
- "phase_order": ["plan","seam","work"], "units": []}
+ "phase_order": ["plan","handoff","work"], "steps": []}
 JSON
 }
 

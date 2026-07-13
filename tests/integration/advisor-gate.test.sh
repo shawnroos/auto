@@ -3,7 +3,7 @@
 #
 # Exercises the REAL ledger.py + the U4 hook scripts (.sh wrappers exec'ing into
 # the sibling .py) wired exactly as the plugin manifest wires them. The ONLY
-# injected seams are the repo path (a sandbox tmp repo) and the PreToolUse event
+# injection points are the repo path (a sandbox tmp repo) and the PreToolUse event
 # JSON (fed on stdin, as the harness would). Nothing is mocked.
 #
 # `driving_session_id` is recorded on the ledger by U5 (the arm-time setter),
@@ -153,7 +153,7 @@ out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_eq "deny" "$(perm_decision "$out")"
 it "askuser: deny reason redirects to the advisor and names both classification branches"
 assert_contains "$out" "advisor"
-it "askuser: deny reason names the pause-seam escalation for design forks"
+it "askuser: deny reason names the pause-handoff escalation for design forks"
 assert_contains "$out" "auto-resume.py pause"
 
 # ─── askuser FAIL-OPEN: deny-unsupported hatch -> systemMessage, NO deny ──────
@@ -209,7 +209,7 @@ ev="$(EVENT sess-AAA AskUserQuestion 'noop')"
 out="$(printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
-# ─── askuser: driver==manual (seam/blocked pause) -> allow ────────────────────
+# ─── askuser: driver==manual (handoff/blocked pause) -> allow ────────────────────
 it "askuser: a manual-driver (paused) run -> allow (not a live pulse chain)"
 REPO="$(mkrepo askuser-manual)"
 pyledger "$REPO" <<'PYEOF'
@@ -628,7 +628,7 @@ assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 # resume re-arm re-records the driving session (fix-round-6 P1)
 # ════════════════════════════════════════════════════════════════════════════
 # THE BUG: a run armed under session A, paused, then resumed from a DIFFERENT
-# interactive session B (the common case: after a seam pause / crash / next-day
+# interactive session B (the common case: after a handoff pause / crash / next-day
 # fresh window) USED TO keep the stale arm-time driving_session_id=A. The
 # re-armed run is self-driven again, but BOTH advisor gates match on
 # driving_session_id == stdin.session_id — so under session B a destructive
@@ -674,30 +674,30 @@ assert_eq "deny" "$(perm_decision "$out")"
 it "resume: the destructive command from session B PAUSES the run (backstop fired)"
 assert_eq "manual" "$(rd_loop "$REPO" rrun driver)"
 
-# ─── seam->work branch ALSO re-records (different write path) ─────────────────
-# _cmd_continue records the session BEFORE branching, but seam->work routes
+# ─── handoff->work branch ALSO re-records (different write path) ─────────────────
+# _cmd_continue records the session BEFORE branching, but handoff->work routes
 # through pulse.advance_to_phase -> ledger.transition_and_emit (a DIFFERENT write
 # path than the blocked-pause set_loop). transition_and_emit does an in-place
 # locked RMW (it never reconstructs the dict), so the top-level
 # driving_session_id survives the phase advance. This asserts that explicitly so
 # a future refactor of the emit path can't silently reintroduce the P1 bug.
-it "resume: seam-paused legacy run resumed under session B re-records the session through the seam->work path"
-REPO="$(mkrepo resume-seam)"
+it "resume: handoff-paused legacy run resumed under session B re-records the session through the handoff->work path"
+REPO="$(mkrepo resume-handoff)"
 "$PY" - "$REPO" "$LEDGER_PY" <<'PYEOF'
 import sys, importlib.util
 repo, ledger_py = sys.argv[1], sys.argv[2]
 s=importlib.util.spec_from_file_location("ledger",ledger_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 # Legacy ledger (recipe=None) so advance_to_phase falls through to the raw
-# set_loop branch; a seam pause is the precondition for the seam->work flip.
-L.init_ledger(repo,"seamrun",backend="ce",loop_phase="seam",units=[{"id":"U1","state":"pending"}])
-L.set_loop(repo,"seamrun",driver="manual",seam_paused=True)
+# set_loop branch; a handoff pause is the precondition for the handoff->work flip.
+L.init_ledger(repo,"handoffrun",backend="ce",loop_phase="handoff",units=[{"id":"U1","state":"pending"}])
+L.set_loop(repo,"handoffrun",driver="manual",handoff_paused=True)
 PYEOF
-set_driving_session "$REPO" seamrun "sess-AAA"
+set_driving_session "$REPO" handoffrun "sess-AAA"
 CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" env -u CLAUDE_CODE_CHILD_SESSION \
-  "$PY" "$RESUME_PY" continue seamrun >/dev/null 2>&1
-assert_eq "sess-BBB" "$(rd_driving "$REPO" seamrun)"
-it "resume: the seam->work flip still advanced the phase (session re-record did not break the advance)"
-assert_eq "work" "$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','seamrun')['loop_phase'])")"
+  "$PY" "$RESUME_PY" continue handoffrun >/dev/null 2>&1
+assert_eq "sess-BBB" "$(rd_driving "$REPO" handoffrun)"
+it "resume: the handoff->work flip still advanced the phase (session re-record did not break the advance)"
+assert_eq "work" "$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_ledger('$REPO','handoffrun')['loop_phase'])")"
 
 # ─── regression guard: WITHOUT the fix, the stale id would let B through ──────
 # Same destructive command but issued from the STALE arm-time session A: it must
@@ -736,7 +736,7 @@ it "resume: re-arm re-records driving_session_id to the resuming session"
 assert_eq "sess-BBB" "$(rd_driving "$REPO" rrun)"
 
 # ─── ownership-steal guard (review #5) ───────────────────────────────────────
-# A run that is LIVE (driver=self, fresh beat, not seam-paused) and owned by
+# A run that is LIVE (driver=self, fresh beat, not handoff-paused) and owned by
 # session AAA must NOT be silently stolen by a `continue`/`advance` from session
 # BBB — that would dark the ORIGINAL driver's destructive backstop mid-run.
 REPO="$(mkrepo resume-steal)"

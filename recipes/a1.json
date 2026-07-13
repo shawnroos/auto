@@ -2,13 +2,13 @@
   "name": "a1",
   "version": "1",
   "description": "Classic CE Stack — plan, build, review, fix to P3-only exit. The v0.1.x default workflow.",
-  "default_adapter": "ce",
-  "phase_order": ["plan", "seam", "work"],
+  "default_backend": "ce",
+  "phase_order": ["plan", "handoff", "work"],
   "terminal_phase": "work",
   "phase_transitions": [
-    {"from": "plan", "to": "work", "emitter": "plan_output_to_work_units"}
+    {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
   ],
-  "units": [
-    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
+  "steps": [
+    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}}
   ]
 }

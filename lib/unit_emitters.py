@@ -2,12 +2,12 @@
 """auto U5b (v0.2.0): the phase-transition producer registry (G1).
 
 Recipes declare WHAT topology to run; producers are HOW work units come into being
-at a phase boundary. v0.1.x produced work units off-ledger (the seam paused for
+at a phase boundary. v0.1.x produced work units off-ledger (the handoff paused for
 manual creation); v0.2.0 makes emission a first-class, in-engine step so A2/A4
 actually spawn their units.
 
 THE PRODUCER (the F4 gap that almost shipped): producers do NOT invent plan output
-— they read it from `unit["dispatch_context"]["enumerated_units"]`, which the
+— they read it from `unit["dispatch_context"]["enumerated_steps"]`, which the
 engine persists when a plan unit reaches `plan-done` by calling the backend's
 `enumerate_plan_units` op (U6 wires the persist; the backend op is the v0.2.0
 contract re-lock). So the data flow is: plan-loop runs → backend enumerates the
@@ -54,7 +54,7 @@ _iteration = load_lib_module("iteration")
 def _enumerated_units(unit: dict) -> list:
     """The work units a plan unit produced, stashed by the engine at plan-done.
 
-    Read from `dispatch_context.enumerated_units` (the backend's
+    Read from `dispatch_context.enumerated_steps` (the backend's
     `enumerate_plan_units` output, persisted in U6's advance path). Empty list if
     the plan produced nothing (the caller/predicate handles the vacuous case).
     """
@@ -62,14 +62,14 @@ def _enumerated_units(unit: dict) -> list:
 
 
 def _plan_units(ledger: dict) -> list:
-    return [u for u in ledger.get("units", []) if u.get("phase") == "plan"]
+    return [u for u in ledger.get("steps", []) if u.get("phase") == "plan"]
 
 
 def _brainstorm_units(ledger: dict) -> list:
-    return [u for u in ledger.get("units", []) if u.get("phase") == "brainstorm"]
+    return [u for u in ledger.get("steps", []) if u.get("phase") == "brainstorm"]
 
 
-def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
+def plan_output_to_work_steps(ledger: dict, to_phase: str) -> list:
     """A1: the single plan unit's enumerated output → one work unit per item.
 
     The classic plan→work emission. With one plan unit (A1), reads its
@@ -79,7 +79,7 @@ def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
     if not plan_units:
         return []
     # A1 has exactly one plan unit; if a recipe somehow has more here, take the
-    # first (A2's multi-plan path uses judge_winner_to_work_units instead).
+    # first (A2's multi-plan path uses judge_winner_to_work_steps instead).
     items = _enumerated_units(plan_units[0])
     return [
         {"id": item["id"], "phase": to_phase,
@@ -90,20 +90,20 @@ def plan_output_to_work_units(ledger: dict, to_phase: str) -> list:
     ]
 
 
-def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
+def brainstorm_output_to_plan_step(ledger: dict, to_phase: str) -> list:
     """Spine (v0.6.0 / U8): the brainstorm unit's output → ONE plan unit.
 
     The brainstorm-rooted spine (``recipes/pipeline.json``,
-    ``phase_order ["brainstorm","plan","seam","work"]``) fires this producer on
+    ``phase_order ["brainstorm","plan","handoff","work"]``) fires this producer on
     arrival at ``plan`` from ``brainstorm`` (KTD-2). ce-brainstorm produces a
     requirements document; the model records that doc's path on the brainstorm
     unit's ``dispatch_context.requirements_doc`` when the brainstorm completes.
     This producer reads that path and materializes the single structural plan
     unit the plan-loop then drives — exactly the shape ``a1`` declares at init
-    (``invokes.adapter_op == "next_plan_step"``), so the downstream plan→work
+    (``invokes.backend_op == "next_plan_step"``), so the downstream plan→work
     machinery is unchanged for both plan-entry (a1) and brainstorm-entry (spine).
 
-    PURE (mirrors ``plan_output_to_work_units``): reads the ledger dict, returns
+    PURE (mirrors ``plan_output_to_work_steps``): reads the ledger dict, returns
     a one-element list of a partial 5-key unit dict; no ledger mutation. The
     requirements-doc path flows onto the plan unit's ``dispatch_context`` so the
     plan backend op has the brainstorm output as input.
@@ -116,7 +116,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
     brainstorm_units = _brainstorm_units(ledger)
     if not brainstorm_units:
         raise RecipeError(
-            "brainstorm_output_to_plan_unit: no 'brainstorm' unit in ledger — "
+            "brainstorm_output_to_plan_step: no 'brainstorm' unit in ledger — "
             "the spine recipe must declare a brainstorm unit whose output seeds "
             "the plan phase"
         )
@@ -124,7 +124,7 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
     requirements_doc = _iteration.read_requirements_doc(brainstorm_units[0])
     if not requirements_doc:
         raise RecipeError(
-            "brainstorm_output_to_plan_unit: brainstorm unit "
+            "brainstorm_output_to_plan_step: brainstorm unit "
             "dispatch_context.requirements_doc is missing — the brainstorm step "
             "must record the requirements-doc path before the plan phase can be "
             "seeded (a silent empty emit would leave plan with no unit)"
@@ -134,25 +134,25 @@ def brainstorm_output_to_plan_unit(ledger: dict, to_phase: str) -> list:
             "id": "plan",
             "phase": to_phase,
             "depends_on": [],
-            "invokes": {"adapter_op": "next_plan_step"},  # format-v1 key; flips in U6
+            "invokes": {"backend_op": "next_plan_step"},
             "dispatch_context": {"requirements_doc": requirements_doc},
         }
     ]
 
 
-def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
+def judge_winner_to_work_steps(ledger: dict, to_phase: str) -> list:
     """A2: emit the WINNING plan's enumerated output as work units.
 
-    The judge unit names the winner via ``dispatch_context.winner_unit_id``
+    The judge unit names the winner via ``dispatch_context.winner_step_id``
     (fix-pass I — v0.2.0 round-2 P0 fix). The previous design read it from
-    ``findings[].winner_unit_id``, but the canonical write path
+    ``findings[].winner_step_id``, but the canonical write path
     ``ledger.record_verdict`` normalizes findings to ``{severity, note}``
     only, hard-stripping every other key — so a real judge agent calling
     record_verdict would have its winner_id silently dropped before the
     producer ever ran. Production A2 was unrunnable end-to-end.
 
     dispatch_context is the right home: it's already where the engine
-    persists ``enumerated_units`` (the parallel routing channel), it survives
+    persists ``enumerated_steps`` (the parallel routing channel), it survives
     ``transition()`` and the verdict-write path with no normalize step, and
     findings stay narrow ``{severity, note}`` (matching the schema doc).
 
@@ -162,31 +162,31 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
     judge verdict is a hard error, not silent empty emission).
 
     v0.3.0 generalization (KTD §D / U3): the gate unit id is read from
-    ``ledger.iteration.gate_unit`` (defaulting to literal ``"judge"`` so
+    ``ledger.iteration.gate_step`` (defaulting to literal ``"judge"`` so
     v0.2.0 a2 ledgers without an iteration block keep working). This lets a
     recipe rename the gate unit without forking the producer.
     """
-    gate_unit_id = (ledger.get("iteration") or {}).get("gate_unit", "judge")
+    gate_unit_id = (ledger.get("iteration") or {}).get("gate_step", "judge")
     judge = next(
-        (u for u in ledger.get("units", []) if u.get("id") == gate_unit_id), None
+        (u for u in ledger.get("steps", []) if u.get("id") == gate_unit_id), None
     )
     if judge is None:
         raise RecipeError(
-            f"judge_winner_to_work_units: no {gate_unit_id!r} unit in ledger"
+            f"judge_winner_to_work_steps: no {gate_unit_id!r} unit in ledger"
         )
     winner_id = _iteration.read_winner_unit_id(judge)
     if not winner_id:
         raise RecipeError(
-            "judge_winner_to_work_units: judge dispatch_context.winner_unit_id "
+            "judge_winner_to_work_steps: judge dispatch_context.winner_step_id "
             "is missing — the judge must call ledger.set_winner_unit_id(...) "
             "alongside record_verdict to declare the winning plan unit"
         )
     winner = next(
-        (u for u in ledger.get("units", []) if u.get("id") == winner_id), None
+        (u for u in ledger.get("steps", []) if u.get("id") == winner_id), None
     )
     if winner is None:
         raise RecipeError(
-            f"judge_winner_to_work_units: winner {winner_id!r} not in ledger"
+            f"judge_winner_to_work_steps: winner {winner_id!r} not in ledger"
         )
     items = _enumerated_units(winner)
     return [
@@ -200,7 +200,7 @@ def judge_winner_to_work_units(ledger: dict, to_phase: str) -> list:
 
 def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
     """A4: emit two bias-differentiated builders. v0.3.0 U6: `compare` is now
-    declared structurally in `units[]` (with `depends_on: [build-clarity, build-perf]`
+    declared structurally in `steps[]` (with `depends_on: [build-clarity, build-perf]`
     forward-referencing the bias-builder emit_template's id_prefix), so this
     producer only emits the two builders — the comparator is already on the
     ledger from init.
@@ -222,7 +222,7 @@ def plan_output_to_paired_builders(ledger: dict, to_phase: str) -> list:
         bid = f"build-{bias}"
         out.append({
             "id": bid, "phase": to_phase, "depends_on": [],
-            "invokes": {"adapter_op": "do_unit"},  # format-v1 key; flips in U6
+            "invokes": {"backend_op": "do_step"},
             "dispatch_context": {"bias": bias, "plan_items": items},
         })
     return out
@@ -247,7 +247,7 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
     PER emitted unit, after this function returns.
 
     Reads (pure, no ledger mutation):
-      - ``ledger.iteration.gate_unit`` → gate unit id (required; the U5
+      - ``ledger.iteration.gate_step`` → gate unit id (required; the U5
         validator enforces this on the recipe, but defense-in-depth: a
         freshly-mutated ledger missing this field is a recipe-shape error).
       - ``ledger.iteration.emit_template`` → template name.
@@ -279,10 +279,10 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
             "declare iteration.{gate_unit, emit_template} to use this producer"
         )
 
-    gate_unit_id = iteration.get("gate_unit")
+    gate_unit_id = iteration.get("gate_step")
     if not gate_unit_id:
         raise RecipeError(
-            "iterate_template: iteration.gate_unit is missing — the recipe "
+            "iterate_template: iteration.gate_step is missing — the recipe "
             "must name the gate unit (U5 validator should have rejected this)"
         )
 
@@ -310,11 +310,11 @@ def iterate_template(ledger: dict, to_phase: str) -> list:
 
     # Find the gate unit to read its decision_payload.emit_count.
     gate = next(
-        (u for u in ledger.get("units", []) if u.get("id") == gate_unit_id), None
+        (u for u in ledger.get("steps", []) if u.get("id") == gate_unit_id), None
     )
     if gate is None:
         raise RecipeError(
-            f"iterate_template: gate unit {gate_unit_id!r} not in ledger.units"
+            f"iterate_template: gate unit {gate_unit_id!r} not in ledger.steps"
         )
 
     decision_payload = _iteration.read_decision_payload(gate) or {}
@@ -378,20 +378,20 @@ def no_emit(ledger_dict, to_phase):
 # test asserts the two sets are equal so a recipe can never name a producer that
 # isn't registered here (and the registry can't drift from the validator).
 REGISTRY = {
-    "plan_output_to_work_units": plan_output_to_work_units,
-    "judge_winner_to_work_units": judge_winner_to_work_units,
+    "plan_output_to_work_steps": plan_output_to_work_steps,
+    "judge_winner_to_work_steps": judge_winner_to_work_steps,
     "plan_output_to_paired_builders": plan_output_to_paired_builders,
     "iterate_template": iterate_template,
     # v0.6.0 (U8): brainstorm→plan spine producer. Added atomically with the
     # recipes.V1_PRODUCER_NAMES entry so the symmetry test stays green.
-    "brainstorm_output_to_plan_unit": brainstorm_output_to_plan_unit,
+    "brainstorm_output_to_plan_step": brainstorm_output_to_plan_step,
 }
 
 
 def resolve(name: str):
     """Return the producer function for ``name``, or raise KeyError.
 
-    The seam-handler resolves the recipe's declared producer name through here,
+    The handoff-handler resolves the recipe's declared producer name through here,
     then hands the function to ``ledger.transition_and_emit``.
     """
     if name not in REGISTRY:

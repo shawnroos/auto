@@ -2,7 +2,7 @@
 # auto launch-chooser: thin bash shim around launch-mode.py.
 #
 # Prints `headless` / `interactive` — the deterministic interactive-vs-headless
-# seam the launch chooser (skills/auto-launch §0) keys silent-apply on (R11/AE6).
+# handoff the launch chooser (skills/auto-launch §0) keys silent-apply on (R11/AE6).
 #
 # Pins the interpreter to /usr/bin/python3 (overridable via CLAUDE_AUTO_PYTHON3)
 # — never bare `python3`, which on macOS may resolve to a Homebrew Python lacking

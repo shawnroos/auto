@@ -18,13 +18,27 @@
 # contract; this test fails the build if a forbidden edge appears.
 #
 # THE DAG (allowed edges only):
-#   ledger_core   → (nothing; DAG root, stdlib + _bootstrap only)
+#   format_compat → (nothing; DAG root, pure stdlib — imports no sibling at all)
+#   ledger_core   → format_compat            [DAG root otherwise: stdlib + _bootstrap]
 #   ledger_mutators → ledger_core
 #   ledger_emitters → ledger_core, ledger_mutators
 #   ledger (facade) → ledger_core, ledger_mutators, ledger_emitters
 #   pulse_guidance → ledger (facade), phase-grammar         [leaf]
 #   pulse_advance  → ledger, iteration, producers, pulse_guidance
 #   pulse          → ledger, iteration, producers, pulse_advance, pulse_guidance
+#   _bootstrap     → format_compat           (load_ledger_safe — read chokepoint 2)
+#   recipe_validate → format_compat          (the validate_and_lint WRITE gate)
+#   recipes        → recipe_validate, format_compat   (resolve() read shim)
+#   presets        → recipe_validate, backend_ops, format_compat  (load_preset shim)
+#
+# U6 (concept-vocabulary rename / KTD-1) added the five `→ format_compat` edges.
+# format_compat is itself a DAG ROOT (pure stdlib, no sibling import), so every
+# one of them is a LEAF edge that closes no cycle — including
+# `ledger_core → format_compat` and `recipe_validate → format_compat`, which both
+# preserve those modules' own root property. NB: this lint is
+# forbidden-edge/negative-grep, so an ALLOWED edge missing from this comment would
+# not turn it red; these four entries are documentation accuracy, and the
+# format_compat.py existence assert below is what makes its absence fail loudly.
 #
 # Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the LEDGER FACADE, never ledger_mutators/ledger_emitters directly — the facade
@@ -181,8 +195,8 @@ fi
 
 # ─── file-existence asserts for the U4-renamed backend modules (F13) ────────
 # The leaf/negative-grep checks above pass VACUOUSLY on a missing (mis-renamed)
-# file — a botched `adapter_ops`→`backend_ops` / `adapter-*`→`backend-*` rename
-# would go green by accident. These positive existence asserts make it go RED.
+# file — a botched rename to the `backend_ops` / `backend-*` module names would
+# go green by accident. These positive existence asserts make it go RED.
 for _mod in backend_ops.py backend-ce.py backend-native.py; do
   it "lib/${_mod} exists (pinned module — guard against a vacuous negative-grep pass)"
   if [ -f "$LIB/${_mod}" ]; then
@@ -191,6 +205,28 @@ for _mod in backend_ops.py backend-ce.py backend-native.py; do
     fail "lib/${_mod} is missing — the U4 backend rename did not land it"
   fi
 done
+
+# ─── file-existence assert for the U6 format shim ───────────────────────────
+# Same anti-vacuity reasoning: lib/format_compat.py is the DAG root every read
+# chokepoint and the write gate depend on. If it vanished, the negative-grep
+# checks above would still pass — but every run-record read would lose its v1→v2
+# upgrade. Pin its existence positively.
+it "lib/format_compat.py exists (the U6 format-v1→v2 shim; DAG root)"
+if [ -f "$LIB/format_compat.py" ]; then
+  pass
+else
+  fail "lib/format_compat.py is missing — the U6 read/write shim did not land"
+fi
+
+# The shim must stay a TRUE DAG root: pure stdlib, importing no sibling. If it
+# ever grew a sibling edge it could cycle back through ledger_core (which imports
+# IT), so this is the load-bearing negative check for the new module.
+it "format_compat.py imports NO sibling lib module (it is the DAG root)"
+if grep -qE 'load_lib_module\(|^from (ledger|recipes|recipe_validate|pulse)' "$LIB/format_compat.py"; then
+  fail "format_compat.py must import no sibling — ledger_core imports it, so any sibling edge risks a cycle"
+else
+  pass
+fi
 
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of ledger_mutators.py with a forbidden facade import added;
