@@ -1127,6 +1127,29 @@ past `DRIVER_SELF_STALE_SECONDS` (3900s) as dead. The sub-agent prompt-builder
 sources its operating contract from the `describe` CLI verb (U4), not a line-range
 citation into this file, so R6/R7 hold where the work actually runs.
 
+### Thin pacing shell — the context-flatness spike outcome (Stage C)
+
+The agent-native goal is a `fable` main session whose context stays FLAT across a
+long run. The residual question was the per-beat READ-BACK: the tree runtime
+already converges off the run-record (not sub-agent prose), but if the boss reads
+the FULL run-record — or `converge`, which returns growing `completed`/`in_flight`
+LISTS — its context is O(N) after N beats. A harness probe
+(`tests/integration/pacing-shell.test.sh`) settled it deterministically:
+
+- **The bounded digest is the answer.** `bash lib/dispatcher.sh digest <run>` is a
+  per-beat summary carrying state COUNTS + phase + predicate — never the step/verdict
+  lists. Measured across 12 beats it stays ~120 B (O(1)) while the full run-record
+  grows 4.6 KB → 5.2 KB (O(N)). A boss that reads only the digest each beat keeps a
+  flat resident context. This is what U9's live pacing shell must read.
+- **The fork collapsed.** The plan offered spawn-per-beat vs. a long-lived driver
+  sub-agent. Both are sub-agents; a sub-agent cannot self-pace, so pacing + the
+  Stop-hook stay in the main session either way — the driver logic descends, the
+  clock does not. There is one viable shape: the main session paces and reads the
+  digest each beat, spawning the driver to decide/dispatch.
+- **Still live-gated.** The probe proves the *mechanism* (bounded read ⇒ flat
+  context). Whether a real `fable` main session over a real multi-beat run holds
+  flat in practice is the live follow-up (U9); the harness cannot spawn a real Agent.
+
 ## 17. Goal-aware plan routing — the pre-step detail (v0.11.0)
 
 The `auto-driver` skill runs a goal-aware pre-step for the `reviewed-plan` and

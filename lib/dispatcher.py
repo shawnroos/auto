@@ -325,6 +325,33 @@ def propose_surface(repo_root, run_id):
     }
 
 
+def digest_surface(repo_root, run_id):
+    """Bounded per-beat digest for the thin pacing shell (Stage C — U8 spike / U9).
+
+    The pacing shell's `fable` boss reads THIS each beat instead of the full
+    run-record. Its size is O(1) in the number of steps and verdicts — it carries
+    state COUNTS, not the step/verdict LISTS — so the boss's resident context stays
+    FLAT across beats even as the run-record grows. That flatness is the property
+    the context-sacred runtime rests on: `converge` returns growing `completed`/
+    `in_flight` LISTS (fine for reconciliation, but O(steps) to read), whereas this
+    digest is the bounded summary a beat needs to pace + decide. Pure read.
+    """
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(repo_root, run_id)
+    counts = {}
+    for u in rr.get("steps", []):
+        st = u.get("state", "unknown")
+        counts[st] = counts.get(st, 0) + 1
+    pred = rr.get("exit_predicate_result") or {}
+    return {
+        "run": run_id,
+        "current_phase": pg.current_phase(rr),
+        "predicate_met": bool(pred.get("met")),
+        "step_counts": counts,       # one entry per STATE (<=7), never per step
+        "total_steps": len(rr.get("steps", [])),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
@@ -617,6 +644,14 @@ def _cli(argv):
             import json
 
             json.dump(propose_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+            return 0
+        if cmd == "digest":
+            # digest <repo> <run>   (Stage C — bounded per-beat pacing-shell digest)
+            repo, run = argv[1], argv[2]
+            import json
+
+            json.dump(digest_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
         sys.stderr.write(f"dispatcher.py: unknown subcommand {cmd!r}\n")
