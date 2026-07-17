@@ -14,6 +14,9 @@ DAG ROOT. Pure stdlib; imports no sibling. Wired into:
   * ``_bootstrap.load_run_record_safe``   — every hook and scan consumer
   * ``workflows.resolve``             — workflow-file reads, before validate()
   * ``workflow_validate.validate_and_lint`` — the authoring WRITE gate
+  * ``presets.load_preset``               — hand-authored preset reads (the THIRD
+    user-data chokepoint; without it a pre-rename preset does not degrade, it
+    HARD-FAILS ``validate_preset`` and aborts ``/auto --preset <name>``)
 
 The three properties everything else rests on:
 
@@ -70,9 +73,18 @@ SURVIVABLE — nothing crashes, nothing is structurally misread — but it does 
 it CORRECT, and a write from the older plugin can be silently dropped. Do the cutover
 below.
 
-REVERT SAFETY. ``downgrade_run_record`` is the exact inverse map (it also strips
+REVERT SAFETY. ``downgrade_run_record`` is the inverse map (it also strips
 the ``format`` marker, so reinstalled pre-rename code never sees an unknown
-version field): ``downgrade_run_record(upgrade_run_record(v1)) == v1``. The
+version field): ``downgrade_run_record(upgrade_run_record(v1)) == v1`` **for every
+record v1 code actually writes** — which is the case the revert procedure needs.
+The qualifier is load-bearing, not throat-clearing: the inverse is DEPTH-BLIND, so a
+record carrying a v2-SPELLED key outside the three opaque containers does not
+round-trip. ``{"notes": {"steps": "x", "producer": "y"}}`` comes back as
+``{"notes": {"units": "x", "emitter": "y"}}``. Real v1 records cannot contain such a
+key (free-form names are confined to the opaque containers below, which are never
+walked), but a HAND-EDITED one can — and hand-edited records are explicitly in this
+module's threat model above. If you are reverting a record you edited by hand, diff
+it. The
 documented revert procedure is to run it over stranded ``format: 2`` records
 BEFORE reinstalling pre-rename code. Downgrade is an OFFLINE / QUIESCED
 operation — run-records lazy-migrate back to v2 on their first post-upgrade
@@ -324,7 +336,11 @@ def downgrade_run_record(d: dict) -> dict:
     (KTD-1). Strips the ``format`` marker so reinstalled pre-rename code never
     sees an unknown version field.
 
-    ``downgrade_run_record(upgrade_run_record(v1)) == v1``.
+    ``downgrade_run_record(upgrade_run_record(v1)) == v1`` for every record v1 code
+    actually writes. NOT unconditionally: the inverse is depth-blind, so a record
+    carrying a v2-spelled key outside the opaque containers round-trips to its v1
+    spelling (``{"notes": {"steps": …}}`` → ``{"notes": {"units": …}}``). v1 code
+    cannot emit that; a hand-edited record can. See the module docstring.
 
     OFFLINE / QUIESCED ONLY. A downgraded record lazy-migrates straight back to
     v2 on its first read-through-mutation by new code, so the state dir must be

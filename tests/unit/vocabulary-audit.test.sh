@@ -243,8 +243,38 @@ GLOBAL_PATH_PREFIX_WHITELIST=(
 # drop too — path- and content-anchored, but still dropping the entire line, so a
 # stale `tick` identifier sharing a line with `auto-tick` rode through.
 #
-# Patching them one at a time has failed five times. So the SHAPE is now fixed by
-# construction, and the class is fenced by a control (Scenario 0):
+#   6. brace-matching region extractor — 0a's own lint, defeated by a `}` inside a
+#      quoted string, so the pipeline's tail went unlinted. (Fixed: markers.)
+#   7. `LEGACYNOTE[A-Za-z0-9-]+`        — a SCRUBS token that satisfied every rule 0a-2
+#      had (positive class, no `[^…]`, no bare `.`) and still ate `add-unit` whole,
+#      laundering a stale identifier at 14/14 green. The old rule policed the token's
+#      ALPHABET; the defect was in its LENGTH.
+#   8. the 0a classifier's DEFAULT-ALLOW — a line was only checked if it began `raw=`;
+#      `IFS= read -r -d '' raw < <(… | grep -vF 'X'; printf '\0')` assigns `raw` without
+#      that prefix, so defect #1 came back verbatim, unlinted, green. Same for `mapfile`,
+#      `local raw="$(…)"`, `declare`, and every continuation line of the generating grep.
+#   9. `supersedes[:,]?[ ]+`?[A-Za-z0-9_./-]+…` — found by RULE, not by review, while
+#      fixing #7: the shipped banner scrub meant appending
+#      `> supersedes v1_ledger_add_unit_recipe_adapter` to a live contract laundered FOUR
+#      terms at 14/14 green, with no table edit at all. Instances #2 and #7 are the same
+#      defect as #9; nobody had spotted #9 in four review passes over the same table.
+#
+# NINE instances. EVERY fix until now was an ENUMERATION — an allowlist of permitted
+# forms, or a probe carrying one payload shape — and every enumeration was escaped by a
+# variant nobody enumerated. #7 escaped #2's fix; #8 escaped #1's fix, twice. The pattern
+# is not bad luck; it is what enumeration DOES.
+#
+# So the two controls that kept losing are now stated as CLOSED rules over the whole
+# input, and neither has a "which lines does this apply to?" step to dodge:
+#   * 0a  pins the pipeline's body LINE FOR LINE. Not "no drops" — this exact text.
+#         Any added line, of any syntax, mentioning `raw` or not, is a diff.
+#   * 0a-2 refuses any SCRUBS token containing `+`, `*` or `{n,}`. Not "no bad classes" —
+#         no unbounded length, so a token's reach is decided by the ROW, never the LINE.
+# 0b/0c/0d stay as behavioural defence in depth, and they are still enumerations (0d's
+# probe glue is a list of three characters someone chose). They are no longer what the
+# class rests on. See "WHAT IS AND IS NOT CLOSED" at Scenario 0.
+#
+# The SHAPE of an exemption is fixed by construction; there are four kinds and no fifth:
 #
 #   KIND (1) PATH        — a whole file legitimately speaks the old vocabulary.
 #                          Matched ANCHORED against the hit's `path:lineno:` prefix,
@@ -321,14 +351,25 @@ PREFIX_RE="^(${_pfx_alt})"
 # <<<SCRUBS-TABLE (0a lints CODE; the table itself is validated by 0a-2 + 0b)
 SCRUBS=(
   # ── every term ──
-  '*%%^(docs/contracts/backend-contract\.md|docs/contracts/run-record-schema\.md|docs/contracts/workflow-format\.md)$%%supersedes[:,]?[ ]+`?[A-Za-z0-9_./-]+`?([ ]+\(?v?[0-9][A-Za-z0-9_.-]*\)?)?%%@SUPERSEDES@%%supersedes `ledger-schema.md`%%KTD-5 contract re-lock banner. F4: this was applied TREE-WIDE, so `This module supersedes ledger.py entirely.` in any doc was exempt. The banners live only in the contract headers — bind it there.'
-  '*%%^(skills/auto-author-workflow/SKILL\.md|skills/auto-backend/SKILL\.md)$%%\([Ff]ormerly `?[A-Za-z0-9_./-]+`?\)%%@FORMERLY@%%(formerly auto-adapter)%%KTD-4 skill breadcrumb, kept so model-side triggering still matches the old phrasing. Lives only in the two renamed skills descriptions.'
+  # F5: these were ONE row each, built on `[A-Za-z0-9_./-]+` — "the banner, whatever it
+  # names". That quantifier is what let `supersedes v1_ledger_add_unit_recipe_adapter`
+  # launder four terms out of a live contract. There is no such thing as "whatever it
+  # names": there are exactly three retired doc names, and a row per name spells each one.
+  # A fourth banner does not silently join them — it fails the audit until someone adds it
+  # here, on purpose, in a diff. That is the exemption being EARNED rather than assumed.
+  '*%%^docs/contracts/run-record-schema\.md$%%supersedes ledger-schema\.md%%@SUPERSEDES@%%supersedes ledger-schema.md%%KTD-5 contract re-lock banner (the un-backticked spelling, as it really appears at run-record-schema.md:3). F4: this was applied TREE-WIDE, so `This module supersedes ledger.py entirely.` in any doc was exempt — now bound to the one contract whose header carries it.'
+  '*%%^docs/contracts/backend-contract\.md$%%supersedes `adapter-contract\.md`%%@SUPERSEDES@%%supersedes `adapter-contract.md`%%same banner, the backend contract (backend-contract.md:4 and :22). `supersedes v0.14.0` on line 3 needs no row: it names no retired term.'
+  '*%%^docs/contracts/workflow-format\.md$%%supersedes `recipe-format\.md`%%@SUPERSEDES@%%supersedes `recipe-format.md`%%same banner, the workflow format contract (workflow-format.md:3).'
+  # Same story: `\([Ff]ormerly `?[A-Za-z0-9_./-]+`?\)` was "(formerly ANYTHING)". There are
+  # two breadcrumbs. Spell them.
+  '*%%^skills/auto-author-workflow/SKILL\.md$%%\(formerly auto-author-recipe\)%%@FORMERLY@%%(formerly auto-author-recipe)%%KTD-4 skill breadcrumb, kept so model-side triggering still matches the old phrasing. Lives only in this renamed skill description. The parens are ESCAPED: bare `(…)` is an ERE group, which would match the breadcrumb without its parens.'
+  '*%%^skills/auto-backend/SKILL\.md$%%\(formerly auto-adapter\)%%@FORMERLY@%%(formerly auto-adapter)%%same breadcrumb, the other renamed skill.'
 
   # ── unit: the term entangled with unavoidable non-renamed noise ──
   'unit%%*%%tests\/unit%%@TIER@%%tests/unit%%the tests/unit TEST-TIER path — keyed to the suite layout, not the renamed concept. Appears as the path of a hit AND as a cross-reference in lib/ and docs/ prose, so it is genuinely tree-wide.'
-  'unit%%*%%[-_A-Za-z0-9][Uu]nit[ -][Tt]est[A-Za-z]*%% unit %%add-unit test-run%%NORMALIZE-TO-KEEP, not a scrub. An `unit test` ATTACHED to an identifier char is a REAL symbol (`add-unit test-run`, `add_unit test_id`), not prose — turn it back into a bare token so it still HITS. MUST precede the prose row below.'
-  'unit%%*%%[Uu]nit[ -][Tt]est[A-Za-z]*%%@UT@%%unit test%%the free-standing prose "unit test" / "unit-testable" (the hyphenated adjective lives in lib/iteration.py, lib/verification.py, lib/goal-route.py).'
-  'unit%%*%%UNIT[ -]TEST[A-Z]*%%@UT@%%UNIT TEST%%the shouted prose form of the same.'
+  'unit%%*%%[-_A-Za-z0-9][Uu]nit[ -][Tt]est%% unit %%add-unit test-run%%NORMALIZE-TO-KEEP, not a scrub. An `unit test` ATTACHED to an identifier char is a REAL symbol (`add-unit test-run`, `add_unit test_id`), not prose — turn it back into a bare token so it still HITS. MUST precede the prose row below.'
+  'unit%%*%%[Uu]nit[ -][Tt]est%%@UT@%%unit test%%the free-standing prose "unit test" / "unit-testable" (the hyphenated adjective lives in lib/iteration.py, lib/verification.py, lib/goal-route.py). The trailing `[A-Za-z]*` these three rows used to carry was pure decoration: cutting `unit-test` out of `unit-testable` already leaves `@UT@able`, which spells no retired term. It bought nothing and cost the boundedness rule.'
+  'unit%%*%%UNIT[ -]TEST%%@UT@%%UNIT TEST%%the shouted prose form of the same.'
   'unit%%*%%plan_step%%@PLANSTEP@%%plan_step%%the plan-phase sub-state — a deliberate do-not-rename carve-out (Key Decisions / CONCEPTS.md). Carries no `unit` token, so it cannot trip the regex; scrubbed defensively so a future `plan_unit`-shaped revival cannot hide behind it.'
   'unit%%*%%PLAN_STEPS%%@PLANSTEP@%%PLAN_STEPS%%same carve-out, shouted.'
   'unit%%*%%next_plan_step%%@PLANSTEP@%%next_plan_step%%same carve-out.'
@@ -542,46 +583,120 @@ audit_term_hits() {
 # AUDIT-PIPELINE>>>
 
 # ════════════════════════════════════════════════════════════════════════════
-# Scenario 0 — THE CLASS CONTROL. Proves the unbounded-exemption class is CLOSED.
+# Scenario 0 — THE CLASS CONTROL.
 # ════════════════════════════════════════════════════════════════════════════
-# Five separate exemptions in this file have been unbounded or unanchored (see the
-# block comment above). Every one of them was caught by a HUMAN reading the diff, and
-# every one of them was GREEN in CI. Scenario 0 is what makes a sixth go RED.
+# NINE separate exemptions in this file have been unbounded or unanchored (see the block
+# comment above). Every one was caught by a HUMAN reading the diff; every one was GREEN
+# in CI. Scenario 0 is what makes a tenth go RED.
 #
-# 0a lints this file's SOURCE: an exemption can only be expressed in the two sanctioned
-#    engine regions, or as a row in the SCRUBS table. Adding a fresh ad-hoc filter to
-#    the pipeline is a build failure, not a review finding.
-# 0b probes every DECLARED exemption's BEHAVIOUR, derived from the tables — so entry 14
-#    of the whitelist and row 29 of SCRUBS are probed the day they are added, with no
-#    second hand-maintained list to forget.
+# 0a  pins the audit pipeline's body, LINE FOR LINE, against AUDIT_BODY_EXPECTED. Adding
+#     any step to the pipeline is a build failure, not a review finding — regardless of
+#     its syntax, and regardless of whether it mentions `raw`.
+# 0a-2 refuses any SCRUBS token containing an unbounded quantifier, so a token's reach is
+#     decided by the row that declares it and never by the line it lands on.
+# 0a-3 pins the set of tree-wide rows.
+# 0b/0c/0d probe every DECLARED exemption's BEHAVIOUR, derived from the tables — so entry
+#     14 of the whitelist and row 29 of SCRUBS are probed the day they are added, with no
+#     second hand-maintained list to forget.
+#
+# ⚠ WHAT IS AND IS NOT CLOSED — read this before writing "the class is closed" again.
+# The previous commit's message said the unbounded-exemption class was CLOSED. It was not:
+# two reviewers had working end-to-end bypasses within a day, and a third defect (#9) was
+# sitting unnoticed in the shipped table the whole time. So, precisely:
+#
+#  CLOSED BY CONSTRUCTION (a rule over the whole input, with no classifier to dodge):
+#   * No step can be added to the audit pipeline.        0a pins the body verbatim.
+#   * No SCRUBS token can have unbounded length.         0a-2 refuses +, *, {n,}.
+#   * No exemption can be claimed from a line's CONTENT. Anchoring is asserted on the
+#                                                        compiled regexes' VALUES.
+#   * No path binding can be a wildcard.                 0a-2 refuses non-literal paths.
+#   * The tree-wide set cannot grow silently.            0a-3 pins it.
+#
+#  NOT CLOSED — bounded, documented, and still real:
+#   * A DECLARED LITERAL THAT IS SIMPLY TOO LONG. `add-unit` is a legal token; so is
+#     `add-unit_ledger`, which eats a term the row never should have. Nothing static can
+#     tell those apart — the row is allowed to name retired text; that is its job. 0d's
+#     adjacent-* probes catch the common shapes, and they are an ENUMERATION of three glue
+#     characters. Bounded by: it must be TYPED, in the row, in a diff, and it only applies
+#     in that row's declared files.
+#   * A SUPERSTRING of a scrubbed token (the residual documented at the scrub engine).
+#   * A `<!--legacy-->` row's columns 3+ (F3, documented above).
+#   * Everything the audit cannot see BY CONSTRUCTION: prose that destroys the old
+#     identifier rather than leaking it (the ⚠ at the top of this file).
+#
+# The honest one-line summary: the class where an exemption's REACH is decided by the LINE
+# is closed. The class where a human DECLARES too much, on purpose, in a reviewable diff,
+# is not — and cannot be, because that is the same act as a legitimate exemption.
 
 # <<<CLASS-LINT
-# ─── Scenario 0a: audit_term_hits filters `$raw` ONLY through sanctioned steps ──
-# This is an ALLOWLIST, not a blacklist — and that distinction is the whole fix.
+# ─── Scenario 0a: the audit pipeline's body is PINNED, line for line ────────────
+# DEFAULT-DENY. Not an allowlist of filter SHAPES — a pin of the WHOLE BODY.
 #
-# An earlier version of this control forbade THREE specific syntaxes (`grep -v`, an awk
-# `gsub`, an awk `next`) anywhere outside the fenced engine regions. A skeptic broke it
-# in one line: a drop expressed as `sed '/X/d'`, or `grep --invert-match`, or an awk
-# `{if(index($0,"X")==0)print}` (inverting the PRINT instead of using `next`) is none of
-# those three shapes, so it sailed through green while laundering real drift. A blacklist
-# of known-bad syntaxes can always be dodged by a syntax it has not enumerated — which is
-# exactly how this file grew five unbounded exemptions in the first place.
+# The history of this control is the history of this file's defect class, in miniature:
 #
-# So the invariant is stated POSITIVELY, on the one thing every filter must do. The
-# function's output is `$raw`, threaded through the pipeline: EVERY step that could remove
-# or transform a hit must either REASSIGN `raw` or PIPE the final `printf` of it. There
-# is no third way to drop a line. So: inside `audit_term_hits`, outside the two fenced
-# engine regions, every `raw=`/`raw+=` assignment and every `printf … "$raw"` sink must be
-# ONE OF the four sanctioned forms below — the generating grep, the two anchored path
-# greps, and the final unfiltered sink. A `sed`, an inverted awk, a `grep --invert-match`,
-# a `${raw//…/}` parameter scrub, a filtered final `printf` — each is a `raw=` or sink
-# line that is NOT on the list, so each fails HERE regardless of its syntax. The fenced
-# regions (the ONE line drop, the ONE scrub engine) are the only exceptions, and they are
-# bounded by 0a-2/0b/0c/0d, not by this lint.
-it "0a: audit_term_hits filters \$raw only through the sanctioned steps (allowlist)"
+#   v1  BLACKLIST of three syntaxes (`grep -v`, awk `gsub`, awk `next`) outside the fenced
+#       regions. Broken in one line: `sed '/X/d'`, `grep --invert-match`, and an awk that
+#       inverts the PRINT are none of those three shapes. A blacklist is dodged by any
+#       syntax it did not enumerate.
+#   v2  ALLOWLIST of four sanctioned `$raw` filter steps — better, and it held for the
+#       shapes it CLASSIFIED. But it still decided WHAT TO CLASSIFY with a blacklist: a
+#       line was a "filter step" only if it began `raw=` / `raw+=` / `printf …"$raw"`.
+#       Anything else was skipped — DEFAULT-ALLOW at the classifier, so the allowlist
+#       never ran on it. Two verified escapes:
+#         IFS= read -r -d '' raw < <(printf '%s\n' "$raw" | grep -vF 'X'; printf '\0')
+#       — an unbounded whole-line drop (defect #1 verbatim) that assigns `raw` without a
+#       `raw=` prefix, so it was never classified, never checked, and went GREEN. Same for
+#       `local raw="$(…)"`, `mapfile`, `declare`. AND the generating grep's CONTINUATION
+#       lines were never classified at all, so `--exclude='evil*'` on line 2 of it
+#       narrowed the entire scan unlinted.
+#
+# The lesson, three times over: any rule that first decides WHICH lines to police is only
+# as good as that decision, and that decision has always been the hole. So this version
+# does not decide. It policies EVERY line.
+#
+# THE PIN: the audit pipeline's body — every non-comment, non-blank line between the
+# AUDIT-PIPELINE markers, outside the two fenced engine regions, whitespace-normalised —
+# must equal AUDIT_BODY_EXPECTED below, EXACTLY. Not "must not contain a drop"; must BE
+# this text. A `sed`, a `read -d ''`, a `mapfile`, a `local raw="$(…)"`, an extra
+# `--exclude=` on a continuation line, a reordered step, a deleted guard, an inverted awk
+# — every one of them is a line that is not in the pin, and every one of them fails HERE,
+# regardless of syntax, regardless of whether it mentions `raw` at all.
+#
+# This is closed by construction in the way the previous two were not: there is no shape
+# to enumerate and no classifier to dodge, because the permitted set is finite, literal,
+# and complete. The cost is that touching this function means editing the pin in the same
+# commit — deliberately, visibly, in a diff a reviewer reads. For the file's security
+# kernel that cost is the feature. It is the same doctrine as TREE_WIDE_EXPECTED (0a-3).
+#
+# The two fenced engine regions are excluded (they are the ONE line drop and the ONE
+# scrub engine) and are bounded by 0a-2/0b/0c/0d instead. A fence that opens early or
+# closes late SHRINKS the body — which is itself a diff against the pin, so truncation
+# fails here too, loudly, instead of silently hiding code from the lint.
+it "0a: the audit pipeline's body is EXACTLY the pinned text (default-deny)"
 # The audit pipeline, minus the two fenced engine regions and comments. Delimited by the
 # AUDIT-PIPELINE markers — NOT by brace-matching, which a `}` in a quoted string silently
 # truncates (see the note at the region's head).
+AUDIT_BODY_EXPECTED="$(cat <<'PINEOF'
+audit_term_hits() {
+local term="$1"
+local root="${2:-$AUTO_ROOT}"
+local regex; regex="$(regex_for_term "$term")"
+local raw
+raw="$(cd "$root" && grep -rniE "$regex" "${SCAN_ROOTS[@]}" \
+--include='*.py' --include='*.sh' --include='*.md' --include='*.json' \
+--exclude-dir='__pycache__' \
+--exclude='*.pyc' \
+2>/dev/null || true)"
+[ -z "$raw" ] && return 0
+raw="$(printf '%s\n' "$raw" | grep -vE "$WHITELIST_RE" || true)"
+[ -z "$raw" ] && return 0
+raw="$(printf '%s\n' "$raw" | grep -vE "$PREFIX_RE" || true)"
+[ -z "$raw" ] && return 0
+[ -z "$raw" ] && return 0
+printf '%s\n' "$raw"
+}
+PINEOF
+)"
 audit_body="$(awk '
   /# <<<AUDIT-PIPELINE/ { on = 1; next }
   /# AUDIT-PIPELINE>>>/ { on = 0 }
@@ -591,29 +706,23 @@ audit_body="$(awk '
     if ($0 ~ /# LEGACY-ROW-EXEMPTION>>>/ || $0 ~ /# SCRUB-ENGINE>>>/)  { skip = 0 }
   }
 ' "$SELF" | grep -vE '^[[:space:]]*#')"
+# Normalise: drop blank lines, strip leading indentation. Indentation is not a security
+# property; the SET OF LINES is.
+audit_body_norm="$(
+  while IFS= read -r l; do
+    t="${l#"${l%%[![:space:]]*}"}"
+    [ -z "$t" ] && continue
+    printf '%s\n' "$t"
+  done <<< "$audit_body"
+)"
 lint_bad=""
-while IFS= read -r l; do
-  t="${l#"${l%%[![:space:]]*}"}"          # strip leading whitespace
-  [ -z "$t" ] && continue
-  # Only ASSIGNMENTS to raw, and the printf SINK of raw, are line-filtering steps.
-  # Everything else (guards like `[ -z "$raw" ]`, `local raw`, the scrub-table setup)
-  # neither removes nor rewrites a hit.
-  is_filter=""
-  case "$t" in
-    raw=*|raw+=*) is_filter="assign" ;;
-    printf*'"$raw"'*) is_filter="sink" ;;
-  esac
-  [ -z "$is_filter" ] && continue
-  case "$t" in
-    'raw="$(cd "$root" && grep -rniE "$regex" "${SCAN_ROOTS[@]}" \') ;;   # the generator
-    'raw="$(printf '\''%s\n'\'' "$raw" | grep -vE "$WHITELIST_RE" || true)"') ;;
-    'raw="$(printf '\''%s\n'\'' "$raw" | grep -vE "$PREFIX_RE" || true)"') ;;
-    'printf '\''%s\n'\'' "$raw"') ;;                                       # the final sink
-    *) lint_bad="${lint_bad}
-    UNSANCTIONED \$raw filter step (${is_filter}) — a drop/scrub that is NOT one of the
-      four sanctioned steps and NOT inside a fenced engine region: ${t}" ;;
-  esac
-done <<< "$audit_body"
+if [ "$audit_body_norm" != "$AUDIT_BODY_EXPECTED" ]; then
+  lint_bad="${lint_bad}
+    the audit pipeline's body is NOT the pinned text. Every line that survives into the
+      pipeline must be in AUDIT_BODY_EXPECTED — a step that drops, rewrites, narrows or
+      reorders hits is a line that is not in the pin. diff (expected → actual):
+$(diff <(printf '%s\n' "$AUDIT_BODY_EXPECTED") <(printf '%s\n' "$audit_body_norm") | sed 's/^/      /')"
+fi
 # The two COMPILED path regexes are anchored AT BOTH ENDS — the exact F1 property,
 # asserted on the VALUE (the allowlist above pins the CALL; this pins what it calls with):
 # the path whitelist must consume the `:<lineno>:` separator, so it cannot match a line's
@@ -629,33 +738,16 @@ case "$PREFIX_RE" in
   *) lint_bad="${lint_bad}
     PREFIX_RE is not \`^\`-rooted — it could match mid-content. got: ${PREFIX_RE}" ;;
 esac
-# ANTI-VACUITY — and this is the part that has to be RIGHT, not just present.
-# The allowlist proves nothing about lines it never saw, so the scan's COVERAGE is itself
-# an assertion. The previous version required four tokens that ALL live in the first ~20
-# lines of the region — so truncating the scan just after the PREFIX step satisfied every
-# one of them while hiding the entire rest of the pipeline. An anti-vacuity check that
-# only looks at the top of what it is measuring measures nothing.
+# ANTI-VACUITY is now STRUCTURAL, not a separate check. The previous version listed tokens
+# the region had to contain ('grep -rniE', the final sink, the closing brace) because the
+# allowlist proved nothing about lines it never saw — so a truncated scan had to be caught
+# separately, and the first attempt at that only looked at the top of what it was measuring.
+# The pin subsumes all of it: the body must EQUAL the expected text, so a truncation (a `}`
+# gadget, an early `# AUDIT-PIPELINE>>>`, a dropped fence) removes lines and diffs. There is
+# no vacuous-scan state left to check for — a scan that saw nothing does not match a
+# nineteen-line pin.
 #
-# So the checks are anchored at BOTH ENDS and at the fences: the region must contain its
-# FIRST step (the generating grep), its LAST step (the final sink + the closing brace),
-# and BOTH engine fences must be intact (opened AND closed). Truncation anywhere — a `}`
-# gadget, an early `# AUDIT-PIPELINE>>>`, a dropped fence — removes one of these and
-# fails HERE.
-for _need in 'grep -rniE' 'WHITELIST_RE' 'PREFIX_RE'; do
-  printf '%s\n' "$audit_body" | grep -qF "$_need" \
-    || lint_bad="${lint_bad}
-    the audit pipeline did not yield its '${_need}' step — the allowlist scan is vacuous"
-done
-# The LAST filter in the region. If this is absent the scan was truncated, and every
-# `case` above silently stopped policing at the cut.
-printf '%s\n' "$audit_body" | grep -qF "printf '%s\n' \"\$raw\"" \
-  || lint_bad="${lint_bad}
-    the audit pipeline did not yield its FINAL SINK — the scan was TRUNCATED, so every
-    filter after the cut is unpoliced (a \`}\` inside a quoted string does exactly this)."
-printf '%s\n' "$audit_body" | grep -qE '^\}$' \
-  || lint_bad="${lint_bad}
-    the audit pipeline did not reach the function's closing brace — the scan was truncated."
-# Both engine fences must be intact: opened AND closed, exactly once each. A fence left
+# Both engine fences must still be intact: opened AND closed, exactly once each. A fence left
 # open swallows the rest of the pipeline into an unlinted 'skip' region.
 # ANCHORED at the start of a comment line: the awk extractor above necessarily SPELLS
 # these markers inside its own match patterns, and a bare `grep -cF` counts those too
@@ -671,9 +763,11 @@ done
 if [ -z "$lint_bad" ]; then
   pass
 else
-  fail "an exemption bypasses the sanctioned filter steps:${lint_bad}
-      Declare it as a SCRUBS row (bounded token + anchored path + a literal probe),
-      or as the ONE legacy-row drop — never as a fresh filter in the pipeline."
+  fail "the audit pipeline is not what it is pinned to be:${lint_bad}
+      Declare an exemption as a SCRUBS row (bounded token + anchored path + a literal
+      probe), or as the ONE legacy-row drop — never as a fresh step in the pipeline.
+      If you changed this function ON PURPOSE, update AUDIT_BODY_EXPECTED in the same
+      commit, and say why in the message."
 fi
 # CLASS-LINT>>>
 
@@ -732,14 +826,52 @@ for _row in "${SCRUBS[@]}"; do
     *) row_bad="${row_bad}
     path is neither \`*\` nor ^…\$-anchored ('${_p}'): ${_row}" ;;
   esac
-  # The TOKEN must be BOUNDED — no unbounded quantifier, so it can never run off the end
-  # of the thing it is meant to exempt and swallow a real stale identifier sharing the
-  # line. This is the F4/`(formerly …)` defect stated as a rule instead of a promise:
-  #   `supersedes.*$`        ran to end-of-line
-  #   `\([Ff]ormerly [^)]*\)` ran to the next `)`, arbitrarily far
-  # Both are structurally impossible to spell now. A POSITIVE class (`[A-Za-z0-9_./-]+`,
-  # `[ ]+`) is fine — it is bounded to the characters a name is made of. A NEGATED class
-  # (`[^)]`) or a `.` wildcard is not: those are "anything at all", which is the bug.
+  # ── THE TOKEN MUST HAVE A BOUNDED MAXIMUM LENGTH ─────────────────────────────
+  # THE rule. One line of policy that closes the whole class, stated on the only property
+  # that ever mattered: *the token's match length must be decided by the ROW, not by the
+  # LINE.*  A regex built from literals, escaped literals, bracket classes, alternation
+  # and `?` has a maximum match length fixed by its own text. Add `+`, `*` or `{n,}` and
+  # that ceiling is gone — how far the token reaches is now a property of whatever it is
+  # pointed at, which is the definition of an unbounded exemption.
+  #
+  # THIS RULE IS WHY THE PREVIOUS ONES FAILED. Every earlier version of this check was a
+  # BLACKLIST of shapes someone had already been burned by:
+  #   `supersedes.*$`         → banned the bare `.` wildcard
+  #   `\([Ff]ormerly [^)]*\)` → banned the NEGATED class
+  # …and both bans were satisfied, in full, by `LEGACYNOTE[A-Za-z0-9-]+` — a POSITIVE,
+  # non-negated, dot-free class that a reviewer verified eats `add-unit` whole and laundered
+  # a stale identifier at 14/14 green. The old comment here even blessed that shape by name
+  # ("A POSITIVE class … is fine — it is bounded to the characters a name is made of").
+  # It is not fine. `[A-Za-z0-9-]+` is bounded in its ALPHABET and unbounded in its LENGTH,
+  # and length is the axis the defect lives on. Enumerating bad alphabets was never going to
+  # terminate; there is always one more class nobody listed.
+  #
+  # So: no unbounded quantifier, at all, anywhere in a token — not just at its right edge.
+  # It is a stronger rule than the defect strictly requires, and that is deliberate: "does
+  # this `+` reach past its own token?" needs a regex parser and a case-by-case argument,
+  # while "is there a `+`?" is decidable by looking. A rule you can check by looking is a
+  # rule that still holds in five commits' time.
+  #
+  # This is not hypothetical tightening — it FOUND A LIVE ONE. The shipped `supersedes`
+  # row's `[A-Za-z0-9_./-]+` meant that appending
+  #     > supersedes v1_ledger_add_unit_recipe_adapter
+  # to docs/contracts/run-record-schema.md laundered FOUR retired terms at 14/14 green, with
+  # no table edit at all — a worse exploit than the reviewed one, in shipped code, invisible
+  # to 0b/0c/0d because their probes end in a backtick. Every row that tripped this rule was
+  # rewritten to a literal below; none of them needed the quantifier.
+  #
+  # (The two checks below are now strictly redundant — a `.` or a `[^…]` with no quantifier
+  # matches one character and cannot run anywhere. They are kept because they name the two
+  # historical defects precisely, and a row that trips them is still a row worth rejecting.)
+  _tok_lit="$(printf '%s' "$_tok" | sed 's/\\.//g')"      # drop ESCAPED pairs (\. \+ \| \( \))
+  _tok_lit="$(printf '%s' "$_tok_lit" | sed 's/\[[^]]*\]//g')"  # drop bracket classes
+  case "$_tok_lit" in
+    *'+'*|*'*'*|*'{'*) row_bad="${row_bad}
+    token contains an UNBOUNDED QUANTIFIER ('${_tok}'): ${_row}
+      \`+\`, \`*\` and \`{n,}\` let the LINE decide how far this exemption reaches. Spell the
+      token out as a literal — if you cannot, the thing you are exempting is not a token.
+      (Escape it — \\+ \\* — if you meant the literal character.)" ;;
+  esac
   case "$_tok" in
     *'[^'*) row_bad="${row_bad}
     token uses a NEGATED character class ('${_tok}'): ${_row}
@@ -969,7 +1101,33 @@ fi
 # still eats straight through it, and (b) `regex_for_term`'s own `(\b|_)` alternative, so
 # every term in the run is a real hit. Each term below is likewise separated by a class
 # char that is also a boundary (`_`, `.`, `/`) — never by a letter.
+# AND THE GLUE IS ITSELF ENUMERATED, WHICH IS THE PART TO BE HONEST ABOUT.
+# `CLS_RUN` leads with `_`, and separates its terms with only `_`, `.` and `/`. A token
+# ending in a greedy class that EXCLUDES those three characters — `[A-Za-z0-9-]+` — stops
+# dead at the run's first character and sails through BOTH shapes above, while inside its
+# declared file it eats hyphen-joined stale identifiers (`add-unit`, `set-enumerated-units`,
+# `--recipe`, `auto-tick` — the retired vocabulary is heavily hyphenated). A reviewer built
+# exactly that row and laundered a stale `add-unit` at 14/14 green. The 'spaced' shape could
+# not catch it either: CLS_PAYLOAD's first term sits behind `= `.
+#
+# So the runs below vary the GLUE — `_`-led, `-`-led, and space-led — and each run's terms
+# are separated by that same character. THIS IS STILL AN ENUMERATION, and it is the reason
+# it is no longer the load-bearing control: a probe can only ever test the glue somebody
+# thought of. The actual fix for that defect is STATIC — 0a-2 now refuses any token
+# carrying `+`, `*` or `{n,}` at all, so the shape these runs hunt for cannot be spelled in
+# the table in the first place. These shapes are defence in depth, and they still earn
+# their keep against the one thing the static rule permits: a DECLARED literal that
+# over-spans its own name (a row whose token is typed as `add-unit_ledger`).
+#
+# Each run's leading character is load-bearing in the same way `_` was. Glued straight on,
+# `tick.sh` + `ledger…` spells `shledger` — no word boundary, so `ledger` is genuinely not
+# an identifier there and the audit is RIGHT not to report it; the probe would be accusing
+# correct code. `_`, `-` and ` ` are each simultaneously (a) a character a greedy name class
+# plausibly contains, and (b) a boundary `regex_for_term` honours — so every term in every
+# run is a real hit.
 CLS_RUN='_ledger.add_unit/recipe_adapter_seam_tick_emitter_orchestrator'
+CLS_RUN_HYPHEN='-ledger-add_unit-recipe-adapter-seam-tick-emitter-orchestrator'
+CLS_RUN_SPACED=' ledger add_unit recipe adapter seam tick emitter orchestrator'
 bnd_bad=""
 for _row in "${SCRUBS[@]}"; do
   _rest="${_row#*$_SEP}"
@@ -981,18 +1139,22 @@ for _row in "${SCRUBS[@]}"; do
   _lit="${_rpath#^}"; _lit="${_lit%$}"; _lit="${_lit#(}"; _lit="${_lit%)}"
   _lit="${_lit%%|*}"; _lit="${_lit//\\./.}"
   mkdir -p "$cls_tmp/$(dirname "$_lit")"
-  for _shape in spaced adjacent; do
+  for _shape in spaced adjacent adjacent-hyphen adjacent-spaced; do
     case "$_shape" in
-      spaced)   printf '%s  %s\n' "$_rprobe" "$CLS_PAYLOAD" > "$cls_tmp/$_lit" ;;
-      adjacent) printf '%s%s\n'   "$_rprobe" "$CLS_RUN"     > "$cls_tmp/$_lit" ;;
+      spaced)          printf '%s  %s\n' "$_rprobe" "$CLS_PAYLOAD"    > "$cls_tmp/$_lit" ;;
+      adjacent)        printf '%s%s\n'   "$_rprobe" "$CLS_RUN"        > "$cls_tmp/$_lit" ;;
+      adjacent-hyphen) printf '%s%s\n'   "$_rprobe" "$CLS_RUN_HYPHEN" > "$cls_tmp/$_lit" ;;
+      adjacent-spaced) printf '%s%s\n'   "$_rprobe" "$CLS_RUN_SPACED" > "$cls_tmp/$_lit" ;;
     esac
     for _t in orchestrator emitter adapter tick seam unit recipe ledger; do
       printf '%s\n' "$(audit_term_hits "$_t" "$cls_tmp")" | grep -F "${_lit}:" >/dev/null && continue
       bnd_bad="${bnd_bad}
     [${_t}/${_shape}] at ${_lit}, the scrub for '${_rprobe}' ATE a stale identifier on its line.
-      A token must stop at its own name. On the 'adjacent' shape this means the token ends
-      in a greedy class that runs rightward across a whole identifier run — bounded to
-      0a-2's eye, unbounded in fact."
+      A token must stop at its own name. On an 'adjacent-*' shape this means the token
+      reaches rightward past its own probe, across the ${_shape#adjacent-} glue, into the
+      identifier run behind it — so it is cutting text the row never declared.
+      0a-2 already refuses any token with a \`+\`/\`*\`/\`{n,}\`, so this is the case it
+      cannot see: a BOUNDED literal that was simply typed too long."
     done
     rm -f "$cls_tmp/$_lit"
   done

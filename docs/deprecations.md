@@ -114,28 +114,60 @@ Rows in the table above whose "remove in" column says v0.15.0 — nothing else.
    rewrite-and-fall-through rather than a second implementation.
 4. Drop the `(formerly …)` breadcrumbs from the two renamed skills' descriptions
    (rows 12–13).
-5. Delete the `_DEPRECATED_VERBS` map in `lib/run_record.py` (row 15). Removable only
+5. Delete the `_DEPRECATED_VERBS` map in `lib/run_record.py` (row 17). Removable only
    under the same condition as the alias command: no run armed by ≤ v0.14.x can still
    be in flight, because such a run's guidance may still be telling its agent to call
    the retired verb.
-6. Drop the legacy-marker read in `lib/auto.py::_handoff_default_notice` (row 16). By
-   v0.15.0 anyone who acked under the old filename has long since re-acked under the
-   new one — the worst case is one stray notice.
+6. Drop the legacy-marker read in `lib/auto.py::_handoff_default_notice` (row 18). This
+   one is genuinely silent, because the notice **migrates the marker on read**: the first
+   post-upgrade run of a legacy-ack user writes `.handoff-default-acknowledged` alongside
+   the old file, so by the time the read goes there is nothing left to re-fire at. (It was
+   not always so. The read used to return early without writing anything, which meant a
+   legacy-ack user never grew the new marker and deleting the read re-fired the notice at
+   **every one of them** — the exact paper-cut the shim exists to prevent, deferred a
+   minor. If you are reading this because you are about to drop the read: confirm
+   `_handoff_default_notice` still writes the new marker on the legacy path first.)
 7. Delete the matching entries in `tests/unit/vocabulary-audit.test.sh` — the global
    path whitelist, and the `SCRUBS` rows that exempt those surfaces. The audit is what
    holds the line afterwards, so this step is what makes the removal stick. (Every row
    in that table names the surface it exempts in its rationale field; delete the row,
    and if the surface is really gone the audit stays green.)
-8. **Delete** the tests whose whole job was to pin the deprecated surfaces:
-   `tests/unit/run-record-stub.test.sh`, `tests/unit/flag-aliases.test.sh`,
-   `tests/unit/rearm-command-exists.test.sh`, and
-   `tests/integration/pulse-alias-inflight.test.sh`.
+8. **Delete** the one test whose whole job was to pin a deprecated surface:
+   `tests/unit/flag-aliases.test.sh`. Every one of its assertions exists only because the
+   retired flags do — with the flags gone there is nothing left in it to keep.
+
+   ⚠ **Only that one.** Three other tests read like they belong here and do not:
+   `run-record-stub.test.sh`, `rearm-command-exists.test.sh` and
+   `pulse-alias-inflight.test.sh` each pin the deprecated surface with a minority of
+   their assertions and the **canonical** surface with the rest. They are step-9 edits.
+   Deleting them would drop live regression coverage **and nothing would go red** — the
+   suite would stay green, the coverage would just be gone. That is the same shape as
+   every other defect this branch has chased: a change that removes a guard without
+   anything noticing. See step 9 for what each one actually holds.
 9. **Edit** — do not delete — the tests that pin a deprecated surface as part of a
-   larger job, or they go red: `tests/integration/workflow-picker.test.sh` (asserts the
-   retired picker stub still forwards), `tests/smoke/scaffold.test.sh` (asserts the
-   alias command file exists and dispatches), `tests/unit/run-record-cli-feedback.test.sh`
-   (pins the retired verbs still dispatch — restore the exit-2 assertion), and
-   `tests/unit/handoff-default.test.sh` (pins the legacy ack marker is honoured). Drop
-   only those assertions.
+   larger job, or they go red. Drop only the alias assertions:
+   - `tests/unit/rearm-command-exists.test.sh` — **one** of its nine assertions pins the
+     alias command of row 8 (and one more asserts both command files dispatch
+     `lib/pulse.sh` — keep the canonical half). The rest guard the canonical rearm path:
+     the loop fires namespaced
+     `/auto:auto-pulse`, no bare un-namespaced emissions, every fired command maps to a
+     command file, `commands/auto-pulse.md` exists, plus two deliberate-fail controls.
+     Those pin **two bugs that actually shipped** — v0.6.2 ("Unknown command" → the pulse
+     never ran) and v0.6.5 (bare un-namespaced command).
+   - `tests/unit/run-record-stub.test.sh` — its last two assertions pin that cmux-socket's
+     pulse-lock path and runaway-spawn sentinel still **resolve post-rename**. Those guard
+     the fail-open class the row-7 re-export shim's own docstring calls severe: an empty path
+     means "lock free" / "un-spawnable", so both guards fail open and spawn competing
+     drivers. Keep them; drop the six that exercise the retired stub itself.
+   - `tests/integration/pulse-alias-inflight.test.sh` — keep the canonical pulse path
+     assertions (canonical `lib/pulse.sh` advances + rearms, `commands/auto-pulse.md`
+     dispatches `lib/pulse.sh`) and the deliberate-fail control (a broken dispatch path
+     does NOT advance the run). Drop the alias/stub ones.
+   - `tests/integration/workflow-picker.test.sh` (asserts the retired picker stub still
+     forwards), `tests/smoke/scaffold.test.sh` (asserts the alias command file exists and
+     dispatches), `tests/unit/run-record-cli-feedback.test.sh` (pins the retired verbs
+     still dispatch — restore the exit-2 assertion), and
+     `tests/unit/handoff-default.test.sh` (pins the legacy ack marker is honoured, and
+     that a legacy-only ack migrates forward — see step 6).
 
 Leave `lib/format_compat.py`, its tests, its fixtures, and the legacy tier dirs alone.

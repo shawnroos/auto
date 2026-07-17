@@ -478,7 +478,14 @@ def set_enumerated_steps(repo_root, run_id, step_id, enumerated):
         dc["enumerated_steps"] = list(sanitized)
         if dropped:
             # U6: the forensic dropped-edge record keys the offending node as
-            # `step` (v1 spelled it `step`; format_compat maps it on read).
+            # `step`. v1 spelled that key with the RETIRED term, and
+            # format_compat._EDGE_KEY_MAP maps it FORWARD (retired -> `step`) on
+            # read. Direction matters here and this comment used to state it
+            # backwards ("v1 spelled it `step`"), which is exactly where a
+            # maintainer checking edge-record compat would be misled. It is not
+            # restated in full because this file may not spell the retired term
+            # (the vocabulary audit scans it) — `_EDGE_KEY_MAP` is the authority,
+            # and it is one grep away in the one module allowed to say both.
             dc["dropped_depends_on_edges"] = [
                 {"step": u, "dep": d, "reason": r} for (u, d, r) in dropped
             ]

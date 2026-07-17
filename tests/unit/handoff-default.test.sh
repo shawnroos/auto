@@ -161,6 +161,23 @@ if [ -z "$upgraded" ]; then
 else
   fail "the notice RE-FIRED at a user who had already acknowledged it under the pre-rename marker: '${upgraded}'"
 fi
+
+# ── Scenario 6a-2: the legacy ack MIGRATES FORWARD (what makes the read droppable) ──
+# Honouring the old marker keeps THIS version quiet, but on its own it is a dead end:
+# a legacy-ack user would never grow a `.handoff-default-acknowledged`, so dropping the
+# legacy read at v0.15.0 (docs/deprecations.md step 6) would re-fire the notice at EVERY
+# one of them — the same paper-cut, deferred one minor. So the notice MIGRATES ON READ:
+# finding only the old marker, it writes the new one. This asserts the run above (which
+# saw only the legacy marker) left the new marker behind.
+it "back-compat notice: a legacy-only ack MIGRATES to the new marker (so the v0.15.0 read-drop stays silent)"
+if [ -f "${up_shared}/.handoff-default-acknowledged" ]; then
+  pass
+else
+  fail "a legacy-only ack did NOT migrate forward — ${up_shared}/.handoff-default-acknowledged
+      was not written, so dropping the legacy read at v0.15.0 re-fires the v0.4.0 notice
+      at every user who acked under the old filename. got: $(ls -a "$up_shared" 2>/dev/null | tr '\n' ' ')"
+fi
+
 # …and the anti-vacuity floor: the same repo with NO marker at all MUST fire, or the
 # assertion above passes for the wrong reason (e.g. resolve_shared_dir returning None).
 it "back-compat notice: the same hermetic repo with NO marker DOES fire (anti-vacuity)"

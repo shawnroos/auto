@@ -204,20 +204,42 @@ def _handoff_default_notice():
     did, by omission.
 
     So: ACCEPT EITHER marker (the old one is proof of an ack just as good as the new
-    one), and WRITE only the new one. This is a read-compat shim of exactly the same
-    shape as lib/format_compat.py, at the smallest possible scale — and like that
-    shim, it is cheap to keep and expensive to have skipped.
+    one), and MIGRATE ON READ — when only the legacy marker is found, write the new
+    one before returning. This is a read-compat shim of exactly the same shape as
+    lib/format_compat.py, at the smallest possible scale — and like that shim, it is
+    cheap to keep and expensive to have skipped.
+
+    The migration is what makes the legacy read DROPPABLE. Without it there is no
+    re-ack path at all: a legacy-ack user never grows a `.handoff-default-acknowledged`,
+    so deleting the legacy read at v0.15.0 (docs/deprecations.md step 6) re-fires this
+    notice at EVERY one of them — the exact bug the shim exists to prevent, just
+    deferred. With it, one post-upgrade run migrates the marker forward and the v0.15.0
+    removal is genuinely silent.
 
     Best-effort: any IO failure swallows silently. A missing marker on a
-    next run re-fires the notice; not a load-bearing correctness path.
+    next run re-fires the notice; not a load-bearing correctness path. The same
+    applies to the migration write — if it fails, the legacy marker is still there
+    and still suppresses the notice, so the user sees nothing either way.
     """
     shared = resolve_shared_dir()
     if shared is None:
         return  # No git → can't anchor the marker; skip the notice.
     marker = os.path.join(shared, ".handoff-default-acknowledged")
-    # The pre-rename spelling. Read-only: an existing ack still counts.
+    # The pre-rename spelling. An existing ack still counts.
     legacy_marker = os.path.join(shared, ".seam-default-acknowledged")
-    if os.path.exists(marker) or os.path.exists(legacy_marker):
+    if os.path.exists(marker):
+        return
+    if os.path.exists(legacy_marker):
+        # MIGRATE ON READ: carry the ack forward under the new name, so the legacy
+        # read above can be deleted at v0.15.0 without re-firing at this user.
+        try:
+            os.makedirs(shared, mode=0o700, exist_ok=True)
+            with open(marker, "w") as fh:
+                fh.write("ack")
+        except OSError:
+            # Same best-effort posture as the write below: the legacy marker still
+            # exists and still suppresses the notice, so nothing user-visible changes.
+            pass
         return
     sys.stderr.write(
         "[auto] v0.4.0 handoff-default FLIP: `/auto <plan>` now proceeds past "
