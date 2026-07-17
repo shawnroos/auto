@@ -205,6 +205,19 @@ _TOOL_SURFACE_PREAMBLE = {
             "noop": '{"action":"noop","reason":"lock-held-by-live-pulse"}',
         },
     },
+    "phase_model": {
+        "doc": (
+            "Phases run in the workflow's phase_order. The CURRENT phase is the "
+            "run-record's loop_phase — never phase_order[0], which is only the "
+            "START phase. When a phase's predicate is met and it is not the "
+            "terminal_phase, the engine advances to the next phase; at the "
+            "terminal_phase the run can exit. Run `describe <run>` for THIS run's "
+            "phase_order and current-phase next-action."
+        ),
+        "default_phase_order": ["plan", "handoff", "work"],
+        "default_terminal_phase": "work",
+        "current_phase_key": "loop_phase",
+    },
 }
 
 

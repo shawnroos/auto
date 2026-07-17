@@ -68,6 +68,17 @@ utilities for upgrading a workflow file on disk — deliberately kept out of
 `_VERBS`/`describe` so the locked, set-equality-enforced agent verb surface stays
 the set of verbs an agent actually drives a run with.
 
+## Phase model
+
+`describe` publishes the loop's phase model so an agent orients to phases without
+the skill corpus. Phases run in the workflow's `phase_order`; the default order is
+`plan` → `handoff` → `work`, with `work` the terminal phase. The **current** phase
+is the run-record's `loop_phase` — never `phase_order[0]`, which is only the start
+phase. When a phase's predicate is met and it is not the terminal phase, the engine
+advances to the next phase; at the terminal phase the run can exit. For a live run,
+`describe <run>` overlays THIS run's `phase_order` and current-phase next-action
+onto the static surface above.
+
 ## What stays deterministic
 
 The agent supplies judgment; the correctness spine stays mechanism. The run-record's
