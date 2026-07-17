@@ -216,7 +216,9 @@ _TOOL_SURFACE_PREAMBLE = {
         ),
         "default_phase_order": ["plan", "handoff", "work"],
         "default_terminal_phase": "work",
-        "current_phase_key": "loop_phase",
+        # current_phase_key is injected in _describe_surface() from phase-grammar's
+        # LOOP_PHASE_KEY — never a raw "loop_phase" literal here (phase-grammar-ast-lint
+        # keeps that key's spelling owned by the ONE phase module).
     },
 }
 
@@ -489,11 +491,19 @@ _VERBS = {
 
 def _describe_surface():
     """The full `describe` payload: the static preamble + the verb catalog derived
-    from `_VERBS`, so dispatch and docs share one source."""
-    return {
+    from `_VERBS`, so dispatch and docs share one source. The phase model's
+    current_phase_key is sourced from phase-grammar (the ONE phase module) rather
+    than a raw literal here — the AST-lint keeps that spelling centralized."""
+    pg = load_lib_module("phase-grammar")
+    surface = {
         **_TOOL_SURFACE_PREAMBLE,
         "verbs": {name: verb.as_doc() for name, verb in _VERBS.items()},
     }
+    surface["phase_model"] = {
+        **surface["phase_model"],
+        "current_phase_key": pg.LOOP_PHASE_KEY,
+    }
+    return surface
 
 
 # ─── the OPERATOR revert command (U10 / KTD-1) ──────────────────────────────
