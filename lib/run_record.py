@@ -280,10 +280,33 @@ def _json_array(raw, what):
 # ── read / inspection handlers (explicit <repo> <run>; no mutation) ──
 
 
+def _describe_run_overlay(run):
+    """The run-scoped `describe <run>` overlay: this run's phase model on top of the
+    static surface. PURE READ — no lock, no mutation (U2). Resolves the repo the same
+    way the feedback/steering verbs do, then reads the run-record and projects its
+    phase state through phase-grammar (the ONE phase-decision module)."""
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(resolve_repo(), run)
+    surface = _describe_surface()
+    current = pg.current_phase(rr)
+    surface["run_phase"] = {
+        "run": run,
+        "phase_order": pg.phase_order(rr),
+        "current_phase": current,
+        "terminal_phase": pg.terminal_phase(rr),
+        "is_terminal": pg.is_terminal_phase(rr),
+        "next_phase_after_met": pg.next_phase_after_met(rr),
+    }
+    return surface
+
+
 def _h_describe(argv):
     # R6/R7: the whole stable operating contract as ONE JSON object, so an agent
-    # orients without loading the skill corpus. No repo, no mutation.
-    json.dump(_describe_surface(), sys.stdout, indent=2, sort_keys=True)
+    # orients without loading the skill corpus. With no arg: the static surface, no
+    # repo, no mutation. With `<run>`: overlays THIS run's phase model (U2) — still a
+    # pure read.
+    surface = _describe_run_overlay(argv[1]) if len(argv) > 1 else _describe_surface()
+    json.dump(surface, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
@@ -413,7 +436,7 @@ def _h_register_session(argv):
 
 _VERBS = {
     # read / inspection
-    "describe": _Verb(_h_describe, "(none)", reads=True),
+    "describe": _Verb(_h_describe, "[run]  (with <run>: overlays THIS run's phase model)", reads=True),
     "read": _Verb(_h_read, "<repo> <run>", reads=True),
     "path": _Verb(_h_path, "<repo> <run>", reads=True),
     "is-orphaned": _Verb(_h_is_orphaned, "<repo> <run>", reads=True),
