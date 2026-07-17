@@ -60,8 +60,12 @@ context runs out, the routine continuation is a normal `/auto-resume`
   not CLI). YOU read the intent and, when `action == "rearm"`, issue
   the `ScheduleWakeup(delay, prompt)` call.
 - **`lib/dispatcher.py`** — `ready_steps`, `dispatch_batch`,
-  `converge`. Surfaces ready-and-independent steps; YOU decide the
-  cap. Never hardcodes concurrency.
+  `converge`, `propose`. Surfaces ready-and-independent steps; YOU decide the
+  cap. Never hardcodes concurrency. `bash lib/dispatcher.sh propose <run>` (U7)
+  is a READ-ONLY view of the grammar-legal candidate advances THIS beat
+  (ready work steps, eligible plan steps + the round-robin pick, phase-advance
+  eligibility) so YOU can steer *which* advance fires — the engine still validates
+  the pick and keeps one-advance-per-pulse. No mutation, no dispatch.
 - **`lib/run_record.py`** — disk-persisted per-step run-record. Read
   `exit_predicate_result.met` from it; never re-derive.
 

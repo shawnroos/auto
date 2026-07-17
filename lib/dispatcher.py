@@ -287,6 +287,44 @@ def pick_next_plan_step_to_advance(run_record: dict):
     return sorted(candidates, key=keyfn)[0]["id"]
 
 
+def propose_surface(repo_root, run_id):
+    """READ-ONLY candidate-advance set for the ``propose`` verb (U7).
+
+    Surfaces the grammar-legal advances available THIS beat so the driving agent can
+    SEE and steer WHICH one fires — the in-loop "what next" that was otherwise
+    code-picked. It only makes the deterministic candidate set legible: the
+    one-advance-per-pulse ORDERING stays mechanism, and the engine still validates
+    any pick (``dispatch_batch`` rejects a not-ready step). Pure read — no lock, no
+    mutation, no dispatch. ``phase-grammar`` is loaded as a consumer (KTD-2: this
+    module already loads siblings via ``load_lib_module``).
+    """
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(repo_root, run_id)
+    pred = rr.get("exit_predicate_result") or {}
+    met = bool(pred.get("met"))
+    is_terminal = pg.is_terminal_phase(rr)
+    return {
+        "run": run_id,
+        "current_phase": pg.current_phase(rr),
+        "ready_work_steps": ready_steps(repo_root, run_id),
+        "eligible_plan_steps": [
+            u["id"] for u in rr.get("steps", [])
+            if u.get("phase") == "plan" and u.get("state") == "dispatched"
+        ],
+        "round_robin_plan_pick": pick_next_plan_step_to_advance(rr),
+        "phase_advance_to": (
+            pg.next_phase_after_met(rr) if met and not is_terminal else None
+        ),
+        "predicate_met": met,
+        "contract": (
+            "READ-ONLY. Exactly one advance fires per pulse. The driver MAY pick "
+            "which candidate fires, but the engine validates the pick against "
+            "phase-grammar + the one-advance-per-pulse ordering — an illegal pick "
+            "is rejected, not executed."
+        ),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Dispatch — the WRITER op. pending -> dispatched + launch the background agent.
 
@@ -571,6 +609,14 @@ def _cli(argv):
             import json
 
             json.dump(converge(repo, run), sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+            return 0
+        if cmd == "propose":
+            # propose <repo> <run>   (U7 — READ-ONLY candidate-advance set)
+            repo, run = argv[1], argv[2]
+            import json
+
+            json.dump(propose_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
         sys.stderr.write(f"dispatcher.py: unknown subcommand {cmd!r}\n")
