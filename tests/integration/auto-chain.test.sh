@@ -79,7 +79,7 @@ mkdir -p "$REPO"
 jqf() { "$PY" -c "import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])" "$1" "$2"; }
 
 # ════════════════════════════════════════════════════════════════════════════
-echo "dispatch-chain.test.sh"
+echo "auto-chain.test.sh"
 
 # ─── Scenario 1: full chain exits on work predicate, emits minors report ──────
 # A work-loop run that reaches exit: one step verdict-returned with ONLY a minor
@@ -481,5 +481,5 @@ fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
-echo "dispatch-chain.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "auto-chain.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

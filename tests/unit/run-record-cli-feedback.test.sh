@@ -91,18 +91,20 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# U7 (concept-vocabulary rename): the work-node CLI verbs were HARD-CUT to their
-# `step` spelling with NO deprecated aliases (KTD-4 — verbs are never persisted,
-# so the only callers are this repo's skills, updated atomically, and driving
-# agents, which the agent-tool-surface contract tells to orient via `describe`).
+# U7 (concept-vocabulary rename) renamed the work-node CLI verbs to their `step`
+# spelling. It also HARD-CUT the old spellings, with no alias — and F(B) reversed
+# that: they are DEPRECATED ALIASES now (see the block below for why).
 #
-# Two things must hold, and only a CLI-level test can prove either:
+# Three things must hold, and only a CLI-level test can prove any of them:
 #   1. the NEW verb actually round-trips through `lib/run_record.sh` (add → reshape-deps
 #      → transition). The Python mutators are covered in steering-verbs.test.sh, but
 #      the model's ONLY run-record-write tool is this shell CLI — the same
 #      uninvokable-instruction bug class this file exists for.
-#   2. the RETIRED verb is a hard exit 2, not a silent no-op, and the error points at
-#      `describe` so a stale-vocabulary agent can re-orient in one step.
+#   2. the RETIRED verb still DISPATCHES (it mutates the record; it does not silently
+#      no-op), warns on stderr, and keeps stdout byte-clean.
+#   3. a genuinely unknown verb is STILL a hard exit 2 whose error names `describe`, so
+#      the alias layer has not become a shrug — and the aliases stay OUT of `describe`,
+#      so no new agent learns the retired vocabulary from us.
 # ════════════════════════════════════════════════════════════════════════════
 
 # ─── add-step round-trip through the CLI (add → reshape-deps → transition) ───
@@ -128,25 +130,92 @@ else
   fail "add-step round-trip broke at: ${rt_err}"
 fi
 
-# ─── the retired verbs are GONE: exit 2, and the error names `describe` ──────
-# NB: the loop below necessarily SPELLS the retired verb names — it is the only place
-# in the tree that may. The vocabulary-audit exempts exactly those two tokens, in
-# exactly this file (path + content anchored), so any OTHER stale token from the
-# retired vocabulary still fails the audit here.
-for retired in add-unit set-enumerated-units; do
-  it "hard-cut (KTD-4): retired verb '${retired}' exits 2 and points at describe"
-  hc_out="$(bash "$RUN_RECORD_SH" "$retired" rF plan '[]' 2>&1)"
-  hc_rc=$?
-  if [ "$hc_rc" -ne 2 ]; then
-    fail "retired verb '${retired}' exited ${hc_rc}, expected 2 (bad-args) — an alias may have crept back in"
-  elif ! printf '%s' "$hc_out" | grep -q "unknown subcommand"; then
-    fail "retired verb '${retired}' did not report 'unknown subcommand'; got: ${hc_out}"
-  elif ! printf '%s' "$hc_out" | grep -q "describe"; then
-    fail "retired verb '${retired}' rejected but did NOT point at \`describe\` — a stale-vocabulary agent cannot re-orient. got: ${hc_out}"
-  else
-    pass
-  fi
-done
+# ─── the retired verbs are DEPRECATED ALIASES, not a hard cut (F(B)) ─────────
+# U7 hard-cut these to exit 2, reasoning that "verbs are never persisted, so nothing
+# in flight can hold one". But the pre-rename guidance module (now lib/pulse_guidance.py)
+# EMITTED GUIDANCE naming them — it handed the driving agent a literal
+# `… set-enumerated-units <args>` line to run. The verb isn't persisted; the
+# INSTRUCTION TO RUN IT is (agent context, and a persisted rearm prompt). An agent
+# mid-run across the upgrade executed it and got exit 2. That is the same in-flight
+# case the deprecated flag aliases and the kept alias command exist for, decided the
+# other way — so it is now an alias, on the same rewrite-and-fall-through mechanism.
+#
+# THREE properties, and the third is the one a bare "it works" test would miss:
+#   1. the retired verb ACTUALLY MUTATES the record (it reaches the canonical handler,
+#      not a no-op that merely exits 0);
+#   2. it warns on STDERR — so an agent is told to re-orient;
+#   3. STDOUT STAYS BYTE-CLEAN — the notice must not land in a `… | jq` pipeline, the
+#      same contract the kept run-record forwarding stub keeps.
+#
+# NB: this loop necessarily SPELLS the retired verb names. The vocabulary-audit exempts
+# exactly those two tokens, in exactly this file and in lib/run_record.py (path +
+# token anchored), so any OTHER stale token from the retired vocabulary still fails.
+
+it "deprecated alias: 'add-unit' still ADDS a step (in-flight agent across the upgrade)"
+al_out="$(bash "$RUN_RECORD_SH" add-unit rF w-alias '[]' work 2>/dev/null)"
+al_rc=$?
+al_state="$(read_field '[u["state"] for u in led["steps"] if u["id"]=="w-alias"]')"
+if [ "$al_rc" -ne 0 ]; then
+  fail "retired verb 'add-unit' exited ${al_rc}; the alias does not dispatch"
+elif [ "$al_state" != "['pending']" ]; then
+  fail "'add-unit' exited 0 but added NO step (steps state: ${al_state}) — a silent no-op is worse than exit 2"
+elif [ -n "$al_out" ]; then
+  fail "'add-unit' wrote to STDOUT ('${al_out}') — the deprecation notice belongs on stderr, or it corrupts a \`… | jq\` pipeline"
+else
+  pass
+fi
+
+it "deprecated alias: 'add-unit' warns on STDERR and names the canonical verb"
+al_err="$(bash "$RUN_RECORD_SH" add-unit rF w-alias2 '[]' work 2>&1 >/dev/null)"
+if printf '%s' "$al_err" | grep -q 'deprecated' && printf '%s' "$al_err" | grep -q 'add-step'; then
+  pass
+else
+  fail "'add-unit' did not warn on stderr naming \`add-step\`; got: ${al_err}"
+fi
+
+it "deprecated alias: 'set-enumerated-units' still writes the enumerated steps"
+se_out="$(bash "$RUN_RECORD_SH" set-enumerated-units rF plan \
+  '[{"id":"e-alias","invokes":{"backend_op":"do_step"}}]' 2>/dev/null)"
+se_rc=$?
+se_ids="$(read_field '[u for u in led["steps"] if u["phase"]=="plan"][0]["dispatch_context"].get("enumerated_steps")')"
+if [ "$se_rc" -ne 0 ]; then
+  fail "retired verb 'set-enumerated-units' exited ${se_rc}; the alias does not dispatch"
+elif ! printf '%s' "$se_ids" | grep -q 'e-alias'; then
+  fail "'set-enumerated-units' exited 0 but enumerated NOTHING (got: ${se_ids}) — a silent no-op"
+elif [ -n "$se_out" ]; then
+  fail "'set-enumerated-units' wrote to STDOUT ('${se_out}') — the notice belongs on stderr"
+else
+  pass
+fi
+
+# …and a verb that is neither canonical nor a known alias is STILL a hard exit 2 that
+# points at `describe`. The alias layer must not become a shrug at any unknown verb.
+it "an unknown (non-aliased) verb still exits 2 and points at describe"
+hc_out="$(bash "$RUN_RECORD_SH" add-widget rF plan '[]' 2>&1)"
+hc_rc=$?
+if [ "$hc_rc" -ne 2 ]; then
+  fail "unknown verb exited ${hc_rc}, expected 2 (bad-args)"
+elif ! printf '%s' "$hc_out" | grep -q "unknown subcommand"; then
+  fail "unknown verb did not report 'unknown subcommand'; got: ${hc_out}"
+elif ! printf '%s' "$hc_out" | grep -q "describe"; then
+  fail "unknown verb rejected but did NOT point at \`describe\` — an agent cannot re-orient. got: ${hc_out}"
+else
+  pass
+fi
+
+# The aliases are NOT part of the advertised agent surface: `describe` (and therefore
+# docs/contracts/agent-tool-surface.md, which the doc-fence binds to it) must not name
+# them. An alias is a bridge for an agent that already holds the old name — not a verb
+# we tell a NEW agent to use. Same posture as `downgrade`.
+it "the deprecated aliases are NOT advertised in describe / the agent tool surface"
+desc="$(bash "$RUN_RECORD_SH" describe 2>/dev/null)"
+if printf '%s' "$desc" | grep -q 'add-unit\|set-enumerated-units'; then
+  fail "describe advertises a deprecated alias — a new agent would learn the retired vocabulary"
+elif ! printf '%s' "$desc" | grep -q 'add-step'; then
+  fail "describe does not name \`add-step\` — the check above would pass vacuously"
+else
+  pass
+fi
 
 # ════════════════════════════════════════════════════════════════════════════
 # Work-loop VERDICT channel (v0.6.8) — record-verdict / set-verdict-decision.

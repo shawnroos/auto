@@ -41,7 +41,8 @@ place that tracks them together.
 | the `--recipe` routing branch in `commands/auto.md` | the `--workflow` branch | The command file must MATCH the retired spelling or the alias never reaches the parser — so this goes **with** the flag entries above, not separately. Easy to miss: it is the one alias surface that is not in `lib/auto.py` | v0.15.0 | <!--legacy--> |
 | `.claude/auto/recipes/` tier dirs (workspace + global) | `.claude/auto/workflows/` | **A USER'S OWN FILES.** Read-only legacy tiers in `lib/workflows.py::_tier_dirs`. Never written to. Removing them orphans workflow files the user authored before the rename | **not scheduled** — see below | <!--legacy--> |
 | the v1 on-disk keys (`units`, `adapter`, `recipe`, `seam_paused`, `emitter`, `gate_unit`, `do_unit`, …) | their v2 spellings, mapped in memory by `lib/format_compat.py` | **USER DATA.** Every pre-rename run-record, hand-authored workflow file, **and hand-authored preset** — three chokepoints, not two (`presets.load_preset` is the third; without it a pre-rename preset does not degrade, it HARD-FAILS `validate_preset` and aborts `/auto --preset <name>`). The map is applied unconditionally on every read, never gated on the `format` marker | **never** — see below | <!--legacy--> |
-| retired CLI verbs (`add-unit`, `set-enumerated-units`) | `add-step`, `set-enumerated-steps` | **Already removed — hard cut, no alias.** Verbs are never persisted, so nothing in flight can hold one; an unknown verb exits 2 and the error names `describe`, the contract's orientation path. Listed here only so a stale transcript is diagnosable | — | <!--legacy--> |
+| retired CLI verbs (`add-unit`, `set-enumerated-units`) | `add-step`, `set-enumerated-steps` | An agent mid-run **across** the upgrade. These were originally a hard cut, on the reasoning that "verbs are never persisted". That was wrong: the pre-rename guidance module handed the driving agent a literal `… set-enumerated-units <args>` line to *run*, and that instruction persists (agent context, rearm prompt) even though the verb doesn't. Now a deprecated alias — `_DEPRECATED_VERBS` in `lib/run_record.py`, same rewrite-and-fall-through as the flags, one stderr notice, stdout byte-clean. Deliberately **not** in `_VERBS`/`describe`, so no new agent learns it | v0.15.0 | <!--legacy--> |
+| the `.seam-default-acknowledged` marker file | `.handoff-default-acknowledged` | **USER STATE, not a code identifier.** The rename swept the filename; `lib/auto.py` still *reads* the old one (it only ever writes the new one). Removing the read re-fires the one-time v0.4.0 handoff-flip notice at every user who dismissed it a version ago. Harmless, but it is the kind of paper-cut that makes an upgrade feel broken | v0.15.0 | <!--legacy--> |
 
 ## The two that are not on a schedule
 
@@ -74,6 +75,31 @@ than "the rename is old news."
 
 ---
 
+## What the read-shim does NOT buy you: a mixed fleet
+
+**Running two plugin versions against one `.claude/auto/` state dir is not supported.**
+The shim makes a mixed fleet *survivable* — nothing crashes, no record is structurally
+misread — but it does not make it *correct*, and the failure is silent.
+
+Here is the whole of it. When the shim maps an old key to its new one it drops the old
+twin, and where **both** twins are present the **new key wins**. Every format-v2
+run-record carries `handoff_paused` from the moment it is created. So if an older
+plugin's hook writes `seam_paused: true` into that record, the record briefly holds both
+keys, new-wins discards the old one, and **the pause the old plugin just set is gone** on
+the very next read. Same for every twinned key.
+
+That is a deliberate trade. Old-wins would make an upgraded record revert to whatever a
+stale hook last wrote — it would break the upgrade path itself. Resolving twins by
+timestamp or heuristic would be an unauditable guess about which plugin version "meant
+it". New-wins is the only rule that is total, order-independent and explainable, so it is
+the rule — and the cost is that the older plugin's write is lost.
+
+**Before any smoke run or `/auto-resume` on a repo whose `.claude/auto/` is shared with an
+installed older plugin: update the plugin, or run against an isolated state dir.** This is
+most likely exactly where you'd least expect it — dogfooding auto on the auto repo itself.
+
+---
+
 ## Removing the temporary layer (v0.15.0 checklist)
 
 Rows in the table above whose "remove in" column says v0.15.0 — nothing else.
@@ -88,17 +114,28 @@ Rows in the table above whose "remove in" column says v0.15.0 — nothing else.
    rewrite-and-fall-through rather than a second implementation.
 4. Drop the `(formerly …)` breadcrumbs from the two renamed skills' descriptions
    (rows 12–13).
-5. Delete the matching entries in `tests/unit/vocabulary-audit.test.sh` — the global
-   path whitelist, and the per-term scrub branches that exempt those surfaces. The
-   audit is what holds the line afterwards, so this step is what makes the removal
-   stick.
-6. **Delete** the tests whose whole job was to pin the deprecated surfaces:
+5. Delete the `_DEPRECATED_VERBS` map in `lib/run_record.py` (row 15). Removable only
+   under the same condition as the alias command: no run armed by ≤ v0.14.x can still
+   be in flight, because such a run's guidance may still be telling its agent to call
+   the retired verb.
+6. Drop the legacy-marker read in `lib/auto.py::_handoff_default_notice` (row 16). By
+   v0.15.0 anyone who acked under the old filename has long since re-acked under the
+   new one — the worst case is one stray notice.
+7. Delete the matching entries in `tests/unit/vocabulary-audit.test.sh` — the global
+   path whitelist, and the `SCRUBS` rows that exempt those surfaces. The audit is what
+   holds the line afterwards, so this step is what makes the removal stick. (Every row
+   in that table names the surface it exempts in its rationale field; delete the row,
+   and if the surface is really gone the audit stays green.)
+8. **Delete** the tests whose whole job was to pin the deprecated surfaces:
    `tests/unit/run-record-stub.test.sh`, `tests/unit/flag-aliases.test.sh`,
    `tests/unit/rearm-command-exists.test.sh`, and
    `tests/integration/pulse-alias-inflight.test.sh`.
-7. **Edit** — do not delete — the two tests that pin a deprecated surface as part of a
+9. **Edit** — do not delete — the tests that pin a deprecated surface as part of a
    larger job, or they go red: `tests/integration/workflow-picker.test.sh` (asserts the
-   retired picker stub still forwards) and `tests/smoke/scaffold.test.sh` (asserts the
-   alias command file exists and dispatches). Drop only those assertions.
+   retired picker stub still forwards), `tests/smoke/scaffold.test.sh` (asserts the
+   alias command file exists and dispatches), `tests/unit/run-record-cli-feedback.test.sh`
+   (pins the retired verbs still dispatch — restore the exit-2 assertion), and
+   `tests/unit/handoff-default.test.sh` (pins the legacy ack marker is honoured). Drop
+   only those assertions.
 
 Leave `lib/format_compat.py`, its tests, its fixtures, and the legacy tier dirs alone.

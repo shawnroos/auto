@@ -36,6 +36,21 @@
 #   * The PROSE form is NOT, and cannot be, without a whitelist that would rot. When
 #     you sweep, EYEBALL any sentence that describes an old→new mapping. This finds the
 #     shape:  grep -rnE '`([a-z_]+)`[^`]{1,20}`\1`' docs/ lib/ README.md CONCEPTS.md
+#
+# ⚠ THE OTHER RESIDUAL — A `<!--legacy-->` ROW'S COLUMNS 3+ (F3). Name it precisely,
+# because "the legacy rows are policed" is only two-thirds true:
+#     | <retired name> | <replacement> | <free text> | <free text> | <!--legacy--> |
+#       └── 1b checks ─┴───────────────┘ └────────── EXEMPT, UNPOLICED ───────────┘
+#   Scenario 1b checks cells 1 and 2 (names a retired term; is not a tautology). It
+#   checks NOTHING from cell 3 on, and it CANNOT: a real row's free-text columns
+#   legitimately carry retired identifiers — docs/deprecations.md has to be able to say
+#   "`.claude/auto/recipes/` tier dirs … read-only legacy tiers in `lib/workflows.py`".
+#   There is no predicate that separates that from a stale identifier someone parked in
+#   a table row. So the residual is, exactly: *inside a genuine, 1b-verified read-compat
+#   row in a scanned .md file, any retired identifier from column 3 onward is invisible
+#   to this audit.* It is bounded to that shape (1c proves nothing outside it can claim
+#   the exemption) and to those few files. It is a BY-DESIGN residual, not a gap to fix
+#   — but when you sweep, EYEBALL those columns too.
 
 set -uo pipefail
 
@@ -197,23 +212,163 @@ GLOBAL_PATH_PREFIX_WHITELIST=(
   'docs/research/'
 )
 
-# ─── PERMANENT GLOBAL CONTENT EXEMPTIONS ────────────────────────────────────
-# Line CONTENT that legitimately references an old term, for any term. There are
-# exactly three, and each is applied INSIDE audit_term_hits (see the scrubs there) —
-# there is deliberately no `GLOBAL_CONTENT_WHITELIST_RE` variable any more. U10 removed
-# it: it had been dead code since the token-scrub rewrite (defined, never referenced),
-# while its comment still described it as the live mechanism. A stale name for a
-# defense, sitting next to the real defense, is how the next reader mis-models what is
-# actually enforced.
+
+# ════════════════════════════════════════════════════════════════════════════
+# THE EXEMPTION MACHINERY — and the ONE defect class this file keeps re-growing.
+# ════════════════════════════════════════════════════════════════════════════
+# FOUR TIMES an exemption in this file has turned out to be an UNBOUNDED or
+# UNANCHORED opt-out from the permanent guard, each found only by review:
 #
-#   * "supersedes <name> <version>" — the KTD-5 re-lock banner. Scrubbed as a bounded
-#     TOKEN (name + optional version), not to end-of-line.
-#   * "(formerly <name>)" — the KTD-4 skill breadcrumbs that keep model-side triggering
-#     matching the old phrasing. Scrubbed as ONE parenthesised name, not `[^)]*`.
-#   * `<!--legacy-->` on a markdown TABLE ROW — the read-compat appendix rows (KTD-5
-#     step 3), whose entire purpose is to name the retired key. Exempt by SHAPE, and
-#     Scenario 1b then polices every such row's content; Scenario 1c proves nothing
-#     outside that shape can claim it.
+#   1. `grep -vF -- '<!--legacy-->'`   — a WHOLE-LINE drop, any file, any shape.
+#                                        Append the marker to a stale line → GREEN.
+#   2. `\([Ff]ormerly [^)]*\)`         — `[^)]*` runs to the next `)`, arbitrarily
+#                                        far, taking real stale identifiers with it.
+#   3. `grep -vF "${wl}:"`             — the PATH whitelist as a fixed-string match
+#                                        ANYWHERE in the `path:lineno:content` hit.
+#                                        So merely CITING a whitelisted path in a
+#                                        line's CONTENT exempted the whole line, in
+#                                        any scanned file:
+#                                          lib/evil.py: led = ledger.read(x)  # see lib/ledger.py: the shim
+#                                        → zero hits for `ledger`. Reachable BY
+#                                        ACCIDENT — "see `lib/ledger.py`: …" is
+#                                        natural prose, and each whitelist entry
+#                                        minted a fresh trigger.
+#   4. `gsub(/supersedes …/)`          — the KTD-5 re-lock banner scrub applied in
+#                                        EVERY scanned file, so
+#                                          "This module supersedes ledger.py entirely."
+#                                        in any doc was fully exempt.
+#
+# And a FIFTH, found while fixing 3+4: the `tick` branch's
+# `grep -vE '^(three test paths):[0-9]+:.*(auto-tick|tick\.sh)'` was a WHOLE-LINE
+# drop too — path- and content-anchored, but still dropping the entire line, so a
+# stale `tick` identifier sharing a line with `auto-tick` rode through.
+#
+# Patching them one at a time has failed five times. So the SHAPE is now fixed by
+# construction, and the class is fenced by a control (Scenario 0):
+#
+#   KIND (1) PATH        — a whole file legitimately speaks the old vocabulary.
+#                          Matched ANCHORED against the hit's `path:lineno:` prefix,
+#                          with the path REGEX-ESCAPED. It can only ever match a
+#                          leading path, never content.
+#   KIND (2) PATH-PREFIX — a whole directory. Same anchoring, same escaping.
+#   KIND (3) TOKEN SCRUB — a BOUNDED token, declared in the SCRUBS table, bound to
+#                          the PATHS where it legitimately lives. NEVER a line drop:
+#                          the token is cut out of a COPY of the line, and the line
+#                          survives if any stale identifier survives the cut.
+#   KIND (4) `<!--legacy-->` MARKDOWN TABLE ROW — the ONLY line drop in this file.
+#                          Bound to a shape (a `|`-row in a `.md` file), policed
+#                          row-by-row by Scenario 1b, fenced by Scenario 1c.
+#
+# There is no fifth kind, and adding one is what Scenario 0a fails on.
+#
+# ⚠ THE RESIDUAL, NAMED PRECISELY (F3 — by design, not an oversight).
+# A `<!--legacy-->` row's columns 3+ (its free-text "what it forwards to" / "what
+# removing it breaks" prose) are exempt and UNPOLICED. 1b checks only cells 1 and 2
+# — the retired name and its replacement — because there is no checkable predicate
+# for the rest: a real row's prose LEGITIMATELY carries retired identifiers
+# (`docs/deprecations.md` must be able to say "`.claude/auto/recipes/` tier dirs …
+# read-only legacy tiers in `lib/workflows.py::_tier_dirs`"). The residual is
+# therefore: *inside a genuine, 1b-verified read-compat table row in a scanned .md
+# file, any retired identifier from column 3 onward is invisible to this audit.* It
+# is bounded to that shape and to those files, and 1c proves nothing outside the
+# shape can reach it. When you sweep, EYEBALL those columns.
+
+# ─── SELF (F8: derive the summary probe from this file, never a hand-copy) ───
+SELF="${BASH_SOURCE[0]}"
+
+# re_escape <literal> → the same string, safe to paste into an ERE.
+# A whitelist entry is a PATH, not a pattern: `lib/ledger.py` used raw as an ERE has
+# a `.` that matches ANY character, so `lib/ledgerZpy` would be exempt too. Escape
+# everything that is not `[A-Za-z0-9_/-]` (each of which is literal in an ERE), so a
+# path can only ever match itself.
+re_escape() { printf '%s' "$1" | sed 's|[^A-Za-z0-9_/-]|\\&|g'; }
+
+# Both path filters are compiled ONCE, here, into a single anchored alternation —
+# `^(a|b|c):[0-9]+:` and `^(dir/|dir/)`. audit_term_hits is called ~50 times per run;
+# escaping and grepping 17 entries separately on each call cost more in process spawns
+# than the whole audit does in work.
+_wl_alt=""
+for _wl in "${GLOBAL_PATH_WHITELIST[@]}"; do
+  _wl_alt="${_wl_alt}${_wl_alt:+|}$(re_escape "$_wl")"
+done
+WHITELIST_RE="^(${_wl_alt}):[0-9]+:"
+
+_pfx_alt=""
+for _wl in "${GLOBAL_PATH_PREFIX_WHITELIST[@]}"; do
+  _pfx_alt="${_pfx_alt}${_pfx_alt:+|}$(re_escape "$_wl")"
+done
+PREFIX_RE="^(${_pfx_alt})"
+
+# ─── THE SCRUBS TABLE — the ONLY place a token exemption may be declared ─────
+# `%%`-separated fields. Applied IN ORDER (one row can set up the next).
+#
+#   term   the audited term this row applies to, or `*` for every term
+#   path   an ERE for the hit's PATH. MUST be `^…$`-anchored, or the literal `*`
+#          for "any file" — which is legal ONLY for a token that is genuinely
+#          tree-wide noise, and whose boundedness Scenario 0b then probes
+#   token  an ERE for the BOUNDED token to cut out of a COPY of the line
+#   repl   what to leave behind. A placeholder for a scrub; ` unit ` for the one
+#          NORMALIZE-TO-KEEP row, which turns a real symbol back INTO a hit
+#   probe  a LITERAL example of `token` as it really appears in the tree. Scenario
+#          0b plants it — unexempted, beside a stale identifier — and requires the
+#          audit to still fire. A row with no honest literal example is a row that
+#          should not exist
+#   why    one line
+#
+# The engine never sees a regex it did not get from this table, and the table can
+# express nothing but a bounded token cut. That is what "bounded by construction"
+# means here — not a comment promising it.
+# <<<SCRUBS-TABLE (0a lints CODE; the table itself is validated by 0a-2 + 0b)
+SCRUBS=(
+  # ── every term ──
+  '*%%^(docs/contracts/backend-contract\.md|docs/contracts/run-record-schema\.md|docs/contracts/workflow-format\.md)$%%supersedes[:,]?[ ]+`?[A-Za-z0-9_./-]+`?([ ]+\(?v?[0-9][A-Za-z0-9_.-]*\)?)?%%@SUPERSEDES@%%supersedes `ledger-schema.md`%%KTD-5 contract re-lock banner. F4: this was applied TREE-WIDE, so `This module supersedes ledger.py entirely.` in any doc was exempt. The banners live only in the contract headers — bind it there.'
+  '*%%^(skills/auto-author-workflow/SKILL\.md|skills/auto-backend/SKILL\.md)$%%\([Ff]ormerly `?[A-Za-z0-9_./-]+`?\)%%@FORMERLY@%%(formerly auto-adapter)%%KTD-4 skill breadcrumb, kept so model-side triggering still matches the old phrasing. Lives only in the two renamed skills descriptions.'
+
+  # ── unit: the term entangled with unavoidable non-renamed noise ──
+  'unit%%*%%tests\/unit%%@TIER@%%tests/unit%%the tests/unit TEST-TIER path — keyed to the suite layout, not the renamed concept. Appears as the path of a hit AND as a cross-reference in lib/ and docs/ prose, so it is genuinely tree-wide.'
+  'unit%%*%%[-_A-Za-z0-9][Uu]nit[ -][Tt]est[A-Za-z]*%% unit %%add-unit test-run%%NORMALIZE-TO-KEEP, not a scrub. An `unit test` ATTACHED to an identifier char is a REAL symbol (`add-unit test-run`, `add_unit test_id`), not prose — turn it back into a bare token so it still HITS. MUST precede the prose row below.'
+  'unit%%*%%[Uu]nit[ -][Tt]est[A-Za-z]*%%@UT@%%unit test%%the free-standing prose "unit test" / "unit-testable" (the hyphenated adjective lives in lib/iteration.py, lib/verification.py, lib/goal-route.py).'
+  'unit%%*%%UNIT[ -]TEST[A-Z]*%%@UT@%%UNIT TEST%%the shouted prose form of the same.'
+  'unit%%*%%plan_step%%@PLANSTEP@%%plan_step%%the plan-phase sub-state — a deliberate do-not-rename carve-out (Key Decisions / CONCEPTS.md). Carries no `unit` token, so it cannot trip the regex; scrubbed defensively so a future `plan_unit`-shaped revival cannot hide behind it.'
+  'unit%%*%%PLAN_STEPS%%@PLANSTEP@%%PLAN_STEPS%%same carve-out, shouted.'
+  'unit%%*%%next_plan_step%%@PLANSTEP@%%next_plan_step%%same carve-out.'
+  'unit%%^tests/run\.sh$%%unit_files%%@TIER@_files%%unit_files%%tests/run.sh is the ONE file where the test-suite TIER name is a code identifier. That `unit` is the tests/unit/ tier, not a workflow step; renaming it would break `bash tests/run.sh unit` for every caller. Scrub the TOKENS — never drop the file, or run.sh becomes the file-level blind spot this branch exists to eliminate.'
+  'unit%%^tests/run\.sh$%%unit\|integration%%@TIER@|integration%%unit|integration%%same: the tier list in the usage string.'
+  'unit%%^tests/run\.sh$%%= "unit"%%= "@TIER@"%%= "unit"%%same: the tier assignment.'
+  'unit%%^tests/run\.sh$%%=== UNIT %%=== @TIER@ %%=== UNIT %%same: the section banner.'
+  'unit%%^tests/run\.sh$%% unit \+%% @TIER@ +%% unit +%%same: the tier tally.'
+  'unit%%^tests/run\.sh$%% unit  %% @TIER@  %% unit  %%same: the tier tally.'
+  'unit%%^lib/run_record\.py$%%set-enumerated-units%%@ALIAS@%%set-enumerated-units%%F(B) KTD-4 REVISITED: the retired work-node verbs now have DEPRECATED ALIASES (the `_DEPRECATED_VERBS` map), because pre-rename tick_guidance emitted guidance naming them and an agent mid-run across the upgrade would hit exit 2. The map must SPELL the retired verb. Only the two verb TOKENS are exempt — any other stale `unit` in run_record.py still fails.'
+  'unit%%^lib/run_record\.py$%%add-unit%%@ALIAS@%%add-unit%%same map, the other verb.'
+  'unit%%^tests/unit/run-record-cli-feedback\.test\.sh$%%set-enumerated-units%%@ALIAS@%%set-enumerated-units%%the test that PINS the alias must NAME the retired verb to invoke it. Only that token, only in that file.'
+  'unit%%^tests/unit/run-record-cli-feedback\.test\.sh$%%add-unit%%@ALIAS@%%add-unit%%same.'
+
+  # ── seam ──
+  'seam%%^docs/deprecations\.md$%%seam_paused%%@V1KEY@%%seam_paused%%docs/deprecations.md is the retired-surface REGISTRY: the mixed-fleet section has to NAME the v1 pause key to explain what a concurrent old-plugin write loses. Only that one KEY token, only in that one doc — any other stale `seam` there still FAILS, and the token is bounded, so a stale identifier sharing the line cannot ride through.'
+  'seam%%^(lib/auto\.py|tests/unit/handoff-default\.test\.sh)$%%\.seam-default-acknowledged%%@LEGACYMARKER@%%.seam-default-acknowledged%%F(C): the pre-rename ACK-MARKER FILENAME. It is USER STATE on disk, not a code identifier — sweeping it silently un-acked every existing user and re-fired the one-time v0.4.0 notice at someone who dismissed it a version ago. lib/auto.py must still READ it (it never writes it), and the test that pins that must NAME it. Only that one filename token; any other stale `seam` in either file still FAILS.'
+
+  # ── adapter ──
+  'adapter%%^(lib/auto\.py|tests/unit/flag-aliases\.test\.sh)$%%--adapter%%@ALIAS@%%--adapter%%the KTD-4 flag-alias layer (`_DEPRECATED_FLAGS`) and the test that pins it. Only the retired FLAG token — a stale `adapter` IDENTIFIER in either file (an `adapter_ops` import, an `ExitReason.ADAPTER_BUG`) still FAILS. Drop with the alias next minor.'
+
+  # ── recipe ──
+  'recipe%%^(lib/auto\.py|commands/auto\.md|tests/unit/flag-aliases\.test\.sh)$%%--teardown-recipe-after-init%%@ALIAS@%%--teardown-recipe-after-init%%the KTD-4 flag-alias layer, its routing branch in commands/auto.md (which must MATCH the retired spelling or the alias never reaches the parser), and the test that pins it.'
+  'recipe%%^(lib/auto\.py|commands/auto\.md|tests/unit/flag-aliases\.test\.sh)$%%--recipe%%@ALIAS@%%--recipe%%same alias layer, the other flag. Listed AFTER the longer spelling so it cannot eat its prefix.'
+  'recipe%%^tests/integration/workflow-picker\.test\.sh$%%recipes-list\.sh%%@STUB@%%recipes-list.sh%%the KTD-4 forwarding stub lib/recipes-list.sh is path-whitelisted (so the audit structurally cannot fail ON it, and nothing would notice if it broke); this test pins that it still forwards, and must NAME the retired path to do so.'
+  'recipe%%^lib/workflows\.py$%%_LEGACY_TIER_DIRNAME%%@LEGACYDIR@%%_LEGACY_TIER_DIRNAME%%KTD-7 the LEGACY TIER DIR: `_tier_dirs` appends the pre-rename user dirs as READ-ONLY legacy tiers so a users existing files still resolve. A legacy fallback that does not name the legacy dir is not a fallback.'
+  'recipe%%^lib/workflows\.py$%%\.claude/auto/recipes%%.claude/auto/@LEGACYDIR@%%.claude/auto/recipes%%same: the retired dir literal.'
+  'recipe%%^lib/workflows\.py$%%"recipes"%%"@LEGACYDIR@"%%"recipes"%%same: the constant that holds it.'
+  'recipe%%^(lib/upstream-cluster\.py|tests/integration/spine-forward\.test\.sh|docs/planning-readiness\.md)$%%feedback_a1_recipe_cant_rebound_to_brainstorm%%@MEMORY_ID@%%feedback_a1_recipe_cant_rebound_to_brainstorm%%an EXTERNAL artifacts NAME — the memory cited as the provenance of the role-diversity weighting (KTD-6). Rewriting the citation to spell `workflow` would point at nothing. Was tree-wide; now bound to the two files that cite it.'
+
+  # ── tick ──
+  'tick%%^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh)$%%auto-tick%%@ALIAS@%%auto-tick%%KTD-4: the kept alias command commands/auto-tick.md is path-whitelisted, but the tests that PIN it must NAME it. Was a WHOLE-LINE grep -v drop (the fifth instance of the unbounded-exemption class); now a bounded token scrub, so any OTHER stale `tick` on those lines still fails.'
+  'tick%%^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh)$%%tick\.sh%%@STUB@%%tick.sh%%same, for the kept forwarding stub lib/tick.sh.'
+)
+# SCRUBS-TABLE>>>
+# NB: there is deliberately NO `emitter`, `seam`, `ledger` or `orchestrator` row.
+# Every file that legitimately spells those retired surfaces is PATH-whitelisted
+# above (the KTD-4 stubs and the tests whose job is to prove they still resolve).
+# Nothing else in the tree may name them, so there is no token to scrub. An
+# empty-but-present exemption is worse than none: it is a standing invitation.
 
 # regex_for_term <term> → the OLD-identifier grep pattern (ERE, used with -i).
 # Leading word boundary OR a leading underscore, case-insensitive at call site:
@@ -226,8 +381,7 @@ GLOBAL_PATH_PREFIX_WHITELIST=(
 # the whole leading-underscore SYMBOL class: `_maybe_seam`, `_try_seam_pause`,
 # `_seam_default_notice` would all have survived U6 audit-GREEN while the term
 # was supposedly retired. Private helpers are exactly where a renamed concept
-# hides longest. Adding the `_` alternative closes that blind spot for every
-# term, not just this one.
+# hides longest. Adding the `_` alternative closes that blind spot for every term.
 regex_for_term() { printf '(\\b|_)%s' "$1"; }
 
 # term_status <term> → prints `pending` or `done` from the table.
@@ -237,14 +391,28 @@ term_status() {
 
 # audit_term_hits <term> [root] → prints the filtered (non-whitelisted) grep hits
 # for the term's OLD identifier, one `path:lineno:content` per line. Empty output
-# means the term is clean. Ignores the status table — the caller decides
-# whether to run it (so the deliberate-fail control can force a term).
+# means the term is clean. Ignores the status table — the caller decides whether to
+# run it (so the deliberate-fail controls can force a term).
 #
-# [root] defaults to the real tree. Scenario 2 (the deliberate-fail control) passes
-# a SYNTHETIC tree instead — every whitelist below is keyed on the RELATIVE
-# `path:lineno:` prefix of a hit, so the exact same filter pipeline applies to
-# either root. That is the point: the control must exercise the REAL filters, not a
-# reimplementation of them, or it proves nothing about the audit that ships.
+# [root] defaults to the real tree. The controls pass a SYNTHETIC tree instead —
+# every filter below is keyed on the RELATIVE `path:lineno:` prefix of a hit, so the
+# exact same pipeline applies to either root. That is the point: a control must
+# exercise the REAL filters, not a reimplementation of them, or it proves nothing
+# about the audit that ships.
+# <<<AUDIT-PIPELINE (Scenario 0a lints everything between these two markers)
+# The region is delimited by MARKERS, not by brace-matching. That is deliberate: an
+# earlier version of 0a extracted this body with awk `on && /^\}/ {exit}` — "stop at the
+# first `}` at column 0" — and a skeptic blinded the whole lint with a two-line gadget:
+#     local _note='
+# }
+# '
+# The `}` inside a quoted string ended the extraction, so every filter AFTER it was
+# unlinted, and a verbatim reintroduction of defect #1 (an unbounded whole-line
+# `grep -vF` drop) went GREEN. Nothing about that was a policy failure — the allowlist
+# was right; it simply never saw the line. A lint that can be truncated by its own input
+# is not a control. Markers cannot be truncated by a brace, and the anti-vacuity check in
+# 0a requires the region's LAST filter (the final sink) to be present — so closing the
+# marker early, or opening it late, fails loudly instead of silently shrinking the scan.
 audit_term_hits() {
   local term="$1"
   local root="${2:-$AUTO_ROOT}"
@@ -258,61 +426,30 @@ audit_term_hits() {
           2>/dev/null || true)"
   [ -z "$raw" ] && return 0
 
-  # ── global path whitelist ──
-  local wl
-  for wl in "${GLOBAL_PATH_WHITELIST[@]}"; do
-    raw="$(printf '%s\n' "$raw" | grep -vF "${wl}:" || true)"
-    [ -z "$raw" ] && return 0
-  done
+  # ── KIND (1): global path whitelist — ANCHORED, ESCAPED (F1) ──
+  # `^(<escaped-path>|…):<lineno>:` — it can match only the leading `path:lineno:` of a
+  # hit, never its content. The old `grep -vF "${wl}:"` was a fixed-string match
+  # ANYWHERE in the hit, so a line whose CONTENT cited a whitelisted path exempted
+  # itself, in any scanned file. Escaping matters too: an unescaped `.` in
+  # `lib/ledger.py` is an ERE wildcard that also matches `lib/ledgerZpy`.
+  raw="$(printf '%s\n' "$raw" | grep -vE "$WHITELIST_RE" || true)"
+  [ -z "$raw" ] && return 0
 
-  # ── global path-PREFIX whitelist (the format-v1 fixture corpus) ──
-  # Anchored at the start of the `path:lineno:content` hit so it can only ever
-  # exempt a leading directory, never a substring match mid-content.
-  for wl in "${GLOBAL_PATH_PREFIX_WHITELIST[@]}"; do
-    raw="$(printf '%s\n' "$raw" | grep -v "^${wl}" || true)"
-    [ -z "$raw" ] && return 0
-  done
+  # ── KIND (2): global path-PREFIX whitelist — ANCHORED, ESCAPED ──
+  # Anchored at the start of the hit so it can only ever exempt a leading directory,
+  # never a substring match mid-content.
+  raw="$(printf '%s\n' "$raw" | grep -vE "$PREFIX_RE" || true)"
+  [ -z "$raw" ] && return 0
 
-  # ── global content whitelist ──
-  # TOKEN-SCRUBBED, not line-dropped. The whole-line `grep -vE` this replaces was the
-  # SAME defect class that let U7's sweep silently corrupt the read-compat tables: an
-  # exemption meant for a breadcrumb ("supersedes …", "(formerly auto-adapter)") also
-  # swallowed any real stale identifier that happened to share the line. Probed and
-  # confirmed: `formerly the add_unit verb lived here` sailed through GREEN.
-  #
-  #   * `<!--legacy-->` rows are still dropped WHOLESALE — a read-compat row's job is
-  #     to name retired keys across its full width, so there is nothing to scrub. That
-  #     exemption is now EARNED rather than assumed: Scenario 1b independently proves
-  #     every such row still names a retired term and is not a tautology.
-  #   * `supersedes …` / `(formerly …)` — only the trailing breadcrumb CLAUSE is
-  #     scrubbed. Anything before it on the line is still audited.
-  # NB one awk pass, not a per-line sed|grep loop: the deliberate-fail control audits
-  # a still-PENDING term whose old identifier is still everywhere (thousands of hits),
-  # and spawning two processes per hit took the audit from 1.3s to 19s.
-  #
-  # `(^|[^a-z0-9])<term>` on a lower-cased copy is exactly `regex_for_term`'s
-  # `(\b|_)<term>` -i: `_` is not alphanumeric, so the one class covers both the
-  # word-boundary and the leading-underscore alternative.
-  #
-  # U10 — THE `<!--legacy-->` EXEMPTION IS NOW SHAPE-BOUND (this was a P0 hole).
-  # The old form was a bare `grep -vF -- '<!--legacy-->'`: a WHOLE-LINE drop, in ANY
-  # file, of ANY shape. That made the marker a silent, invisible opt-out from the
-  # permanent guard — append it to any line, anywhere, and the audit looks away:
-  #
-  #     README.md:  Run `ledger.py add-unit` on the recipe adapter. <!--legacy-->   → GREEN
-  #     lib/auto.py: _recipe = load_lib_module("recipes")  # <!--legacy-->          → GREEN
-  #
-  # The file's own comment claimed this was safe because "Scenario 1b independently
-  # proves every such row still names a retired term". 1b does no such thing for those
-  # lines: it inspects ONLY lines whose content starts with `|` (table rows) in .md
-  # files, and skips everything else. So the drop exempted a strictly LARGER set than
-  # 1b polices — and widening SCAN_ROOTS handed that hole four more trees.
-  #
-  # Fix: exempt EXACTLY what 1b polices, and nothing else — a markdown TABLE ROW. The
-  # exemption is earned by SHAPE (a `|`-row in a `.md` file, which 1b then checks row by
-  # row for "names a retired term" + "not a tautology"), never by the marker alone. A
-  # `<!--legacy-->` on a prose line, a comment, or anything in a .py/.sh/.json file no
-  # longer exempts anything. Scenario 1c is the control.
+  # ── KIND (4): the `<!--legacy-->` markdown TABLE ROW — the ONE line drop ──
+  # <<<LEGACY-ROW-EXEMPTION (Scenario 0a fences this region)
+  # A read-compat row's job is to name retired keys across its full width, so there
+  # is nothing to scrub — the row is dropped WHOLESALE. That is only safe because the
+  # exemption is earned by SHAPE (a `|`-row in a `.md` file) and then POLICED: 1b
+  # checks every such row still names a retired term and is not a tautology; 1c proves
+  # nothing outside the shape can claim it. The marker alone exempts NOTHING — a
+  # `<!--legacy-->` on a prose line, a code comment, or anything in a .py/.sh/.json
+  # file is audited normally.
   raw="$(printf '%s\n' "$raw" | awk '
     {
       if (index($0, "<!--legacy-->") > 0) {
@@ -323,258 +460,551 @@ audit_term_hits() {
           c2 = index(rest, ":")
           content = (c2 > 0) ? substr(rest, c2 + 1) : ""
           sub(/^[ \t]+/, "", content)
-          # A read-compat TABLE ROW in a markdown file: the one shape whose job is to
-          # name retired identifiers across its full width, and the one shape 1b polices.
           if (path ~ /\.md$/ && substr(content, 1, 1) == "|") next
         }
       }
       print
     }' || true)"
   [ -z "$raw" ] && return 0
+  # LEGACY-ROW-EXEMPTION>>>
+
+  # ── KIND (3): TOKEN SCRUBS, driven entirely by the SCRUBS table ──
+  # <<<SCRUB-ENGINE (Scenario 0a fences this region)
+  # ONE awk pass, table-driven. The rows applicable to this term are fed in ahead of
+  # the hits (separated by a sentinel) so their `token` / `repl` reach awk as DATA —
+  # no shell-quoting of regexes into awk source, and no way to express anything but
+  # "cut this bounded token, on these paths".
   #
-  # Both scrubs are BOUNDED to the real breadcrumb shape. An unbounded
-  # `supersedes.*$` / `[Ff]ormerly [^)]*` runs to end-of-line, so a line reading
-  # `supersedes: add_unit is still callable` is scrubbed to nothing and rides
-  # through GREEN — the very hole this rewrite closes. What the tree actually
-  # contains is a re-lock banner (`supersedes <name> <version>`, KTD-5) and a
-  # parenthesised skill breadcrumb (`(formerly auto-adapter)`, KTD-4), so:
-  #   * `supersedes` exempts only the NEXT one or two tokens (a name, then an
-  #     optional version) — not the rest of the line;
-  #   * `formerly` exempts only ONE NAME inside the parens.
+  # A line SURVIVES the scrub if a stale identifier survives the cut. Nothing here can
+  # drop a line: `print $0` prints the RAW line, and the scrubbed copy `p` is used only
+  # to decide.
   #
-  # U10 — the `formerly` scrub was NOT actually bounded (P1). It read
-  # `\([Ff]ormerly [^)]*\)`, and `[^)]*` is exactly the unbounded form the comment
-  # above says it fixed: it runs to the next `)`, which on a prose line is arbitrarily
-  # far. `(formerly auto-adapter, and the ledger.py add-unit verb)` scrubbed the stale
-  # identifiers along with the breadcrumb and rode through GREEN. The real breadcrumbs
-  # in the tree are a single name — `(formerly auto-adapter)`,
-  # `(formerly auto-author-recipe)` — so the pattern now matches exactly that: ONE
-  # name-shaped token. Anything else on the line is still audited.
-  raw="$(printf '%s\n' "$raw" | awk -v term="$term" '
-    {
-      p = $0
-      gsub(/supersedes[:,]?[ ]+`?[A-Za-z0-9_.\/-]+`?([ ]+\(?v?[0-9][A-Za-z0-9_.-]*\)?)?/, "@SUPERSEDES@", p)
-      gsub(/\([Ff]ormerly `?[A-Za-z0-9_.\/-]+`?\)/, "@FORMERLY@", p)
-      if (tolower(p) ~ "(^|[^a-z0-9])" tolower(term)) print $0
-    }' || true)"
-  [ -z "$raw" ] && return 0
-
-  # ── term-specific whitelist ──
-  case "$term" in
-    unit)
-      # The `unit` term is entangled with unavoidable non-renamed noise. U7 makes
-      # the exemption TOKEN-SCRUBBING, not line-dropping — see the block comment.
-      #
-      # PERMANENT noise (the U7 whitelist):
-      #   * the `tests/unit` directory PATH — keyed to the test-suite layout, not
-      #     the renamed concept. It appears BOTH as the path of a hit
-      #     (`tests/unit/foo.test.sh:12:…`) AND as a cross-reference inside lib/
-      #     and docs/ prose (`see tests/unit/recipes.test.sh`).
-      #   * the prose "unit test" / "unit tests" / "unit-test" / "unit-testable"
-      #     (the hyphenated adjective form lives in lib/iteration.py,
-      #     lib/verification.py, lib/goal-route.py — a bare `unit tests?` misses it).
-      #   * plan_step / PLAN_STEPS / next_plan_step — the plan-phase sub-state, a
-      #     deliberate "don't rename" carve-out (Key Decisions / CONCEPTS.md).
-      #     These carry no `unit` token so they cannot trip the regex; scrubbed
-      #     defensively so a future `plan_unit`-shaped revival can't hide behind them.
-      #   * tests/run.sh — the ONE file where the test-suite TIER name is a code
-      #     identifier (`unit_files`, `[unit|integration|smoke|all]`, `=== UNIT ===`).
-      #     That `unit` is the tests/unit/ tier, not a workflow step; renaming it
-      #     would break `bash tests/run.sh unit` for every caller.
-      #
-      # WHY SCRUBBING, NOT DROPPING (U7 hardening — this was a real hole):
-      # U1 wrote this as `grep -vE '^tests/unit/'`, which DROPS EVERY HIT IN EVERY
-      # FILE UNDER tests/unit/ — all 61 unit-test files. The `unit` term's biggest
-      # code surface is exactly those files' symbols and asserts, so the audit was
-      # structurally blind to the bulk of what U7 had to rename: a stale `add_unit`
-      # in a unit test could never fail it. Likewise `grep -viE 'unit tests?'`
-      # dropped the WHOLE LINE, so any real `unit` symbol sharing a line with the
-      # words "unit test" vanished too.
-      # Now: strip the whitelisted TOKENS from a copy of each line, then keep the
-      # line only if a `unit` identifier SURVIVES the strip. The whitelist exempts
-      # the noise token, never the line and never the file.
-      # One awk pass (see the perf note on the global-content scrub above).
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          gsub(/tests\/unit/, "@TIER@", p)
-
-          # LEFT-BOUNDARY matters. A bare `[Uu]nit[ -][Tt]est` scrub also eats the
-          # TAIL of a real identifier whose next token starts with "test" —
-          # `add-unit test-run`, `add_unit test_id` — and the line sails through
-          # GREEN. That is exactly the retired-verb-plus-a-test-arg shape a doc
-          # example or a new test would reintroduce. So: an `unit test` ATTACHED to
-          # an identifier char is a REAL symbol — normalize it to a bare token so it
-          # still HITS. Only the free-standing prose form is scrubbed.
-          gsub(/[-_A-Za-z0-9][Uu]nit[ -][Tt]est[A-Za-z]*/, " unit ", p)   # real symbol → keep
-          gsub(/[Uu]nit[ -][Tt]est[A-Za-z]*/, "@UT@", p)                  # prose → scrub
-          gsub(/UNIT[ -]TEST[A-Z]*/, "@UT@", p)
-
-          gsub(/plan_step|PLAN_STEPS|next_plan_step/, "@PLANSTEP@", p)
-
-          # tests/run.sh: the test-suite TIER name is a real identifier there
-          # (`unit_files`, `[unit|integration|smoke|all]`, `=== UNIT (`). Scrub those
-          # TOKENS — do NOT drop the whole file, or run.sh becomes the very kind of
-          # file-level blind spot this branch was rewritten to eliminate.
-          if ($0 ~ /^tests\/run\.sh:/) {
-            gsub(/unit_files/,        "@TIER@_files",      p)
-            gsub(/unit\|integration/, "@TIER@|integration", p)
-            gsub(/= "unit"/,          "= \"@TIER@\"",      p)
-            gsub(/=== UNIT /,         "=== @TIER@ ",       p)
-            gsub(/ unit \+/,          " @TIER@ +",         p)
-            gsub(/ unit  /,           " @TIER@  ",         p)
-          }
-
-          # PERMANENT (KTD-4 hard-cut): the retired CLI verbs have NO aliases, and the
-          # regression test that PINS that they now exit 2 has to NAME them to invoke
-          # them. Same path+content anchoring as the `tick` branch below: only those
-          # two tokens, only in the one test that asserts they are gone — any OTHER
-          # stale `unit` in that file still fails the audit. (Matched on $0, the RAW
-          # line: `p` has already had tests/unit scrubbed to @TIER@.)
-          if ($0 ~ /^tests\/unit\/run-record-cli-feedback\.test\.sh:/) {
-            gsub(/add-unit|set-enumerated-units/, "@RETIRED@", p)
-          }
-
-          if (tolower(p) ~ /(^|[^a-z0-9])unit/) print $0
-        }' || true)"
-      ;;
-    adapter)
-      # PERMANENT: the KTD-4 flag-alias layer in lib/auto.py keeps `--adapter` as a
-      # deprecated alias (the `_DEPRECATED_FLAGS` map entry + its comment block).
-      # TOKEN-SCRUBBED in BOTH homes: the `_DEPRECATED_FLAGS` map in lib/auto.py, and
-      # the test that PINS the alias (which must NAME the retired flag to invoke it).
-      # Only the `--adapter` TOKEN is exempt — a stale `adapter` IDENTIFIER in either
-      # file (an `adapter_ops` import, an `ExitReason.ADAPTER_BUG`) still FAILS.
-      #
-      # The old form here was `grep -vE '^lib/auto\.py:.*(--adapter|[Dd]eprecat)'` — a
-      # WHOLE-LINE drop keyed on the word "deprecat", sitting in the one file where a
-      # deprecation comment is most likely to sit beside a stale identifier. Same U7
-      # lesson as every other branch in this case block. Drop both scrubs when the
-      # alias is removed next minor.
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          if ($0 ~ /^(lib\/auto\.py|tests\/unit\/flag-aliases\.test\.sh):/) {
-            gsub(/--adapter/, "@ALIAS@", p)
-          }
-          if (tolower(p) ~ /(^|[^a-z0-9])adapter/) print $0
-        }' || true)"
-      # (U6 REMOVED the TEMP persisted-key exemptions here — `adapter`,
-      # `adapter_scale`, `adapter_op`, `default_adapter` are now flipped ON DISK
-      # to backend/backend_scale/backend_op/default_backend. The only module that
-      # may still spell them is lib/format_compat.py, which is path-whitelisted.)
-      ;;
-    recipe)
-      # The KTD-4 flag-alias layer in lib/auto.py::_parse_args keeps the old
-      # spellings (--recipe / --teardown-recipe-after-init) as deprecated aliases
-      # (the `_DEPRECATED_FLAGS` map entries + their comment block).
-      # TOKEN-SCRUBBED in all three homes: the `_DEPRECATED_FLAGS` map in lib/auto.py,
-      # the routing branch in commands/auto.md (which must match the retired spelling
-      # or the alias never reaches the parser), and the test that PINS the aliases.
-      # Only the two retired FLAG spellings are exempt — a stale `recipe` IDENTIFIER in
-      # any of them (a `recipes.py` import, a `RecipeError`) still FAILS the audit.
-      # Whole-line drops were the previous form; see the `adapter` branch above for why
-      # they are the wrong shape. Drop these when the aliases are removed next minor.
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          if ($0 ~ /^(lib\/auto\.py|commands\/auto\.md|tests\/unit\/flag-aliases\.test\.sh):/) {
-            gsub(/--teardown-recipe-after-init|--recipe/, "@ALIAS@", p)
-          }
-          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
-        }' || true)"
-
-      # PERMANENT (one minor version): the KTD-4 forwarding stub `lib/recipes-list.sh`
-      # is globally path-whitelisted above — which means the audit structurally CANNOT
-      # fail on it, so nothing would notice if it broke. workflow-picker.test.sh pins
-      # that it still forwards; to do so it must NAME the retired path. Only the
-      # `recipes-list.sh` TOKEN is scrubbed, and only in that test: a stale `recipe`
-      # IDENTIFIER there still fails. (Same shape as the `tick` branch, which exempts
-      # the tests that pin `tick.sh` / `auto-tick`.) Drop with the stub next minor.
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          if ($0 ~ /^tests\/integration\/workflow-picker\.test\.sh:/) {
-            gsub(/recipes-list\.sh/, "@STUB@", p)
-          }
-          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
-        }' || true)"
-
-      # PERMANENT (KTD-7 — the LEGACY TIER DIR). `lib/workflows.py::_tier_dirs`
-      # appends the pre-rename user dirs as READ-ONLY legacy tiers so a user's
-      # existing files still resolve after the rename. That code MUST literally
-      # spell the old dir name — a legacy fallback that doesn't name the legacy dir
-      # is not a fallback.
-      #
-      # TOKEN-SCRUBBED, NOT LINE-DROPPED (and NOT file-dropped). An earlier draft of
-      # this exemption anchored on the WORD "legacy" and dropped the whole line — which
-      # meant any stale identifier that happened to share a line with the word "legacy"
-      # (`from recipes import resolve  # legacy`) rode through GREEN. That is the exact
-      # defect class U7 documented two branches down and this file keeps re-learning.
-      # So: strip the retired dir LITERAL and the constant that holds it, then keep the
-      # line if any `recipe` identifier SURVIVES the strip.
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          if ($0 ~ /^lib\/workflows\.py:/) {
-            gsub(/_LEGACY_TIER_DIRNAME/,   "@LEGACYDIR@", p)
-            gsub(/\.claude\/auto\/recipes/, ".claude/auto/@LEGACYDIR@", p)
-            gsub(/"recipes"/,              "\"@LEGACYDIR@\"", p)
-          }
-          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
-        }' || true)"
-
-      # PERMANENT: an EXTERNAL artifact's NAME. `lib/upstream-cluster.py` and
-      # `tests/integration/spine-forward.test.sh` both cite the memory
-      # `feedback_a1_recipe_cant_rebound_to_brainstorm` as the provenance of the
-      # role-diversity weighting (KTD-6). That is a real file in a system this repo
-      # does not own; rewriting the citation to spell `workflow` would point at
-      # nothing. Same class as the "(formerly auto-author-recipe)" skill breadcrumb:
-      # a retired name that must stay spelled to remain useful. Scoped to that ONE
-      # exact token — any other stale `recipe` on the line, or in those files, still
-      # fails. NB scrubbed (not line-dropped), so a stale identifier sharing the line
-      # with the citation cannot ride through on its coat-tails (the U7 lesson).
-      raw="$(printf '%s\n' "$raw" | awk '
-        {
-          p = $0
-          gsub(/feedback_a1_recipe_cant_rebound_to_brainstorm/, "@MEMORY_ID@", p)
-          if (tolower(p) ~ /(^|[^a-z0-9])recipe/) print $0
-        }' || true)"
-      ;;
-    tick)
-      # PERMANENT (KTD-4, one minor version): the kept forwarding stub `lib/tick.sh`
-      # and the kept alias command `commands/auto-tick.md` are whitelisted BY PATH
-      # above — but the tests that PIN their existence/behavior have to NAME them,
-      # and those test files are NOT whitelisted (any other stale `tick` in them
-      # must still fail). So the exemption is anchored to path AND content: only the
-      # alias-command token `auto-tick` / the stub path `tick.sh` are exempt, only in
-      # the three tests that assert the old surface still resolves. Drop this branch
-      # when the alias + stub are removed next minor.
-      raw="$(printf '%s\n' "$raw" \
-             | grep -vE '^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh):[0-9]+:.*(auto-tick|tick\.sh)' \
-             || true)"
-      ;;
-    # NB: there is deliberately NO `emitter` branch any more. U1–U8 carried one to
-    # exempt the two-term MODULE FAMILIES (KTD-3) whose final name lands in the unit
-    # that owns their FAMILY, not their first term:
-    #   * lib/unit_emitters.py  → lib/step_producers.py        — landed U7 (`unit`)
-    #   * lib/ledger_emitters.py → lib/run_record_producers.py — landed U9 (`ledger`)
-    # Both have now moved, so NO file in the tree spells `[_-]emitters` and the
-    # exemption has nothing left to exempt. An empty-but-present branch is worse than
-    # no branch: it is a standing invitation for a future stale `emitter` to be waved
-    # through. Deleted at U9, as U1 said it would be.
-    # NB: there is deliberately NO `ledger` branch. Every file that legitimately
-    # spells the retired run-record surface is PATH-whitelisted above — the two KTD-4
-    # stubs (`lib/ledger.py`, `lib/ledger.sh`) and the one test whose job is to prove
-    # they still resolve (`tests/unit/run-record-stub.test.sh`). Nothing else in the
-    # tree may name the term, so there is no token to scrub and no branch to write.
-    # The contract's retired-identifier map earns the `<!--legacy-->` exemption
-    # instead — and Scenario 1b POLICES that exemption row by row.
-  esac
+  # NB one awk pass, not a per-line sed|grep loop: a control audits a term whose old
+  # identifier is planted across a whole synthetic tree, and spawning two processes per
+  # hit took this audit from 1.3s to 19s.
+  #
+  # `(^|[^a-z0-9])<term>` on a lower-cased copy is exactly `regex_for_term`'s
+  # `(\b|_)<term>` -i: `_` is not alphanumeric, so the one class covers both the
+  # word-boundary and the leading-underscore alternative.
+  #
+  # KNOWN RESIDUAL — a SUPERSTRING of a scrubbed token (skeptic-surfaced, and NOT the
+  # F1/F4 class). A scrub cuts its token as a SUBSTRING, so a future identifier that has a
+  # scrubbed token as a PREFIX loses its term along with the token: `seam_paused_at` →
+  # `@V1KEY@_at` no longer contains `seam`; `add-unit-v2` → `@ALIAS@-v2` no longer
+  # contains `unit`. Such an identifier would be exempted. This is bounded three ways,
+  # which is why it is a documented residual rather than a hole chased with a lookahead
+  # this awk has no portable way to spell: (1) it is scoped to each row's few DECLARED
+  # files — the same stale superstring anywhere ELSE still fails; (2) it needs a NEW
+  # identifier that is a literal extension of a retired v1 token, in the one file whose
+  # job is to name that token — an unlikely shape; (3) the scrub is still BOUNDED — it
+  # cuts its token and no more, which is the property F1/F4 were actually about. When you
+  # add a row, prefer a token that is already a WHOLE identifier (`seam_paused`, not
+  # `seam`), which is what keeps this surface as small as it is.
+  local rows="" SEP='%%'
+  local row r_term r_path r_tok r_repl rest
+  for row in "${SCRUBS[@]}"; do
+    r_term="${row%%$SEP*}";  rest="${row#*$SEP}"
+    r_path="${rest%%$SEP*}"; rest="${rest#*$SEP}"
+    r_tok="${rest%%$SEP*}";  rest="${rest#*$SEP}"
+    r_repl="${rest%%$SEP*}"
+    [ "$r_term" = "*" ] || [ "$r_term" = "$term" ] || continue
+    # `*` (any file) becomes the always-true path regex; every other row is ^…$-anchored
+    # in the table itself, and Scenario 0a fails the build if one is not.
+    [ "$r_path" = "*" ] && r_path='.'
+    rows="${rows}${r_path}"$'\t'"${r_tok}"$'\t'"${r_repl}"$'\n'
+  done
+  if [ -n "$rows" ]; then
+    raw="$(printf '%s@@SCRUB-TABLE-ENDS@@\n%s\n' "$rows" "$raw" | awk -v term="$term" '
+      !seen_hits && $0 == "@@SCRUB-TABLE-ENDS@@" { seen_hits = 1; next }
+      !seen_hits {
+        n++
+        i = index($0, "\t");            PATHRE[n] = substr($0, 1, i - 1)
+        r = substr($0, i + 1)
+        j = index(r, "\t");             TOK[n]    = substr(r, 1, j - 1)
+        REPL[n] = substr(r, j + 1)
+        next
+      }
+      {
+        colon = index($0, ":")
+        path  = (colon > 0) ? substr($0, 1, colon - 1) : $0
+        p = $0
+        for (k = 1; k <= n; k++) {
+          if (path ~ PATHRE[k]) gsub(TOK[k], REPL[k], p)
+        }
+        if (tolower(p) ~ "(^|[^a-z0-9])" tolower(term)) print $0
+      }' || true)"
+  fi
+  # SCRUB-ENGINE>>>
 
   [ -z "$raw" ] && return 0
   printf '%s\n' "$raw"
 }
+# AUDIT-PIPELINE>>>
+
+# ════════════════════════════════════════════════════════════════════════════
+# Scenario 0 — THE CLASS CONTROL. Proves the unbounded-exemption class is CLOSED.
+# ════════════════════════════════════════════════════════════════════════════
+# Five separate exemptions in this file have been unbounded or unanchored (see the
+# block comment above). Every one of them was caught by a HUMAN reading the diff, and
+# every one of them was GREEN in CI. Scenario 0 is what makes a sixth go RED.
+#
+# 0a lints this file's SOURCE: an exemption can only be expressed in the two sanctioned
+#    engine regions, or as a row in the SCRUBS table. Adding a fresh ad-hoc filter to
+#    the pipeline is a build failure, not a review finding.
+# 0b probes every DECLARED exemption's BEHAVIOUR, derived from the tables — so entry 14
+#    of the whitelist and row 29 of SCRUBS are probed the day they are added, with no
+#    second hand-maintained list to forget.
+
+# <<<CLASS-LINT
+# ─── Scenario 0a: audit_term_hits filters `$raw` ONLY through sanctioned steps ──
+# This is an ALLOWLIST, not a blacklist — and that distinction is the whole fix.
+#
+# An earlier version of this control forbade THREE specific syntaxes (`grep -v`, an awk
+# `gsub`, an awk `next`) anywhere outside the fenced engine regions. A skeptic broke it
+# in one line: a drop expressed as `sed '/X/d'`, or `grep --invert-match`, or an awk
+# `{if(index($0,"X")==0)print}` (inverting the PRINT instead of using `next`) is none of
+# those three shapes, so it sailed through green while laundering real drift. A blacklist
+# of known-bad syntaxes can always be dodged by a syntax it has not enumerated — which is
+# exactly how this file grew five unbounded exemptions in the first place.
+#
+# So the invariant is stated POSITIVELY, on the one thing every filter must do. The
+# function's output is `$raw`, threaded through the pipeline: EVERY step that could remove
+# or transform a hit must either REASSIGN `raw` or PIPE the final `printf` of it. There
+# is no third way to drop a line. So: inside `audit_term_hits`, outside the two fenced
+# engine regions, every `raw=`/`raw+=` assignment and every `printf … "$raw"` sink must be
+# ONE OF the four sanctioned forms below — the generating grep, the two anchored path
+# greps, and the final unfiltered sink. A `sed`, an inverted awk, a `grep --invert-match`,
+# a `${raw//…/}` parameter scrub, a filtered final `printf` — each is a `raw=` or sink
+# line that is NOT on the list, so each fails HERE regardless of its syntax. The fenced
+# regions (the ONE line drop, the ONE scrub engine) are the only exceptions, and they are
+# bounded by 0a-2/0b/0c/0d, not by this lint.
+it "0a: audit_term_hits filters \$raw only through the sanctioned steps (allowlist)"
+# The audit pipeline, minus the two fenced engine regions and comments. Delimited by the
+# AUDIT-PIPELINE markers — NOT by brace-matching, which a `}` in a quoted string silently
+# truncates (see the note at the region's head).
+audit_body="$(awk '
+  /# <<<AUDIT-PIPELINE/ { on = 1; next }
+  /# AUDIT-PIPELINE>>>/ { on = 0 }
+  on {
+    if ($0 ~ /# <<<LEGACY-ROW-EXEMPTION/ || $0 ~ /# <<<SCRUB-ENGINE/) { skip = 1 }
+    if (!skip) print
+    if ($0 ~ /# LEGACY-ROW-EXEMPTION>>>/ || $0 ~ /# SCRUB-ENGINE>>>/)  { skip = 0 }
+  }
+' "$SELF" | grep -vE '^[[:space:]]*#')"
+lint_bad=""
+while IFS= read -r l; do
+  t="${l#"${l%%[![:space:]]*}"}"          # strip leading whitespace
+  [ -z "$t" ] && continue
+  # Only ASSIGNMENTS to raw, and the printf SINK of raw, are line-filtering steps.
+  # Everything else (guards like `[ -z "$raw" ]`, `local raw`, the scrub-table setup)
+  # neither removes nor rewrites a hit.
+  is_filter=""
+  case "$t" in
+    raw=*|raw+=*) is_filter="assign" ;;
+    printf*'"$raw"'*) is_filter="sink" ;;
+  esac
+  [ -z "$is_filter" ] && continue
+  case "$t" in
+    'raw="$(cd "$root" && grep -rniE "$regex" "${SCAN_ROOTS[@]}" \') ;;   # the generator
+    'raw="$(printf '\''%s\n'\'' "$raw" | grep -vE "$WHITELIST_RE" || true)"') ;;
+    'raw="$(printf '\''%s\n'\'' "$raw" | grep -vE "$PREFIX_RE" || true)"') ;;
+    'printf '\''%s\n'\'' "$raw"') ;;                                       # the final sink
+    *) lint_bad="${lint_bad}
+    UNSANCTIONED \$raw filter step (${is_filter}) — a drop/scrub that is NOT one of the
+      four sanctioned steps and NOT inside a fenced engine region: ${t}" ;;
+  esac
+done <<< "$audit_body"
+# The two COMPILED path regexes are anchored AT BOTH ENDS — the exact F1 property,
+# asserted on the VALUE (the allowlist above pins the CALL; this pins what it calls with):
+# the path whitelist must consume the `:<lineno>:` separator, so it cannot match a line's
+# CONTENT; the prefix whitelist must be `^`-rooted, so it can only exempt a leading dir.
+case "$WHITELIST_RE" in
+  '^('*'):[0-9]+:') ;;
+  *) lint_bad="${lint_bad}
+    WHITELIST_RE does not anchor to a leading \`path:lineno:\` — a whitelisted path
+    could be claimed from a line's CONTENT (F1). got: ${WHITELIST_RE}" ;;
+esac
+case "$PREFIX_RE" in
+  '^('*')') ;;
+  *) lint_bad="${lint_bad}
+    PREFIX_RE is not \`^\`-rooted — it could match mid-content. got: ${PREFIX_RE}" ;;
+esac
+# ANTI-VACUITY — and this is the part that has to be RIGHT, not just present.
+# The allowlist proves nothing about lines it never saw, so the scan's COVERAGE is itself
+# an assertion. The previous version required four tokens that ALL live in the first ~20
+# lines of the region — so truncating the scan just after the PREFIX step satisfied every
+# one of them while hiding the entire rest of the pipeline. An anti-vacuity check that
+# only looks at the top of what it is measuring measures nothing.
+#
+# So the checks are anchored at BOTH ENDS and at the fences: the region must contain its
+# FIRST step (the generating grep), its LAST step (the final sink + the closing brace),
+# and BOTH engine fences must be intact (opened AND closed). Truncation anywhere — a `}`
+# gadget, an early `# AUDIT-PIPELINE>>>`, a dropped fence — removes one of these and
+# fails HERE.
+for _need in 'grep -rniE' 'WHITELIST_RE' 'PREFIX_RE'; do
+  printf '%s\n' "$audit_body" | grep -qF "$_need" \
+    || lint_bad="${lint_bad}
+    the audit pipeline did not yield its '${_need}' step — the allowlist scan is vacuous"
+done
+# The LAST filter in the region. If this is absent the scan was truncated, and every
+# `case` above silently stopped policing at the cut.
+printf '%s\n' "$audit_body" | grep -qF "printf '%s\n' \"\$raw\"" \
+  || lint_bad="${lint_bad}
+    the audit pipeline did not yield its FINAL SINK — the scan was TRUNCATED, so every
+    filter after the cut is unpoliced (a \`}\` inside a quoted string does exactly this)."
+printf '%s\n' "$audit_body" | grep -qE '^\}$' \
+  || lint_bad="${lint_bad}
+    the audit pipeline did not reach the function's closing brace — the scan was truncated."
+# Both engine fences must be intact: opened AND closed, exactly once each. A fence left
+# open swallows the rest of the pipeline into an unlinted 'skip' region.
+# ANCHORED at the start of a comment line: the awk extractor above necessarily SPELLS
+# these markers inside its own match patterns, and a bare `grep -cF` counts those too
+# (open=2 close=2 — the lint accusing itself). A real fence line is a comment that STARTS
+# with the marker; a reference to one is not.
+for _f in 'LEGACY-ROW-EXEMPTION' 'SCRUB-ENGINE'; do
+  _o="$(grep -cE "^[[:space:]]*# <<<${_f}" "$SELF" || true)"
+  _c="$(grep -cE "^[[:space:]]*# ${_f}>>>" "$SELF" || true)"
+  { [ "$_o" = "1" ] && [ "$_c" = "1" ]; } || lint_bad="${lint_bad}
+    engine fence '${_f}' is not exactly one open + one close (open=${_o} close=${_c}) —
+    a duplicated or unbalanced fence hides pipeline code from this lint."
+done
+if [ -z "$lint_bad" ]; then
+  pass
+else
+  fail "an exemption bypasses the sanctioned filter steps:${lint_bad}
+      Declare it as a SCRUBS row (bounded token + anchored path + a literal probe),
+      or as the ONE legacy-row drop — never as a fresh filter in the pipeline."
+fi
+# CLASS-LINT>>>
+
+# ─── Scenario 0a-2: every SCRUBS row is shape-bound BY CONSTRUCTION ──────────
+# A row must carry all six fields, its path must be `^…$`-anchored (or the explicit
+# `*` for tree-wide noise), and it must name a LITERAL probe — the thing Scenario 0b
+# plants. A row with no honest literal example of what it exempts is a row that
+# cannot be tested, which is how an unbounded exemption gets in.
+it "0a: every SCRUBS row is well-formed (6 fields, anchored path, a literal probe)"
+row_bad=""
+_SEP='%%'
+for _row in "${SCRUBS[@]}"; do
+  _n=0
+  _r="$_row"
+  while :; do
+    _n=$((_n + 1))
+    case "$_r" in *"$_SEP"*) _r="${_r#*$_SEP}" ;; *) break ;; esac
+  done
+  if [ "$_n" -ne 6 ]; then
+    row_bad="${row_bad}
+    ${_n} fields (want 6): ${_row}"
+    continue
+  fi
+  _t="${_row%%$_SEP*}"; _rest="${_row#*$_SEP}"
+  _p="${_rest%%$_SEP*}"; _rest="${_rest#*$_SEP}"
+  _tok="${_rest%%$_SEP*}"; _rest="${_rest#*$_SEP}"
+  _repl="${_rest%%$_SEP*}"; _rest="${_rest#*$_SEP}"
+  _probe="${_rest%%$_SEP*}"; _why="${_rest#*$_SEP}"
+  # A path binding must ENUMERATE LITERAL PATHS — `^(a/b\.py|c/d\.sh)$` — never a
+  # wildcard pattern. This is what makes a widening IMPOSSIBLE TO DO QUIETLY, and it is
+  # the last hole the F4 class had: pinning the tree-wide (`*`) rows stops
+  # `^docs/contracts/…$` → `*`, but NOT `^docs/contracts/[^/]+\.md$` → `^docs/.+\.md$`,
+  # which re-widens the scrub across every doc while still "having a path binding". No
+  # behavioural probe can catch that — a probe tests the scrub against its DECLARED
+  # scope, and the declaration is what moved. So the declaration is constrained instead:
+  # a wildcard cannot be spelled here at all, and adding a file to an exemption means
+  # typing that file's name.
+  #
+  # Legal: ^ $ ( ) | \. and [A-Za-z0-9_/-]. Everything else (`.` `+` `*` `[` `]` `?`)
+  # is a wildcard and is refused.
+  case "$_p" in
+    '*') ;;                                  # tree-wide noise: legal, pinned by 0a-3
+    '^'*'$')
+      _bare="${_p#^}"; _bare="${_bare%$}"
+      _bare="${_bare//\\./D}"                # ESCAPED dot → placeholder (a legal literal).
+                                             # An UNESCAPED `.` survives as `.` and is
+                                             # caught below — it is a wildcard.
+      _bare="${_bare//(/}"; _bare="${_bare//)/}"; _bare="${_bare//|/}"
+      case "$_bare" in
+        *[!A-Za-z0-9_/-]*) row_bad="${row_bad}
+    path is a WILDCARD, not an enumeration of literal paths ('${_p}'): ${_row}
+      Spell each file out: ^(dir/one\\.py|dir/two\\.sh)\$ — a wildcard can silently widen
+      an exemption across a whole tree, which is exactly the F4 defect." ;;
+      esac
+      ;;
+    *) row_bad="${row_bad}
+    path is neither \`*\` nor ^…\$-anchored ('${_p}'): ${_row}" ;;
+  esac
+  # The TOKEN must be BOUNDED — no unbounded quantifier, so it can never run off the end
+  # of the thing it is meant to exempt and swallow a real stale identifier sharing the
+  # line. This is the F4/`(formerly …)` defect stated as a rule instead of a promise:
+  #   `supersedes.*$`        ran to end-of-line
+  #   `\([Ff]ormerly [^)]*\)` ran to the next `)`, arbitrarily far
+  # Both are structurally impossible to spell now. A POSITIVE class (`[A-Za-z0-9_./-]+`,
+  # `[ ]+`) is fine — it is bounded to the characters a name is made of. A NEGATED class
+  # (`[^)]`) or a `.` wildcard is not: those are "anything at all", which is the bug.
+  case "$_tok" in
+    *'[^'*) row_bad="${row_bad}
+    token uses a NEGATED character class ('${_tok}'): ${_row}
+      \`[^x]*\` means 'anything until x' — it runs past the token and eats real stale
+      identifiers on the same line. Spell what the token IS, not what it is not." ;;
+  esac
+  # drop bracket classes (a `.` inside one is a literal), then drop ESCAPED dots; any
+  # `.` still standing is a wildcard.
+  _tok_bare="$(printf '%s' "$_tok" | sed 's/\[[^]]*\]//g')"
+  _tok_bare="${_tok_bare//\\./}"
+  case "$_tok_bare" in
+    *'.'*) row_bad="${row_bad}
+    token contains an UNESCAPED \`.\` wildcard ('${_tok}'): ${_row}
+      Escape it (\\.) if you meant a literal dot; a wildcard quantifier here is how an
+      exemption grows to swallow the rest of the line." ;;
+  esac
+  [ -n "$_t" ]     || row_bad="${row_bad}
+    empty term: ${_row}"
+  [ -n "$_tok" ]   || row_bad="${row_bad}
+    empty token: ${_row}"
+  [ -n "$_probe" ] || row_bad="${row_bad}
+    empty probe literal (Scenario 0b cannot test this row): ${_row}"
+  [ -n "$_why" ]   || row_bad="${row_bad}
+    empty rationale: ${_row}"
+done
+if [ -z "$row_bad" ]; then
+  pass
+else
+  fail "malformed SCRUBS row(s):${row_bad}"
+fi
+
+# ─── Scenario 0a-3: the TREE-WIDE rows are a PINNED set ──────────────────────
+# `path = *` is the one legal way to make an exemption apply everywhere, so it is also
+# the one-token way to RE-OPEN the F4 hole: widen a path-bound row to `*` and its scrub
+# is tree-wide again. Scenario 0b's boundedness probe cannot see that (the row is still
+# a bounded token — it is just applied in too many files), so the SET is pinned here.
+#
+# A row belongs on this list only if its token is genuinely unavoidable noise across the
+# tree: a test-tier path, an English phrase, a do-not-rename carve-out. Adding one is a
+# real decision. Making that decision requires editing this list, in the same commit,
+# on purpose — which is the entire point.
+it "0a: the tree-wide (path=\`*\`) SCRUBS rows are exactly the pinned set"
+TREE_WIDE_EXPECTED="PLAN_STEPS
+UNIT TEST
+add-unit test-run
+next_plan_step
+plan_step
+tests/unit
+unit test"
+tree_wide_actual="$(
+  for _row in "${SCRUBS[@]}"; do
+    _rest="${_row#*$_SEP}"
+    [ "${_rest%%$_SEP*}" = "*" ] || continue
+    _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"
+    printf '%s\n' "${_rest%%$_SEP*}"
+  done | LC_ALL=C sort
+)"
+if [ "$tree_wide_actual" = "$TREE_WIDE_EXPECTED" ]; then
+  pass
+else
+  fail "the set of TREE-WIDE exemptions changed. A row was widened to \`*\` (which makes its
+      scrub apply in every scanned file — the F4 hole), or a tree-wide row was added.
+      expected:
+$(printf '%s\n' "$TREE_WIDE_EXPECTED" | sed 's/^/        /')
+      actual:
+$(printf '%s\n' "$tree_wide_actual" | sed 's/^/        /')
+      If the widening is deliberate, say so by editing TREE_WIDE_EXPECTED in this commit."
+fi
+
+# ─── Scenario 0b: NO exemption can be claimed by CONTENT ─────────────────────
+# The generalisation of F1 and F4. Every exemption in this file has a TRIGGER — the
+# whitelisted path, the prefix, the scrubbed token. The class defect is that the
+# trigger, appearing in a line's CONTENT at an ORDINARY path, exempted that line:
+#
+#   lib/evil.py:  led = ledger.read(x)  # see lib/ledger.py: the shim   → was GREEN (F1)
+#   docs/evil.md: This module supersedes ledger.py entirely.            → was GREEN (F4)
+#
+# So: for EVERY trigger the tables declare, plant it at an ORDINARY path beside a
+# payload that spells all 8 retired identifiers, and require the audit to fire for
+# every term. Derived from GLOBAL_PATH_WHITELIST + GLOBAL_PATH_PREFIX_WHITELIST +
+# SCRUBS, so a new entry is probed automatically — there is no second list to update.
+#
+# This is what proves the exemptions are BOUNDED: a path exemption may only exempt its
+# own path, a token scrub may only cut its own token, and neither may ever be summoned
+# by prose.
+cls_tmp="$(mktemp -d)"
+trap 'rm -rf "$cls_tmp"' EXIT
+mkdir -p "$cls_tmp/lib" "$cls_tmp/docs"
+
+# One payload, all 8 retired identifiers. `add_unit` carries `unit` via the leading
+# underscore (the class regex_for_term's `_` alternative exists for).
+CLS_PAYLOAD='STALE = ledger.add_unit(recipe, adapter, seam, tick, emitter, orchestrator)'
+
+CLS_TRIGGERS=()
+for _e in "${GLOBAL_PATH_WHITELIST[@]}";        do CLS_TRIGGERS+=("$_e"); done
+for _e in "${GLOBAL_PATH_PREFIX_WHITELIST[@]}"; do CLS_TRIGGERS+=("$_e"); done
+for _row in "${SCRUBS[@]}"; do
+  _rest="${_row#*$_SEP}"; _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"
+  CLS_TRIGGERS+=("${_rest%%$_SEP*}")
+done
+CLS_TRIGGERS+=('<!--legacy-->')   # the one structural exemption: it too is shape-bound
+
+# The plants reproduce the REVIEWED EXPLOIT SHAPE verbatim — `# see <trigger>: the shim`
+# — trailing colon included. That colon is not decoration: F1's filter was
+# `grep -vF "<path>:"`, so the exploit needed the path to be FOLLOWED BY A COLON in the
+# content, which is exactly how a path gets cited in English ("see `lib/ledger.py`: the
+# shim"). A probe without it would miss the very defect it is named for.
+_i=0
+for _trig in "${CLS_TRIGGERS[@]}"; do
+  _i=$((_i + 1))
+  printf '%s  # see %s: the shim\n' "$CLS_PAYLOAD" "$_trig" > "$cls_tmp/lib/df_class_${_i}.py"
+  printf 'Note — see %s: %s\n'      "$_trig" "$CLS_PAYLOAD" > "$cls_tmp/docs/df_class_${_i}.md"
+done
+
+it "0b: NO declared exemption can be claimed by a line's CONTENT (F1 + F4, generalised)"
+cls_bad=""
+for _t in orchestrator emitter adapter tick seam unit recipe ledger; do
+  _h="$(audit_term_hits "$_t" "$cls_tmp")"
+  _j=0
+  for _trig in "${CLS_TRIGGERS[@]}"; do
+    _j=$((_j + 1))
+    for _f in "lib/df_class_${_j}.py" "docs/df_class_${_j}.md"; do
+      printf '%s\n' "$_h" | grep -F "${_f}:" >/dev/null \
+        || cls_bad="${cls_bad}
+    [${_t}] ${_f} EXEMPTED ITSELF by citing '${_trig}' in its content"
+    done
+  done
+done
+if [ -z "$cls_bad" ]; then
+  pass
+else
+  fail "an exemption is claimable by CONTENT — the F1/F4 class is OPEN again:${cls_bad}"
+fi
+
+# ─── Scenario 0c: a PATH-BOUND scrub does not apply OFF its path ─────────────
+# 0b proves each exemption is BOUNDED (it cuts its own token and nothing else). It does
+# NOT prove each exemption is SCOPED — and F4 was a scope defect, not a boundedness one:
+# the `supersedes` scrub cut exactly the right token, in every file in the tree.
+#
+# 0b cannot see that, because its payload survives the over-broad cut and the line is
+# reported anyway. So scope gets its own probe: plant each row's probe literal ALONE —
+# no payload to mask the result — at an ORDINARY path, and require the retired term
+# INSIDE THE LITERAL to be reported. If the row is correctly path-bound, the scrub does
+# not run here and the term is caught. Widen the row (to `*`, or to a looser path ERE)
+# and the scrub eats the literal, the file goes quiet, and this goes RED.
+#
+# Rows whose probe literal contains no retired term at all (`_LEGACY_TIER_DIRNAME`,
+# `plan_step`) are skipped: there is nothing for the audit to catch in them, which is
+# also why they cannot exempt anything. Tree-wide (`path = *`) rows are skipped by
+# definition — their scope is pinned by Scenario 0a-3 instead.
+# One ordinary path per scanned tree, so a scrub that leaks into ANY of them is caught —
+# not just one that leaks into lib/. (A row that legitimately DECLARES one of these paths
+# has that candidate skipped: the scrub is supposed to apply there.)
+mkdir -p "$cls_tmp/lib" "$cls_tmp/docs" "$cls_tmp/docs/contracts" "$cls_tmp/tests/unit" \
+         "$cls_tmp/commands" "$cls_tmp/skills/df-scope"
+SCOPE_CANDIDATES=(
+  'lib/df_scope.py'
+  'docs/df_scope.md'
+  'docs/contracts/df_scope.md'
+  'tests/unit/df_scope.test.sh'
+  'commands/df_scope.md'
+  'skills/df-scope/SKILL.md'
+)
+scope_bad=""
+for _row in "${SCRUBS[@]}"; do
+  _rest="${_row#*$_SEP}"
+  _rpath="${_rest%%$_SEP*}"
+  [ "$_rpath" = "*" ] && continue              # tree-wide by design → Scenario 0a-3
+  _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"
+  _rprobe="${_rest%%$_SEP*}"
+  for _f in "${SCOPE_CANDIDATES[@]}"; do
+    # skip a candidate the row legitimately covers — there the scrub SHOULD apply.
+    printf '%s\n' "$_f" | grep -qE "$_rpath" && continue
+    printf '%s\n' "$_rprobe" > "$cls_tmp/$_f"
+    for _t in orchestrator emitter adapter tick seam unit recipe ledger; do
+      # does the literal itself name a retired term? if not, there is nothing to catch
+      # in it — and nothing it could exempt either.
+      printf '%s\n' "$_rprobe" | grep -qiE "$(regex_for_term "$_t")" || continue
+      printf '%s\n' "$(audit_term_hits "$_t" "$cls_tmp")" | grep -F "${_f}:" >/dev/null && continue
+      scope_bad="${scope_bad}
+    [${_t}] '${_rprobe}' was SCRUBBED at ${_f} — but that row is bound to '${_rpath}'.
+      The exemption is applying OFF its declared path (the F4 shape)."
+    done
+    rm -f "$cls_tmp/$_f"
+  done
+done
+it "0c: a PATH-BOUND scrub does NOT apply outside its declared path (F4, generalised)"
+if [ -z "$scope_bad" ]; then
+  pass
+else
+  fail "an exemption escaped its path binding:${scope_bad}"
+fi
+
+# ─── Scenario 0d: a scrub cuts ONLY its token, WHERE IT ACTUALLY RUNS ────────
+# 0b and 0c both probe from OUTSIDE a row's declared path, where its scrub does not run
+# at all. So neither can see the defect that only manifests INSIDE it: a token regex that
+# cuts more than its token, taking a real stale identifier that shares the line with it.
+# That is the `(formerly …)` bug — `[^)]*` reached past the breadcrumb — and it was
+# invisible to every probe until this one.
+#
+# So: plant, AT the row's own declared path (the first literal in its enumeration), the
+# probe literal FOLLOWED BY the all-8-terms payload. The scrub runs. It must cut its
+# token and stop — leaving every stale identifier in the payload to be caught.
+#
+# TWO payload SHAPES, and the second is the whole point (skeptic-found).
+# The original probe planted `<probe>  <payload>` — separated by SPACES. That can only
+# catch a token that runs ACROSS WHITESPACE, so it handed a false "bounded" verdict to any
+# token ending in a greedy identifier class. A skeptic weaponised exactly that: the row
+#     '*%%^(lib/iteration\.py)$%%LEGACYNOTE[A-Za-z0-9_./-]+%%@LEGACYNOTE@%%…'
+# is a legal, innocent-looking row that passed 0a, 0a-2, 0a-3, 0b, 0c AND 0d, while its
+# `+` ate an unbroken run of identifier characters —
+# `LEGACYNOTE_ledger.add_unit/recipe_…` — swallowing all 8 retired terms at once. The
+# token IS "bounded" in the only sense 0a-2 can statically check (a positive class, no
+# `[^…]`, no bare `.`); it is not bounded in the sense that matters. The PROBE's shape was
+# the lie, not the row — so the probe is what gets fixed.
+#
+# The ADJACENT payload is an unbroken run of the very characters a name class is built
+# from, glued onto the probe with NO separator. A token that stops at its own name leaves
+# the run intact and passes; a token that runs rightward eats it and FAILS. Legit rows are
+# unaffected: each stops at a delimiter its own regex names (a backtick, a `)`, a `/`, a
+# space), so the run survives them.
+#
+# The run LEADS with `_`, and that is load-bearing. Glued straight on, `tick.sh` + `ledger…`
+# spells `shledger` — no word boundary, so `ledger` is genuinely not an identifier there
+# and the audit is RIGHT not to report it. The probe would have been accusing correct code.
+# A leading `_` is simultaneously (a) inside the `[A-Za-z0-9_./-]` class, so a greedy token
+# still eats straight through it, and (b) `regex_for_term`'s own `(\b|_)` alternative, so
+# every term in the run is a real hit. Each term below is likewise separated by a class
+# char that is also a boundary (`_`, `.`, `/`) — never by a letter.
+CLS_RUN='_ledger.add_unit/recipe_adapter_seam_tick_emitter_orchestrator'
+bnd_bad=""
+for _row in "${SCRUBS[@]}"; do
+  _rest="${_row#*$_SEP}"
+  _rpath="${_rest%%$_SEP*}"
+  [ "$_rpath" = "*" ] && continue
+  _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"; _rest="${_rest#*$_SEP}"
+  _rprobe="${_rest%%$_SEP*}"
+  # first literal path out of `^(a|b|c)$` (paths are literal enumerations — 0a-2 pins it)
+  _lit="${_rpath#^}"; _lit="${_lit%$}"; _lit="${_lit#(}"; _lit="${_lit%)}"
+  _lit="${_lit%%|*}"; _lit="${_lit//\\./.}"
+  mkdir -p "$cls_tmp/$(dirname "$_lit")"
+  for _shape in spaced adjacent; do
+    case "$_shape" in
+      spaced)   printf '%s  %s\n' "$_rprobe" "$CLS_PAYLOAD" > "$cls_tmp/$_lit" ;;
+      adjacent) printf '%s%s\n'   "$_rprobe" "$CLS_RUN"     > "$cls_tmp/$_lit" ;;
+    esac
+    for _t in orchestrator emitter adapter tick seam unit recipe ledger; do
+      printf '%s\n' "$(audit_term_hits "$_t" "$cls_tmp")" | grep -F "${_lit}:" >/dev/null && continue
+      bnd_bad="${bnd_bad}
+    [${_t}/${_shape}] at ${_lit}, the scrub for '${_rprobe}' ATE a stale identifier on its line.
+      A token must stop at its own name. On the 'adjacent' shape this means the token ends
+      in a greedy class that runs rightward across a whole identifier run — bounded to
+      0a-2's eye, unbounded in fact."
+    done
+    rm -f "$cls_tmp/$_lit"
+  done
+done
+it "0d: a scrub cuts ONLY its own token, inside the path where it RUNS (bounded)"
+if [ -z "$bnd_bad" ]; then
+  pass
+else
+  fail "a token exemption is UNBOUNDED — it swallows real stale identifiers:${bnd_bad}"
+fi
+
+rm -rf "$cls_tmp"; trap - EXIT
 
 # ─── Scenario 1: audit the real status table (all `pending` today → green) ───
 it "no old identifier survives outside the whitelist for any DONE term"
@@ -670,19 +1100,47 @@ while IFS= read -r hit; do
   n1="$(norm "$c1")"
   n2="$(norm "$c2")"
   [ -z "$n1" ] && continue
-  # Skip the HEADER row — identified by its FIRST CELL, not by a substring anywhere
-  # on the line (a data row must never be able to opt out of this check by quoting
-  # the header's wording in a later column). `key` heads the key map; `location`
-  # heads the U8 tier-dir map; `identifier` heads the U9 code map (the run-record
-  # rename touched no persisted key, so its legacy table maps SYMBOLS, not keys —
-  # but it claims the same `<!--legacy-->` exemption, so it gets the same policing).
-  # U10 adds the two tables the WIDENED scan brought in scope: `retired identifier`
-  # heads the historical-mapping tables in CONCEPTS.md + README.md, and
-  # `deprecated surface` heads the removal ledger in docs/deprecations.md.
-  case "$n1" in
-    "legacy (v1) key"|"legacy (v1) location"|"legacy (v1) identifier") continue ;;
-    "retired identifier"|"deprecated surface") continue ;;
+  # Skip the HEADER row — and ONLY a real header row.
+  #
+  # F3: matching the header by its first cell's TEXT is not enough. A DATA row whose
+  # first cell happens to be the literal string `retired identifier` or `deprecated
+  # surface` — easy to write by accident in a table that is ABOUT retired identifiers —
+  # skipped both checks entirely and claimed the `<!--legacy-->` exemption unpoliced.
+  # A header is not a string; it is a POSITION: in markdown, the header is the row
+  # immediately followed by the `|---|---|` delimiter row. So check the STRUCTURE, and
+  # require the text to match as well. A data row can fake the text; it cannot fake
+  # being followed by the delimiter.
+  next_line="$(sed -n "$((lineno + 1))p" "${AUTO_ROOT}/${file}")"
+  is_header=""
+  case "$next_line" in
+    \|[-\ :]*)
+      # the delimiter row: only |, -, :, and spaces
+      case "$next_line" in
+        *[!-\ :\|]*) ;;
+        *) is_header="yes" ;;
+      esac
+      ;;
   esac
+  if [ -n "$is_header" ]; then
+    # `key` heads the key map; `location` heads the U8 tier-dir map; `identifier` heads
+    # the U9 code map (the run-record rename touched no persisted key, so its legacy
+    # table maps SYMBOLS, not keys — but it claims the same `<!--legacy-->` exemption,
+    # so it gets the same policing). U10 added the two tables the WIDENED scan brought
+    # in scope: `retired identifier` heads the historical-mapping tables in CONCEPTS.md
+    # + README.md, and `deprecated surface` heads the removal ledger in
+    # docs/deprecations.md. A row that is structurally a header but spells NONE of
+    # these is a new table claiming the exemption — say so rather than waving it past.
+    case "$n1" in
+      "legacy (v1) key"|"legacy (v1) location"|"legacy (v1) identifier") continue ;;
+      "retired identifier"|"deprecated surface") continue ;;
+      *)
+        legacy_bad="${legacy_bad}
+    ${file}:${lineno}: a NEW <!--legacy--> table appeared, headed '${n1}' — add it to the
+      known-headers list here on purpose, so its rows get policed like every other."
+        continue
+        ;;
+    esac
+  fi
   # (a) the v1 cell must name a retired identifier.
   #
   # NB the set here is the 8 AUDITED terms PLUS `content` — and the difference is the
@@ -923,15 +1381,49 @@ fi
 
 rm -rf "$df_tmp"; trap - EXIT
 
-# ─── Scenario 3: the summary line matches the runner's tally regex ──────────
-# tests/run.sh tallies on: ^<name>.test.sh(:| results:) N passed, M failed
-it "summary line matches the runner tally regex"
-probe="vocabulary-audit.test.sh: 0 passed, 0 failed"
-if printf '%s\n' "$probe" \
-   | grep -qE '^[^[:space:]]+\.test\.sh(:| results:) [0-9]+ passed, [0-9]+ failed'; then
+# ─── Scenario 3: THIS file's summary line is tallied by THE RUNNER'S regex ──
+# F8: both sides are now DERIVED, neither is hand-copied.
+#
+# The old shape checked a hardcoded probe string ("vocabulary-audit.test.sh: 0 passed,
+# 0 failed") against a hand-copied duplicate of run.sh's regex. It read NEITHER real
+# source. So it stayed green if run.sh tightened its regex, and it stayed green if this
+# file's own final `echo` drifted — the two exact drifts it exists to catch. It only
+# ever proved that one constant matches another constant.
+#
+# Now: the regex is read out of tests/run.sh, and the probe is rendered from THIS file's
+# own final `echo` line (with ${PASS}/${FAIL} substituted). If either side moves, this
+# fails.
+it "this file's summary line is matched by tests/run.sh's ACTUAL tally regex"
+tally_bad=""
+
+# The runner's regex, from the runner.
+runner_re="$(sed -n "/summary_line=\$(grep -E/ s/^[^']*'\([^']*\)'.*/\1/p" \
+             "${AUTO_ROOT}/tests/run.sh" | head -1)"
+
+# This file's summary line, from this file: take the last `echo "...test.sh: ..."` and
+# expand the two counter placeholders. Parameter expansion only — nothing is eval'd.
+summary_fmt="$(grep -E '^echo "[^"]*\.test\.sh: \$\{PASS\} passed, \$\{FAIL\} failed"$' \
+               "$SELF" | tail -1)"
+probe="${summary_fmt#echo \"}"
+probe="${probe%\"}"
+probe="${probe//\$\{PASS\}/7}"
+probe="${probe//\$\{FAIL\}/0}"
+
+# Anti-vacuity on BOTH derivations — an empty regex or an empty probe would make the
+# match below meaningless (and `grep -qE ''` matches everything).
+[ -n "$runner_re" ] || tally_bad="could not read the tally regex out of tests/run.sh — the check below is vacuous"
+[ -n "$probe" ]     || tally_bad="${tally_bad:+$tally_bad; }could not render this file's summary line from its own final echo"
+case "$probe" in
+  vocabulary-audit.test.sh:*) ;;
+  *) tally_bad="${tally_bad:+$tally_bad; }the rendered summary line does not start with this file's own basename: '${probe}'" ;;
+esac
+if [ -z "$tally_bad" ] && ! printf '%s\n' "$probe" | grep -qE "$runner_re"; then
+  tally_bad="tests/run.sh would NOT tally this file: '${probe}' does not match its regex '${runner_re}'"
+fi
+if [ -z "$tally_bad" ]; then
   pass
 else
-  fail "summary line format would NOT be tallied by tests/run.sh"
+  fail "$tally_bad"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

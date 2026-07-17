@@ -557,21 +557,53 @@ def _h_downgrade(argv):
     return 0
 
 
+# KTD-4 REVISITED — the retired work-node verbs get DEPRECATED ALIASES.
+#
+# U7 hard-cut `add-unit` / `set-enumerated-units` to their `step` spelling with NO
+# alias, on the reasoning that "verbs are never persisted, so nothing in flight can
+# hold one". That reasoning is wrong, and it is the ONE place the rename decided this
+# question inconsistently:
+#
+#   The pre-rename guidance module (what is now `lib/pulse_guidance.py`) EMITS
+#   GUIDANCE naming these verbs — it hands the driving agent a literal
+#   `… set-enumerated-units <args>` line to run. The verb is not persisted, but the
+#   INSTRUCTION TO RUN IT is: it sits in an agent's context (and in a persisted rearm
+#   prompt) across the upgrade. An agent mid-run then executes a verb that exits 2 and
+#   the run stalls — the exact in-flight scenario the deprecated flag aliases and the
+#   kept alias command exist for. Same problem; it was decided the other way here.
+#
+# Same mechanism as `_DEPRECATED_FLAGS` in lib/auto.py: rewrite the retired spelling
+# to its canonical one, emit exactly ONE stderr notice (stdout stays byte-clean, so
+# `… read | jq` keeps working), and fall through to the canonical handler — which owns
+# arity and validation. There is no second implementation to drift.
+#
+# NOT in `_VERBS`, and so NOT in `describe` or the agent-tool-surface contract: an
+# alias is a bridge for an agent that already holds the old name, not a verb we
+# advertise. Same posture as `downgrade`. Removed in v0.15.0 (docs/deprecations.md).
+_DEPRECATED_VERBS = {
+    "add-unit": "add-step",
+    "set-enumerated-units": "set-enumerated-steps",
+}
+
+
 def _cli(argv):
     if not argv:
         sys.stderr.write("usage: run_record.py <subcommand> ...\n")
         return 2
     if argv[0] == "downgrade":
         return _h_downgrade(argv)
+    canon = _DEPRECATED_VERBS.get(argv[0])
+    if canon is not None:
+        sys.stderr.write(
+            f"run_record.py: {argv[0]} is deprecated; use {canon}\n"
+        )
+        argv = [canon] + list(argv[1:])
     verb = _VERBS.get(argv[0])
     if verb is None:
-        # U7 (concept-vocabulary rename) HARD-CUT the work-node verbs to their
-        # `step` spelling with NO deprecated aliases: verbs are never persisted
-        # (KTD-4), so the only callers are this repo's skills (updated atomically)
-        # and driving agents. An agent holding a pre-rename verb name must not be
-        # left guessing — point it at `describe`, the machine-readable mirror of
-        # `_VERBS` that docs/contracts/agent-tool-surface.md contractually tells it
-        # to orient by. Exit 2 (bad args), never a silent no-op.
+        # An agent holding a verb name we do not know must not be left guessing —
+        # point it at `describe`, the machine-readable mirror of `_VERBS` that
+        # docs/contracts/agent-tool-surface.md contractually tells it to orient by.
+        # Exit 2 (bad args), never a silent no-op.
         sys.stderr.write(
             f"run_record.py: unknown subcommand {argv[0]!r}\n"
             "  run `python3 lib/run_record.py describe` for the authoritative verb set.\n"

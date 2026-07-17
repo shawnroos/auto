@@ -17,39 +17,67 @@
 # tests/unit/doc-fence-run-record-schema.test.sh (H). The DAG edges are the
 # contract; this test fails the build if a forbidden edge appears.
 #
-# THE DAG (allowed edges only):
-#   format_compat → (nothing; DAG root, pure stdlib — imports no sibling at all)
-#   run_record_core   → format_compat            [DAG root otherwise: stdlib + _bootstrap]
-#   run_record_mutators → run_record_core
-#   run_record_producers → run_record_core, run_record_mutators
-#   run_record (facade) → run_record_core, run_record_mutators, run_record_producers
-#   pulse_guidance → run_record (facade), phase-grammar         [leaf]
-#   pulse_advance  → run_record, iteration, step_producers, pulse_guidance
-#   pulse          → run_record, iteration, step_producers, pulse_advance, pulse_guidance
-#   step_producers → (nothing; leaf — the phase-boundary producers are pure)
+# THE DAG (allowed edges only). VERIFIED AGAINST THE ACTUAL IMPORTS — F6 found this
+# comment had drifted badly, and a DAG comment that lies is worse than none: the next
+# agent reasons about the topology from HERE, not from the source. Re-verify with
+#   grep -nE '^[a-z_]+ = load_lib_module\("|^import [a-z_]+ as ' lib/<mod>.py
+# before you edit any line below.
 #
-# The producer module took its final name at U7 (KTD-3). NB: pulse_advance reaches it
-# via a PLAIN `import step_producers as producers`, NOT load_lib_module(), so
-# `loads_sibling` cannot see that edge — the existence assert near the bottom is what
-# makes a botched rename go red here instead of at runtime.
-#   _bootstrap     → format_compat           (load_run_record_safe — read chokepoint 2)
-#   workflow_validate → format_compat          (the validate_and_lint WRITE gate)
-#   workflows        → workflow_validate, format_compat   (resolve() read shim)
-#   presets        → workflow_validate, backend_ops, format_compat  (load_preset shim)
-#   run_record       → format_compat            (U10: the `downgrade` operator command —
-#                                                the facade owns the CLI, so the INVERSE
-#                                                map is loaded here; format_compat itself
-#                                                cannot host it, being unable to reach
-#                                                core's flock as a DAG root)
+# Three EDGE KINDS, and telling them apart is the whole point of this file:
+#   [top]   `x = load_lib_module("y")` at module top — the only kind `loads_sibling`
+#           (and therefore every check below) can SEE.
+#   [plain] a bare `import y` at module top — a real edge this lint CANNOT see.
+#   [lazy]  a load INSIDE a function body — a real runtime edge, invisible to the lint,
+#           and the mechanism that lets a "cycle" on paper not be one at import time.
 #
-# U6 (concept-vocabulary rename / KTD-1) added the five `→ format_compat` edges.
-# format_compat is itself a DAG ROOT (pure stdlib, no sibling import), so every
-# one of them is a LEAF edge that closes no cycle — including
-# `run_record_core → format_compat` and `workflow_validate → format_compat`, which both
-# preserve those modules' own root property. NB: this lint is
-# forbidden-edge/negative-grep, so an ALLOWED edge missing from this comment would
-# not turn it red; these four entries are documentation accuracy, and the
-# format_compat.py existence assert below is what makes its absence fail loudly.
+#   format_compat        → (nothing)                          DAG root; pure stdlib
+#   run_record_core      → format_compat [lazy], run_record_predicate [lazy]
+#                          Deliberately keeps NO module-top sibling import, which is what
+#                          makes it the acyclic root of the run-record family.
+#   run_record_mutators  → run_record_core
+#   run_record_producers → run_record_core
+#   run_record_predicate → run_record_core
+#   run_record_steering  → run_record_core, run_record_mutators
+#   run_record (facade)  → run_record_core, run_record_predicate, run_record_mutators,
+#                          run_record_steering, run_record_producers, format_compat
+#                          (format_compat: U10's `downgrade` operator command. The facade
+#                          owns the CLI, so the INVERSE map is loaded here; format_compat
+#                          cannot host it, being unable to reach core's flock as a root.)
+#
+#   pulse_guidance → phase-grammar, iteration                  NOT a leaf, and NOT an
+#                    importer of the run_record facade — it takes `load_run_record` as a
+#                    FUNCTION from _bootstrap. The old comment claimed both.
+#   pulse_advance  → phase-grammar, iteration, pulse_guidance, upstream-cluster,
+#                    step_producers [plain]
+#   pulse          → phase-grammar, pulse_advance, pulse_guidance
+#                    The old comment claimed `pulse → iteration, step_producers,
+#                    run_record`. It imports NONE of the three: it reaches that work
+#                    through pulse_advance. It DOES import phase-grammar, undocumented.
+#   step_producers → workflows, iteration
+#                    The old comment called this a pure leaf importing nothing. It is
+#                    neither: `workflows` is how a producer resolves the step template.
+#
+#   _bootstrap        → run_record [lazy], format_compat [lazy], phase-grammar [lazy]
+#                       EVERY one is call-time, and that is load-bearing: run_record
+#                       does `from _bootstrap import …` at module TOP, so a module-top
+#                       `_bootstrap → run_record` edge would be a genuine import cycle.
+#                       The lazy load is what keeps the back-edge legal. Do not promote
+#                       any of these to a module-top import.
+#   workflow_validate → format_compat                          (the validate WRITE gate)
+#   workflows         → workflow_validate, format_compat       (resolve() read shim)
+#   presets           → workflow_validate, backend_ops, format_compat  (load_preset shim)
+#   iteration         → verification [lazy]
+#
+# format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
+# edge is a LEAF edge that closes no cycle.
+#
+# NB this lint is forbidden-edge / negative-grep: an ALLOWED edge missing from this
+# comment does NOT turn it red. That is exactly why the comment drifted, and why the
+# existence asserts below matter — they are what makes a botched rename fail loudly
+# rather than silently vacate a negative grep. `loads_sibling` greps for the
+# `load_lib_module("x")` call form ONLY, so it is blind to both [plain] and [lazy] edges:
+# pulse_advance reaches step_producers via a PLAIN `import step_producers as producers`,
+# and the existence assert is the only thing standing behind that edge.
 #
 # Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the RUN-RECORD FACADE, never run_record_mutators/run_record_producers directly — the facade

@@ -110,6 +110,19 @@ it "agent-tool-surface.md advertises no verb that _VERBS does not dispatch"
 stale=""
 doc_verbs="$(sed -n '/^## Verbs$/,/^## /p' "$DOC" \
              | grep -oE '`[a-z][a-z-]*`' | tr -d '`' | sort -u)"
+# ANTI-VACUITY FLOOR (F7). The extraction is pinned to the LITERAL `^## Verbs$`
+# heading. Rename that heading — or restructure the section — and `sed` yields nothing,
+# `doc_verbs` is empty, the loop below runs zero times, and this check reports SUCCESS
+# while policing the doc→code direction not at all. The floor makes that a failure.
+# Cross-checked against the OTHER direction's floor (Scenario 0's `>= 10` on `describe`):
+# every verb must be named in the section, so the section can never hold fewer.
+doc_verb_count="$(printf '%s\n' "$doc_verbs" | grep -c . || true)"
+verb_count="$(printf '%s\n' "$VERBS" | grep -c . || true)"
+if [ "$doc_verb_count" -lt "$verb_count" ]; then
+  fail "the \`## Verbs\` section yielded only ${doc_verb_count} verb-shaped code spans but
+      \`describe\` dispatches ${verb_count} — the section heading was renamed or restructured,
+      so this check is VACUOUS (it would report success while policing nothing)."
+else
 while IFS= read -r cand; do
   [ -z "$cand" ] && continue
   if ! printf '%s\n' "$VERBS" | grep -qx -- "$cand"; then
@@ -121,6 +134,7 @@ if [ -z "$stale" ]; then
 else
   fail "agent-tool-surface.md names these as verbs, but they do NOT dispatch: ${stale}
       an agent following the contract would get exit 2."
+fi
 fi
 
 # ─── Scenario 3: deliberate-fail — proves the fence is not vacuous ───────────

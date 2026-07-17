@@ -29,20 +29,46 @@ The three properties everything else rests on:
 
 APPLIED UNCONDITIONALLY ON EVERY READ — never gated on ``format``.
 The ``format`` marker exists to gate hypothetical FUTURE (v3+) migrations; it must
-NEVER be used to *skip* the v1→v2 map. A ``format: 2`` record written by new code
-can still be MUTATED by an OLD plugin in a mixed fleet (near-certain when
-dogfooding auto on the auto repo itself): the old code writes ``seam_paused: true``
-or ``units`` straight back into the v2 record. A shim that skipped ``format >= 2``
-would then skip that record forever, silently losing the old plugin's write — the
-write-skip-forever hole. Applying the map unconditionally closes it: writers may
-safely lag readers. Because the map is pure and idempotent, running it over an
-already-v2 record is a no-op by construction (no old key is present to map).
+NEVER be used to *skip* the v1→v2 map.
 
-STALE-TWIN DROP. After an old key is mapped to its new key the old twin is
-DROPPED, so a mapped record can never carry both ``units`` and ``steps``. Where
-BOTH twins are present on input (a partial hand-edit, or the mixed-fleet case
-above), the NEW key's value wins and the old twin is dropped. Genuinely-unknown
+The reason is NOT that gating would lose a concurrent old-plugin write — read the
+next paragraph; it demonstrably does lose it, and that is accepted. The reason is
+that **format-gating a READ is a mixed-fleet corruption trap**. A ``format`` marker
+tells you what wrote the record LAST, not what vocabulary its keys are in: a v1
+record that any old-plugin hook touches after an upgrade, a record hand-edited by an
+operator, a record restored from a backup, a v2 record a downgrade stripped the
+marker from — each can carry v1 keys under any marker value, or none. A gated shim
+reads such a record as if its keys were already v2, so ``steps`` is simply absent and
+the step array reads as EMPTY. That is a silent, structural misread of user data.
+The ungated map cannot misread anything: it is pure, idempotent and order-independent,
+so running it over an already-v2 record is a no-op BY CONSTRUCTION (no old key is
+present to map), while running it over anything else fixes it. Ungated, the shim is
+total; gated, it is a guess about provenance. Writers may safely lag readers.
+
+STALE-TWIN DROP — AND WHAT IT COSTS. After an old key is mapped to its new key the
+old twin is DROPPED, so a mapped record can never carry both ``units`` and ``steps``.
+Where BOTH twins are present on input, **the NEW key's value wins**. Genuinely-unknown
 keys — anything not in a map below — pass through untouched, at any depth.
+
+Say the consequence plainly, because it is easy to talk yourself out of it:
+**a concurrent OLD-plugin write to a v2 record is LOST.** Every v2 record carries
+``handoff_paused`` from init. So when an old plugin writes ``seam_paused: true`` into
+it, the record now holds BOTH twins, new-wins discards the old one, and the pause the
+old plugin just set is gone on the next read. Not "degraded" — gone. The same holds
+for every twinned key, and no ordering of the upgrade changes it.
+
+That is a DELIBERATE trade, not an oversight. The alternatives are worse: old-wins
+would make an upgraded record revert to whatever a stale hook last wrote, breaking the
+upgrade path itself; and resolving the twins by timestamp/heuristic would be exactly
+the kind of magic this repo refuses — a silent, unauditable guess about which of two
+plugin versions "meant it". New-wins is the only rule that is total, order-independent
+and explainable.
+
+The honest conclusion, therefore: **running two plugin versions against one
+``.claude/auto/`` state dir is NOT SUPPORTED.** The shim makes a mixed fleet
+SURVIVABLE — nothing crashes, nothing is structurally misread — but it does not make
+it CORRECT, and a write from the older plugin can be silently dropped. Do the cutover
+below.
 
 REVERT SAFETY. ``downgrade_run_record`` is the exact inverse map (it also strips
 the ``format`` marker, so reinstalled pre-rename code never sees an unknown

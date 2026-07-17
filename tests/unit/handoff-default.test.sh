@@ -118,6 +118,69 @@ else
 fi
 rm -rf "$test_repo"
 
+# ── Scenario 6b: an ack made under the PRE-RENAME marker still counts. ───
+# F(C): the rename swept the marker filename `.seam-default-acknowledged` →
+# `.handoff-default-acknowledged`. But that file is not a code identifier — it is
+# USER STATE on disk, written by the previous version. Renaming it silently un-acks
+# every existing user, and the one-time "this default changed" notice fires a second
+# time at someone who dismissed it a version ago. So the OLD marker is still honoured.
+#
+# The setup plants ONLY the legacy marker (exactly what an upgrading user's repo has)
+# and asserts the notice stays silent.
+it "back-compat notice: an existing .seam-default-acknowledged ack is still honoured"
+up_repo="$(mktemp -d -t handoff-upgrade.XXXXXX)"
+(
+  cd "$up_repo"
+  git init -q .
+  git config user.email t@t
+  git config user.name t
+) >/dev/null 2>&1
+# Plant the PRE-RENAME marker where the previous version wrote it, and nothing else.
+up_shared="$(cd "$up_repo" && "$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, importlib.util
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.resolve_shared_dir())
+PYEOF
+)"
+mkdir -p "$up_shared"
+printf 'ack' > "${up_shared}/.seam-default-acknowledged"
+upgraded="$(cd "$up_repo" && "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1 1>/dev/null
+import sys, os, importlib.util
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m._handoff_default_notice()
+PYEOF
+)"
+if [ -z "$upgraded" ]; then
+  pass
+else
+  fail "the notice RE-FIRED at a user who had already acknowledged it under the pre-rename marker: '${upgraded}'"
+fi
+# …and the anti-vacuity floor: the same repo with NO marker at all MUST fire, or the
+# assertion above passes for the wrong reason (e.g. resolve_shared_dir returning None).
+it "back-compat notice: the same hermetic repo with NO marker DOES fire (anti-vacuity)"
+rm -f "${up_shared}/.seam-default-acknowledged" "${up_shared}/.handoff-default-acknowledged"
+novac="$(cd "$up_repo" && "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1 1>/dev/null
+import sys, os, importlib.util
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+spec = importlib.util.spec_from_file_location("auto", os.path.join(auto_root, "lib", "auto.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m._handoff_default_notice()
+PYEOF
+)"
+if printf '%s' "$novac" | grep -q "handoff-default FLIP"; then
+  pass
+else
+  fail "the notice did NOT fire in a marker-less repo — Scenario 6b proves nothing. got: '${novac}'"
+fi
+rm -rf "$up_repo"
+
 # ── Scenario 7: notice degrades gracefully outside a git tree. ───────────
 # resolve_shared_dir() returns None outside git; the notice should swallow.
 it "back-compat notice: silent in a non-git dir (resolve_shared_dir → None)"

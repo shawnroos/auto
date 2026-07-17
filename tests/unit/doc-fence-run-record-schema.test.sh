@@ -86,41 +86,75 @@ REQUIRED=(
   "backstop_latched"
 )
 
-# ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────
-missing=""
-for sym in "${REQUIRED[@]}"; do
-  if ! grep -q -F -- "$sym" "$SCHEMA_DOC"; then
-    missing+="${sym}\n"
-  fi
-done
+# ─── Scenario 0: anti-vacuity floors ────────────────────────────────────────
+# Both of these guard the same failure mode: the fence reporting SUCCESS because it
+# checked nothing. With `REQUIRED=()` — or with `SCHEMA_DOC` pointing at a file that
+# does not exist — every loop below runs zero times, or trivially, and this file goes
+# GREEN while enforcing precisely nothing.
+it "the fenced doc exists (else every grep below passes vacuously)"
+if [ -f "$SCHEMA_DOC" ]; then
+  pass
+else
+  fail "run-record-schema.md is missing — every check below would pass vacuously"
+fi
 
+it "REQUIRED is non-empty and covers the surface (anti-vacuity floor)"
+if [ "${#REQUIRED[@]}" -ge 20 ]; then
+  pass
+else
+  fail "REQUIRED has ${#REQUIRED[@]} entries (floor: 20) — the fence is checking almost nothing.
+      If a symbol was deliberately retired, lower the floor in the same commit and say why."
+fi
+
+# The fence's ACTUAL check, factored into a function so the deliberate-fail control
+# below can re-point it at a PLANTED-BROKEN copy of the doc and prove it fires.
+#
+# This factoring is the whole point (F2). The DF control this replaces built
+# `grep -v exit_reason "$doc"` and then asserted that `exit_reason` was absent from the
+# result. That proves `grep -v` works. It never ran Scenario 1's loop, never touched
+# `REQUIRED`, and would have passed with `REQUIRED=()` — i.e. the control was green on a
+# fence that checked nothing, which is the exact condition it existed to detect. Same
+# anti-pattern named and fixed in tests/unit/doc-fence-agent-tool-surface.test.sh.
+#
+# missing_symbols <doc> → prints the REQUIRED symbols not named in <doc>.
+missing_symbols() {
+  local doc="$1" sym out=""
+  for sym in "${REQUIRED[@]}"; do
+    grep -q -F -- "$sym" "$doc" || out+="${sym} "
+  done
+  printf '%s' "$out"
+}
+
+# ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────
 it "every public run_record symbol is mentioned in docs/contracts/run-record-schema.md"
+missing="$(missing_symbols "$SCHEMA_DOC")"
 if [ -z "$missing" ]; then
   pass
 else
-  fail "missing from run-record-schema.md:
-$(printf '%b' "$missing")"
+  fail "missing from run-record-schema.md: ${missing}"
 fi
 
-# ─── Scenario 2: deliberate-fail — proves the lint isn't vacuous ────────────
-# Write a temporary copy of the schema doc with a known symbol removed; the
-# lint MUST flag it. Mirrors G5's wikilink-check DF pattern.
-it "deliberate-fail: stripping exit_reason from the schema doc trips the lint"
+# ─── Scenario 2: deliberate-fail — the fence's OWN checker, on a broken doc ──
+# Plant a copy of the schema doc with a REQUIRED symbol stripped, and run
+# missing_symbols — the real check, the real REQUIRED list — against it. It must name
+# the stripped symbol. Nothing here re-implements the fence, so a fence that stopped
+# working cannot leave this control green.
+it "deliberate-fail: the fence's checker flags a symbol stripped from a planted doc"
 tmpdir="$(mktemp -d -t doc-fence-df.XXXXXX)"
 trap 'rm -rf "$tmpdir"' EXIT
-# Copy doc with exit_reason occurrences removed.
+# `exit_reason` is a substring of `set_exit_reason`, so stripping one strips both —
+# and the control asserts BOTH come back, which also pins that REQUIRED still holds
+# them (a REQUIRED that quietly lost them would fail here, not pass).
 grep -v "exit_reason" "$SCHEMA_DOC" > "$tmpdir/schema.md"
-# Re-run the grep against the planted-broken copy.
-df_missing=""
-for sym in "exit_reason" "set_exit_reason"; do
-  if ! grep -q -F -- "$sym" "$tmpdir/schema.md"; then
-    df_missing+="${sym} "
-  fi
-done
-if [ -n "$df_missing" ]; then
+df_missing="$(missing_symbols "$tmpdir/schema.md")"
+df_bad=""
+case "$df_missing" in *exit_reason*)     ;; *) df_bad="exit_reason " ;;     esac
+case "$df_missing" in *set_exit_reason*) ;; *) df_bad+="set_exit_reason " ;; esac
+if [ -z "$df_bad" ]; then
   pass
 else
-  fail "deliberate-fail: lint did NOT catch removed symbols ${df_missing}"
+  fail "deliberate-fail: the fence did NOT flag ${df_bad}as missing from the planted-broken doc
+      (checker returned: '${df_missing}') — the fence is vacuous."
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

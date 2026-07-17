@@ -194,6 +194,20 @@ def _handoff_default_notice():
     so the notice doesn't re-fire per worktree under fanout — KTD-3 (the
     dependency this skill declared on U1).
 
+    THE RENAME MOVED THE MARKER, AND A MOVED MARKER IS A RE-FIRED NOTICE.
+    The concept-vocabulary rename swept this filename ``.seam-default-acknowledged``
+    → ``.handoff-default-acknowledged``. But the marker is not a code identifier —
+    it is a piece of USER STATE on disk, written by the previous version. Renaming
+    it means every existing user's ack is silently un-acked, and the one-time
+    "this default changed" notice fires a second time at someone who dismissed it a
+    version ago. Nothing else in the rename touched user state without a shim; this
+    did, by omission.
+
+    So: ACCEPT EITHER marker (the old one is proof of an ack just as good as the new
+    one), and WRITE only the new one. This is a read-compat shim of exactly the same
+    shape as lib/format_compat.py, at the smallest possible scale — and like that
+    shim, it is cheap to keep and expensive to have skipped.
+
     Best-effort: any IO failure swallows silently. A missing marker on a
     next run re-fires the notice; not a load-bearing correctness path.
     """
@@ -201,7 +215,9 @@ def _handoff_default_notice():
     if shared is None:
         return  # No git → can't anchor the marker; skip the notice.
     marker = os.path.join(shared, ".handoff-default-acknowledged")
-    if os.path.exists(marker):
+    # The pre-rename spelling. Read-only: an existing ack still counts.
+    legacy_marker = os.path.join(shared, ".seam-default-acknowledged")
+    if os.path.exists(marker) or os.path.exists(legacy_marker):
         return
     sys.stderr.write(
         "[auto] v0.4.0 handoff-default FLIP: `/auto <plan>` now proceeds past "

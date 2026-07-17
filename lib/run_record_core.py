@@ -372,9 +372,12 @@ def _read_json(path: str) -> dict:
     ``format: 2``), a v1 record is LAZILY MIGRATED on its first post-upgrade
     mutation — no migration command is needed.
 
-    The map is applied UNCONDITIONALLY, never gated on ``format`` — see
-    ``format_compat``'s docstring for the mixed-fleet write-skip-forever hole
-    that gating would open.
+    The map is applied UNCONDITIONALLY, never gated on ``format``. A ``format``
+    marker says what wrote the record LAST, not what vocabulary its keys are in
+    (an old-plugin hook, a hand-edit, a restore, a stripped marker), so gating the
+    READ on it is a guess about provenance that misreads user data when it guesses
+    wrong. Ungated, the map is total; see ``format_compat``'s docstring — including
+    what a mixed fleet costs, which is a lost old-plugin write, not a safe one.
     """
     with open(path, "r") as fh:
         led = json.load(fh)
