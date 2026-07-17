@@ -374,7 +374,7 @@ SCRUBS=(
   'unit%%*%%PLAN_STEPS%%@PLANSTEP@%%PLAN_STEPS%%same carve-out, shouted.'
   'unit%%*%%next_plan_step%%@PLANSTEP@%%next_plan_step%%same carve-out.'
   'unit%%^tests/run\.sh$%%unit_files%%@TIER@_files%%unit_files%%tests/run.sh is the ONE file where the test-suite TIER name is a code identifier. That `unit` is the tests/unit/ tier, not a workflow step; renaming it would break `bash tests/run.sh unit` for every caller. Scrub the TOKENS — never drop the file, or run.sh becomes the file-level blind spot this branch exists to eliminate.'
-  'unit%%^tests/run\.sh$%%unit\|integration%%@TIER@|integration%%unit|integration%%same: the tier list in the usage string.'
+  'unit%%^tests/run\.sh$%%unit[|]integration%%@TIER@|integration%%unit|integration%%same: the tier list in the usage string. The pipe is a BRACKET LITERAL `[|]`, not `\|`: `\|` is a literal pipe under this box'"'"'s BSD awk but ALTERNATION under gawk (widening the token to `unit`-OR-`integration`), silently, with the probe none the wiser. `[|]` is a literal in every awk.'
   'unit%%^tests/run\.sh$%%= "unit"%%= "@TIER@"%%= "unit"%%same: the tier assignment.'
   'unit%%^tests/run\.sh$%%=== UNIT %%=== @TIER@ %%=== UNIT %%same: the section banner.'
   'unit%%^tests/run\.sh$%% unit \+%% @TIER@ +%% unit +%%same: the tier tally.'
@@ -483,7 +483,7 @@ audit_term_hits() {
   [ -z "$raw" ] && return 0
 
   # ── KIND (4): the `<!--legacy-->` markdown TABLE ROW — the ONE line drop ──
-  # <<<LEGACY-ROW-EXEMPTION (Scenario 0a fences this region)
+  # <<<LEGACY-ROW-EXEMPTION (a human landmark; Scenario 0a pins this region's code verbatim)
   # A read-compat row's job is to name retired keys across its full width, so there
   # is nothing to scrub — the row is dropped WHOLESALE. That is only safe because the
   # exemption is earned by SHAPE (a `|`-row in a `.md` file) and then POLICED: 1b
@@ -510,7 +510,7 @@ audit_term_hits() {
   # LEGACY-ROW-EXEMPTION>>>
 
   # ── KIND (3): TOKEN SCRUBS, driven entirely by the SCRUBS table ──
-  # <<<SCRUB-ENGINE (Scenario 0a fences this region)
+  # <<<SCRUB-ENGINE (a human landmark; Scenario 0a pins this region's code verbatim)
   # ONE awk pass, table-driven. The rows applicable to this term are fed in ahead of
   # the hits (separated by a sentinel) so their `token` / `repl` reach awk as DATA —
   # no shell-quoting of regexes into awk source, and no way to express anything but
@@ -668,14 +668,20 @@ audit_term_hits() {
 # commit — deliberately, visibly, in a diff a reviewer reads. For the file's security
 # kernel that cost is the feature. It is the same doctrine as TREE_WIDE_EXPECTED (0a-3).
 #
-# The two fenced engine regions are excluded (they are the ONE line drop and the ONE
-# scrub engine) and are bounded by 0a-2/0b/0c/0d instead. A fence that opens early or
-# closes late SHRINKS the body — which is itself a diff against the pin, so truncation
-# fails here too, loudly, instead of silently hiding code from the lint.
+# The two engine regions (the ONE line drop and the ONE scrub engine) are pinned IN FULL,
+# same as the rest — 0a-2/0b/0c/0d bound their DATA (the SCRUBS table, the whitelists),
+# but the engine CODE is fixed logic and is pinned here verbatim. Excluding them, as an
+# earlier version did, was itself a default-allow hole: a filter dropped inside an engine
+# region left the pin unchanged and laundered freely (review r3). Nothing is excluded now.
 it "0a: the audit pipeline's body is EXACTLY the pinned text (default-deny)"
-# The audit pipeline, minus the two fenced engine regions and comments. Delimited by the
+# The WHOLE audit pipeline — comments and blank lines aside, EVERY non-comment line
+# between the AUDIT-PIPELINE markers, including the two engine bodies. Delimited by the
 # AUDIT-PIPELINE markers — NOT by brace-matching, which a `}` in a quoted string silently
-# truncates (see the note at the region's head).
+# truncates (see the note at the region's head). The engines used to be EXCLUDED from this
+# pin (bounded only by 0a-2/0b/0c/0d) — and that exclusion was itself a default-allow hole:
+# any filter added inside an engine region left this pin unchanged and laundered freely
+# (review r3, the 9th instance of the class). So nothing is excluded now — the engines are
+# pinned verbatim like the rest of the body.
 AUDIT_BODY_EXPECTED="$(cat <<'PINEOF'
 audit_term_hits() {
 local term="$1"
@@ -692,6 +698,54 @@ raw="$(printf '%s\n' "$raw" | grep -vE "$WHITELIST_RE" || true)"
 [ -z "$raw" ] && return 0
 raw="$(printf '%s\n' "$raw" | grep -vE "$PREFIX_RE" || true)"
 [ -z "$raw" ] && return 0
+raw="$(printf '%s\n' "$raw" | awk '
+{
+if (index($0, "<!--legacy-->") > 0) {
+colon = index($0, ":")
+if (colon > 0) {
+path = substr($0, 1, colon - 1)
+rest = substr($0, colon + 1)          # "<lineno>:<content>"
+c2 = index(rest, ":")
+content = (c2 > 0) ? substr(rest, c2 + 1) : ""
+sub(/^[ \t]+/, "", content)
+if (path ~ /\.md$/ && substr(content, 1, 1) == "|") next
+}
+}
+print
+}' || true)"
+[ -z "$raw" ] && return 0
+local rows="" SEP='%%'
+local row r_term r_path r_tok r_repl rest
+for row in "${SCRUBS[@]}"; do
+r_term="${row%%$SEP*}";  rest="${row#*$SEP}"
+r_path="${rest%%$SEP*}"; rest="${rest#*$SEP}"
+r_tok="${rest%%$SEP*}";  rest="${rest#*$SEP}"
+r_repl="${rest%%$SEP*}"
+[ "$r_term" = "*" ] || [ "$r_term" = "$term" ] || continue
+[ "$r_path" = "*" ] && r_path='.'
+rows="${rows}${r_path}"$'\t'"${r_tok}"$'\t'"${r_repl}"$'\n'
+done
+if [ -n "$rows" ]; then
+raw="$(printf '%s@@SCRUB-TABLE-ENDS@@\n%s\n' "$rows" "$raw" | awk -v term="$term" '
+!seen_hits && $0 == "@@SCRUB-TABLE-ENDS@@" { seen_hits = 1; next }
+!seen_hits {
+n++
+i = index($0, "\t");            PATHRE[n] = substr($0, 1, i - 1)
+r = substr($0, i + 1)
+j = index(r, "\t");             TOK[n]    = substr(r, 1, j - 1)
+REPL[n] = substr(r, j + 1)
+next
+}
+{
+colon = index($0, ":")
+path  = (colon > 0) ? substr($0, 1, colon - 1) : $0
+p = $0
+for (k = 1; k <= n; k++) {
+if (path ~ PATHRE[k]) gsub(TOK[k], REPL[k], p)
+}
+if (tolower(p) ~ "(^|[^a-z0-9])" tolower(term)) print $0
+}' || true)"
+fi
 [ -z "$raw" ] && return 0
 printf '%s\n' "$raw"
 }
@@ -700,11 +754,7 @@ PINEOF
 audit_body="$(awk '
   /# <<<AUDIT-PIPELINE/ { on = 1; next }
   /# AUDIT-PIPELINE>>>/ { on = 0 }
-  on {
-    if ($0 ~ /# <<<LEGACY-ROW-EXEMPTION/ || $0 ~ /# <<<SCRUB-ENGINE/) { skip = 1 }
-    if (!skip) print
-    if ($0 ~ /# LEGACY-ROW-EXEMPTION>>>/ || $0 ~ /# SCRUB-ENGINE>>>/)  { skip = 0 }
-  }
+  on { print }
 ' "$SELF" | grep -vE '^[[:space:]]*#')"
 # Normalise: drop blank lines, strip leading indentation. Indentation is not a security
 # property; the SET OF LINES is.
@@ -738,17 +788,19 @@ case "$PREFIX_RE" in
   *) lint_bad="${lint_bad}
     PREFIX_RE is not \`^\`-rooted — it could match mid-content. got: ${PREFIX_RE}" ;;
 esac
-# ANTI-VACUITY is now STRUCTURAL, not a separate check. The previous version listed tokens
+# ANTI-VACUITY is STRUCTURAL, not a separate check. The previous version listed tokens
 # the region had to contain ('grep -rniE', the final sink, the closing brace) because the
 # allowlist proved nothing about lines it never saw — so a truncated scan had to be caught
 # separately, and the first attempt at that only looked at the top of what it was measuring.
 # The pin subsumes all of it: the body must EQUAL the expected text, so a truncation (a `}`
-# gadget, an early `# AUDIT-PIPELINE>>>`, a dropped fence) removes lines and diffs. There is
-# no vacuous-scan state left to check for — a scan that saw nothing does not match a
-# nineteen-line pin.
+# gadget, an early `# AUDIT-PIPELINE>>>`) removes lines and diffs. There is no vacuous-scan
+# state left to check for — a scan that saw nothing does not match a 66-line pin.
 #
-# Both engine fences must still be intact: opened AND closed, exactly once each. A fence left
-# open swallows the rest of the pipeline into an unlinted 'skip' region.
+# The two engine regions are NO LONGER excluded from the pin (that exclusion was the r3
+# hole), so the LEGACY-ROW-EXEMPTION / SCRUB-ENGINE markers no longer gate extraction — a
+# missing or duplicated one changes nothing, because the body is pinned in full regardless.
+# They survive only as human landmarks, and this cheap check keeps them balanced so the
+# landmarks stay honest. It is documentation hygiene now, not a security control.
 # ANCHORED at the start of a comment line: the awk extractor above necessarily SPELLS
 # these markers inside its own match patterns, and a bare `grep -cF` counts those too
 # (open=2 close=2 — the lint accusing itself). A real fence line is a comment that STARTS
@@ -757,8 +809,8 @@ for _f in 'LEGACY-ROW-EXEMPTION' 'SCRUB-ENGINE'; do
   _o="$(grep -cE "^[[:space:]]*# <<<${_f}" "$SELF" || true)"
   _c="$(grep -cE "^[[:space:]]*# ${_f}>>>" "$SELF" || true)"
   { [ "$_o" = "1" ] && [ "$_c" = "1" ]; } || lint_bad="${lint_bad}
-    engine fence '${_f}' is not exactly one open + one close (open=${_o} close=${_c}) —
-    a duplicated or unbalanced fence hides pipeline code from this lint."
+    engine landmark '${_f}' is not exactly one open + one close (open=${_o} close=${_c}) —
+    the region markers drifted; keep them balanced so the code stays readable."
 done
 if [ -z "$lint_bad" ]; then
   pass
@@ -1272,17 +1324,20 @@ while IFS= read -r hit; do
   # immediately followed by the `|---|---|` delimiter row. So check the STRUCTURE, and
   # require the text to match as well. A data row can fake the text; it cannot fake
   # being followed by the delimiter.
+  #
+  # The delimiter must be a REAL one: at least two cells, each `:?-{3,}:?`. The old
+  # character-only check (`only |, -, :, and spaces`) accepted `| |` and `|-|` — an EMPTY
+  # or one-dash "delimiter" — so a data row could fake the delimiter after all: pair a
+  # first cell that spells a known header (`retired identifier`) with a `| |` on the next
+  # line and the row skipped policing, laundering a stale term in cell 2 (review r3). All
+  # real delimiter rows in this tree use `---`+ cells, so `{3,}` costs nothing and shuts
+  # the empty/short forms out.
   next_line="$(sed -n "$((lineno + 1))p" "${AUTO_ROOT}/${file}")"
   is_header=""
-  case "$next_line" in
-    \|[-\ :]*)
-      # the delimiter row: only |, -, :, and spaces
-      case "$next_line" in
-        *[!-\ :\|]*) ;;
-        *) is_header="yes" ;;
-      esac
-      ;;
-  esac
+  if printf '%s\n' "$next_line" | grep -qE \
+      '^[[:space:]]*\|[[:space:]]*:?-{3,}:?[[:space:]]*\|[[:space:]]*:?-{3,}:?[[:space:]]*(\|[[:space:]]*:?-{3,}:?[[:space:]]*)*\|?[[:space:]]*$'; then
+    is_header="yes"
+  fi
   if [ -n "$is_header" ]; then
     # `key` heads the key map; `location` heads the U8 tier-dir map; `identifier` heads
     # the U9 code map (the run-record rename touched no persisted key, so its legacy

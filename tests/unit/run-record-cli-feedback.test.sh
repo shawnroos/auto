@@ -188,6 +188,19 @@ else
   pass
 fi
 
+it "deprecated alias: 'set-enumerated-units' warns on STDERR and names the canonical verb"
+# The sibling above (add-unit) asserts its stderr warning; this one previously piped
+# stderr to /dev/null and never checked it, so the alias could go SILENT and the suite
+# stay green (review r3). The contract is: every retired verb warns on stderr and names
+# its canonical replacement.
+se_err="$(bash "$RUN_RECORD_SH" set-enumerated-units rF plan \
+  '[{"id":"e-alias2","invokes":{"backend_op":"do_step"}}]' 2>&1 >/dev/null)"
+if printf '%s' "$se_err" | grep -q 'deprecated' && printf '%s' "$se_err" | grep -q 'set-enumerated-steps'; then
+  pass
+else
+  fail "'set-enumerated-units' did not warn on stderr naming \`set-enumerated-steps\`; got: ${se_err}"
+fi
+
 # …and a verb that is neither canonical nor a known alias is STILL a hard exit 2 that
 # points at `describe`. The alias layer must not become a shrug at any unknown verb.
 it "an unknown (non-aliased) verb still exits 2 and points at describe"

@@ -118,9 +118,16 @@ fi
 #
 # missing_symbols <doc> → prints the REQUIRED symbols not named in <doc>.
 missing_symbols() {
-  local doc="$1" sym out=""
+  local doc="$1" sym esym out=""
   for sym in "${REQUIRED[@]}"; do
-    grep -q -F -- "$sym" "$doc" || out+="${sym} "
+    # Word-boundary match, NOT a substring: `grep -F "exit_reason"` is satisfied by
+    # `set_exit_reason` alone, so the fence counted a symbol documented only as part of a
+    # LONGER name (review r3). Require a non-[alnum_] boundary (or line edge) on each side,
+    # so `exit_reason` must be named in its own right. The symbol is regex-escaped first —
+    # today all REQUIRED entries are bare `[A-Za-z0-9_]`, but a future entry with a `.` or
+    # `[` would otherwise become a wildcard and re-open the same false-positive.
+    esym="$(printf '%s' "$sym" | sed 's/[.[(){}+*?^$|\\]/\\&/g')"
+    grep -Eq "(^|[^[:alnum:]_])${esym}([^[:alnum:]_]|$)" "$doc" || out+="${sym} "
   done
   printf '%s' "$out"
 }

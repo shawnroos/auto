@@ -81,8 +81,10 @@ The qualifier is load-bearing, not throat-clearing: the inverse is DEPTH-BLIND, 
 record carrying a v2-SPELLED key outside the three opaque containers does not
 round-trip. ``{"notes": {"steps": "x", "producer": "y"}}`` comes back as
 ``{"notes": {"units": "x", "emitter": "y"}}``. Real v1 records cannot contain such a
-key (free-form names are confined to the opaque containers below, which are never
-walked), but a HAND-EDITED one can — and hand-edited records are explicitly in this
+key (free-form names are confined to the opaque containers below, whose KEYS are
+passed through verbatim, never renamed — their values are still walked, but a value
+is not what mis-downgrades here), but a HAND-EDITED one can — and hand-edited records
+are explicitly in this
 module's threat model above. If you are reverting a record you edited by hand, diff
 it. The
 documented revert procedure is to run it over stranded ``format: 2`` records

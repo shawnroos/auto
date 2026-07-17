@@ -20,8 +20,11 @@
 # THE DAG (allowed edges only). VERIFIED AGAINST THE ACTUAL IMPORTS — F6 found this
 # comment had drifted badly, and a DAG comment that lies is worse than none: the next
 # agent reasons about the topology from HERE, not from the source. Re-verify with
-#   grep -nE '^[a-z_]+ = load_lib_module\("|^import [a-z_]+ as ' lib/<mod>.py
-# before you edit any line below.
+#   grep -nE '^[a-z_]+ = load_lib_module\("|^import [a-z_]+( as [a-z_]+)?([[:space:]]|$)' lib/<mod>.py
+# before you edit any line below. (The `( as …)?` alternative catches the [plain] bare
+# `import y` edge from line 29 too — the old pattern only saw the aliased form and would
+# have missed a future bare `import run_record_core`; it also surfaces stdlib `import os`
+# lines, which are noise you eyeball past, not sibling edges.)
 #
 # Three EDGE KINDS, and telling them apart is the whole point of this file:
 #   [top]   `x = load_lib_module("y")` at module top — the only kind `loads_sibling`
