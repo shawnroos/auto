@@ -132,6 +132,8 @@ force_skip = run_record_steering.force_skip              # R3/R20 — reason man
 add_step = run_record_steering.add_step                  # R3
 reshape_deps = run_record_steering.reshape_deps          # R3
 register_session = run_record_steering.register_session  # R21 — hook ownership set
+set_retry_budget = run_record_steering.set_retry_budget  # R3 — per-run retry budget
+set_stall_threshold = run_record_steering.set_stall_threshold  # R3 — per-step stall threshold
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from run_record_producers: phase-transition + iteration emission paths.
@@ -436,6 +438,22 @@ def _h_register_session(argv):
     return 0
 
 
+def _h_set_retry_budget(argv):
+    # set-retry-budget <run> <step> <budget>   (R3 — per-run retry budget; the
+    # mutator rejects a non-integer / negative budget under the lock).
+    run, step, budget = argv[1], argv[2], argv[3]
+    set_retry_budget(resolve_repo(), run, step, budget)
+    return 0
+
+
+def _h_set_stall_threshold(argv):
+    # set-stall-threshold <run> <step> <seconds>   (R3 — per-step stall threshold;
+    # the mutator rejects a non-integer / non-positive seconds under the lock).
+    run, step, seconds = argv[1], argv[2], argv[3]
+    set_stall_threshold(resolve_repo(), run, step, seconds)
+    return 0
+
+
 _VERBS = {
     # read / inspection
     "describe": _Verb(_h_describe, "[run]  (with <run>: overlays THIS run's phase model)", reads=True),
@@ -485,6 +503,16 @@ _VERBS = {
         _h_register_session,
         "<run>  (registers $CLAUDE_CODE_SESSION_ID — the caller's own)",
         rejects="exit 2 if CLAUDE_CODE_SESSION_ID is unset. Idempotent otherwise.",
+    ),
+    "set-retry-budget": _Verb(
+        _h_set_retry_budget,
+        "<run> <step> <budget>  (per-run retry budget; should_escalate honors it)",
+        rejects="RunRecordError on a non-integer or negative budget.",
+    ),
+    "set-stall-threshold": _Verb(
+        _h_set_stall_threshold,
+        "<run> <step> <seconds>  (per-step stall threshold the stall clock reads)",
+        rejects="RunRecordError on a non-integer or non-positive seconds.",
     ),
 }
 

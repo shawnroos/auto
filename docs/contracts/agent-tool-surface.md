@@ -55,7 +55,9 @@ shapes and per-verb rejection modes. In brief:
   run-id), `add-step` (rejects a duplicate id or an unknown dependency),
   `reshape-deps` (rejects a cycle), `force-skip` (requires a reason — R20; cannot
   bury an existing finding — R16), `register-session` (join the PreToolUse
-  ownership set — R21).
+  ownership set — R21), `set-retry-budget` (per-run retry budget the driver owns —
+  `should_escalate` honors it), `set-stall-threshold` (per-step stall threshold the
+  stall clock reads).
 
 This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
 derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb

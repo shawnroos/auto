@@ -245,8 +245,15 @@ def should_escalate(step: dict, max_attempts: int = 2) -> bool:
     to the operator rather than looping forever. ``max_attempts`` defaults to 2,
     the settled N=2 escalation budget. A missing/zero attempt reads as 0 (never
     escalates), matching the attempt counter's additive default.
+
+    PER-STEP OVERRIDE (U6): if the driver set ``step["retry_budget"]`` via the
+    ``set-retry-budget`` steering verb, that budget is honored instead of
+    ``max_attempts`` — the driver owns per-run patience. Absent the field, the
+    settled default holds, so this is backward-compatible.
     """
-    return int(step.get("attempt", 0) or 0) >= int(max_attempts)
+    budget = step.get("retry_budget")
+    limit = int(budget) if budget is not None else int(max_attempts)
+    return int(step.get("attempt", 0) or 0) >= limit
 
 
 def pick_next_plan_step_to_advance(run_record: dict):
