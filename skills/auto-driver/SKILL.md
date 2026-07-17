@@ -16,24 +16,23 @@ One action line per branch. Dispatch. Do not narrate.
 
 ## Load the hypothesis
 
-Set `CLAUDE_AUTO_CONVERSATION_SIGNAL=1` inline when THIS session is worth routing on (a just-built plan / imperative about existing work) so it preempts stale plans; else drop it:
-
 ```
-CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
+bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-detect.sh"
 ```
 
 If the detector yields no parseable envelope (empty/non-zero env hiccup), don't stall — treat as `raw`.
 
-Returns one JSON object (`situation`, `summary`, `ambiguity`, `single_plan`, `multi_plan`, `in_flight`, `workspace`, `workspace_action`, `recommendation`). Surface `summary`; act on `situation` + `ambiguity`:
+Returns one JSON object (`situation`, `summary`, `ambiguity`, `single_plan`, `multi_plan`, `in_flight`, `workspace`, `workspace_action`, `recommendation`, `plans`, `git`). The detector emits deterministic **facts** — it has no transcript access. **You** have the transcript: surface `summary`, then decide the route from `situation` + `ambiguity` + the `plans`/`git` facts. The conversation-vs-stale-plan call is YOURS, not the detector's (U4 — see below).
 
 | situation         | ambiguity null → dispatch                                                    | ambiguity non-null → AskUserQuestion |
 |-------------------|------------------------------------------------------------------------------|--------------------------------------|
 | `in-flight`       | (FRESH run) `bash "${CLAUDE_PLUGIN_ROOT}/lib/auto-resume.sh" "continue <run-id>"` | (STALE run) options = resume vs start-fresh; on the resume option (carries `run_id`) → `auto-resume.sh "continue <run-id>"`; on "Start fresh" (`run_id` null) → treat as `raw` (ask what to work on) |
 | `ambiguous-runs`  | (n/a — always ambiguous)                                                     | options = the in-flight run-ids; on answer, resume the chosen run |
-| `reviewed-plan`   | run the **goal-aware pre-step** below first; if it does not reshape, load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --workflow w"` | (n/a — single plan unambiguous)      |
-| `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9). Run the **goal-aware pre-step** below first | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
-| `conversation-context` | classify state → recommend → author goal → dispatch entry workflow (see below) | (n/a — pre-dispatch escalate if unsure) |
-| `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text. Summary may include dirty-tree context. |
+| `reviewed-plan`   | if `single_plan.freshness` is `stale` and this session is about other live work, prefer conversation-context (below). Else run the **goal-aware pre-step**; if it does not reshape, load `auto-launch` (the launch chooser) via Skill: it gates on `driving_session_id` — self-driven silent-applies, interactive confirms — then dispatches `lib/auto.sh "<path> --workflow w"` | (n/a — single plan unambiguous)      |
+| `multi-plan`      | (n/a — always asks; only genuinely-competing plans reach here, §9). If every `plans[].freshness` is `stale` and this session is about other live work, prefer conversation-context (below); else run the **goal-aware pre-step** first | options = each plan (`path` → `auto.sh "<path>"`); a "Fan out all N" option (`path` null → `auto-spawn.py fanout`) appears ONLY when the set is fresh |
+| `raw`             | (n/a — always ambiguous)                                                     | open "what should we work on?"; on answer, route as freeform text (or conversation-context, below). Summary may include dirty-tree context (the `git` fact). |
+
+**Conversation-context is driver-owned (U4).** The detector no longer emits a `conversation-context` situation — it can't sense the transcript. When the facts show no in-flight run and no LIVE plan to act on (`situation` = `raw`, or a `reviewed-plan`/`multi-plan` whose plans are all `freshness: stale`) AND this session is clearly about live work, DON'T act on the stale/absent plan: classify state → recommend (`lib/recommender.py`) → author goal → dispatch the entry workflow (pre-dispatch escalate if unsure). A FRESH plan (`freshness: fresh`) always wins over conversation.
 
 ## Goal-aware plan routing (pre-step)
 

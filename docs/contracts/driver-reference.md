@@ -478,10 +478,11 @@ not the raw count:
   (fanning out over genuinely-live plans is legitimate);
 - **all stale** → `multi-plan` ask with each option staleness-marked and the
   fan-out-all footgun **suppressed** (never offer to spawn N worktrees on old
-  clutter) — OR, when the driver set `CLAUDE_AUTO_CONVERSATION_SIGNAL`, the stale
-  ask is **preempted** by `conversation-context` (§11): a live session beats a
-  stale plan set. A single lone plan (fresh or stale) stays `reviewed-plan` —
-  one plan carries no fan-out footgun.
+  clutter). The detector no longer preempts this with `conversation-context` — U4
+  moved that call to the DRIVER, which sees the transcript: the ask carries the
+  `plans` facts (freshness-marked), and the driver may run conversation-context
+  itself (§11) instead of acting on stale clutter. A single lone plan (fresh or
+  stale) stays `reviewed-plan`, carrying its `freshness` for the same driver call.
 
 So `multi-plan` now fires only for genuinely-competing plans, and a
 `path: null` fan-out-all option appears only when the target set is fresh.
@@ -543,24 +544,21 @@ See `docs/contracts/batch-sidecar-schema.md` for the sidecar format.
 - **Always goaled.** No `/auto` run proceeds without an active
   deliberate-stop goal/status engaging the Stop hook.
 
-## 11. Conversation-driven entry (v0.6.0 — `conversation-context`; wired v0.7.x U3)
+## 11. Conversation-driven entry (driver-owned since U4)
 
-The `conversation-context` situation (lib/auto-detect.sh) fires when there is no
-in-flight run and no **live** plan, but the driver judged the **current
-conversation** rich enough to route on and set `CLAUDE_AUTO_CONVERSATION_SIGNAL`
-before loading the hypothesis. The envelope's `recommendation` is null — the
-driver computes it.
+Conversation-context is a **driver decision**, not a detector situation (U4). The
+detector has no transcript access, so it emits deterministic facts only; the
+DRIVER, which has the transcript, decides whether to route on the conversation.
 
-**v0.7.x U3 — the signal is now actually set, and it can preempt stale plans.**
-v0.6.0 shipped this branch but specified the signal-set only as prose; no
-production code ever set the env var (only an integration test did), so the
-branch was dead — a context-rich bare `/auto` always fell through to `raw` or a
-plan ask. The auto-driver now sets it **inline** on the detector call
-(`CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash …/auto-detect.sh`) whenever the session
-is worth routing on. And the precedence changed: "no live plan" now includes the
-case where **every discovered plan is stale** (§9) — a stale plan set no longer
-blocks conversation-context. A **fresh** plan (`reviewed-plan`) still wins over
-conversation; only stale clutter yields to it.
+**U4 retired the `CLAUDE_AUTO_CONVERSATION_SIGNAL` backchannel.** v0.6.0/v0.7.x had
+the detector honour an env var the driver set — the detector reaching for a signal
+it structurally couldn't sense. That is gone. Now: when the facts show no in-flight
+run and no **live** plan (`raw`, or a `reviewed-plan`/`multi-plan` whose plans are
+all `freshness: stale`) AND the driver judges the current conversation worth routing
+on, the driver runs the conversation-context flow itself — classify state → author
+goal → dispatch — instead of acting on stale/absent plans. A **fresh** plan still
+wins over conversation; only stale clutter yields to it. The envelope's
+`recommendation` is null (the driver computes it via `lib/recommender.py`).
 
 **Context sources (D2 — the split that keeps the classification honest):**
 - **Current conversation** = the driver reflecting on its OWN live transcript.

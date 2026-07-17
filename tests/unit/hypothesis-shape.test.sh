@@ -3,7 +3,7 @@
 #
 # v0.4.0 KTD-1: auto-detect.sh emits a JSON HYPOTHESIS envelope (not a TSV
 # verdict). This test pins:
-#   1. one of the six valid situations,
+#   1. one of the five valid situations (conversation-context retired — U4),
 #   2. the envelope shape (every slot present, even when null),
 #   3. discriminated-union population (single_plan vs multi_plan vs in_flight),
 #   4. ambiguity-array shape on the ambiguous-runs branch,
@@ -467,14 +467,16 @@ assert_eq "raw" "$(json_field setup_malformed 'H["situation"]')"
 # v0.4.1 (plan 004): adds `workspace` + `workspace_action` to the envelope
 # so the skill can route project-workspace handling from one read.
 # v0.6.0 (U1): adds `recommendation` — present on EVERY envelope (the detector
-# always emits null; the driver fills it via lib/recommender.py). The key-set
-# grew from eight to nine in lockstep with the U1 contract change.
-it "envelope shape: every emitted JSON has all nine top-level keys (incl. v0.6.0 recommendation)"
+# always emits null; the driver fills it via lib/recommender.py).
+# U4: adds `plans` (the full freshness-ranked list) + `git` (branch/dirty) — the
+# raw FACTS the driver decides the route on, since the detector has no transcript.
+# The key-set grew to eleven in lockstep with the U4 contract change.
+it "envelope shape: every emitted JSON has all eleven top-level keys (incl. U4 plans+git)"
 shape_setup() {
   setup_inflight_one "$1"
 }
 keys="$(json_field shape_setup 'sorted(H.keys())')"
-assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
+assert_eq "['ambiguity', 'git', 'in_flight', 'multi_plan', 'plans', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
 
 # ── Scenario 10b: workspace_action correctly derived
 # v0.4.1 (plan 004): action routing rules per KTD-4
