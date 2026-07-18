@@ -7,8 +7,8 @@ description: >
   "help me shape a goal and verification for this", "what should the
   done-condition be", or when /auto routes a session that needs structuring
   before it runs. This skill COACHES (rubric-driven, seeded from session state —
-  not a blank interview) and compiles to a validated recipe + a goal doc by
-  CALLING auto-author-recipe and auto-author-goal as backends. It writes no
+  not a blank interview) and compiles to a validated workflow + a goal doc by
+  CALLING auto-author-workflow and auto-author-goal as backends. It writes no
   parallel spec format (no loop.yaml).
 ---
 
@@ -18,8 +18,8 @@ A **loop design** is a sharp goal, a set of typed verification criteria, and
 deliberate stop conditions — the shape a run needs before it's worth driving.
 This skill is the front door for producing one. It does NOT invent a new
 artifact: it coaches the design and compiles it onto auto's existing surfaces —
-a validated recipe (`lib/recipes.py`) and a model-judgeable goal doc — by
-calling `auto-author-recipe` and `auto-author-goal` as backends. The user never
+a validated workflow (`lib/workflows.py`) and a model-judgeable goal doc — by
+calling `auto-author-workflow` and `auto-author-goal` as backends. The user never
 writes JSON or a goal predicate by hand.
 
 Read these before coaching — they are the quality bar, not background:
@@ -29,7 +29,7 @@ Read these before coaching — they are the quality bar, not background:
 ## What stays true throughout
 
 - **The deterministic exit predicate is the single source of truth for "done."**
-  Auto's Stop hook (`blockers == 0 AND majors == 0 AND all_units_terminal` —
+  Auto's Stop hook (`blockers == 0 AND majors == 0 AND all_steps_terminal` —
   "only P3 findings remain") decides when the *run* is over. Typed verification
   criteria are *gate* conditions layered on top; they steer a gate's
   iterate/advance/exit decision but never become a second exit judge. This is
@@ -45,7 +45,7 @@ Read these before coaching — they are the quality bar, not background:
   returns prose, not a structured verdict (see
   `docs/research/advisor-contract-spike.md`). The engine never shells out to a
   model. (R9, R10.)
-- **No parallel spec format.** Output is only a recipe + a goal doc, both
+- **No parallel spec format.** Output is only a workflow + a goal doc, both
   through the existing validation gates. No `loop.yaml` / `loop.resolved.json`.
   (R3.)
 
@@ -72,7 +72,7 @@ back to a blank interview because the hypothesis was thin.
 
 Sharpen the seeded goal against the goal rubric: a concrete outcome (not an
 activity), the artifact/end-state that *proves* done, scope boundaries and
-maximum depth (these feed the recipe's iteration bounds), the context sources
+maximum depth (these feed the workflow's iteration bounds), the context sources
 the driver should gather, and who consumes the result. Run the rubric's critique
 prompts — especially "what would count as done if two competent agents
 disagreed?" A goal whose done-condition is still fuzzy can't become a typed
@@ -81,7 +81,7 @@ criterion yet.
 ### 3. Elicit typed verification — `references/verification-rubric.md` + `references/verification-taxonomy.md`
 
 Turn the goal's definition of done into the `verification` array auto attaches to
-a gate unit. Coach **deterministic-first**: if a claim *can* be a command +
+a gate step. Coach **deterministic-first**: if a claim *can* be a command +
 check, it must be — don't reach for a judge to dodge writing the check.
 
 The four criterion types, with the field shape the validator enforces
@@ -99,7 +99,7 @@ and for how criteria combine):
   `rubric_ref`. For the high-leverage semantic calls where a second independent
   read earns its cost.
 - **`human`** — a checkpoint only a person can clear (routes through the pause
-  seam). Optional `prompt`. For taste, business judgment, legal risk.
+  handoff). Optional `prompt`. For taste, business judgment, legal risk.
 
 Each criterion is `{id, type, …type-fields}`; `type` is one of exactly those
 four; the array is capped at ≤ 16. Keep one claim per criterion. Per the
@@ -112,13 +112,13 @@ into the gate's committed decision. Judge and human criteria come back as
 ### 4. Set gates + stop conditions — `references/control-rubric.md`
 
 Every loop needs deliberate bounds, not silent defaults. Coach and surface
-auto's existing, engine-enforced bounds on the recipe's `iteration` block:
+auto's existing, engine-enforced bounds on the workflow's `iteration` block:
 
 - `iteration.bound.max_attempts` (required) — caps honored `iterate` verdicts
   before the engine forces `iterate → exit`.
 - `iteration.bound.max_wall_seconds` (optional) — caps cumulative *active*
   wall-time for open-ended work.
-- Plus the ledger's existing per-unit stall and per-run dead-chain gates.
+- Plus the run-record's existing per-step stall and per-run dead-chain gates.
 
 A gate whose only verdict source is a judge (`revise_until_clean`-style) needs
 an `advisor_judge` or `human` criterion or it can never resolve — flag that.
@@ -136,10 +136,10 @@ Before writing anything, render the proposed loop so the user can see it:
 
 ```
 python3 -c "import sys; sys.path.insert(0,'lib'); from _bootstrap import load_lib_module; \
-m=load_lib_module('topology-render'); print(m.render(<draft-recipe-dict>, 60))"
+m=load_lib_module('topology-render'); print(m.render(<draft-workflow-dict>, 60))"
 ```
 
-Show the card, point at where the gate unit (carrying the `verification` array)
+Show the card, point at where the gate step (carrying the `verification` array)
 sits, and ask "does this match the loop you want?" Iterate on the draft until it
 does.
 
@@ -148,11 +148,11 @@ does.
 Two writes, each through an existing skill (no consolidation — both backends
 stay separate; this skill orchestrates them). R3.
 
-- **Recipe → `auto-author-recipe`.** Hand it the confirmed draft, with the
-  `verification` array on the unit named by `iteration.gate_unit`. That skill
-  owns the write gate: `lib/recipes.py::validate_and_lint` before write, atomic
+- **Workflow → `auto-author-workflow`.** Hand it the confirmed draft, with the
+  `verification` array on the step named by `iteration.gate_step`. That skill
+  owns the write gate: `lib/workflows.py::validate_and_lint` before write, atomic
   mkstemp+rename, and read-back verification. The typed `verification` block
-  rides on the *existing* `iteration.gate_unit` mechanism — no new emitter, no
+  rides on the *existing* `iteration.gate_step` mechanism — no new producer, no
   new topology grammar, and the same `validate()` enforces the criterion shape
   at both write time and engine load time. Surface any hard validation error and
   fix it with the user; do not work around the gate.
@@ -161,17 +161,17 @@ stay separate; this skill orchestrates them). R3.
   with the inlined acceptance outcomes the goal entails. The user binds it with
   `/goal <doc-path.md>`; this skill (like the backend) never runs `/goal`.
 
-Report the two artifacts written and how to run them: `/auto <plan> --recipe
-<name>` for the recipe, `/goal <doc-path.md>` to bind the goal.
+Report the two artifacts written and how to run them: `/auto <plan> --workflow
+<name>` for the workflow, `/goal <doc-path.md>` to bind the goal.
 
 ## What this skill does NOT do
 
 - It does not build a new spec format — no `loop.yaml` / `loop.resolved.json`.
-  Output is only a recipe + goal doc through the existing gates. (R3.)
-- It does not consolidate or replace `auto-author-recipe` / `auto-author-goal`
+  Output is only a workflow + goal doc through the existing gates. (R3.)
+- It does not consolidate or replace `auto-author-workflow` / `auto-author-goal`
   — it calls them. It also does not touch `auto-driver` routing.
-- It does not re-document the recipe field set or the write mechanics — those
-  live in `docs/contracts/recipe-format.md`, `verification-taxonomy.md`, and the
+- It does not re-document the workflow field set or the write mechanics — those
+  live in `docs/contracts/workflow-format.md`, `verification-taxonomy.md`, and the
   backend skills. Defer to them.
 - It does not evaluate judge criteria itself at design time, and it never makes
   the engine call `advisor`. `advisor_judge` is satisfied by the driving session

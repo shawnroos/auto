@@ -1,0 +1,249 @@
+{
+  "active_wall_seconds": 0,
+  "adapter": "ce",
+  "adapter_scale": "three-tier",
+  "agent_session_ids": [],
+  "driving_session_id": null,
+  "emit_templates": {
+    "plan-candidate": {
+      "id_prefix": "plan-",
+      "invokes": {
+        "adapter_op": "next_plan_step"
+      },
+      "phase": "plan"
+    }
+  },
+  "exit_predicate_result": {
+    "all_units_terminal": false,
+    "blockers": 0,
+    "gaps_open": null,
+    "iteration_pending": false,
+    "majors": 0,
+    "met": false,
+    "minors": 3
+  },
+  "exit_reason": null,
+  "goal_intent": "Ship the widget exporter",
+  "iteration": {
+    "bound": {
+      "max_attempts": 5,
+      "max_wall_seconds": 900
+    },
+    "emit_template": "plan-candidate",
+    "gate_unit": "judge"
+  },
+  "iteration_attempts": 0,
+  "iteration_emit_count": 3,
+  "last_active_at": null,
+  "loop": {
+    "driver": "self",
+    "last_beat_at": "2026-07-12T23:02:58Z"
+  },
+  "loop_phase": "work",
+  "phase_order": [
+    "plan",
+    "seam",
+    "work"
+  ],
+  "phase_transitions": [
+    {
+      "emitter": "judge_winner_to_work_units",
+      "from": "plan",
+      "to": "work"
+    }
+  ],
+  "plan_step": null,
+  "recipe": {
+    "name": "a2",
+    "source_tier": "built-in"
+  },
+  "run_id": "midwork",
+  "seam_paused": false,
+  "terminal_phase": "work",
+  "units": [
+    {
+      "attempt": 1,
+      "depends_on": [],
+      "dispatch_context": {
+        "adapter_op": "next_plan_step",
+        "dropped_depends_on_edges": [
+          {
+            "dep": "ghost-unit",
+            "reason": "dangling",
+            "unit": "w-3"
+          }
+        ],
+        "enumerated_units": [
+          {
+            "id": "w-1",
+            "invokes": {
+              "adapter_op": "do_unit"
+            },
+            "title": "extract the exporter"
+          },
+          {
+            "depends_on": [
+              "w-1"
+            ],
+            "id": "w-2",
+            "invokes": {
+              "adapter_op": "do_unit"
+            },
+            "title": "wire the CLI"
+          },
+          {
+            "depends_on": [],
+            "id": "w-3",
+            "invokes": {
+              "adapter_op": "do_unit"
+            },
+            "title": "docs"
+          }
+        ]
+      },
+      "dispatched_at": null,
+      "findings": [
+        {
+          "note": "",
+          "severity": "minor"
+        }
+      ],
+      "gaps_open": null,
+      "id": "plan-1",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "plan",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "verdict-returned",
+      "verdict_at": "2026-07-12T23:02:58Z"
+    },
+    {
+      "attempt": 1,
+      "depends_on": [],
+      "dispatch_context": {
+        "adapter_op": "next_plan_step"
+      },
+      "dispatched_at": null,
+      "findings": [
+        {
+          "note": "",
+          "severity": "minor"
+        }
+      ],
+      "gaps_open": null,
+      "id": "plan-2",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "plan",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "verdict-returned",
+      "verdict_at": "2026-07-12T23:02:58Z"
+    },
+    {
+      "attempt": 1,
+      "depends_on": [],
+      "dispatch_context": {
+        "adapter_op": "next_plan_step"
+      },
+      "dispatched_at": null,
+      "findings": [
+        {
+          "note": "",
+          "severity": "minor"
+        }
+      ],
+      "gaps_open": null,
+      "id": "plan-3",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "plan",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "verdict-returned",
+      "verdict_at": "2026-07-12T23:02:58Z"
+    },
+    {
+      "attempt": 1,
+      "depends_on": [
+        "plan-1",
+        "plan-2",
+        "plan-3"
+      ],
+      "dispatch_context": {
+        "adapter_op": "review",
+        "prompt_template": "judge.md",
+        "winner_unit_id": "plan-1"
+      },
+      "dispatched_at": null,
+      "findings": [],
+      "gaps_open": null,
+      "id": "judge",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "work",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "verdict-returned",
+      "verdict_at": "2026-07-12T23:02:58Z"
+    },
+    {
+      "attempt": 1,
+      "depends_on": [],
+      "dispatch_context": {},
+      "dispatched_at": null,
+      "findings": [],
+      "gaps_open": null,
+      "id": "w-1",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "work",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "dispatched",
+      "verdict_at": null
+    },
+    {
+      "attempt": 0,
+      "depends_on": [
+        "w-1"
+      ],
+      "dispatch_context": {},
+      "dispatched_at": null,
+      "findings": [],
+      "gaps_open": null,
+      "id": "w-2",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "work",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "pending",
+      "verdict_at": null
+    },
+    {
+      "attempt": 0,
+      "depends_on": [],
+      "dispatch_context": {},
+      "dispatched_at": null,
+      "findings": [],
+      "gaps_open": null,
+      "id": "w-3",
+      "last_advanced_at": null,
+      "last_error": null,
+      "phase": "work",
+      "plan_step": null,
+      "skip_reason": null,
+      "stall_threshold_seconds": 600,
+      "state": "pending",
+      "verdict_at": null
+    }
+  ]
+}

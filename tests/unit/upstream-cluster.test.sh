@@ -4,7 +4,7 @@
 # finding count (KTD-6 — adversarial + feasibility + security converging on one
 # upstream phase beats N same-role hits).
 #
-# SELF-CONTAINED inline harness (modeled on tests/unit/emitters.test.sh): shells
+# SELF-CONTAINED inline harness (modeled on tests/unit/producers.test.sh): shells
 # into Python via _bootstrap.load_lib_module("upstream-cluster").
 #
 # Scenarios:
@@ -17,7 +17,7 @@
 #   5. attributed phase is the CURRENT phase (not upstream) → NOT detected
 #   6. two upstream phases both qualify → pick the MOST-diverse, tie → earliest
 #   7. escalation_message names the upstream phase + roles; None when not detected
-#   8. classify never reads ledger["loop_phase"] (args-only) — recipe-blind /
+#   8. classify never reads run_record["loop_phase"] (args-only) — workflow-blind /
 #      empty order yields no upstream phases → not detected
 
 set -uo pipefail
@@ -48,7 +48,7 @@ from _bootstrap import load_lib_module
 uc = load_lib_module("upstream-cluster")
 op = sys.argv[2]
 
-SPINE = ["brainstorm", "plan", "seam", "work"]
+SPINE = ["brainstorm", "plan", "handoff", "work"]
 
 
 def fmt(r):
@@ -151,8 +151,8 @@ elif op == "message-not-detected":
     r = uc.classify([], "work", SPINE)
     print("none" if uc.escalation_message(r) is None else "UNEXPECTED")
 
-elif op == "recipe-blind-empty-order":
-    # No phase_order (recipe-blind / non-spine). 3 diverse roles but there are
+elif op == "workflow-blind-empty-order":
+    # No phase_order (workflow-blind / non-spine). 3 diverse roles but there are
     # no upstream phases to attribute to → not detected. Proves the classifier
     # reads its phase context from ARGS, never the loop_phase literal.
     findings = [
@@ -201,8 +201,8 @@ it "escalation_message returns None when not detected"
 assert_eq "none" "$(uc message-not-detected)"
 
 # ─── Scenario 8: args-only phase context (no loop_phase literal read) ────────
-it "recipe-blind / empty phase_order → no upstream phases → not detected"
-assert_eq "False|None||0" "$(uc recipe-blind-empty-order)"
+it "workflow-blind / empty phase_order → no upstream phases → not detected"
+assert_eq "False|None||0" "$(uc workflow-blind-empty-order)"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

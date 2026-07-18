@@ -5,7 +5,7 @@
 # momentarily unavailable — a single dispatch line with no graceful fallback.
 # The driver-side gap (a detector subprocess that won't run) is handled in
 # skills/auto-driver/SKILL.md (degrade to `raw`) and pinned by the smoke test.
-# This test pins the OTHER half at the seam we can drive deterministically: the
+# This test pins the OTHER half at the handoff we can drive deterministically: the
 # dispatch line surfaces a LEGIBLE non-zero failure rather than a silent stall.
 #
 # Scenarios:
@@ -62,7 +62,7 @@ assert_true "printf '%s' \"$OUT\" | grep -qF 'docs/plans/nope.md'"
 it "detector: emits a non-empty parseable envelope on a degraded repo"
 BADREPO="${SANDBOX}/badrepo"
 mkdir -p "$BADREPO"
-printf 'not a dir' > "${BADREPO}/.claude"   # .claude is a file → ledger scan degrades
+printf 'not a dir' > "${BADREPO}/.claude"   # .claude is a file → run_record scan degrades
 RAW="$(CLAUDE_AUTO_REPO="$BADREPO" bash "$DET" 2>/dev/null)"
 # Pipe RAW directly (never re-eval a string full of JSON quotes) and require the
 # envelope be both non-empty AND valid JSON.

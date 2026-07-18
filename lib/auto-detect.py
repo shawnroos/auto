@@ -3,11 +3,11 @@
 
 The detection logic that used to live in a single-quoted bash heredoc inside
 `lib/auto-detect.sh`. U15 (plan 2026-07-01-001) moved it into this sibling
-module following the shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3):
+module following the shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3):
 `auto-detect.sh` is now a thin shim that pins the interpreter, resolves
 `script_dir`, and execs this file with `script_dir` as argv[1].
 
-READ-ONLY: scans the ledger dir + plan dirs + git status; never writes. Repo
+READ-ONLY: scans the run-record dir + plan dirs + git status; never writes. Repo
 root resolved via `_bootstrap.resolve_repo` (CLAUDE_AUTO_REPO or walk-up).
 
 The full JSON-envelope contract (situations, slots, staleness TTL) is documented
@@ -20,19 +20,19 @@ Three duplications the split killed — each now reaches back through `_bootstra
   * the importlib load of a sibling lib module (appeared TWICE — for
     `auto-workspace.py` and for `plan-rank.py`) → `_bootstrap.load_lib_module`.
   * `_read_in_flight`'s inline `open`+`json.load`+`isinstance(dict)` guard →
-    `_bootstrap.load_ledger_safe`. NOTE: `iter_worktree_ledgers` (the helper the
+    `_bootstrap.load_run_record_safe`. NOTE: `iter_worktree_run_records` (the helper the
     plan named) yields `(run_id, led)` with NO file mtime and NO path — but the
-    detector needs each ledger's mtime for BOTH the single-run staleness gate
+    detector needs each run-record's mtime for BOTH the single-run staleness gate
     and the freshest-first (mtime-desc) ordering of the ambiguous-runs options.
     So the scan keeps its own glob+getmtime skeleton (byte-identical output) and
-    swaps only the parse/guard for `load_ledger_safe` (the exact primitive
-    `iter_worktree_ledgers` wraps internally).
+    swaps only the parse/guard for `load_run_record_safe` (the exact primitive
+    `iter_worktree_run_records` wraps internally).
 """
 
 import sys, os, json, glob, subprocess, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _bootstrap import resolve_repo, load_lib_module, load_ledger_safe  # noqa: E402
+from _bootstrap import resolve_repo, load_lib_module, load_run_record_safe  # noqa: E402
 
 # script_dir arrives as argv[1] from the shim. The sibling-module loads now go
 # through `_bootstrap.load_lib_module` (which resolves against `lib/` directly),
@@ -42,7 +42,7 @@ from _bootstrap import resolve_repo, load_lib_module, load_ledger_safe  # noqa: 
 # forwards `_det_dir`. Keep the contract; do not re-litigate it.
 script_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
 
-# Staleness TTL for a SINGLE in-flight run. A run whose ledger has not been
+# Staleness TTL for a SINGLE in-flight run. A run whose run-record has not been
 # touched within this window is low-confidence: the detector keeps
 # situation=in-flight but sets `ambiguity` so the driver ASKS (resume vs start
 # fresh) instead of silently auto-resuming (2026-06 misfire: a 15-day-old,
@@ -178,28 +178,28 @@ def _workspace_action(workspace, situation):
     return "none"
 
 
-def _read_in_flight(ledger_dir):
+def _read_in_flight(run_record_dir):
     """Return [(run_id, goal_intent_str_or_None, mtime)] for not-met runs.
 
     Mtime-desc so the freshest run comes first — the in-flight branch picks
     [0] when there's exactly one, and the ambiguous-runs branch lists them.
     The mtime rides along so the single-run branch can gate on staleness
     (2026-06 misfire fix) without re-stat-ing the file.
-    Malformed ledgers are skipped (parity with v0.2.x).
+    Malformed run-records are skipped (parity with v0.2.x).
     """
-    # Stat each candidate ONCE behind its own guard, BEFORE sorting. A ledger
+    # Stat each candidate ONCE behind its own guard, BEFORE sorting. A run-record
     # deleted mid-scan (concurrent run / cleanup sweep) would otherwise raise
     # OSError from the `sorted(key=os.path.getmtime)` callback and degrade the
     # WHOLE detector to `raw` — hiding every in-flight run over a transient
     # race. Skipping the vanished file is the correct, local degrade.
     #
     # U15: the glob+getmtime skeleton stays here (the detector needs the mtime,
-    # which _bootstrap.iter_worktree_ledgers does not carry), but the per-file
-    # open+json.load+isinstance(dict) guard is now _bootstrap.load_ledger_safe
-    # (the exact primitive iter_worktree_ledgers wraps) — killing the inlined
+    # which _bootstrap.iter_worktree_run_records does not carry), but the per-file
+    # open+json.load+isinstance(dict) guard is now _bootstrap.load_run_record_safe
+    # (the exact primitive iter_worktree_run_records wraps) — killing the inlined
     # parse duplication while keeping the output byte-identical.
     pairs = []
-    for path in glob.glob(os.path.join(ledger_dir, "*.json")):
+    for path in glob.glob(os.path.join(run_record_dir, "*.json")):
         try:
             pairs.append((path, os.path.getmtime(path)))
         except OSError:
@@ -208,10 +208,10 @@ def _read_in_flight(ledger_dir):
 
     out = []
     for path, mtime in pairs:
-        led = load_ledger_safe(path)
-        # load_ledger_safe returns None on ANY read/parse failure OR a non-dict
+        led = load_run_record_safe(path)
+        # load_run_record_safe returns None on ANY read/parse failure OR a non-dict
         # top-level value — folding the old OSError/ValueError + isinstance guard
-        # into one call. A None here is a malformed/unreadable ledger: skip it.
+        # into one call. A None here is a malformed/unreadable run-record: skip it.
         if led is None:
             continue
         if "exit_predicate_result" not in led:
@@ -221,7 +221,7 @@ def _read_in_flight(ledger_dir):
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
         # v0.4.0 KTD-2: surface goal_intent so the ambiguous-runs options
         # carry "what was this started for" rather than just a slug. None on
-        # legacy ledgers (pre-v0.4.0) is fine — the renderer falls back to
+        # legacy run-records (pre-v0.4.0) is fine — the renderer falls back to
         # run_id. mtime was captured above (single stat, no TOCTOU re-stat).
         out.append((run_id, led.get("goal_intent"), mtime))
     return out
@@ -259,8 +259,8 @@ def _emit_reviewed_plan(plan_path):
     """Emit the reviewed-plan envelope for a single unambiguous plan."""
     _emit(_safe_envelope(
         "reviewed-plan",
-        "starting `%s` (recipe w, work-only — reviewed plan goes straight "
-        "to the work-loop; pass `--recipe a1` to re-plan from scratch)"
+        "starting `%s` (workflow w, work-only — reviewed plan goes straight "
+        "to the work-loop; pass `--workflow a1` to re-plan from scratch)"
         % plan_path,
         single_plan={"path": plan_path, "run_id_hint": None},
     ))
@@ -367,7 +367,7 @@ def _diff_summary(repo):
 # change (the code moved verbatim; each router still _emit's, which raises
 # SystemExit): the module-level block would otherwise be attributed by the
 # size-budget lint's `def`→`def` awk to the last helper above (a measurement
-# artifact — see the adapter-ce.py:_next_plan_step waiver). Keeping each router
+# artifact — see the backend-ce.py:_next_plan_step waiver). Keeping each router
 # a real `def` under the function budget avoids a fresh waiver on a health split.
 
 
@@ -375,7 +375,7 @@ def _route_in_flight(in_flight):
     """Emit the in-flight / ambiguous-runs envelope, or return to fall through.
 
     Runs first. Exactly ONE not-met run → `in-flight` (silent-resume when the
-    ledger is fresh; ASK when stale/anomalous). MORE than one → `ambiguous-runs`.
+    run-record is fresh; ASK when stale/anomalous). MORE than one → `ambiguous-runs`.
     Both branches _emit (raising SystemExit); an empty `in_flight` list returns
     None so the caller proceeds to plan discovery. The `if`/`if` (not `elif`) +
     _emit's SystemExit keep the branches mutually exclusive, exactly as when this
@@ -384,7 +384,7 @@ def _route_in_flight(in_flight):
     if len(in_flight) == 1:
         run_id, goal_intent, mtime = in_flight[0]
         in_flight_block = {"run_id": run_id, "run_ids": [run_id]}
-        # Fresh iff the ledger was last touched within [now-TTL, now]. A delta
+        # Fresh iff the run-record was last touched within [now-TTL, now]. A delta
         # OUTSIDE that window — too old (stale) OR negative (future mtime: clock
         # skew, restored backup, cross-machine sync) — is low-confidence and
         # must ASK. Treating a future mtime as "fresh" would silently auto-resume
@@ -506,7 +506,7 @@ def _route_plans_or_raw(repo):
     #
     # The branch emits an EMPTY (null) recommendation + ambiguity null: the
     # driver computes the recommendation via lib/recommender.py (U2) and either
-    # dispatches the entry recipe or pre-dispatch escalates (U3). When the signal
+    # dispatches the entry workflow or pre-dispatch escalates (U3). When the signal
     # is UNSET, this branch is skipped and the engine falls through to `raw` (and
     # an all-stale plan set was already emitted as a multi-plan ask above).
     if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
@@ -591,8 +591,8 @@ def main():
         repo = resolve_repo()
 
         # ── Step 1: in-flight scan. ────────────────────────────────────────
-        ledger_dir = os.path.join(repo, ".claude", "auto")
-        in_flight = _read_in_flight(ledger_dir)
+        run_record_dir = os.path.join(repo, ".claude", "auto")
+        in_flight = _read_in_flight(run_record_dir)
         _route_in_flight(in_flight)
 
         # No in-flight run → plan discovery / conversation-context / raw. This

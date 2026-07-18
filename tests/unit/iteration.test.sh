@@ -2,13 +2,13 @@
 # auto v0.3.0 U1 unit test: the ONE iteration-decision module.
 #
 # Mirrors tests/unit/phase-grammar.test.sh — every site that reads a gate
-# unit's verdict.decision routes through this module. AST lint (sibling
+# step's verdict.decision routes through this module. AST lint (sibling
 # file tests/unit/iteration-ast-lint.test.sh) mechanically enforces that
 # no other lib/*.py raw-subscripts dispatch_context["decision"] — same
 # discipline as phase-grammar's "loop_phase" literal lint.
 #
 # Behavior contract from plan U1:
-#   evaluate_decision(led, gate_unit_id, now_monotonic=None) -> dict with
+#   evaluate_decision(led, gate_step_id, now_monotonic=None) -> dict with
 #     decision_effective: "advance" | "iterate" | "exit" | None
 #     original_decision: <same string or None>
 #     bound_breached: bool
@@ -21,7 +21,7 @@
 #   3. bound: max_attempts — attempts == max → effective forced to "exit"
 #   4. bound: max_wall_seconds — active_wall_seconds > max → effective forced to "exit"
 #   5. no decision yet — read_decision returns None, evaluate returns None
-#   6. unknown gate unit id — raises clear error
+#   6. unknown gate step id — raises clear error
 
 set -uo pipefail
 
@@ -54,7 +54,7 @@ op = sys.argv[2]
 
 def make_led(decision, attempts=0, active_wall_seconds=0,
              max_attempts=5, max_wall_seconds=None):
-    """A minimal ledger shape with one gate unit named 'judge' carrying the
+    """A minimal run_record shape with one gate step named 'judge' carrying the
     given decision payload, plus the iteration block + bound."""
     judge = {"id": "judge", "phase": "work", "state": "verdict-returned",
              "dispatch_context": {}}
@@ -64,15 +64,15 @@ def make_led(decision, attempts=0, active_wall_seconds=0,
     if max_wall_seconds is not None:
         bound["max_wall_seconds"] = max_wall_seconds
     return {
-        "units": [judge],
-        "iteration": {"gate_unit": "judge", "bound": bound},
+        "steps": [judge],
+        "iteration": {"gate_step": "judge", "bound": bound},
         "iteration_attempts": attempts,
         "active_wall_seconds": active_wall_seconds,
     }
 
 def make_verif_led(crits, dispatch_context=None):
-    """A minimal ledger with one gate unit 'g' carrying a verification block."""
-    return {"units": [{"id": "g", "phase": "work", "state": "verdict-returned",
+    """A minimal run_record with one gate step 'g' carrying a verification block."""
+    return {"steps": [{"id": "g", "phase": "work", "state": "verdict-returned",
                        "dispatch_context": dispatch_context or {},
                        "verification": crits}]}
 
@@ -139,7 +139,7 @@ elif op == "bound-wall":
 
 elif op == "no-decision":
     led = make_led(decision=None)
-    rd = iteration.read_decision(led["units"][0])
+    rd = iteration.read_decision(led["steps"][0])
     r = iteration.evaluate_decision(led, "judge")
     print(json.dumps({
         "read_decision": rd,
@@ -159,19 +159,19 @@ elif op == "decisions-constant":
 
 # ─── compute_pending_state ops (F3 / kieran-7) ──────────────────────────────
 # compute_pending_state is the centralized bound-check that
-# recompute_predicate calls (replacing the prior duplicate copy in ledger.py).
+# recompute_predicate calls (replacing the prior duplicate copy in run_record.py).
 # These ops exercise the same scenarios as evaluate_decision but on the
 # pending-bool surface compute_pending_state exposes.
 
 elif op == "pending-no-iteration-block":
-    print(iteration.compute_pending_state({"units": []}))
+    print(iteration.compute_pending_state({"steps": []}))
 
-elif op == "pending-no-gate-unit-named":
-    led = {"units": [], "iteration": {"bound": {}}}
+elif op == "pending-no-gate-step-named":
+    led = {"steps": [], "iteration": {"bound": {}}}
     print(iteration.compute_pending_state(led))
 
 elif op == "pending-gate-not-found":
-    led = {"units": [], "iteration": {"gate_unit": "ghost", "bound": {}}}
+    led = {"steps": [], "iteration": {"gate_step": "ghost", "bound": {}}}
     print(iteration.compute_pending_state(led))
 
 elif op == "pending-decision-not-iterate":
@@ -192,9 +192,9 @@ elif op == "pending-wall-breached":
     print(iteration.compute_pending_state(led))
 
 # ─── rel-2: brittleness — coercion failure on a bound counter ───────────────
-# A corrupted numeric ledger field MUST NOT raise from compute_pending_state
+# A corrupted numeric run-record field MUST NOT raise from compute_pending_state
 # — it is called from the _atomic_write chokepoint, so a raise here locks
-# out every subsequent ledger mutation including writes needed to recover.
+# out every subsequent run-record mutation including writes needed to recover.
 
 elif op == "pending-corrupt-iteration-attempts":
     led = make_led("iterate", attempts=2, max_attempts=5)
@@ -221,12 +221,12 @@ elif op == "pending-corrupt-max-wall":
 
 # ─── G1 / rel-r2-1: kill-switch read-side parity ───────────────────────────
 # When the operator sets CLAUDE_AUTO_DISABLE_ITERATION=1, compute_pending_state
-# must short-circuit to False — symmetric with tick.advance_iteration_loop's
-# write-side fence (lib/tick.py:624). Without parity, a kill-switched mid-iter
+# must short-circuit to False — symmetric with pulse.advance_iteration_loop's
+# write-side fence (lib/pulse.py:624). Without parity, a kill-switched mid-iter
 # run still computes iteration_pending=True from the gate's stale "iterate"
 # verdict and blocks the predicate's `met` branch via the AND-NOT clause.
 #
-# This test constructs a ledger that WOULD return True (iterate under bound)
+# This test constructs a run-record that WOULD return True (iterate under bound)
 # and asserts the kill-switch flips it to False. The deliberate-fail control
 # (Edit-revert of iteration.py) proves the test isn't vacuous: without the
 # top-of-function `if is_iteration_disabled(): return False` it returns True
@@ -243,7 +243,7 @@ elif op == "pending-kill-switch-on":
 # ``iteration`` key is corrupted to a non-dict scalar (e.g. partial write,
 # torn recovery), the subsequent ``.get(...)`` calls would raise AttributeError
 # and that raise would propagate through _atomic_write → recompute_predicate,
-# BLOCKING the very ledger writes F2 needs to mark the loop done.
+# BLOCKING the very run-record writes F2 needs to mark the loop done.
 #
 # The fix at iteration.py adds an isinstance check that fences the function to
 # return False on non-dict iteration shapes (None stays the legitimate "no
@@ -253,7 +253,7 @@ elif op == "pending-kill-switch-on":
 # discriminator can distinguish the raise (DF state) from the False return.
 
 elif op == "pending-iteration-non-dict-string":
-    led = {"units": [], "iteration": "broken-string"}
+    led = {"steps": [], "iteration": "broken-string"}
     try:
         v = iteration.compute_pending_state(led)
         print(f"returned:{v}")
@@ -261,7 +261,7 @@ elif op == "pending-iteration-non-dict-string":
         print(f"raised:{type(e).__name__}")
 
 elif op == "pending-iteration-non-dict-list":
-    led = {"units": [], "iteration": ["broken", "list"]}
+    led = {"steps": [], "iteration": ["broken", "list"]}
     try:
         v = iteration.compute_pending_state(led)
         print(f"returned:{v}")
@@ -274,12 +274,12 @@ elif op == "pending-bound-non-dict":
     # the bound key would survive `iteration.get('bound') or {}` (truthy
     # non-dict), then `bound.get('max_attempts')` would raise AttributeError
     # — which propagates through _atomic_write → recompute_predicate and
-    # blocks the very ledger writes F2 needs to mark the loop done. The
-    # isinstance guard degrades to False, keeping the ledger writable.
+    # blocks the very run-record writes F2 needs to mark the loop done. The
+    # isinstance guard degrades to False, keeping the run-record writable.
     led = {
-        "units": [{"id": "judge", "phase": "work",
+        "steps": [{"id": "judge", "phase": "work",
                    "dispatch_context": {"decision": "iterate"}}],
-        "iteration": {"gate_unit": "judge", "bound": "corrupted-string"},
+        "iteration": {"gate_step": "judge", "bound": "corrupted-string"},
     }
     try:
         v = iteration.compute_pending_state(led)
@@ -320,8 +320,8 @@ assert_eq \
   '{"read_decision": null, "decision_effective": null}' \
   "$(run_iter no-decision)"
 
-# ─── Scenario 6: unknown gate unit ──────────────────────────────────────────
-it "evaluate_decision: unknown gate_unit_id raises"
+# ─── Scenario 6: unknown gate step ──────────────────────────────────────────
+it "evaluate_decision: unknown gate_step_id raises"
 result="$(run_iter unknown-gate)"
 case "$result" in
   raised:*) pass ;;
@@ -336,10 +336,10 @@ assert_eq "advance,iterate,exit" "$(run_iter decisions-constant)"
 it "compute_pending_state: no iteration block → False"
 assert_eq "False" "$(run_iter pending-no-iteration-block)"
 
-it "compute_pending_state: no gate_unit named in iteration block → False"
-assert_eq "False" "$(run_iter pending-no-gate-unit-named)"
+it "compute_pending_state: no gate_step named in iteration block → False"
+assert_eq "False" "$(run_iter pending-no-gate-step-named)"
 
-it "compute_pending_state: gate unit id not present in units[] → False"
+it "compute_pending_state: gate step id not present in steps[] → False"
 assert_eq "False" "$(run_iter pending-gate-not-found)"
 
 it "compute_pending_state: gate decision != 'iterate' → False"
@@ -357,7 +357,7 @@ assert_eq "False" "$(run_iter pending-wall-breached)"
 # ─── F3 / rel-2: graceful degradation on corrupt numeric fields ─────────────
 # A single corrupt numeric field MUST NOT raise from compute_pending_state;
 # every call site (notably _atomic_write -> recompute_predicate) requires the
-# function to return a bool no matter what shape the ledger has.
+# function to return a bool no matter what shape the run-record has.
 
 it "compute_pending_state: corrupt iteration_attempts → False (no raise)"
 assert_eq "False" "$(run_iter pending-corrupt-iteration-attempts)"
@@ -373,8 +373,8 @@ assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 
 # ─── G1 / rel-r2-1: kill-switch read-side parity ──────────────────────────
 # Operator sets CLAUDE_AUTO_DISABLE_ITERATION=1; compute_pending_state must
-# return False even on a ledger that would otherwise be iterate-under-bound.
-# This mirrors the write-side check at lib/tick.py:624. The same ledger
+# return False even on a run-record that would otherwise be iterate-under-bound.
+# This mirrors the write-side check at lib/pulse.py:624. The same run-record
 # shape WITHOUT the env var returns True (covered by pending-iterate-under
 # above) — the only difference is the kill-switch, isolating the behavior
 # the test is asserting.
@@ -382,20 +382,20 @@ assert_eq "False" "$(run_iter pending-corrupt-max-wall)"
 it "compute_pending_state: kill-switch (CLAUDE_AUTO_DISABLE_ITERATION=1) → False even on iterate-under-bound"
 assert_eq "False" "$(CLAUDE_AUTO_DISABLE_ITERATION=1 run_iter pending-kill-switch-on)"
 
-# Sanity: kill-switch UNSET on the SAME ledger shape returns True. Without
+# Sanity: kill-switch UNSET on the SAME run-record shape returns True. Without
 # this paired check, a regression that flips both sides (e.g. accidentally
 # returns False unconditionally) would still see this section "pass."
-it "compute_pending_state: same ledger WITHOUT kill-switch → True (sanity for the pair above)"
+it "compute_pending_state: same run_record WITHOUT kill-switch → True (sanity for the pair above)"
 assert_eq "True" "$(run_iter pending-kill-switch-on)"
 
 # ─── G2 / ADV-R2-1: shape-corruption shield ────────────────────────────────
 # If ``iteration`` is a non-dict scalar (string, list — torn-write shapes),
 # compute_pending_state MUST return False, NOT raise. A raise here would
 # propagate through _atomic_write → recompute_predicate and block the very
-# ledger writes F2 (lib/tick.py) needs to force-mark the loop done.
+# run-record writes F2 (lib/pulse.py) needs to force-mark the loop done.
 #
 # The DF cycle: comment out the isinstance check in iteration.py → these tests
-# go RED with "raised:AttributeError" (the iteration_block.get('gate_unit')
+# go RED with "raised:AttributeError" (the iteration_block.get('gate_step')
 # line crashes on a str/list). With the fix, both return "returned:False".
 
 it "compute_pending_state: iteration='broken-string' (non-dict scalar) → returns False (no raise)"
@@ -406,7 +406,7 @@ assert_eq "returned:False" "$(run_iter pending-iteration-non-dict-list)"
 
 # ─── v0.3.0 H / corr-r3-1: bound shape guard symmetry ──────────────────────
 # G2 added isinstance(iter_block, dict) at the top of compute_pending_state
-# but did NOT add the parallel guard for iteration.bound. A torn ledger
+# but did NOT add the parallel guard for iteration.bound. A torn run-record
 # writing iteration.bound="corrupted" survives `iteration.get('bound') or {}`
 # (truthy non-dict string), then bound.get('max_attempts') raises
 # AttributeError — propagating through _atomic_write → recompute_predicate
@@ -446,20 +446,20 @@ sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 iteration = load_lib_module("iteration")
 
-unit = {"dispatch_context": {"enumerated_units": [{"id": "w1"}]}}
+step = {"dispatch_context": {"enumerated_steps": [{"id": "w1"}]}}
 
 # 1. misspelled key -> KeyError (loud), NOT a silent None.
 try:
-    iteration.read_dc(unit, "enumarated_units")  # typo
+    iteration.read_dc(step, "enumarated_steps")  # typo
     typo = "no-raise"
 except KeyError:
     typo = "raised"
 
 # 2. declared-but-absent key -> None (real-miss semantics preserved).
-absent = iteration.read_dc(unit, "winner_unit_id")
+absent = iteration.read_dc(step, "winner_step_id")
 
 # 3. named accessor reads the declared key.
-named = iteration.read_enumerated_units(unit)
+named = iteration.read_enumerated_steps(step)
 
 # 4. read_decision still delegates through read_dc (behavior identical).
 dec = iteration.read_decision({"dispatch_context": {"decision": "iterate"}})

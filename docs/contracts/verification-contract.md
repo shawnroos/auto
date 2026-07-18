@@ -2,22 +2,22 @@
 
 Status: **LOCKED** (v0.7.0, U8). Changes here are breaking — bump and migrate.
 
-Typed verification lets a recipe gate unit carry checkable done-conditions that
-steer the gate's advance/iterate decision. It is **additive**: a unit without a
+Typed verification lets a workflow gate step carry checkable done-conditions that
+steer the gate's advance/iterate decision. It is **additive**: a step without a
 `verification` block behaves exactly as pre-v0.7.0 (a1/a2/a4/w unaffected). It
 never replaces auto's deterministic exit predicate — verification only steers a
-gate; the predicate (`blockers == 0 AND majors == 0 AND all_units_terminal`,
+gate; the predicate (`blockers == 0 AND majors == 0 AND all_steps_terminal`,
 i.e. "only P3 findings remain") stays the run's single source of truth.
 
 ## 1. The `verification` block
 
-A unit MAY carry `verification`: an array of **≤ 16** criteria. Each criterion:
+A step MAY carry `verification`: an array of **≤ 16** criteria. Each criterion:
 
 ```
 { "id": "<unique non-empty string>", "type": "<one of four>", ... }
 ```
 
-Validated at recipe **load** time by `lib/recipes.py::validate()` (hand-rolled,
+Validated at workflow **load** time by `lib/workflows.py::validate()` (hand-rolled,
 no pip — install-anywhere). Rejected: an unknown `type`, an unknown key for the
 criterion's type (per-type key sets, not a flat union), a duplicate `id`, an
 array over the cap.
@@ -27,7 +27,7 @@ array over the cap.
 | `programmatic` | `argv` (non-empty list[str]), `check` | `timeout_sec` (positive int) | engine, in-process |
 | `model_judge` | — | `rubric_ref` (str) | driver / work agent |
 | `advisor_judge` | — | `rubric_ref` (str) | driver (consults `advisor`) |
-| `human` | — | `prompt` (str) | driver (pause seam) |
+| `human` | — | `prompt` (str) | driver (pause handoff) |
 
 `check` is one of: `"exit_zero"` | `{"stdout_contains": str}` | `{"stdout_equals": str}`.
 
@@ -58,12 +58,12 @@ translation from signal to the committed `dispatch_context.decision`.
 
 ## 4. Resolution + commit (the single write)
 
-`lib/iteration.py::resolve_gate_verification(ledger, gate_unit_id, *, repo_root,
+`lib/iteration.py::resolve_gate_verification(run_record, gate_step_id, *, repo_root,
 judge_verdicts)` runs the programmatic criteria, folds in `judge_verdicts` (the
 arg, plus any persisted on `dispatch_context.judge_verdicts`), and returns
-`{signal, pending_judges, programmatic_results}` — **no ledger write**. The
+`{signal, pending_judges, programmatic_results}` — **no run-record write**. The
 caller commits a non-None signal as the gate decision via **exactly one**
-`ledger_mutators.set_verdict_decision` call. Driver-side advisor-judging is
+`run_record_mutators.set_verdict_decision` call. Driver-side advisor-judging is
 `skills/auto/SKILL.md` §4.7.
 
 The driver writes an `append_advisor_audit` record **only when a judge-type

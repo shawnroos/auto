@@ -6,7 +6,7 @@
 >
 > The sidecar exists because N sub-runs need a single record the parent
 > session can read to compose their status. Single-run flow is unaffected
-> by this contract — it lives only on the existing per-run ledger.
+> by this contract — it lives only on the existing per-run run-record.
 
 ---
 
@@ -24,7 +24,7 @@
 - Directory + file are created with mode `0700` / `0600`.
 
 The `batches/` sub-directory is intentionally separate from per-run
-ledger files (`<run>.json`) so a glob over `.claude/auto/*.json` keeps
+run-record files (`<run>.json`) so a glob over `.claude/auto/*.json` keeps
 scanning runs only; the Stop hook globs `batches/*.json` separately.
 
 ---
@@ -120,7 +120,7 @@ A spawn proceeds in this order:
 
 `lib/on-stop.py` (extended in U4):
 - Scans `<host-shared>/batches/*.json` for `status: "committed"` sidecars.
-- For each, reads each plan's recorded sub-run ledger (located via the
+- For each, reads each plan's recorded sub-run run-record (located via the
   sub-run's worktree, NOT the host repo's `.claude/auto/`).
 - Composite predicate: every sub-run's `exit_predicate_result.met`
   must be true.
@@ -146,7 +146,7 @@ on the next spawn's port-discovery scan (§3.1 step 2).
 
 - Plan: `docs/plans/2026-05-27-002-feat-auto-bare-entry-and-fanout-plan.md`
   (U2 + KTD-2 + KTD-3).
-- Ledger schema: `docs/contracts/ledger-schema.md` (the existing per-run
+- RunRecord schema: `docs/contracts/run-record-schema.md` (the existing per-run
   contract — additive `goal_intent` field in v0.4.0 U1).
 - Cmux dispatch shape: `lib/cmux-socket.sh::auto::cmux_spawn_workspace`
   (the v0.4.0 U2 reusable helper factored out of `auto::spawn_resume`).

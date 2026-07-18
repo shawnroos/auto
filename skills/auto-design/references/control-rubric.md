@@ -1,25 +1,25 @@
 <!--
 Adapted from ksimback/looper (references/control-rubric.md), MIT License.
-Rewritten in auto's vocabulary (recipe / ledger / driver / exit-predicate);
+Rewritten in auto's vocabulary (workflow / run-record / driver / exit-predicate);
 looper's execution + council framing stripped. Original © the looper authors.
 -->
 
 # Control rubric
 
 Use this when setting the loop's stop conditions — the bounds that keep a run
-from grinding forever. In auto these map onto the recipe's `iteration.bound`
-and the ledger's existing staleness gates; the design skill coaches the user to
+from grinding forever. In auto these map onto the workflow's `iteration.bound`
+and the run-record's existing staleness gates; the design skill coaches the user to
 set them deliberately rather than inherit silent defaults.
 
 ## What every loop must have
 
-- **A hard iteration cap.** The recipe's `iteration.bound.max_attempts` — the
+- **A hard iteration cap.** The workflow's `iteration.bound.max_attempts` — the
   maximum number of times a gate may verdict `iterate` before the engine forces
   `iterate → exit`. Without it a failing gate loops to the agent-launch ceiling.
 - **A wall-time cap** when the work is open-ended: `iteration.bound.max_wall_seconds`
   (cumulative *active* wall time). Breach forces exit the same way.
 - **An explicit exit predicate.** Auto's deterministic predicate —
-  `blockers == 0 AND majors == 0 AND all_units_terminal` ("only P3 findings
+  `blockers == 0 AND majors == 0 AND all_steps_terminal` ("only P3 findings
   remain") — is the run's single source of truth for done. Typed verification
   criteria are gate conditions layered on top; they never replace it.
 
@@ -29,7 +29,7 @@ The design skill should still *coach* these and write them into the goal doc,
 even though the engine does not enforce new bounds for them yet:
 
 - **No-progress detection** — stop after N consecutive iterations that change
-  nothing material. Today auto approximates this with the per-unit stall
+  nothing material. Today auto approximates this with the per-step stall
   threshold and the per-run dead-chain gate; a dedicated no-progress signal is
   deferred.
 - **Budget caps** — usd / tokens / wall-clock the user is willing to spend.
@@ -46,7 +46,7 @@ guard yet."
 - Is the work bounded enough that `max_attempts` alone suffices, or does it need
   a wall-time cap too?
 - Where should a human be in the loop? (A `human` verification criterion routes
-  through the pause seam — use it for irreversible or judgment-heavy gates.)
+  through the pause handoff — use it for irreversible or judgment-heavy gates.)
 - What is the single condition that means "done" — and is it the deterministic
   predicate, or does it need extra typed criteria?
 

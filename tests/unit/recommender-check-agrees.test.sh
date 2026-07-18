@@ -59,7 +59,7 @@ it "reviewed-plan + a1 -> false (router picks w, not a1)"
 assert_eq "false" "$(agrees reviewed-plan a1)"
 
 # ── unverifiable / degenerate inputs degrade to false (block skip) ───────────
-it "unknown state -> false (recipe_or_entry is None, never matches a stem)"
+it "unknown state -> false (workflow_or_entry is None, never matches a stem)"
 assert_eq "false" "$(agrees totally-unknown-state a1)"
 
 it "empty stem -> false (a None pick must not match an empty arg)"

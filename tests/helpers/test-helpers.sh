@@ -4,11 +4,11 @@
 # # $HOME ISOLATION CONTRACT (P0 — read before writing tests)
 #
 # Every test that touches engine state MUST isolate $HOME before running
-# any plugin code. The dispatch ledger lives at <repo>/.claude/auto/
+# any plugin code. The dispatch run-record lives at <repo>/.claude/auto/
 # (NOT in $HOME), so dispatch's $HOME surface is small — but the engine's
 # hooks and any future user-level state could touch ~/.claude/, so we keep
 # the isolation framework intact and isolate $HOME by default. Tests that
-# write a ledger should point the engine at a sandbox repo dir, not $HOME.
+# write a run-record should point the engine at a sandbox repo dir, not $HOME.
 #
 # Pattern:
 #   . tests/helpers/test-helpers.sh

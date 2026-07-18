@@ -3,7 +3,7 @@
 #   evaluate_programmatic (run + check + bounded binary-safe evidence) and the
 #   pure aggregate (decision / pending_judges, KTD-6).
 #
-# SELF-CONTAINED inline harness (same style as recipes.test.sh / ledger.test.sh).
+# SELF-CONTAINED inline harness (same style as workflows.test.sh / run-record.test.sh).
 
 set -uo pipefail
 

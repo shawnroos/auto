@@ -7,7 +7,7 @@ its own live transcript + a ~2-day ce-sessions lookback, classifies the session
 into ONE state label, and asks THIS module which ce-family step to run.
 
 This module is a PURE function of (state_label, confidence). It does NOT read the
-transcript, the ledger, or the filesystem — the driver supplies the classified
+transcript, the run-record, or the filesystem — the driver supplies the classified
 state and a confidence score; the module returns the deterministic recommendation
 tuple. Keeping the mapping here (not in skill prose) makes the routing taxonomy
 deterministic, testable, and grep-checkable — `feedback_deterministic_over_
@@ -16,30 +16,30 @@ the crisp step (state -> recommendation) is code.
 
 TAXONOMY (plan KTD-2; v0.6.0):
 
-  state label            ce step        recipe_or_entry    entry      spine?  kind
+  state label            ce step        workflow_or_entry    entry      spine?  kind
   ---------------------- -------------- ------------------ ---------- ------- ------
-  vague                  ce-brainstorm  pipeline           brainstorm spine   recipe
-  clear-intent-no-plan   ce-plan        a1                 plan       spine   recipe
-  reviewed-plan          work-only      w                  work       spine   recipe
-  code-unreviewed        ce-code-review review (review.json) work       off     recipe
+  vague                  ce-brainstorm  pipeline           brainstorm spine   workflow
+  clear-intent-no-plan   ce-plan        a1                 plan       spine   workflow
+  reviewed-plan          work-only      w                  work       spine   workflow
+  code-unreviewed        ce-code-review review (review.json) work       off     workflow
   bug                    ce-debug       /ce-debug          -          off     skill
   what-to-improve        ce-ideate      /ce-ideate         -          n/a     skill
   perf                   ce-optimize    /ce-optimize       -          off     skill
 
-WHY vague dispatches the spine recipe `pipeline` (not a `/ce-brainstorm` skill
-rec): the brainstorm-rooted spine (recipes/pipeline.json, U7/U8) ships in THIS
+WHY vague dispatches the spine workflow `pipeline` (not a `/ce-brainstorm` skill
+rec): the brainstorm-rooted spine (workflows/pipeline.json, U7/U8) ships in THIS
 v0.6.0 diff alongside the recommender — Phase A (entry) and Phase B (forward
 spine) land together. So vague routes to a real `pipeline` dispatch entering at
 the `brainstorm` phase, and the run auto-advances brainstorm→plan→work (the
 plan's headline success criterion: "A spine run auto-advances
-brainstorm→plan→work" through the smart-entry route). `recipe_or_entry` is the
-bare recipe STEM ("pipeline"), not the filename — auto.py resolves it via
-`recipes.load_and_validate(name, repo)` → f"{name}.json" (same as a1/w/review).
+brainstorm→plan→work" through the smart-entry route). `workflow_or_entry` is the
+bare workflow STEM ("pipeline"), not the filename — auto.py resolves it via
+`workflows.load_and_validate(name, repo)` → f"{name}.json" (same as a1/w/review).
 
-WHY debug/optimize are SKILL recs (not recipes): the CE adapter exposes only
-plan/deepen/review_plan/enumerate_plan_units/do_unit/review (lib/adapter-ce.py),
-so a `debug.json`/`optimize.json` recipe would be a non-functional stub. Only
-`review.json` (the `review` op exists) is a real off-spine recipe. debug/optimize
+WHY debug/optimize are SKILL recs (not workflows): the CE backend exposes only
+plan/deepen/review_plan/enumerate_plan_steps/do_step/review (lib/backend-ce.py),
+so a `debug.json`/`optimize.json` workflow would be a non-functional stub. Only
+`review.json` (the `review` op exists) is a real off-spine workflow. debug/optimize
 follow the `ce-ideate` precedent — recommend the skill, no auto-wrap.
 
 CONFIDENCE / ESCALATE: confidence is an INPUT (the driver's own certainty in its
@@ -67,94 +67,94 @@ from _bootstrap import coerce_confidence
 # default-for-uncertainty is escalate (R-1 / R-5).
 CONFIDENCE_THRESHOLD = 0.6
 
-# The recommendation "kind" — how the driver consumes recipe_or_entry:
-#   "recipe" -> dispatch via lib/auto.sh with `--recipe <recipe_or_entry>`,
-#               entering at the named phase (the recipe's phase_order[0]).
-#   "skill"  -> recommend the ce skill command (recipe_or_entry, e.g.
+# The recommendation "kind" — how the driver consumes workflow_or_entry:
+#   "workflow" -> dispatch via lib/auto.sh with `--workflow <workflow_or_entry>`,
+#               entering at the named phase (the workflow's phase_order[0]).
+#   "skill"  -> recommend the ce skill command (workflow_or_entry, e.g.
 #               "/ce-brainstorm") — NO auto-wrap, no run created.
-KIND_RECIPE = "recipe"
+KIND_WORKFLOW = "workflow"
 KIND_SKILL = "skill"
 
 # The deterministic taxonomy. Each entry is the recommendation for a known state
 # label. Confidence/escalate are layered on top by `recommend()` — these rows are
-# the state-INTRINSIC shape (which step, which recipe/skill, on the spine or not).
+# the state-INTRINSIC shape (which step, which workflow/skill, on the spine or not).
 #
 # Field meanings:
 # U6 (R9) — legible-alias choice: the taxonomy KEEPS the bare shorthand STEMS
 # ("a1"/"w"/"pipeline"/"review") rather than emitting the legible aliases. This is
 # the minimal change that makes BOTH forms route: aliasing lives in ONE place
-# (lib/recipes.py::_ALIASES, consulted inside resolve() before the file lookup),
+# (lib/workflows.py::_ALIASES, consulted inside resolve() before the file lookup),
 # so a stem passed here resolves directly and a legible name passed anywhere
-# (e.g. an operator's `--recipe plan-build-review`) resolves to the same recipe.
-# Emitting aliases here instead would force `launch-gate.SKIP_ELIGIBLE_RECIPES`
+# (e.g. an operator's `--workflow plan-build-review`) resolves to the same workflow.
+# Emitting aliases here instead would force `launch-gate.SKIP_ELIGIBLE_WORKFLOWS`
 # and the `--check-agrees` stem-equality to switch to the alias form too, for no
 # gain — the router's pick is compared as an opaque token either way.
 #
 #   ce_step         the ce-family step this state maps to (operator-facing label).
-#   recipe_or_entry the recipe NAME (kind=recipe) or the skill COMMAND (kind=skill).
-#   entry           the entry phase for a recipe dispatch (None for skill recs).
+#   workflow_or_entry the workflow NAME (kind=workflow) or the skill COMMAND (kind=skill).
+#   entry           the entry phase for a workflow dispatch (None for skill recs).
 #   is_spine        True iff this is a creative-spine step (brainstorm->plan->work);
 #                   off-spine / n/a states are False (KTD-2 — off-spine never
-#                   returns a spine recipe or an auto-advance entry).
-#   kind            KIND_RECIPE or KIND_SKILL (see above).
+#                   returns a spine workflow or an auto-advance entry).
+#   kind            KIND_WORKFLOW or KIND_SKILL (see above).
 _TAXONOMY = {
     "vague": {
-        # The brainstorm-rooted spine. `recipe_or_entry` is the BARE recipe STEM
+        # The brainstorm-rooted spine. `workflow_or_entry` is the BARE workflow STEM
         # ("pipeline"), NOT the filename — auto.py resolves it via
-        # `recipes.load_and_validate(name, repo)` → f"{name}.json", so passing
-        # "pipeline.json" would resolve to recipes/pipeline.json.json and fail.
-        # The recipe's phase_order[0] IS the entry phase ("brainstorm"); the run
-        # auto-advances brainstorm→plan→work via the U8 emitter (KTD-2/3).
+        # `workflows.load_and_validate(name, repo)` → f"{name}.json", so passing
+        # "pipeline.json" would resolve to workflows/pipeline.json.json and fail.
+        # The workflow's phase_order[0] IS the entry phase ("brainstorm"); the run
+        # auto-advances brainstorm→plan→work via the U8 producer (KTD-2/3).
         "ce_step": "ce-brainstorm",
-        "recipe_or_entry": "pipeline",
+        "workflow_or_entry": "pipeline",
         "entry": "brainstorm",
         "is_spine": True,
-        "kind": KIND_RECIPE,
+        "kind": KIND_WORKFLOW,
     },
     "clear-intent-no-plan": {
         "ce_step": "ce-plan",
-        "recipe_or_entry": "a1",
+        "workflow_or_entry": "a1",
         "entry": "plan",
         "is_spine": True,
-        "kind": KIND_RECIPE,
+        "kind": KIND_WORKFLOW,
     },
     "reviewed-plan": {
         "ce_step": "work-only",
-        "recipe_or_entry": "w",
+        "workflow_or_entry": "w",
         "entry": "work",
         "is_spine": True,
-        "kind": KIND_RECIPE,
+        "kind": KIND_WORKFLOW,
     },
     "code-unreviewed": {
-        # `recipe_or_entry` is the BARE recipe STEM, not the filename: auto.py
-        # feeds it to `recipes.load_and_validate(name, repo)`, which resolves via
-        # `os.path.join(<tier>, f"{name}.json")`. So the off-spine review recipe
-        # (recipes/review.json, U11) is addressed as "review" — passing
-        # "review.json" would resolve to recipes/review.json.json and fail. This
-        # matches how every other row addresses its recipe by stem (a1, w).
+        # `workflow_or_entry` is the BARE workflow STEM, not the filename: auto.py
+        # feeds it to `workflows.load_and_validate(name, repo)`, which resolves via
+        # `os.path.join(<tier>, f"{name}.json")`. So the off-spine review workflow
+        # (workflows/review.json, U11) is addressed as "review" — passing
+        # "review.json" would resolve to workflows/review.json.json and fail. This
+        # matches how every other row addresses its workflow by stem (a1, w).
         "ce_step": "ce-code-review",
-        "recipe_or_entry": "review",
+        "workflow_or_entry": "review",
         "entry": "work",
         "is_spine": False,
-        "kind": KIND_RECIPE,
+        "kind": KIND_WORKFLOW,
     },
     "bug": {
         "ce_step": "ce-debug",
-        "recipe_or_entry": "/ce-debug",
+        "workflow_or_entry": "/ce-debug",
         "entry": None,
         "is_spine": False,
         "kind": KIND_SKILL,
     },
     "what-to-improve": {
         "ce_step": "ce-ideate",
-        "recipe_or_entry": "/ce-ideate",
+        "workflow_or_entry": "/ce-ideate",
         "entry": None,
         "is_spine": False,
         "kind": KIND_SKILL,
     },
     "perf": {
         "ce_step": "ce-optimize",
-        "recipe_or_entry": "/ce-optimize",
+        "workflow_or_entry": "/ce-optimize",
         "entry": None,
         "is_spine": False,
         "kind": KIND_SKILL,
@@ -162,10 +162,10 @@ _TAXONOMY = {
 }
 
 # The safe default for an UNKNOWN/ambiguous state: recommend nothing concrete,
-# escalate. Never a recipe, never a spine entry — the driver asks the operator.
+# escalate. Never a workflow, never a spine entry — the driver asks the operator.
 _UNKNOWN_RECOMMENDATION = {
     "ce_step": None,
-    "recipe_or_entry": None,
+    "workflow_or_entry": None,
     "entry": None,
     "is_spine": False,
     "kind": KIND_SKILL,
@@ -181,7 +181,7 @@ def recommend(state_label, confidence=1.0):
     """Map a classified state label + confidence to a recommendation dict.
 
     Returns a dict with keys:
-      state, ce_step, recipe_or_entry, entry, is_spine, kind, confidence, escalate
+      state, ce_step, workflow_or_entry, entry, is_spine, kind, confidence, escalate
 
     ``escalate`` is True iff confidence < CONFIDENCE_THRESHOLD OR the state is
     unknown — the driver consumes it as "do NOT dispatch; escalate to the
@@ -222,7 +222,7 @@ def _cli(argv):
     router, compare stems" into ONE shell step so the agent can't substitute its
     own judgment for the cross-check. It is `true` IFF the router's deterministic
     pick for <state> equals <stem> exactly. An unknown/blank state yields a
-    `recipe_or_entry` of None, which never string-equals a real stem -> `false`
+    `workflow_or_entry` of None, which never string-equals a real stem -> `false`
     (the conservative direction: an unverifiable agreement blocks skip).
     """
     import json
@@ -231,7 +231,7 @@ def _cli(argv):
         # --check-agrees <state> <stem>
         state = argv[1] if len(argv) > 1 else None
         stem = argv[2] if len(argv) > 2 else ""
-        pick = recommend(state).get("recipe_or_entry")
+        pick = recommend(state).get("workflow_or_entry")
         # Agreement gates a SKIP, so the pick must ALSO be skip-eligible: the
         # router legitimately returns non-skip stems (`pipeline` for a vague
         # state, `review` for code-unreviewed), and those must never green-light a
@@ -245,12 +245,12 @@ def _cli(argv):
         # (`plan-build-review`/`work-only`) as the primary recommendation, with the
         # shorthand `a1`/`w` as aliases — so <stem> may arrive in either form.
         # Canonicalize it to its shorthand stem BEFORE the equality / eligibility
-        # check (the ONE alias→stem SSOT is recipes.canonical_name). Without this,
+        # check (the ONE alias→stem SSOT is workflows.canonical_name). Without this,
         # an alias-form recommendation could never string-equal the router's bare
-        # stem pick and could never reach the skip tier. SKIP_ELIGIBLE_RECIPES
+        # stem pick and could never reach the skip tier. SKIP_ELIGIBLE_WORKFLOWS
         # holds STEMS ONLY precisely because the fold-to-stem happens here.
-        stem = load_lib_module("recipes").canonical_name(stem)
-        eligible = load_lib_module("launch-gate").SKIP_ELIGIBLE_RECIPES
+        stem = load_lib_module("workflows").canonical_name(stem)
+        eligible = load_lib_module("launch-gate").SKIP_ELIGIBLE_WORKFLOWS
         agree = pick is not None and pick == stem and pick in eligible
         sys.stdout.write("true\n" if agree else "false\n")
         return 0

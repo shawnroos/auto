@@ -62,7 +62,7 @@ assert_eq "OK" "$("$PY" "$LIB/presets.py" load-validate tuned-review "$REPO")"
 
 # ── 2. presets load-validate: shape-invalid workspace preset -> INVALID ─────
 cat > "$REPO/.claude/auto/presets/bad.json" <<'JSON'
-{"name":"bad","version":"1","description":"d","invokes":{"adapter_op":"review"},"verification":[]}
+{"name":"bad","version":"1","description":"d","invokes":{"backend_op":"review"},"verification":[]}
 JSON
 it "presets CLI load-validate: a shape-invalid preset prints INVALID naming the field"
 out="$("$PY" "$LIB/presets.py" load-validate bad "$REPO")"
@@ -82,7 +82,7 @@ case "$out" in INVALID:*) pass ;; *) fail "expected INVALID:, got '$out'";; esac
 # ── 5. preset_oneshot launch: names the op + folds the template body ────────
 it "preset_oneshot CLI launch: names the built-in preset's op"
 out="$("$PY" "$LIB/preset_oneshot.py" launch tuned-review "$AUTO_ROOT")"
-assert_contains '"adapter_op": "review"' "$out"
+assert_contains '"backend_op": "review"' "$out"
 
 it "preset_oneshot CLI launch: folds the preset's prompt_template body"
 assert_contains "Tuned review prompt" "$out"

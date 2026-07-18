@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""auto v0.4.0 U2: multi-plan fanout orchestrator.
+"""auto v0.4.0 U2: multi-plan fanout dispatcher.
 
 Given a hypothesis envelope's ``multi_plan.paths`` (the v0.4.0 rename of
 v0.2.x's ``ambiguous-plans``), this module:
@@ -25,7 +25,7 @@ Why the cmux primitive (round-4 R4-001):
   The harness's native Agent tool does NOT expose `cwd` or `env`
   parameters. A naive ``bash -lc "claude '/auto:auto <plan>' &"`` fails: the
   claude CLI defaults to an interactive tty-bound session and ``-p``
-  exits after the first response, terminating before a multi-tick
+  exits after the first response, terminating before a multi-pulse
   /auto loop can drive. The cmux app-owned workspace is the ONLY
   working dispatch shape — verified by the U1 cmux spike and by
   v0.3.x's /auto-resume code path in production.
@@ -50,15 +50,15 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (
     CMUX_REF_CHARS as _CMUX_REF_CHARS,
     cmux_available as _cmux_available,
-    load_ledger,
+    load_run_record,
     load_lib_module,
     resolve_host_repo_root,
     resolve_shared_dir,
 )  # noqa: E402
 
-# The ledger facade owns the canonical ISO-Z time stamp (ledger.now_iso). Load
-# it via the facade — not ledger_core — to keep facade discipline (U4).
-ledger = load_ledger()
+# The run-record facade owns the canonical ISO-Z time stamp (run_record.now_iso). Load
+# it via the facade — not run_record_core — to keep facade discipline (U4).
+run_record = load_run_record()
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ _DEFAULT_PROVISIONAL_TTL = 600  # 10 minutes
 
 
 class SpawnError(Exception):
-    """Base for fanout-orchestrator errors."""
+    """Base for fanout-dispatcher errors."""
 
 
 class PortPoolExhausted(SpawnError):
@@ -94,10 +94,10 @@ class CmuxUnavailable(SpawnError):
     """cmux binary is not on PATH — fanout cannot dispatch."""
 
 
-# ── Slugify (vendored — same logic as ledger_core::_slugify_branch) ────────
+# ── Slugify (vendored — same logic as run_record_core::_slugify_branch) ────────
 #
-# We do NOT import from ledger_core because this module needs to run from
-# the host-repo cwd before any ledger exists. The duplication is bounded
+# We do NOT import from run_record_core because this module needs to run from
+# the host-repo cwd before any run-record exists. The duplication is bounded
 # (one regex pair) and intentional.
 
 
@@ -120,7 +120,7 @@ def _now_stamp() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M%S")
 
 
-# ── Sidecar IO (atomic write parity with ledger_core::_atomic_write) ───────
+# ── Sidecar IO (atomic write parity with run_record_core::_atomic_write) ───────
 
 
 def _batches_dir(shared: str) -> str:
@@ -183,7 +183,7 @@ def _scan_in_use_ports(shared: str):
     cleanup; no separate GC pass needed.
 
     Malformed sidecars are skipped (parity with the Stop hook's tolerance
-    of bad ledgers — never let one corrupt file break the orchestrator).
+    of bad run-records — never let one corrupt file break the dispatcher).
     """
     in_use = set()
     swept = []
@@ -296,7 +296,7 @@ def _git_worktree_add(host_repo: str, worktree: str, branch: str):
     """Run `git worktree add <worktree> -b <branch>` from the host repo.
 
     Raises WorktreeAddFailed on non-zero exit. Caller is responsible for
-    teardown (the orchestrator's rollback path).
+    teardown (the dispatcher's rollback path).
     """
     result = subprocess.run(
         ["git", "-C", host_repo, "worktree", "add", worktree, "-b", branch],
@@ -339,7 +339,7 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
         CLAUDE_AUTO_REPO=<worktree> claude '/auto:auto <plan>'"
 
     The CLAUDE_AUTO_REPO env-pin (round-2 R2-001) ensures the sub-run's
-    ledger writes land at <worktree>/.claude/auto/.
+    run-record writes land at <worktree>/.claude/auto/.
 
     Returns a dict with the captured cmux state for the batch sidecar:
         {"mode": "workspace"|"tab", "tab_surface_id": "<surface-uuid>"|None}
@@ -499,7 +499,7 @@ def fanout(plan_paths, *, composite_intent=None):
     sidecar_path = os.path.join(_batches_dir(shared), f"{batch_id}.json")
     sidecar = {
         "id": batch_id,
-        "created_at": ledger.now_iso(),
+        "created_at": run_record.now_iso(),
         "status": "provisional",
         "composite_intent": composite_intent or _default_intent(plans),
         "plans": plans,

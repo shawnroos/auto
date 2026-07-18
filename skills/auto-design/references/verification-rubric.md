@@ -1,6 +1,6 @@
 <!--
 Adapted from ksimback/looper (references/verification-rubric.md), MIT License.
-Rewritten in auto's vocabulary (recipe / ledger / gate / exit-predicate);
+Rewritten in auto's vocabulary (workflow / run-record / gate / exit-predicate);
 looper's "judge" type split into model_judge / advisor_judge, and its
 structured-judge runner contract dropped (advisor returns prose, not a verdict).
 Original © the looper authors.
@@ -9,7 +9,7 @@ Original © the looper authors.
 # Verification rubric
 
 Use this when turning the goal's definition of done into **typed verification
-criteria** — the `verification` array auto attaches to a gate unit. These
+criteria** — the `verification` array auto attaches to a gate step. These
 criteria steer the gate's iterate / advance / exit decision; they never replace
 auto's deterministic exit predicate (the predicate stays the single source of
 truth for when the *run* is done — see the control rubric).

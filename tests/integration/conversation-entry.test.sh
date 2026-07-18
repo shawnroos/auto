@@ -23,8 +23,8 @@
 #        before/after, signal SET)
 #     9. exit 0 on the conversation-context path AND on a forced internal error
 #   U2 — recommender taxonomy:
-#    10. each taxonomy row maps to its expected (step, recipe/entry, is_spine, kind)
-#    11. off-spine states never return a spine recipe or an auto-advance entry
+#    10. each taxonomy row maps to its expected (step, workflow/entry, is_spine, kind)
+#    11. off-spine states never return a spine workflow or an auto-advance entry
 #    12. low confidence below threshold sets escalate=True (known state)
 #    13. unknown / non-string state degrades to a safe escalate default, no crash
 #    14. confident known spine state does NOT escalate
@@ -112,21 +112,21 @@ recommender = load_lib_module("recommender")
 op = sys.argv[2]
 
 if op == "row":
-    # row <state> -> "step|recipe_or_entry|entry|is_spine|kind|escalate"
+    # row <state> -> "step|workflow_or_entry|entry|is_spine|kind|escalate"
     r = recommender.recommend(sys.argv[3], 1.0)
     print("%s|%s|%s|%s|%s|%s" % (
-        r["ce_step"], r["recipe_or_entry"], r["entry"],
+        r["ce_step"], r["workflow_or_entry"], r["entry"],
         r["is_spine"], r["kind"], r["escalate"]))
 elif op == "escalate":
     # escalate <state> <confidence> -> True/False
     r = recommender.recommend(sys.argv[3], float(sys.argv[4]))
     print("True" if r["escalate"] else "False")
 elif op == "unknown":
-    # unknown <state-or-NONE> -> "state|escalate|recipe_or_entry|is_spine"
+    # unknown <state-or-NONE> -> "state|escalate|workflow_or_entry|is_spine"
     state = None if sys.argv[3] == "NONE" else sys.argv[3]
     r = recommender.recommend(state, 1.0)
     print("%s|%s|%s|%s" % (
-        r["state"], r["escalate"], r["recipe_or_entry"], r["is_spine"]))
+        r["state"], r["escalate"], r["workflow_or_entry"], r["is_spine"]))
 elif op == "offspine-safe":
     # No off-spine row may return is_spine=True; none may carry an entry on a
     # skill rec. Returns "ok" iff every off-spine row honours the invariant.
@@ -246,7 +246,7 @@ assert_eq "present" "$ERR_BLOCK"
 it "U1: recommendation key present on a degraded-repo envelope at runtime"
 REPO_ERR="${SANDBOX}/errrepo"
 mkdir -p "$REPO_ERR"
-# A repo whose .claude is a regular file: the ledger scan finds nothing and the
+# A repo whose .claude is a regular file: the run-record scan finds nothing and the
 # detector degrades safely; the emitted envelope must still carry the key.
 printf 'not a dir' > "${REPO_ERR}/.claude"
 RAW_ERR="$(CLAUDE_AUTO_REPO="$REPO_ERR" bash "$DET" 2>/dev/null)"
@@ -337,23 +337,23 @@ assert_eq "0" "$?"
 # ════════════════════════════════════════════════════════════════════════════
 
 # ─── Scenario 10: each taxonomy row maps to its expected tuple ────────────────
-# vague dispatches the brainstorm-rooted spine recipe `pipeline` entering at the
+# vague dispatches the brainstorm-rooted spine workflow `pipeline` entering at the
 # `brainstorm` phase (the spine ships in this same v0.6.0 diff — U7/U8). The
-# recipe_or_entry is the BARE STEM "pipeline" (--recipe resolves f"{name}.json").
-it "U2 row vague -> ce-brainstorm pipeline @ brainstorm (recipe, spine)"
-assert_eq "ce-brainstorm|pipeline|brainstorm|True|recipe|False" "$(rec row vague)"
+# workflow_or_entry is the BARE STEM "pipeline" (--workflow resolves f"{name}.json").
+it "U2 row vague -> ce-brainstorm pipeline @ brainstorm (workflow, spine)"
+assert_eq "ce-brainstorm|pipeline|brainstorm|True|workflow|False" "$(rec row vague)"
 
-it "U2 row clear-intent-no-plan -> ce-plan a1 @ plan (recipe, spine)"
-assert_eq "ce-plan|a1|plan|True|recipe|False" "$(rec row clear-intent-no-plan)"
+it "U2 row clear-intent-no-plan -> ce-plan a1 @ plan (workflow, spine)"
+assert_eq "ce-plan|a1|plan|True|workflow|False" "$(rec row clear-intent-no-plan)"
 
-it "U2 row reviewed-plan -> work-only w @ work (recipe, spine)"
-assert_eq "work-only|w|work|True|recipe|False" "$(rec row reviewed-plan)"
+it "U2 row reviewed-plan -> work-only w @ work (workflow, spine)"
+assert_eq "work-only|w|work|True|workflow|False" "$(rec row reviewed-plan)"
 
-# recipe_or_entry is the BARE recipe STEM ("review"), NOT the filename: the
-# driver feeds it to `--recipe`, which auto.py resolves via f"{name}.json".
+# workflow_or_entry is the BARE workflow STEM ("review"), NOT the filename: the
+# driver feeds it to `--workflow`, which auto.py resolves via f"{name}.json".
 # Passing "review.json" would resolve to review.json.json and fail.
-it "U2 row code-unreviewed -> ce-code-review BARE STEM 'review' @ work (recipe, OFF-spine)"
-assert_eq "ce-code-review|review|work|False|recipe|False" "$(rec row code-unreviewed)"
+it "U2 row code-unreviewed -> ce-code-review BARE STEM 'review' @ work (workflow, OFF-spine)"
+assert_eq "ce-code-review|review|work|False|workflow|False" "$(rec row code-unreviewed)"
 
 it "U2 row bug -> ce-debug /ce-debug (skill, off-spine, no entry)"
 assert_eq "ce-debug|/ce-debug|None|False|skill|False" "$(rec row bug)"
@@ -364,7 +364,7 @@ assert_eq "ce-ideate|/ce-ideate|None|False|skill|False" "$(rec row what-to-impro
 it "U2 row perf -> ce-optimize /ce-optimize (skill, off-spine, no entry)"
 assert_eq "ce-optimize|/ce-optimize|None|False|skill|False" "$(rec row perf)"
 
-# ─── Scenario 11: off-spine states never return a spine recipe / advance entry ─
+# ─── Scenario 11: off-spine states never return a spine workflow / advance entry ─
 it "U2: off-spine states never claim is_spine, and skill recs never carry an entry"
 assert_eq "ok" "$(rec offspine-safe)"
 
@@ -373,7 +373,7 @@ it "U2: low confidence (0.3) on a known spine state sets escalate=True"
 assert_eq "True" "$(rec escalate clear-intent-no-plan 0.3)"
 
 # ─── Scenario 13: unknown / non-string state degrades to safe escalate ────────
-it "U2: unknown state -> state=unknown, escalate, no recipe (safe default)"
+it "U2: unknown state -> state=unknown, escalate, no workflow (safe default)"
 assert_eq "unknown|True|None|False" "$(rec unknown zzz-not-a-state)"
 
 it "U2: non-string (None) state -> safe escalate default, never crashes"
@@ -387,10 +387,10 @@ assert_eq "False" "$(rec escalate reviewed-plan 1.0)"
 # SKILL.md + driver-reference.md §11 tell the driver to run
 # `python lib/recommender.py <state> <confidence>` and read the JSON line. This
 # exercises that exact path (not just load_lib_module) — the surface the driver
-# actually uses — and emits the bare recipe stem the dispatch line consumes.
+# actually uses — and emits the bare workflow stem the dispatch line consumes.
 it "U2: CLI 'recommender.py code-unreviewed 0.9' emits the bare 'review' stem JSON"
 CLI_OUT="$("$PY" "${AUTO_ROOT}/lib/recommender.py" code-unreviewed 0.9)"
-assert_eq "review" "$(hfield "$CLI_OUT" 'H["recipe_or_entry"]')"
+assert_eq "review" "$(hfield "$CLI_OUT" 'H["workflow_or_entry"]')"
 
 it "U2: CLI low-confidence escalates; CLI bad-confidence arg degrades to escalate (no crash)"
 LOW_OUT="$("$PY" "${AUTO_ROOT}/lib/recommender.py" clear-intent-no-plan 0.2)"

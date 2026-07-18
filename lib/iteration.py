@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """auto U1 (v0.3.0): the ONE iteration-decision module.
 
-Every site that reads a gate unit's `decision` field — the tick's iteration
+Every site that reads a gate step's `decision` field — the pulse's iteration
 check, `recompute_predicate`'s iteration_pending computation, `/auto-status`'s
 reporting — routes through THIS module. The AST lint
 (`tests/unit/iteration-ast-lint.test.sh`) forbids the string literal "decision"
-as an `ast.Constant` anywhere in `lib/*.py` EXCEPT this file and `lib/ledger.py`
+as an `ast.Constant` anywhere in `lib/*.py` EXCEPT this file and `lib/run_record.py`
 (the writer in `set_verdict_decision`). A new consumer physically cannot
 re-introduce a divergent literal access without tripping the lint.
 
 WHY centralize (memory `feedback_plan_documents_transition_code_doesnt_wire_it`):
 the dominant v0.2.0 build-bug class was "a rule the prose describes that the
 code enforces in some sites but not its siblings." The iteration `decision`
-field is exactly that kind of rule once recipes can declare an `iteration`
+field is exactly that kind of rule once workflows can declare an `iteration`
 block. One helper = one place the decision lives.
 
 WHY the field lives on `dispatch_context` (memory v0.2.0 round-2 P0 fix at
-commit `81de3e0` — `set_winner_unit_id`): `record_verdict` normalizes findings
+commit `81de3e0` — `set_winner_step_id`): `record_verdict` normalizes findings
 to `{severity, note}` only. A `decision` field on findings would be silently
 stripped on the canonical write path. `dispatch_context` is preserved by
 `transition()` and the verdict-write path with no normalize step. v0.3.0
@@ -29,22 +29,22 @@ from __future__ import annotations
 
 import math
 
-# Kill-switch parity with tick.advance_iteration_loop (G1 / rel-r2-1).
+# Kill-switch parity with pulse.advance_iteration_loop (G1 / rel-r2-1).
 # `_bootstrap` is on sys.path before this module loads: every caller of
-# `load_lib_module("iteration")` (tick.py at module top, ledger.py via
+# `load_lib_module("iteration")` (pulse.py at module top, run_record.py via
 # `_lazy_load`) prepends lib/ to sys.path first. Importing the symbol here is
-# the same shape tick.py uses at line 60. The fence has to hold on the READ
+# the same shape pulse.py uses at line 60. The fence has to hold on the READ
 # side (compute_pending_state) too — without it, a kill-switched mid-iteration
 # run still computes iteration_pending=True from the gate's stale "iterate"
 # verdict, which blocks the predicate's `met` branch via the AND-NOT clause
 # and leaves /auto-resume abort as the only escape. F5 unfenced the write
-# side (tick.py:624); G1 mirrors it on the read side so the standard
+# side (pulse.py:624); G1 mirrors it on the read side so the standard
 # predicate-met flow takes over when the operator flips the switch.
 from _bootstrap import is_iteration_disabled  # noqa: E402
 
-# The three legal values a gate unit's verdict.decision may carry. The engine
+# The three legal values a gate step's verdict.decision may carry. The engine
 # reads `decision_effective` from `evaluate_decision()` and routes on it; raw
-# unit-side reads MUST go through `read_decision()` so the AST lint can hold.
+# step-side reads MUST go through `read_decision()` so the AST lint can hold.
 DECISIONS = ("advance", "iterate", "exit")
 
 # ── Deliberate bound-check duplication (do NOT naively merge) ────────────────
@@ -56,7 +56,7 @@ DECISIONS = ("advance", "iterate", "exit")
 #   • Coercion — evaluate_decision uses raw int()/float() that RAISE on a
 #     corrupt bound (→ an operator-visible ITERATION_CHECK_FAILED F2 stop);
 #     compute_pending_state uses _try_int/_try_float that DEGRADE to False so
-#     the recompute never raises and never locks the ledger. A shared
+#     the recompute never raises and never locks the run-record. A shared
 #     never-raise helper would silently convert F2's diagnostic stop into
 #     continuation on a torn bound.
 #   • Cap applicability — evaluate_decision treats max_attempts == 0 as "no
@@ -68,10 +68,10 @@ DECISIONS = ("advance", "iterate", "exit")
 
 
 # ── dispatch_context: the typed key set + thin accessors (U12) ───────────────
-# `dispatch_context` is the additive per-unit bag `transition()` preserves
+# `dispatch_context` is the additive per-step bag `transition()` preserves
 # verbatim (no normalize step). Historically every consumer read it via
 # `(u.get("dispatch_context") or {}).get("<literal>")` — a shape that SWALLOWS a
-# typo: `.get("enumarated_units")` returns None just like a real miss. Declaring
+# typo: `.get("enumarated_steps")` returns None just like a real miss. Declaring
 # the key set ONCE + reading through `read_dc` turns a misspelled key into a loud
 # KeyError at the accessor instead of a silent None. `read_decision` (the
 # centralized decision reader the AST lint pins here) now delegates to `read_dc`,
@@ -79,9 +79,9 @@ DECISIONS = ("advance", "iterate", "exit")
 DISPATCH_CONTEXT_KEYS = frozenset({
     "decision",
     "decision_payload",
-    "winner_unit_id",
+    "winner_step_id",
     "judge_verdicts",
-    "enumerated_units",
+    "enumerated_steps",
     "bound_override",
     "requirements_doc",
     "plan_path",
@@ -91,8 +91,8 @@ DISPATCH_CONTEXT_KEYS = frozenset({
 })
 
 
-def read_dc(unit: dict, key: str, default=None):
-    """Typed read of a single `dispatch_context` key off a unit.
+def read_dc(step: dict, key: str, default=None):
+    """Typed read of a single `dispatch_context` key off a step.
 
     Raises ``KeyError`` if `key` is not a declared `dispatch_context` key — a
     MISSPELLED key name fails loud at the accessor instead of silently returning
@@ -106,98 +106,98 @@ def read_dc(unit: dict, key: str, default=None):
             f"read_dc: {key!r} is not a declared dispatch_context key; "
             f"known keys: {sorted(DISPATCH_CONTEXT_KEYS)!r}"
         )
-    return (unit.get("dispatch_context") or {}).get(key, default)
+    return (step.get("dispatch_context") or {}).get(key, default)
 
 
-def read_decision(unit: dict):
-    """Return the gate unit's verdict.decision, or None if not set.
+def read_decision(step: dict):
+    """Return the gate step's verdict.decision, or None if not set.
 
-    Reads from `unit.dispatch_context.decision` — the v0.3.0 channel established
-    by `lib/ledger.py::set_verdict_decision`. NEVER from `findings[]` (which
+    Reads from `step.dispatch_context.decision` — the v0.3.0 channel established
+    by `lib/run_record.py::set_verdict_decision`. NEVER from `findings[]` (which
     `record_verdict` normalizes to `{severity, note}`). This is the ONE function
     every caller routes through; the AST lint enforces it.
     """
-    return read_dc(unit, "decision")
+    return read_dc(step, "decision")
 
 
 # Named thin accessors for the read-heavy keys — one call per consumer read site
 # so a typo becomes an AttributeError on the module, not a swallowed None. Keys
-# with no live read site (`bias`, `plan_items` — emitter-WRITTEN only) stay in
+# with no live read site (`bias`, `plan_items` — producer-WRITTEN only) stay in
 # `DISPATCH_CONTEXT_KEYS` and are reachable via `read_dc` without a named alias.
-def read_enumerated_units(unit: dict):
-    """The plan unit's enumerated work-unit list (producer-persist), or None."""
-    return read_dc(unit, "enumerated_units")
+def read_enumerated_steps(step: dict):
+    """The plan step's enumerated work-step list (producer-persist), or None."""
+    return read_dc(step, "enumerated_steps")
 
 
-def read_winner_unit_id(unit: dict):
-    """The judge gate's chosen winner unit id, or None."""
-    return read_dc(unit, "winner_unit_id")
+def read_winner_step_id(step: dict):
+    """The judge gate's chosen winner step id, or None."""
+    return read_dc(step, "winner_step_id")
 
 
-def read_judge_verdicts(unit: dict):
+def read_judge_verdicts(step: dict):
     """The gate's persisted judge verdicts map, or None."""
-    return read_dc(unit, "judge_verdicts")
+    return read_dc(step, "judge_verdicts")
 
 
-def read_bound_override(unit: dict):
+def read_bound_override(step: dict):
     """The gate's bound-override record ({bound, original_decision, ...}), or None."""
-    return read_dc(unit, "bound_override")
+    return read_dc(step, "bound_override")
 
 
-def read_requirements_doc(unit: dict):
-    """The brainstorm/plan unit's requirements-doc path, or None."""
-    return read_dc(unit, "requirements_doc")
+def read_requirements_doc(step: dict):
+    """The brainstorm/plan step's requirements-doc path, or None."""
+    return read_dc(step, "requirements_doc")
 
 
-def read_plan_path(unit: dict):
-    """The plan unit's durable plan_path, or None."""
-    return read_dc(unit, "plan_path")
+def read_plan_path(step: dict):
+    """The plan step's durable plan_path, or None."""
+    return read_dc(step, "plan_path")
 
 
-def read_decision_payload(unit: dict):
+def read_decision_payload(step: dict):
     """The gate's per-iteration decision payload dict, or None."""
-    return read_dc(unit, "decision_payload")
+    return read_dc(step, "decision_payload")
 
 
-def _find_gate_unit(ledger: dict, gate_unit_id: str) -> dict:
-    """Find the gate unit in the ledger; raise on not-found.
+def _find_gate_step(run_record: dict, gate_step_id: str) -> dict:
+    """Find the gate step in the run-record; raise on not-found.
 
-    Mirrors `lib/ledger.py::_find_unit` shape — a missing gate_unit_id is a
-    recipe bug (validator should have caught it) and must surface loudly, not
+    Mirrors `lib/run_record.py::_find_step` shape — a missing gate_step_id is a
+    workflow bug (validator should have caught it) and must surface loudly, not
     return None which would let the iteration check silently no-op.
     """
-    for u in ledger.get("units", []):
-        if u.get("id") == gate_unit_id:
+    for u in run_record.get("steps", []):
+        if u.get("id") == gate_step_id:
             return u
     raise KeyError(
-        f"iteration.evaluate_decision: gate_unit_id {gate_unit_id!r} not in "
-        f"ledger.units; known ids: "
-        f"{sorted(u.get('id') for u in ledger.get('units', []))!r}"
+        f"iteration.evaluate_decision: gate_step_id {gate_step_id!r} not in "
+        f"run_record.steps; known ids: "
+        f"{sorted(u.get('id') for u in run_record.get('steps', []))!r}"
     )
 
 
-def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None, judge_verdicts=None) -> dict:
-    """v0.7.0 (U4): run a gate unit's typed ``verification`` criteria and fold
+def resolve_gate_verification(run_record: dict, gate_step_id: str, *, repo_root=None, judge_verdicts=None) -> dict:
+    """v0.7.0 (U4): run a gate step's typed ``verification`` criteria and fold
     them into an advance/iterate SIGNAL via ``verification.aggregate`` (KTD-6).
 
-    Pure of ledger WRITES (so it is unit-testable without a live run): it runs
+    Pure of run-record WRITES (so it is unit-testable without a live run): it runs
     the gate's ``programmatic`` criteria in-process
     (``verification.evaluate_programmatic``), folds in any already-supplied judge
     verdicts (``advisor_judge`` / ``model_judge`` / ``human`` — passed in, or
     previously persisted on ``dispatch_context.judge_verdicts`` by the driver in
     U5), and returns ``{"signal", "pending_judges", "programmatic_results"}``.
 
-    The CALLER (tick/driver) commits a non-None ``signal`` as the gate's decision
-    via ``ledger_mutators.set_verdict_decision`` — keeping the decision write
+    The CALLER (pulse/driver) commits a non-None ``signal`` as the gate's decision
+    via ``run_record_mutators.set_verdict_decision`` — keeping the decision write
     centralized (``tests/unit/iteration-ast-lint.test.sh``). When
     ``pending_judges`` is non-empty the signal is None: the gate cannot decide
     until the driver supplies those verdicts.
 
-    A gate unit with no ``verification`` block returns ``signal=None`` and no
+    A gate step with no ``verification`` block returns ``signal=None`` and no
     pending judges — legacy gates (a1/a2/a4) are unaffected (the field is
     additive and they never carry it).
     """
-    gate = _find_gate_unit(ledger, gate_unit_id)
+    gate = _find_gate_step(run_record, gate_step_id)
     crits = gate.get("verification") or []
     if not crits:
         return {"signal": None, "pending_judges": [], "programmatic_results": {}}
@@ -221,39 +221,39 @@ def resolve_gate_verification(ledger: dict, gate_unit_id: str, *, repo_root=None
     }
 
 
-def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> dict:
-    """Compute the iteration decision the engine should honor THIS tick.
+def evaluate_decision(run_record: dict, gate_step_id: str, now_monotonic=None) -> dict:
+    """Compute the iteration decision the engine should honor THIS pulse.
 
-    Reads the gate unit's `dispatch_context.decision` (via `read_decision`) AND
-    the ledger's `iteration.bound` block, then composes them: `iterate` under
+    Reads the gate step's `dispatch_context.decision` (via `read_decision`) AND
+    the run-record's `iteration.bound` block, then composes them: `iterate` under
     bound stays `iterate`; `iterate` over bound forces to `exit` and surfaces
     `bound_breached: True` + `bound_type` so the engine's caller can record
-    `bound_override` on the gate unit (per KTD §D).
+    `bound_override` on the gate step (per KTD §D).
 
     Returns a dict with five fields (always all present):
         decision_effective: "advance" | "iterate" | "exit" | None
         original_decision:  the raw read (or None)
         bound_breached:     True iff engine overrode iterate→exit
         bound_type:         "max_attempts" | "max_wall_seconds" | None
-        attempts_made:      ledger["iteration_attempts"] (top-level int field)
+        attempts_made:      run_record["iteration_attempts"] (top-level int field)
 
     `now_monotonic` is reserved for future use (a wall-time-from-now bound
-    check that doesn't depend on the ledger's `active_wall_seconds` accumulator
-    — useful for emergency stop in long-running ticks). v0.3.0 reads the
-    accumulator off the ledger and ignores `now_monotonic`.
+    check that doesn't depend on the run-record's `active_wall_seconds` accumulator
+    — useful for emergency stop in long-running pulses). v0.3.0 reads the
+    accumulator off the run-record and ignores `now_monotonic`.
 
     The bound check fires on the ATTEMPTS COUNTER PRE-INCREMENT — if
     iteration_attempts is already at max_attempts when the gate writes
     iterate, that next iterate would be the (max_attempts+1)-th attempt;
-    engine overrides to exit. The caller (tick's advance_iteration_loop)
+    engine overrides to exit. The caller (pulse's advance_iteration_loop)
     increments iteration_attempts ONLY when honoring an iterate (not when
     overriding to exit), so the counter tracks honored iterations.
     """
-    gate = _find_gate_unit(ledger, gate_unit_id)
+    gate = _find_gate_step(run_record, gate_step_id)
     original = read_decision(gate)
 
-    attempts_made = int(ledger.get("iteration_attempts", 0))
-    active_wall_seconds = float(ledger.get("active_wall_seconds", 0))
+    attempts_made = int(run_record.get("iteration_attempts", 0))
+    active_wall_seconds = float(run_record.get("active_wall_seconds", 0))
 
     # No decision yet (gate hasn't verdicted, or its decision was cleared by
     # the most recent reset_for_iteration) — caller treats this as "no
@@ -269,7 +269,7 @@ def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> di
 
     if original not in DECISIONS:
         raise ValueError(
-            f"iteration.evaluate_decision: gate unit {gate_unit_id!r} "
+            f"iteration.evaluate_decision: gate step {gate_step_id!r} "
             f"dispatch_context.decision is {original!r}; must be one of "
             f"{DECISIONS!r}"
         )
@@ -284,8 +284,8 @@ def evaluate_decision(ledger: dict, gate_unit_id: str, now_monotonic=None) -> di
             "attempts_made": attempts_made,
         }
 
-    # iterate: read the recipe's bound and check.
-    iteration = ledger.get("iteration") or {}
+    # iterate: read the workflow's bound and check.
+    iteration = run_record.get("iteration") or {}
     bound = iteration.get("bound") or {}
     max_attempts = int(bound.get("max_attempts", 0)) if bound.get("max_attempts") is not None else 0
     max_wall = bound.get("max_wall_seconds")
@@ -326,7 +326,7 @@ def _try_int(value):
     """Return int(value), or ``_COERCE_FAILED`` on bad type/value.
 
     Used by ``compute_pending_state`` — a coercion failure on any numeric
-    bound field is treated as "ledger numeric state is corrupt; cannot make
+    bound field is treated as "run_record numeric state is corrupt; cannot make
     a safe iteration decision; collapse to not-pending so writes still go
     through." Per the "close a dimension, not a sibling" rule (rel-2): the
     predicate-recompute chokepoint must degrade gracefully on bad inputs.
@@ -345,43 +345,43 @@ def _try_float(value):
         return _COERCE_FAILED
 
 
-def compute_pending_state(ledger: dict) -> bool:
+def compute_pending_state(run_record: dict) -> bool:
     """Return True iff the run has a live iteration in flight (KTD §B).
 
     THE central iteration-bound logic — every caller (the
     ``recompute_predicate`` -> ``_atomic_write`` chokepoint AND the engine's
-    tick.advance_iteration_loop) reads the SAME rule through this module.
+    pulse.advance_iteration_loop) reads the SAME rule through this module.
     Mirrors ``evaluate_decision``'s bound math without surfacing the
     ``decision_effective``/``bound_type`` envelope ``recompute_predicate``
     doesn't need.
 
     True iff:
         - The run declares an ``iteration`` block.
-        - The block names a ``gate_unit`` that exists in ``units[]``.
-        - The gate unit's ``dispatch_context.decision == "iterate"``.
+        - The block names a ``gate_step`` that exists in ``steps[]``.
+        - The gate step's ``dispatch_context.decision == "iterate"``.
         - Neither bound is breached (``iteration_attempts < max_attempts``
           AND ``active_wall_seconds < max_wall_seconds``).
 
     Brittleness contract (rel-2): if any of ``iteration_attempts``,
     ``active_wall_seconds``, ``max_attempts``, ``max_wall_seconds`` fails
-    to coerce to a number, the function returns ``False`` (the ledger's
+    to coerce to a number, the function returns ``False`` (the run-record's
     numeric state is corrupt and the safest decision is "not pending" —
-    treats the in-flight iteration as advisorially-exited so the ledger
+    treats the in-flight iteration as advisorially-exited so the run-record
     can continue accepting writes). A single corrupt numeric field MUST
-    NOT lock out every subsequent ledger mutation, including writes
+    NOT lock out every subsequent run-record mutation, including writes
     needed to recover — this function is called from ``_atomic_write`` on
     EVERY write.
 
-    Why this lives here and not in ``ledger.py``: the AST lint says
+    Why this lives here and not in ``run_record.py``: the AST lint says
     iteration.py is THE iteration-decision module; the bound check
-    ``ledger._compute_iteration_pending`` used to open-code was lifted here so
+    ``run_record._compute_iteration_pending`` used to open-code was lifted here so
     the recompute path and the engine path live in one module. The comparison
     is still deliberately written twice (here + ``evaluate_decision``) — see the
     module-level "Deliberate bound-check duplication" note for why not to merge.
 
     Kill-switch parity (G1 / rel-r2-1): when ``CLAUDE_AUTO_DISABLE_ITERATION=1``
     is set, return False unconditionally — symmetric with the write-side
-    short-circuit at ``tick.advance_iteration_loop`` (lib/tick.py:624).
+    short-circuit at ``pulse.advance_iteration_loop`` (lib/pulse.py:624).
     Without this, a kill-switched mid-iteration run can't exit via the
     standard predicate-met path: the gate's stale ``decision="iterate"``
     still composes ``iteration_pending=True`` into the predicate, blocking
@@ -393,40 +393,40 @@ def compute_pending_state(ledger: dict) -> bool:
         return False
 
     # v0.3.0 G2 / ADV-R2-1: shape-corruption shield. ``iteration`` may be any
-    # JSON-deserializable value if the ledger is torn (e.g. a non-dict scalar
+    # JSON-deserializable value if the run-record is torn (e.g. a non-dict scalar
     # from a partial write or a corrupted recovery); the subsequent
     # ``.get(...)`` calls would raise AttributeError, which would propagate
     # through ``_atomic_write -> recompute_predicate`` and block the very
-    # ledger writes F2 needs to mark the loop done. Fence here before the
+    # run-record writes F2 needs to mark the loop done. Fence here before the
     # "no iteration declared" check (None stays the legitimate signal).
-    iter_block_raw = ledger.get("iteration")
+    iter_block_raw = run_record.get("iteration")
     if iter_block_raw is not None and not isinstance(iter_block_raw, dict):
         return False
 
     iteration_block = iter_block_raw
     if not iteration_block:
         return False
-    gate_unit_id = iteration_block.get("gate_unit")
-    if not gate_unit_id:
+    gate_step_id = iteration_block.get("gate_step")
+    if not gate_step_id:
         return False
-    gate_unit = None
-    for u in ledger.get("units", []):
-        if u.get("id") == gate_unit_id:
-            gate_unit = u
+    gate_step = None
+    for u in run_record.get("steps", []):
+        if u.get("id") == gate_step_id:
+            gate_step = u
             break
-    if gate_unit is None:
+    if gate_step is None:
         return False
-    if read_decision(gate_unit) != "iterate":
+    if read_decision(gate_step) != "iterate":
         return False
 
     bound = iteration_block.get("bound") or {}
     # v0.3.0 H / corr-r3-1: shape guard on iteration.bound — symmetric with
     # G2's top-level iteration guard (line 259-260) and G7's render-side
-    # bound guard (auto-status.py:165-168). Without this, a torn ledger
+    # bound guard (auto-status.py:165-168). Without this, a torn run-record
     # writing iteration.bound="corrupted" survives `or {}` (truthy non-dict
     # string) and the subsequent `bound.get(...)` raises AttributeError —
     # which propagates through _atomic_write→recompute_predicate and blocks
-    # the very ledger writes F2 needs to mark the loop done.
+    # the very run-record writes F2 needs to mark the loop done.
     if not isinstance(bound, dict):
         return False
 
@@ -437,7 +437,7 @@ def compute_pending_state(ledger: dict) -> bool:
         max_attempts = _try_int(max_attempts_raw)
         if max_attempts is _COERCE_FAILED:
             return False
-        attempts = _try_int(ledger.get("iteration_attempts", 0))
+        attempts = _try_int(run_record.get("iteration_attempts", 0))
         if attempts is _COERCE_FAILED:
             return False
         if attempts >= max_attempts:
@@ -449,7 +449,7 @@ def compute_pending_state(ledger: dict) -> bool:
         max_wall = _try_float(max_wall_raw)
         if max_wall is _COERCE_FAILED:
             return False
-        active = _try_float(ledger.get("active_wall_seconds", 0))
+        active = _try_float(run_record.get("active_wall_seconds", 0))
         if active is _COERCE_FAILED:
             return False
         if active >= max_wall:

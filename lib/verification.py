@@ -3,7 +3,7 @@
 
 Two responsibilities, both pure-stdlib (no pip — the plugin ships to arbitrary
 repos via a marketplace; a third-party dep would break install-anywhere, same
-constraint as lib/recipes.py):
+constraint as lib/workflows.py):
 
   1. ``evaluate_programmatic(criterion, cwd)`` — RUN a `programmatic` criterion
      (argv + a `check`) and return a structured pass/fail result with bounded,
@@ -17,7 +17,7 @@ constraint as lib/recipes.py):
      still pending. Keeping this pure is what makes the advisor-judge path
      unit-testable without a live ``advisor`` (judge verdicts inject as data).
 
-The criterion shape is the one validated in lib/recipes.py::_validate_verification
+The criterion shape is the one validated in lib/workflows.py::_validate_verification
 and documented in skills/auto-design/references/verification-taxonomy.md.
 """
 
@@ -27,7 +27,7 @@ import subprocess
 from typing import Optional
 
 # Bound the evidence captured from a programmatic criterion so a chatty (or
-# binary-spewing) command can't bloat the ledger. Bytes, not chars — applied to
+# binary-spewing) command can't bloat the run-record. Bytes, not chars — applied to
 # the encoded output before decode.
 _EVIDENCE_CAP_BYTES = 8192
 # Default per-criterion subprocess timeout when the criterion omits timeout_sec.
@@ -51,7 +51,7 @@ def _truncate_evidence(raw: bytes) -> str:
 def _check_passes(check, returncode: int, stdout: str) -> bool:
     """Apply a criterion's `check` to a finished run. `check` is one of:
     "exit_zero" | {"stdout_contains": s} | {"stdout_equals": s}.
-    (Shape already validated at recipe-load time; we re-read defensively.)
+    (Shape already validated at workflow-load time; we re-read defensively.)
     """
     if check == "exit_zero":
         return returncode == 0
@@ -75,7 +75,7 @@ def evaluate_programmatic(criterion: dict, cwd: Optional[str] = None) -> dict:
     check = criterion.get("check")
     timeout = criterion.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)
     if not argv:
-        # Unreachable via a validated recipe (the validator requires a non-empty
+        # Unreachable via a validated workflow (the validator requires a non-empty
         # argv), but keep the "never raises" contract honest for the debug CLI
         # and any unvalidated caller — subprocess.run([]) would raise IndexError.
         return {"criterion_id": cid, "status": "fail", "evidence": "empty argv (nothing to run)"}
@@ -118,7 +118,7 @@ def aggregate(criteria, programmatic_results: dict, judge_verdicts: dict) -> dic
     literal "decision").
 
     Args:
-      criteria: the unit's ``verification`` list (each ``{id, type, ...}``).
+      criteria: the step's ``verification`` list (each ``{id, type, ...}``).
       programmatic_results: ``{criterion_id: "pass"|"fail"}`` for programmatic
         criteria already run by the engine.
       judge_verdicts: ``{criterion_id: "pass"|"fail"}`` for model_judge /

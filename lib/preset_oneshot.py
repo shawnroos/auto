@@ -2,30 +2,30 @@
 """auto one-shot preset helpers (addressable-step-contents).
 
 THIN, pure/testable pieces the `auto-preset` skill calls to run a preset
-one-shot (KTD-3 — the skill is the orchestrator; this module holds no control
-flow, no tick, no `/goal`):
+one-shot (KTD-3 — the skill is the dispatcher; this module holds no control
+flow, no pulse, no `/goal`):
 
   1. ``validate_oneshot_criteria(criteria)`` (U3) — validate a RATIFIED criteria
-     list against the verification taxonomy BEFORE dispatch, reusing the recipe
+     list against the verification taxonomy BEFORE dispatch, reusing the workflow
      validator's shape check (KTD-2 reuse).
 
   2. ``build_oneshot_launch(preset, repo)`` (U5) — build the driver-side launch
-     descriptor: the preset's `adapter_op`, plus the `prompt_template` body when
+     descriptor: the preset's `backend_op`, plus the `prompt_template` body when
      the preset declares one (KTD-5 — the tuning is folded at the DRIVER launch,
-     never via an adapter edit).
+     never via a backend edit).
 
   3. ``oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)``
      (U4) — the TERMINAL verdict: fold the ratified criteria + resolved results
      into a single ``verification.aggregate`` call and re-label the aggregator's
      advance/iterate SIGNAL as a terminal ``pass``/``fail`` (KTD-1). It takes the
-     ratified criteria list DIRECTLY (there is no synthesized unit) and is
+     ratified criteria list DIRECTLY (there is no synthesized step) and is
      READ-ONLY over them: it reports a verdict, it does NOT commit an iteration
      decision.
 
 KTD-1 BOUNDARY (defended in review + import-topology): this module MUST NOT import
 `lib/iteration.py` (the iteration-decision-commit module) and MUST NOT write a
 `decision` field anywhere. The one-shot verdict is a terminal read of the pure
-evaluator, distinct from the looping recipe's gate. It reuses ONLY
+evaluator, distinct from the looping workflow's gate. It reuses ONLY
 `verification.aggregate` — the same pure primitive
 `iteration.resolve_gate_verification` folds through, but reached HERE independently
 (pattern reuse, not a call into iteration). `verification` is a stdlib-safe leaf
@@ -50,19 +50,19 @@ from _bootstrap import load_lib_module  # noqa: E402 — after _LIB_DIR is on sy
 # relative prompt_template against the workspace repo first, then this built-in root.
 _AUTO_ROOT = os.path.dirname(_LIB_DIR)
 
-# `recipe_validate` is the pure-stdlib validation DAG root (imports no heavy
+# `workflow_validate` is the pure-stdlib validation DAG root (imports no heavy
 # sibling — same leaf discipline `presets.py` relies on). We reuse TWO primitives:
-#   - `_validate_verification` — the SAME taxonomy-shape check a recipe's
+#   - `_validate_verification` — the SAME taxonomy-shape check a workflow's
 #     `verification` block passes, so U3's ratify gate rejects a malformed
 #     proposed criterion with the exact rules the engine enforces (KTD-2 reuse).
-#   - `_check_prompt_template` — the SAME path-bounding a recipe's prompt_template
+#   - `_check_prompt_template` — the SAME path-bounding a workflow's prompt_template
 #     passes, re-applied defensively before U5 reads a template off disk.
 # NOTE the KTD-1 boundary is unaffected: `iteration` is STILL never imported here
-# (import-topology enforces it); `recipe_validate` is a different, gate-free leaf.
-_recipe_validate = load_lib_module("recipe_validate")
-_validate_verification = _recipe_validate._validate_verification
-_check_prompt_template = _recipe_validate._check_prompt_template
-RecipeError = _recipe_validate.RecipeError
+# (import-topology enforces it); `workflow_validate` is a different, gate-free leaf.
+_workflow_validate = load_lib_module("workflow_validate")
+_validate_verification = _workflow_validate._validate_verification
+_check_prompt_template = _workflow_validate._check_prompt_template
+WorkflowError = _workflow_validate.WorkflowError
 
 # The pure verification evaluator — a stdlib-safe leaf (subprocess + typing only).
 # `oneshot_verdict` reuses ONLY `verification.aggregate` (KTD-1); `iteration` is
@@ -85,9 +85,9 @@ def validate_oneshot_criteria(criteria) -> tuple:
 
     This is the pre-dispatch gate: the criteria the operator accepted (possibly
     EDITED — AE2) are checked BEFORE the op is launched. It REUSES
-    ``recipe_validate._validate_verification`` (KTD-2 reuse discipline) — the SAME
-    shape check the recipe validator applies at both write time and engine-load
-    time — by wrapping the list in a synthetic unit. So a malformed proposed
+    ``workflow_validate._validate_verification`` (KTD-2 reuse discipline) — the SAME
+    shape check the workflow validator applies at both write time and engine-load
+    time — by wrapping the list in a synthetic step. So a malformed proposed
     criterion (a `programmatic` with a shell string instead of an argv list, an
     unknown `type`, >16 criteria, a per-type unknown field) is rejected here with
     the exact same rules the engine would enforce.
@@ -96,12 +96,12 @@ def validate_oneshot_criteria(criteria) -> tuple:
     valid (vacuous-pass) run, so an empty/None list validates ``ok``.
     """
     # `_validate_verification` reads `u["id"]` + `u.get("verification")` and
-    # RAISES RecipeError on the first violation. A synthetic unit adapts the
+    # RAISES WorkflowError on the first violation. A synthetic step adapts the
     # raise-on-first-error contract to the collect-and-return one this gate wants.
-    synthetic_unit = {"id": "one-shot", "verification": criteria}
+    synthetic_step = {"id": "one-shot", "verification": criteria}
     try:
-        _validate_verification(synthetic_unit)
-    except RecipeError as e:
+        _validate_verification(synthetic_step)
+    except WorkflowError as e:
         return False, [str(e)]
     return True, []
 
@@ -111,11 +111,11 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
 
     DRIVER-SIDE ONLY. The one-shot is driver-orchestrated (KTD-3), so the load-
     bearing site for "a preset's tuning reaches the dispatched agent" is the
-    DRIVER launch, NOT an adapter edit — ``orchestrator.dispatch_batch`` never
-    consults the adapter (driver-reference §7). This helper is what the
+    DRIVER launch, NOT a backend edit — ``dispatcher.dispatch_batch`` never
+    consults the backend (driver-reference §7). This helper is what the
     ``auto-preset`` skill calls to assemble that launch:
 
-      - it always names the preset's ``adapter_op``;
+      - it always names the preset's ``backend_op``;
       - when the preset declares a ``prompt_template``, it folds the template's
         BODY into the descriptor (``prompt_template`` = the path, ``prompt_template_body``
         = the file text) so the skill can splice the tuning into the sub-agent's
@@ -125,21 +125,21 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
         template-less preset launches exactly as before).
 
     ``preset`` is a VALIDATED preset dict (see ``lib/presets.py::validate_preset``
-    / ``load_and_validate_preset``), so ``invokes`` and ``invokes.adapter_op`` are
+    / ``load_and_validate_preset``), so ``invokes`` and ``invokes.backend_op`` are
     accessed directly — the validator guarantees them.
 
     The relative ``prompt_template`` path is re-path-bounded (defensively — same
-    ``_check_prompt_template`` the recipe/preset validators use) and resolved
+    ``_check_prompt_template`` the workflow/preset validators use) and resolved
     against the workspace ``repo`` first (a workspace override wins, matching
     ``load_preset``'s tier order), then the auto plugin root (where built-in seeds
-    ship). A declared-but-unreadable template FAILS CLOSED with a ``RecipeError``
+    ship). A declared-but-unreadable template FAILS CLOSED with a ``WorkflowError``
     rather than launching a half-tuned agent.
 
-    Returns ``{"adapter_op": <op>[, "prompt_template": <path>,
+    Returns ``{"backend_op": <op>[, "prompt_template": <path>,
     "prompt_template_body": <text>]}``. Pure w.r.t. ``preset`` — mutates nothing.
     """
     invokes = preset["invokes"]
-    descriptor = {"adapter_op": invokes["adapter_op"]}
+    descriptor = {"backend_op": invokes["backend_op"]}
 
     pt = invokes.get("prompt_template")
     if pt:
@@ -160,11 +160,11 @@ def build_oneshot_launch(preset: dict, repo: str) -> dict:
             except (OSError, UnicodeError) as e:
                 # Unreadable OR not valid UTF-8 — a present-but-bad template is a
                 # hard error, not a silent fall-through to the next base.
-                raise RecipeError(
+                raise WorkflowError(
                     f"prompt_template {pt!r} at {candidate} could not be read: {e}"
                 ) from None
         if body is None:
-            raise RecipeError(
+            raise WorkflowError(
                 f"prompt_template {pt!r} not found; searched: "
                 + ", ".join(os.path.join(b, pt) for b in (repo, _AUTO_ROOT))
             )
@@ -259,7 +259,7 @@ def _cli(argv) -> int:
         try:
             preset = presets.load_and_validate_preset(argv[1], argv[2])
             print(json.dumps(build_oneshot_launch(preset, argv[2])))
-        except (presets.PresetError, RecipeError) as e:
+        except (presets.PresetError, WorkflowError) as e:
             print("INVALID: " + str(e))
         return 0
     if op == "verdict":

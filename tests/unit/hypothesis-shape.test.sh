@@ -8,7 +8,7 @@
 #   3. discriminated-union population (single_plan vs multi_plan vs in_flight),
 #   4. ambiguity-array shape on the ambiguous-runs branch,
 #   5. dirty-tree triggers on uncommitted changes,
-#   6. goal_intent (when present on the ledger) feeds the in-flight summary +
+#   6. goal_intent (when present on the run-record) feeds the in-flight summary +
 #      ambiguous-runs option descriptions,
 #   7. exit 0 on every path (rel-001 / hook-safety).
 #
@@ -200,7 +200,7 @@ EOF
 }
 
 setup_inflight_stale() {
-  # A single not-met run whose ledger has not been touched in months — well
+  # A single not-met run whose run-record has not been touched in months — well
   # beyond the default staleness TTL (1 day). Backdating mtime exercises the
   # real default, not a test-only env knob.
   cat > "$1/.claude/auto/runStale.json" <<'EOF'
@@ -363,7 +363,7 @@ assert_eq "in-flight" "$(json_field setup_inflight_one 'H["situation"]')"
 it "in-flight: in_flight.run_id is the single run-id"
 assert_eq "runA" "$(json_field setup_inflight_one 'H["in_flight"]["run_id"]')"
 
-it "in-flight: summary surfaces the goal_intent from the ledger"
+it "in-flight: summary surfaces the goal_intent from the run_record"
 # The exact phrasing is operator-friendly — we just assert goal_intent appears.
 assert_eq "True" "$(json_field setup_inflight_one '"Ship the login fix" in H["summary"]')"
 
@@ -459,8 +459,8 @@ assert_eq "open" "$(json_field setup_dirty_tree 'H["ambiguity"]["kind"]')"
 it "dirty-tree: summary surfaces git context (branch + diff)"
 assert_eq "True" "$(json_field setup_dirty_tree '"branch" in H["summary"]')"
 
-# ── Scenario 9: malformed ledger is skipped (parity with v0.2.x) ───────────
-it "malformed ledger: skipped silently → falls through to raw"
+# ── Scenario 9: malformed run-record is skipped (parity with v0.2.x) ───────────
+it "malformed run_record: skipped silently → falls through to raw"
 assert_eq "raw" "$(json_field setup_malformed 'H["situation"]')"
 
 # ── Scenario 10: every envelope has the canonical key set (shape invariant)

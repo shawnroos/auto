@@ -4,9 +4,9 @@
 Given a review verdict's findings + their reviewer-role/lens metadata, decide
 whether they CLUSTER on a single UPSTREAM phase — i.e. the flaw is inherited
 from an earlier creative-spine stage (brainstorm/plan) rather than being a
-local issue in the current phase. The engine (lib/tick_advance.py) calls this
+local issue in the current phase. The engine (lib/pulse_advance.py) calls this
 during a spine run and, on a positive detection, ESCALATES the cluster to the
-operator via the existing pause seam (driver=manual + blocked_on). No backward
+operator via the existing pause handoff (driver=manual + blocked_on). No backward
 loop_phase move, no new persisted field, no rebound machinery — that autonomous
 backward edge is deferred to v0.7.0 (KTD-6). v0.6.0 ships the detection half.
 
@@ -20,11 +20,11 @@ distinct reviewer roles attribute to ONE upstream phase", NOT a count threshold.
 The "many same-role local findings" negative case falls out for free: one role
 contributes distinct-role-count == 1 to any phase, below the threshold.
 
-WHERE THE METADATA LIVES (the `decision` / `winner_unit_id` precedent —
-lib/iteration.py, lib/ledger_mutators.set_winner_unit_id): `record_verdict`
-NORMALIZES findings to ``{severity, note}`` only (lib/ledger_mutators.py:150),
+WHERE THE METADATA LIVES (the `decision` / `winner_step_id` precedent —
+lib/iteration.py, lib/run_record_mutators.set_winner_step_id): `record_verdict`
+NORMALIZES findings to ``{severity, note}`` only (lib/run_record_mutators.py:150),
 so any reviewer-role / target-phase tag on a finding is STRIPPED on the
-canonical write path. Role-tagged findings therefore survive on the unit's
+canonical write path. Role-tagged findings therefore survive on the step's
 ``dispatch_context`` (preserved by ``transition`` / the verdict-write path with
 no normalize step), exactly as the iteration ``decision`` does. This classifier
 reads a list of finding-records of the shape::
@@ -38,11 +38,11 @@ populates these tags the classifier simply returns "no cluster" (degrade-safe).
 
 PURE + STDLIB-ONLY (import-topology / pure-leaf discipline): this module imports
 NO lib siblings — it takes the current phase + phase order as ARGS (never reads
-``ledger["loop_phase"]``, which would trip the phase-grammar AST lint) and never
-writes the ledger. That makes it a trivially-testable leaf and adds only the one
-edge ``tick_advance → upstream_cluster`` to the import DAG.
+``run_record["loop_phase"]``, which would trip the phase-grammar AST lint) and never
+writes the run-record. That makes it a trivially-testable leaf and adds only the one
+edge ``pulse_advance → upstream_cluster`` to the import DAG.
 
-DEGRADE-SAFE (never crash a ledger write path): every accessor tolerates a
+DEGRADE-SAFE (never crash a run-record write path): every accessor tolerates a
 malformed/partial finding record (non-dict entries, missing/blank role or phase,
 a non-list ``findings`` arg, a non-list ``phase_order``). On ANY malformed shape
 the classifier collapses to the safe default — ``detected=False`` — so a torn
@@ -213,10 +213,10 @@ def _result(detected, target_phase, roles, finding_count, reason):
 
 
 def escalation_message(result):
-    """A one-line operator message for the pause seam's ``blocked_on`` field.
+    """A one-line operator message for the pause handoff's ``blocked_on`` field.
 
     Names the upstream phase + the converging findings so the operator can see
-    WHY the run halted without opening the ledger. Returns None when the result
+    WHY the run halted without opening the run-record. Returns None when the result
     is not a detection (the caller should only escalate on ``detected``).
     """
     if not isinstance(result, dict) or not result.get("detected"):

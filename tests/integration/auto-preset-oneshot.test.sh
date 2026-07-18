@@ -6,7 +6,7 @@
 # -> launch the op ONCE -> resolve criteria inline -> oneshot_verdict on the
 # ratified criteria -> report + terminate. The live sub-agent launch and
 # the propose/ratify CONVERSATION are agent-driven (verified by the skill prose +
-# code review). What is DETERMINISTIC — and what this test pins — is the lib seam
+# code review). What is DETERMINISTIC — and what this test pins — is the lib handoff
 # the skill drives:
 #
 #   load_preset -> validate_oneshot_criteria -> build_oneshot_launch ->
@@ -93,7 +93,7 @@ results.append("criteria_valid=%s" % ok_v)
 
 # ── Step 3: build the launch descriptor (U5) — names op, folds template ──────
 launch = co.build_oneshot_launch(preset, auto_root)
-results.append("launch_op=%s" % launch.get("adapter_op"))
+results.append("launch_op=%s" % launch.get("backend_op"))
 results.append("launch_body_folds=%s" % ("Tuned review prompt" in (launch.get("prompt_template_body") or "")))
 
 # ── Step 4: STUB the dispatch — resolve every criterion inline (KTD-3) ────────

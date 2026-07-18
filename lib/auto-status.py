@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """auto: /auto-status logic behind status.sh.
 
-READ-ONLY. Parses an optional run-id, reads the durable ledger(s) via ledger.py,
+READ-ONLY. Parses an optional run-id, reads the durable run_record(s) via run_record.py,
 and prints a human-readable status: loop_phase (+ plan_step), the cached
-exit_predicate_result (blockers / majors / minors / gaps_open / met), per-unit
-states, the driver, last_beat_at + liveness, and any stalled units with their
-last_error cause. It NEVER mutates the ledger or arms a tick.
+exit_predicate_result (blockers / majors / minors / gaps_open / met), per-step
+states, the driver, last_beat_at + liveness, and any stalled steps with their
+last_error cause. It NEVER mutates the run-record or arms a pulse.
 
 Argument forms (parsed HERE, never in the .md body, per memory
 `feedback_slash_command_arg_substitution`):
@@ -13,7 +13,7 @@ Argument forms (parsed HERE, never in the .md body, per memory
     (no args)        report the only active run; if >1 active, LIST them.
     <run>            report that specific run.
 
-Mirrors resume.py's shape: parse argv positionally, route through ledger.py,
+Mirrors resume.py's shape: parse argv positionally, route through run_record.py,
 exit 0 on a clean surface; only a genuine failure (unknown run-id) exits
 non-zero so the operator sees it.
 
@@ -33,8 +33,8 @@ sys.path.insert(0, _LIB_DIR)
 from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
     is_iteration_disabled,
     iter_active_runs,
-    iter_worktree_ledgers,
-    load_ledger,
+    iter_worktree_run_records,
+    load_run_record,
     load_lib_module,
     resolve_repo,
 )
@@ -53,20 +53,20 @@ _resolve_repo = resolve_repo
 
 
 def _should_render_iteration(led: dict) -> bool:
-    """v0.3.0 F1 — render the Iteration section iff the ledger shows ANY
+    """v0.3.0 F1 — render the Iteration section iff the run-record shows ANY
     iteration signal.
 
     Per F1 task: render WHEN any of:
-      • ``iteration`` block is non-null (recipe declared a gate),
+      • ``iteration`` block is non-null (workflow declared a gate),
       • ``iteration_attempts`` > 0 (the loop has actually iterated),
-      • ``active_wall_seconds`` > 0 (the wall-time accumulator has ticked),
-      • any unit carries a ``dispatch_context.bound_override`` (a bound was
+      • ``active_wall_seconds`` > 0 (the wall-time accumulator has pulsed),
+      • any step carries a ``dispatch_context.bound_override`` (a bound was
         breached at exit).
 
-    Otherwise the section is OMITTED — non-iteration recipes (a1, W, legacy
-    v0.2.x a2/a4) stay quiet. ``init_ledger`` always sets ``iteration``=None
-    by default, so the check is ``bool(ledger.get("iteration"))``, NOT
-    ``"iteration" in ledger`` — the key is always present.
+    Otherwise the section is OMITTED — non-iteration workflows (a1, W, legacy
+    v0.2.x a2/a4) stay quiet. ``init_run_record`` always sets ``iteration``=None
+    by default, so the check is ``bool(run_record.get("iteration"))``, NOT
+    ``"iteration" in run_record`` — the key is always present.
 
     G7 (ADV-R2-2) — SHAPE-DEFENSIVE on the READ chokepoint. A corrupt
     ``iteration`` (non-dict, non-None) or stringified ``iteration_attempts``
@@ -95,10 +95,10 @@ def _should_render_iteration(led: dict) -> bool:
         return True
     if wall_f > 0:
         return True
-    units = led.get("units")
-    if not isinstance(units, list):
-        units = []
-    for u in units:
+    steps = led.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+    for u in steps:
         if not isinstance(u, dict):
             continue
         dc = u.get("dispatch_context")
@@ -114,7 +114,7 @@ def _render_iteration_section(led: dict) -> None:
     via ``_should_render_iteration``.
 
     Fields (per F1 task):
-      • gate_unit — ledger["iteration"]["gate_unit"]
+      • gate_step — run_record["iteration"]["gate_step"]
       • attempts  — iteration_attempts / iteration["bound"]["max_attempts"]
       • wall_time — active_wall_seconds / iteration["bound"].get("max_wall_seconds", "—")
       • emit_count — iteration_emit_count (monotonic counter)
@@ -153,8 +153,8 @@ def _render_iteration_section(led: dict) -> None:
 
         sys.stdout.write("  iteration:\n")
 
-        gate_unit = iteration_block.get("gate_unit") or "—"
-        sys.stdout.write(f"    gate_unit: {gate_unit}\n")
+        gate_step = iteration_block.get("gate_step") or "—"
+        sys.stdout.write(f"    gate_step: {gate_step}\n")
 
         attempts = led.get("iteration_attempts", 0)
         max_attempts = bound.get("max_attempts", "—")
@@ -187,7 +187,7 @@ def _render_iteration_section(led: dict) -> None:
             )
 
         # Kill-switch: render when the operator has set the env var. Routed
-        # through is_iteration_disabled (F5 unfence) — the SAME helper tick.py
+        # through is_iteration_disabled (F5 unfence) — the SAME helper pulse.py
         # uses, so /auto-status and the actual iteration check can never disagree.
         if is_iteration_disabled():
             sys.stdout.write(
@@ -203,7 +203,7 @@ def _render_iteration_section(led: dict) -> None:
         )
 
 
-def _liveness(ledger, led: dict) -> str:
+def _liveness(run_record, led: dict) -> str:
     """Human note on last_beat_at vs the orphan GRACE."""
     loop = led.get("loop") or {}
     last_beat = loop.get("last_beat_at")
@@ -218,43 +218,43 @@ def _liveness(ledger, led: dict) -> str:
         return f"{last_beat} (unparseable)"
     now = datetime.datetime.now(datetime.timezone.utc)
     age = int((now - parsed).total_seconds())
-    grace = getattr(ledger, "GRACE_SECONDS", 4200)
+    grace = getattr(run_record, "GRACE_SECONDS", 4200)
     flag = " — STALE (> GRACE)" if age > grace else ""
     return f"{last_beat} ({age}s ago, GRACE={grace}s){flag}"
 
 
-def _print_skip_reason(unit: dict, state: str) -> None:
-    """R20: render a force-skipped unit's reason as a sub-bullet under the unit.
+def _print_skip_reason(step: dict, state: str) -> None:
+    """R20: render a force-skipped step's reason as a sub-bullet under the step.
 
     A skip is auditable in the operator's face, never silent (mirrors the finding
-    / bound_exit sub-bullet shape). Only `terminal-skip` units carry a
-    `skip_reason`; a legacy ledger or a never-skipped unit reads None and prints
+    / bound_exit sub-bullet shape). Only `terminal-skip` steps carry a
+    `skip_reason`; a legacy run-record or a never-skipped step reads None and prints
     nothing. Extracted from `_print_run` to keep it inside the function budget.
     """
     if state != "terminal-skip":
         return
-    reason = unit.get("skip_reason")
+    reason = step.get("skip_reason")
     if reason:
         sys.stdout.write(f"        skip_reason: {reason}\n")
 
 
-def _print_run(ledger, run_id: str, led: dict) -> None:
+def _print_run(run_record, run_id: str, led: dict) -> None:
     loop = led.get("loop") or {}
     epr = led.get("exit_predicate_result") or {}
-    units = led.get("units") or []
+    steps = led.get("steps") or []
 
     sys.stdout.write(f"run: {run_id}\n")
     phase = phase_grammar.current_phase(led)
     line = f"  loop_phase: {phase}"
     if phase == "plan":
         line += f"  (plan_step={led.get('plan_step')})"
-    if led.get("seam_paused"):
-        line += "  [seam_paused]"
+    if led.get("handoff_paused"):
+        line += "  [handoff_paused]"
     sys.stdout.write(line + "\n")
 
     # v0.3.0 G2 / AN-W1: surface exit_reason on a done run so the operator can
     # tell a clean exit from a wedge that F2 force-marked done after an
-    # iteration-check crash or a recipe-bug raise. Quiet when the run is live
+    # iteration-check crash or a workflow-bug raise. Quiet when the run is live
     # or finished cleanly (exit_reason==None).
     er = led.get("exit_reason")
     if phase == "done" and isinstance(er, dict):
@@ -265,47 +265,47 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
         )
 
     sys.stdout.write(
-        f"  adapter: {led.get('adapter', '?')} "
-        f"(scale={led.get('adapter_scale', '?')})\n"
+        f"  backend: {led.get('backend', '?')} "
+        f"(scale={led.get('backend_scale', '?')})\n"
     )
     sys.stdout.write(
         f"  driver: {loop.get('driver', '?')}    "
-        f"last_beat_at: {_liveness(ledger, led)}\n"
+        f"last_beat_at: {_liveness(run_record, led)}\n"
     )
 
     # Cached exit predicate — READ, never re-derive.
     sys.stdout.write(
         "  exit_predicate: met={met}  blockers={b}  majors={m}  "
-        "minors={n}  gaps_open={g}  all_units_terminal={t}\n".format(
+        "minors={n}  gaps_open={g}  all_steps_terminal={t}\n".format(
             met=epr.get("met"),
             b=epr.get("blockers"),
             m=epr.get("majors"),
             n=epr.get("minors"),
             g=epr.get("gaps_open"),
-            t=epr.get("all_units_terminal"),
+            t=epr.get("all_steps_terminal"),
         )
     )
 
     # v0.3.0 F1: iteration-awareness. Rendered between the predicate line and
-    # the units block so iteration_pending sits next to its predicate-modifier
+    # the steps block so iteration_pending sits next to its predicate-modifier
     # context. Omitted entirely when the run has no iteration signal at all
-    # (legacy a1 / W / v0.2.x a2/a4) — keeps non-iteration recipes quiet.
+    # (legacy a1 / W / v0.2.x a2/a4) — keeps non-iteration workflows quiet.
     if _should_render_iteration(led):
         _render_iteration_section(led)
 
-    # Per-unit states.
-    if not units:
-        sys.stdout.write("  units: (none yet — plan-loop has not populated work units)\n")
+    # Per-step states.
+    if not steps:
+        sys.stdout.write("  steps: (none yet — plan-loop has not populated work steps)\n")
     else:
-        sys.stdout.write(f"  units ({len(units)}):\n")
+        sys.stdout.write(f"  steps ({len(steps)}):\n")
         # Scale-aware terminality (Bug #3): the [terminal] marker must match the
-        # cached predicate's gating decision, so read this run's adapter_scale and
-        # pass it through — a blocker-only run's major-only unit shows [terminal],
+        # cached predicate's gating decision, so read this run's backend_scale and
+        # pass it through — a blocker-only run's major-only step shows [terminal],
         # consistent with met. Scale-blind here would mislabel it [active].
-        scale = led.get("adapter_scale", "three-tier")
-        for u in units:
+        scale = led.get("backend_scale", "three-tier")
+        for u in steps:
             try:
-                terminal = ledger.unit_is_terminal(u, scale)
+                terminal = run_record.step_is_terminal(u, scale)
             except Exception:
                 terminal = False
             mark = "terminal" if terminal else "active"
@@ -320,7 +320,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
                     f"        finding: {f.get('severity')} — {f.get('note', '')}\n"
                 )
             # v0.3.0 F1: bound_exit sub-bullet — surfaces a forced exit driven
-            # by an iteration-bound breach (KTD §D / ledger.set_bound_override
+            # by an iteration-bound breach (KTD §D / run_record.set_bound_override
             # writes `dispatch_context.bound_override = {bound, original_decision,
             # at}`). Includes original_decision so the rendered surface matches
             # the stored payload exactly (fix-the-class — no asymmetry between
@@ -333,10 +333,10 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
                     f"at={bo.get('at', '?')}\n"
                 )
 
-    # Stalled units with their last_error cause.
-    stalled = [u for u in units if u.get("state") == "stalled"]
+    # Stalled steps with their last_error cause.
+    stalled = [u for u in steps if u.get("state") == "stalled"]
     if stalled:
-        sys.stdout.write("  stalled units:\n")
+        sys.stdout.write("  stalled steps:\n")
         for u in stalled:
             err = u.get("last_error")
             if isinstance(err, dict):
@@ -357,7 +357,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
     # Exit-time minors report (minors never gate; surfaced for promotion).
     if phase_grammar.current_phase(led) == "done" and (epr.get("minors") or 0) > 0:
         sys.stdout.write("  remaining minors (operator may promote):\n")
-        for u in units:
+        for u in steps:
             for f in u.get("findings") or []:
                 if f.get("severity") == "minor":
                     sys.stdout.write(
@@ -366,7 +366,7 @@ def _print_run(ledger, run_id: str, led: dict) -> None:
 
 
 def run(argv) -> int:
-    ledger = load_ledger()
+    run_record = load_run_record()
     repo_root = _resolve_repo()
 
     rest = list(argv)
@@ -374,30 +374,30 @@ def run(argv) -> int:
 
     if run_arg:
         try:
-            led = ledger.read_ledger(repo_root, run_arg)
-        except ledger.LedgerNotFound as exc:
+            led = run_record.read_run_record(repo_root, run_arg)
+        except run_record.RunRecordNotFound as exc:
             sys.stderr.write(f"status: {exc}\n")
             return 1
         run_id = led.get("run_id") or run_arg
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     # No run-id: resolve the active run, or list if ambiguous / report none.
     active = list(iter_active_runs(repo_root))
     if not active:
-        all_runs = list(iter_worktree_ledgers(repo_root))
+        all_runs = list(iter_worktree_run_records(repo_root))
         if not all_runs:
             sys.stdout.write("status: no auto run found in this repo.\n")
             return 0
         # All runs are done — show the most recent one (last by sorted slug).
         run_id, led = all_runs[-1]
         sys.stdout.write("status: no active run; showing the most recent (done):\n")
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     if len(active) == 1:
         run_id, led = active[0]
-        _print_run(ledger, run_id, led)
+        _print_run(run_record, run_id, led)
         return 0
 
     sys.stdout.write("status: multiple active runs — specify one:\n")

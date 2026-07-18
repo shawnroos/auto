@@ -3,7 +3,7 @@
 #
 # U5 / KTD-5: for the DRIVER-orchestrated one-shot, the preset's optional
 # `prompt_template` is folded into the launched sub-agent's prompt by the DRIVER,
-# never by an adapter edit. build_oneshot_launch is the thin lib seam the
+# never by a backend edit. build_oneshot_launch is the thin lib handoff the
 # auto-preset skill calls to build the launch descriptor: it names the op and,
 # when the preset declares a prompt_template, folds the template's BODY in.
 # Template-less presets produce the plain op invocation (regression-safe).
@@ -72,10 +72,10 @@ plain = {
     "name": "plain-review",
     "version": "1",
     "description": "a template-less review preset",
-    "invokes": {"adapter_op": "review"},
+    "invokes": {"backend_op": "review"},
 }
 d_plain = fn(plain, auto_root)
-results.append("plain_op=%s" % d_plain.get("adapter_op"))
+results.append("plain_op=%s" % d_plain.get("backend_op"))
 results.append("plain_has_tmpl=%s" % ("prompt_template" in d_plain))
 results.append("plain_has_body=%s" % ("prompt_template_body" in d_plain))
 
@@ -87,7 +87,7 @@ except Exception as e:
     print("LOAD-FAIL:%s" % e)
     sys.exit(0)
 d_tuned = fn(tuned, auto_root)
-results.append("tuned_op=%s" % d_tuned.get("adapter_op"))
+results.append("tuned_op=%s" % d_tuned.get("backend_op"))
 body = d_tuned.get("prompt_template_body") or ""
 results.append("tuned_body_folds=%s" % ("Tuned review prompt" in body))
 results.append("tuned_has_tmpl=%s" % ("prompt_template" in d_tuned))

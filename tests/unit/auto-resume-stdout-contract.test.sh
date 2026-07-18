@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto regression test: /auto-resume stdout contract.
 #
-# The re-arm paths (`continue` seam→work, `advance` plan→enumerate) MUST emit
+# The re-arm paths (`continue` handoff→work, `advance` plan→enumerate) MUST emit
 # exactly ONE JSON object on stdout and NOTHING on stderr. This guards the
 # driver-facing contract documented in skills/auto/SKILL.md §2 and
 # commands/auto-resume.md: the driver parses the WHOLE of stdout with json.loads,
@@ -43,9 +43,9 @@ def load(name, path):
     return m
 
 a = load("auto", os.path.join(auto_root, "lib", "auto.py"))
-ledger = load("ledger", os.path.join(auto_root, "lib", "ledger.py"))
+run_record = load("run_record", os.path.join(auto_root, "lib", "run_record.py"))
 resume = load("auto_resume", os.path.join(auto_root, "lib", "auto-resume.py"))
-tick = load("tick", os.path.join(auto_root, "lib", "tick.py"))
+pulse = load("pulse", os.path.join(auto_root, "lib", "pulse.py"))
 
 repo = tempfile.mkdtemp(); os.environ["CLAUDE_AUTO_REPO"] = repo
 # Re-arm paths re-record the driving session (advisor-gate ownership) and REFUSE
@@ -66,12 +66,12 @@ for f in glob.glob(os.path.join(repo, ".claude", "auto", "*.json")):
         break
 
 if scenario == "continue":
-    # seam→work continue.
-    ledger.set_loop(repo, run_id, loop_phase="seam", seam_paused=True, driver="manual")
-    fn = lambda: resume._cmd_continue(ledger, repo, run_id)
+    # handoff→work continue.
+    run_record.set_loop(repo, run_id, loop_phase="handoff", handoff_paused=True, driver="manual")
+    fn = lambda: resume._cmd_continue(run_record, repo, run_id)
 elif scenario == "advance":
     # plan→enumerate advance.
-    fn = lambda: resume._cmd_advance(ledger, repo, run_id)
+    fn = lambda: resume._cmd_advance(run_record, repo, run_id)
 
 out, err = io.StringIO(), io.StringIO()
 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -79,13 +79,13 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
 o, e = out.getvalue(), err.getvalue()
 
 # Discriminators: stdout is exactly one JSON object; stderr is empty; the object
-# is the arm-tick intent (proves we captured the re-arm, not a terminal no-op).
+# is the arm-pulse intent (proves we captured the re-arm, not a terminal no-op).
 stdout_is_one_json = False
 is_arm = False
 try:
     obj = json.loads(o.strip())
     stdout_is_one_json = isinstance(obj, dict)
-    is_arm = obj.get("action") == "arm-tick"
+    is_arm = obj.get("action") == "arm-pulse"
 except Exception:
     pass
 stderr_clean = (e.strip() == "")
@@ -93,8 +93,8 @@ print("%s|%s|%s|%s" % (stdout_is_one_json, stderr_clean, is_arm, rc))
 PYEOF
 }
 
-# ─── continue (seam→work): one JSON object on stdout, clean stderr ──────────────
-it "continue(seam→work): stdout is exactly one arm-tick JSON object, stderr clean"
+# ─── continue (handoff→work): one JSON object on stdout, clean stderr ──────────────
+it "continue(handoff→work): stdout is exactly one arm-pulse JSON object, stderr clean"
 res="$(run_scenario continue)"
 IFS='|' read -r c_json c_err c_arm c_rc <<EOF
 $res
@@ -103,7 +103,7 @@ EOF
   && pass || fail "expected True|True|True|0, got ${res}"
 
 # ─── advance (plan→enumerate): one JSON object on stdout, clean stderr ──────────
-it "advance(plan→enumerate): stdout is exactly one arm-tick JSON object, stderr clean"
+it "advance(plan→enumerate): stdout is exactly one arm-pulse JSON object, stderr clean"
 res_a="$(run_scenario advance)"
 IFS='|' read -r a_json a_err a_arm a_rc <<EOF
 $res_a

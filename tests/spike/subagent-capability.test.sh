@@ -3,19 +3,19 @@
 # runtime is built on. See docs/research/2026-07-10-subagent-runtime-capability-spike.md.
 #
 # These are not behavior tests of new code — they PIN the load-bearing facts the
-# v0.13.0 runtime assumes about the ledger + hooks, so a future refactor (or a
+# v0.13.0 runtime assumes about the run-record + hooks, so a future refactor (or a
 # harness change) that quietly breaks one fails loudly HERE with a pointer to the
 # spike, rather than silently darkening the tree runtime or the destructive
 # backstop in production.
 #
-# Asserted (all from the local ledger CLI + hook predicates — no live sub-agent):
-#   1. A run + units can be created from the CLI (init) — the spike's closed gap.
-#   2. A separate process can RMW the ledger (transition round-trips across a
+# Asserted (all from the local run-record CLI + hook predicates — no live sub-agent):
+#   1. A run + steps can be created from the CLI (init) — the spike's closed gap.
+#   2. A separate process can RMW the run-record (transition round-trips across a
 #      fresh python invocation) — the property the tree runtime rests on.
 #   3. force_skip's edges are OUTSIDE ALLOWED_TRANSITIONS (reason cannot be
 #      bypassed via transition()).
 #   4. terminal-skip is terminal in the predicate BUT does not bury findings.
-#   5. The ledger carries the ownership set the hooks gate on (agent_session_ids),
+#   5. The run-record carries the ownership set the hooks gate on (agent_session_ids),
 #      and register-session joins it.
 #   6. describe lists every CLI verb (the orientation surface stays complete).
 
@@ -23,7 +23,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 PASS=0
@@ -55,23 +55,23 @@ export CLAUDE_AUTO_REPO="$REPO"
 echo "subagent-capability.test.sh"
 
 # ─── 1. init from the CLI (R4 — the spike's closed gap) ──────────────────────
-it "a run + units can be created from the CLI (init)"
-"$PY" "$LEDGER_PY" init spike '[{"id":"U1"}]' ce work >/dev/null 2>&1
-created="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$LEDGER_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_ledger('$REPO','spike');print(l['units'][0]['id'])" 2>/dev/null)"
+it "a run + steps can be created from the CLI (init)"
+"$PY" "$RUN_RECORD_PY" init spike '[{"id":"U1"}]' ce work >/dev/null 2>&1
+created="$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);l=m.read_run_record('$REPO','spike');print(l['steps'][0]['id'])" 2>/dev/null)"
 assert_eq "U1" "$created"
 
 # ─── 2. cross-process RMW (the tree-runtime foundation) ──────────────────────
-it "a SEPARATE process can read-modify-write the ledger (transition round-trip)"
-"$PY" "$LEDGER_PY" transition "$REPO" spike U1 dispatched >/dev/null 2>&1
-state="$("$PY" "$LEDGER_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin)['units'][0]['state'])")"
+it "a SEPARATE process can read-modify-write the run_record (transition round-trip)"
+"$PY" "$RUN_RECORD_PY" transition "$REPO" spike U1 dispatched >/dev/null 2>&1
+state="$("$PY" "$RUN_RECORD_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin)['steps'][0]['state'])")"
 assert_eq "dispatched" "$state"
 
 # ─── 3. force_skip edges are outside ALLOWED_TRANSITIONS ─────────────────────
 it "force_skip's terminal-skip edges are NOT in ALLOWED_TRANSITIONS (reason can't be bypassed)"
-guard="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+guard="$("$PY" - "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
 s=importlib.util.spec_from_file_location("l",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-at = m.ledger_core.ALLOWED_TRANSITIONS
+at = m.run_record_core.ALLOWED_TRANSITIONS
 leaked = "terminal-skip" in at.get("pending", set()) or "terminal-skip" in at.get("verdict-returned", set())
 print("bypassable" if leaked else "guarded")
 PYEOF
@@ -80,14 +80,14 @@ assert_eq "guarded" "$guard"
 
 # ─── 4. terminal-skip is terminal but does not bury findings ─────────────────
 it "terminal-skip is terminal in the predicate, but a skipped blocker still counts"
-verdict="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+verdict="$("$PY" - "$RUN_RECORD_PY" <<'PYEOF'
 import sys, importlib.util
 s=importlib.util.spec_from_file_location("l",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-pred = m.ledger_predicate
+pred = m.run_record_predicate
 skipped_clean = {"state": "terminal-skip", "findings": []}
 skipped_blocker = {"state": "terminal-skip", "findings": [{"severity": "blocker"}]}
-b, *_ = pred._count_severities_by_unit({"units": [skipped_blocker]})
-print(f"{pred.unit_is_terminal(skipped_clean)}|{pred.unit_is_terminal(skipped_blocker)}|{b}")
+b, *_ = pred._count_severities_by_step({"steps": [skipped_blocker]})
+print(f"{pred.step_is_terminal(skipped_clean)}|{pred.step_is_terminal(skipped_blocker)}|{b}")
 PYEOF
 )"
 # terminal(clean)=True, terminal(blocker)=True, but the blocker is still COUNTED (=1)
@@ -97,11 +97,11 @@ assert_eq "True|True|1" "$verdict"
 # The CLI reads $CLAUDE_CODE_SESSION_ID from the env (never an arg), so a process
 # can only ever register ITSELF — the cross-session-capture guard (security review).
 it "register-session joins the caller's own env session id into agent_session_ids"
-CLAUDE_CODE_SESSION_ID=sess-KID "$PY" "$LEDGER_PY" register-session spike >/dev/null 2>&1
-owners="$("$PY" "$LEDGER_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('agent_session_ids'))")"
+CLAUDE_CODE_SESSION_ID=sess-KID "$PY" "$RUN_RECORD_PY" register-session spike >/dev/null 2>&1
+owners="$("$PY" "$RUN_RECORD_PY" read "$REPO" spike | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('agent_session_ids'))")"
 assert_eq "['sess-KID']" "$owners"
 it "register-session with no CLAUDE_CODE_SESSION_ID in env is a hard error (exit 2)"
-env -u CLAUDE_CODE_SESSION_ID "$PY" "$LEDGER_PY" register-session spike >/dev/null 2>&1
+env -u CLAUDE_CODE_SESSION_ID "$PY" "$RUN_RECORD_PY" register-session spike >/dev/null 2>&1
 assert_eq "2" "$?"
 
 # ─── 6. describe stays complete (orientation surface) ────────────────────────
@@ -110,13 +110,13 @@ assert_eq "2" "$?"
 # CLI but absent from the agent's self-description surface would be an orientation
 # hole this guard exists to catch.
 it "describe documents every CLI verb (no undocumented surface)"
-diff="$("$PY" - "$LEDGER_PY" <<'PYEOF'
+diff="$("$PY" - "$RUN_RECORD_PY" <<'PYEOF'
 import sys, json, subprocess, importlib.util
-ledger_py = sys.argv[1]
-spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+run_record_py = sys.argv[1]
+spec = importlib.util.spec_from_file_location("run_record", run_record_py)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 cli = set(m._VERBS)
-out = subprocess.run([sys.executable, ledger_py, "describe"], capture_output=True, text=True).stdout
+out = subprocess.run([sys.executable, run_record_py, "describe"], capture_output=True, text=True).stdout
 described = set(json.loads(out).get("verbs", {}).keys())
 print(json.dumps({"missing": sorted(cli - described), "extra": sorted(described - cli)}))
 PYEOF

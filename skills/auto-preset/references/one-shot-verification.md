@@ -3,12 +3,12 @@ One-shot verification reference for the auto-preset skill.
 Extends skills/auto-design/references/verification-taxonomy.md (the authoritative
 criterion-shape contract) to the RUN-TIME, STEP-LEVEL, driver-orchestrated
 one-shot. The criterion SHAPES are identical; what changes is WHO resolves each
-type and WHEN — inline, in one synchronous pass, with no tick and no gate.
+type and WHEN — inline, in one synchronous pass, with no pulse and no gate.
 -->
 
 # One-shot verification — deriving and resolving criteria
 
-A one-shot preset run has no flow, no loop, and no tick. The `auto-preset`
+A one-shot preset run has no flow, no loop, and no pulse. The `auto-preset`
 skill is the whole control path: it PROPOSES a small set of context-fit
 verification criteria, the operator ACCEPTS or EDITS them, the ratified set is
 baked into the single run, and the skill RESOLVES every criterion **inline**
@@ -19,14 +19,14 @@ Read `skills/auto-design/references/verification-taxonomy.md` first — it pins 
 exact field shape of each criterion (`programmatic` / `model_judge` /
 `advisor_judge` / `human`). Nothing here changes those shapes; the ratified list
 is validated against that same taxonomy (via `preset_oneshot.validate_oneshot_criteria`,
-which reuses the recipe validator) before anything is baked.
+which reuses the workflow validator) before anything is baked.
 
 ## Deriving criteria from the target — seed, don't interview
 
 Extend `auto-design`'s **"Seed, don't interview"** invariant to the step level.
 Do NOT open a blank questionnaire. Read the target the operator named (the diff,
 the branch, the file, the change to build) and the preset's own intent (its
-`description` and `adapter_op`), and PROPOSE a short list — usually 1–3 criteria —
+`description` and `backend_op`), and PROPOSE a short list — usually 1–3 criteria —
 that would actually prove this one step landed. Then let the operator accept or
 edit.
 
@@ -41,15 +41,15 @@ Worked seeds:
 - A `review` preset fired at a diff → propose `programmatic` `{argv: ["bash",
   "tests/run.sh"], check: exit_zero}` when the repo has a test command, plus a
   `model_judge` "the review's findings are grounded in the diff, not generic."
-- A `do_unit` preset fired at a scoped build → propose `programmatic` that the
+- A `do_step` preset fired at a scoped build → propose `programmatic` that the
   build's own test/typecheck passes, plus (only if the change is taste-sensitive)
   a `human` sign-off.
 
 ## The INLINE-resolution rule — every type resolves in one pass (KTD-3)
 
-Because the skill drives synchronously and there is **no next tick**, every
+Because the skill drives synchronously and there is **no next pulse**, every
 ratified criterion must resolve *before* the verdict is computed. There is no
-"pending across ticks" state — a criterion that cannot resolve inline has no
+"pending across pulses" state — a criterion that cannot resolve inline has no
 later chance to. That constrains how each type is satisfied:
 
 - **`programmatic`** — the skill runs it **in-process** via
@@ -63,10 +63,10 @@ later chance to. That constrains how each type is satisfied:
   session makes itself (reusing `skills/auto/SKILL.md` §4.6 / §4.7: `advisor`
   returns prose, the driver maps it to a per-criterion pass/fail). **This
   BLOCKS** — the skill waits for the consult and maps its result before moving
-  on. It does not defer to a later tick, because there is none.
+  on. It does not defer to a later pulse, because there is none.
 - **`human`** — resolved by a **blocking pause**: the skill asks the operator and
   waits. **This BLOCKS** — a `human` criterion on a one-shot is a synchronous
-  checkpoint the run stops at, not a deferred pause that a future tick clears.
+  checkpoint the run stops at, not a deferred pause that a future pulse clears.
 
 State this plainly to anyone proposing criteria: on a one-shot, an
 `advisor_judge` or `human` criterion **stops the run until it is answered**.
@@ -79,7 +79,7 @@ when the second read or the human judgment is worth blocking for — otherwise a
 Once all criteria are resolved, the skill folds them into a single terminal
 verdict via `preset_oneshot.oneshot_verdict(ratified_criteria,
 programmatic_results, judge_verdicts)` — the ratified criteria list goes in
-directly (there is no synthesized unit):
+directly (there is no synthesized step):
 
 - `programmatic_results` — `{criterion_id: status}` from `evaluate_programmatic`.
 - `judge_verdicts` — `{criterion_id: status}` for `model_judge` /

@@ -84,7 +84,7 @@ marker with NEW UUIDs (cmux assigns fresh ones per workspace) — see
 ## 3. What auto guarantees
 
 1. **Atomic marker writes.** Every marker write uses
-   `tempfile.mkstemp` + `os.rename` (the same pattern as ledger
+   `tempfile.mkstemp` + `os.rename` (the same pattern as run-record
    atomic_write). A reader will never observe a partial JSON.
 
 2. **`tabs[]` mutation is also atomic.** When a fanout adds a new

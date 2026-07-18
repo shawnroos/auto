@@ -1,0 +1,15 @@
+{
+  "name": "w",
+  "version": "1",
+  "description": "Work-only — I already have a reviewed plan. Starts the plan phase ALREADY SATISFIED (plan_presatisfied), so the first pulse skips /ce-plan + /ce-doc-review, enumerates the reviewed plan's work steps, and runs them straight through. Smart-entry routes the reviewed-plan situation here; pass --workflow a1 to force a fresh plan-loop instead.",
+  "default_backend": "ce",
+  "phase_order": ["plan", "handoff", "work"],
+  "terminal_phase": "work",
+  "phase_transitions": [
+    {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
+  ],
+  "plan_presatisfied": true,
+  "steps": [
+    {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"backend_op": "next_plan_step"}}
+  ]
+}

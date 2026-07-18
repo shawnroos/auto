@@ -72,7 +72,7 @@
 | `surface_id` | string | cmux surface UUID |
 | `kind` | enum | `"primary"` (initial claude session) \| `"fanout"` (auto-dispatched sub-run tab) \| `"manual"` (operator-opened, NOT tracked by auto today — included for future extensibility) |
 | `plan` | string \| null | for `fanout` kind: the plan path the sub-run is driving |
-| `run_id` | string \| null | for `fanout` kind: the sub-run's run-id (matches the ledger's `run_id` at `<worktree>/.claude/auto/<run-id>.json`) |
+| `run_id` | string \| null | for `fanout` kind: the sub-run's run-id (matches the run-record's `run_id` at `<worktree>/.claude/auto/<run-id>.json`) |
 
 ---
 

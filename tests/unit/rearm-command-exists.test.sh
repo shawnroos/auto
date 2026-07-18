@@ -4,14 +4,14 @@
 #
 # Two-layer regression guard for the self-pacing loop:
 #
-#   v0.6.2 bug: commands/auto-tick.md did not exist → every re-arm fired
-#   `/auto-tick`, the harness said "Unknown command", the tick never ran.
+#   v0.6.2 bug: commands/auto-pulse.md did not exist → every re-arm fired
+#   `/auto-pulse`, the harness said "Unknown command", the pulse never ran.
 #
-#   v0.6.5 bug: the command file existed, but the loop fired the BARE `/auto-tick`.
+#   v0.6.5 bug: the command file existed, but the loop fired the BARE `/auto-pulse`.
 #   Plugin slash commands fired PROGRAMMATICALLY (ScheduleWakeup / loop
 #   re-injection) only resolve in their NAMESPACED `/<plugin>:<command>` form —
 #   the bare token is still "Unknown command". So the loop STILL never self-paced
-#   even with the file present. The fix: emit `/auto:auto-tick` (plugin name is
+#   even with the file present. The fix: emit `/auto:auto-pulse` (plugin name is
 #   `auto`).
 #
 # This test pins BOTH: the programmatic emissions use `/auto:<command>` (never a
@@ -60,7 +60,7 @@ missing_command_files() {
   local missing="" token name file
   while IFS= read -r token; do
     [ -z "$token" ] && continue
-    name="${token#/auto:}"                 # /auto:auto-tick -> auto-tick
+    name="${token#/auto:}"                 # /auto:auto-pulse -> auto-pulse
     file="${AUTO_ROOT}/commands/${name}.md"
     [ -f "$file" ] || missing="${missing}${token} -> commands/${name}.md (MISSING)
 "
@@ -88,11 +88,11 @@ collect_bare_startup_args() {
 }
 
 # ─── Scenario 1: the loop fires NAMESPACED commands (scraper finds them) ─────
-it "loop fires namespaced /auto:<command> prompts (at least /auto:auto-tick)"
+it "loop fires namespaced /auto:<command> prompts (at least /auto:auto-pulse)"
 fired="$(collect_fired_namespaced)"
 case "$fired" in
-  */auto:auto-tick*) pass ;;
-  *) fail "no /auto:auto-tick emission found; scraped: ${fired:-<none>}" ;;
+  */auto:auto-pulse*) pass ;;
+  *) fail "no /auto:auto-pulse emission found; scraped: ${fired:-<none>}" ;;
 esac
 
 # ─── Scenario 2: NO bare un-namespaced /auto-<sub> emissions (the v0.6.5 bug) ─
@@ -113,9 +113,30 @@ missing="$(missing_command_files)"
 ${missing}"
 
 # ─── Scenario 4: the heartbeat, named explicitly ────────────────────────────
-it "commands/auto-tick.md exists (the self-pacing heartbeat command)"
+it "commands/auto-pulse.md exists (the self-pacing heartbeat command)"
+[ -f "${AUTO_ROOT}/commands/auto-pulse.md" ] && pass \
+  || fail "commands/auto-pulse.md missing — /auto:auto-pulse can't resolve, loop stalls"
+
+# ─── Scenario 4b: the KEPT ALIAS command (concept-vocabulary rename U5, KTD-4) ─
+# The rename made /auto:auto-pulse canonical, but runs armed BEFORE it have
+# `/auto:auto-tick <run>` persisted inside a ScheduleWakeup prompt (and in stale
+# rearm-intent JSON). If commands/auto-tick.md disappears, those in-flight runs
+# fire an "Unknown command" and the chain wedges — the exact v0.6.2 bug class,
+# re-introduced by a rename. Both command files must exist AND both must dispatch
+# the SAME engine (lib/pulse.sh); the alias must NOT point at a stale lib/tick.sh.
+it "commands/auto-tick.md alias survives the rename (in-flight ScheduleWakeup prompts fire it)"
 [ -f "${AUTO_ROOT}/commands/auto-tick.md" ] && pass \
-  || fail "commands/auto-tick.md missing — /auto:auto-tick can't resolve, loop stalls"
+  || fail "commands/auto-tick.md missing — in-flight runs' persisted /auto:auto-tick can't resolve, loop stalls"
+
+it "both command files (canonical + alias) dispatch lib/pulse.sh"
+alias_ok=0; canon_ok=0
+grep -qF 'lib/pulse.sh' "${AUTO_ROOT}/commands/auto-tick.md" 2>/dev/null && alias_ok=1
+grep -qF 'lib/pulse.sh' "${AUTO_ROOT}/commands/auto-pulse.md" 2>/dev/null && canon_ok=1
+if [ "$alias_ok" = 1 ] && [ "$canon_ok" = 1 ]; then
+  pass
+else
+  fail "auto-tick.md dispatches pulse.sh: ${alias_ok}; auto-pulse.md dispatches pulse.sh: ${canon_ok} (both must be 1)"
+fi
 
 # ─── Scenario 5: no bare `claude '/auto...'` startup-args in spawn paths ──────
 # Twin of the rearm bug: fanout (auto-spawn.py) + orphan-resume (cmux-socket.sh)
@@ -131,13 +152,13 @@ ${bare_startup}"
 fi
 
 # ─── Scenario 6: deliberate-fail — a bare emission is caught ─────────────────
-it "deliberate-fail: a bare /auto-tick prompt emission trips the namespacing check"
+it "deliberate-fail: a bare /auto-pulse prompt emission trips the namespacing check"
 tmpfile="${AUTO_ROOT}/lib/__rearm_probe__.py"
-printf '%s\n' 'rearm_prompt = "/auto-tick {run_id}"  # prompt' > "$tmpfile"
+printf '%s\n' 'rearm_prompt = "/auto-pulse {run_id}"  # prompt' > "$tmpfile"
 probe="$(collect_bare_emissions)"
 rm -f "$tmpfile"
 case "$probe" in
-  */auto-tick*) pass ;;
+  */auto-pulse*) pass ;;
   *) fail "planted bare emission NOT caught: ${probe:-<empty>}" ;;
 esac
 

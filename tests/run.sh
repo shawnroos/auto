@@ -23,7 +23,7 @@
 #   A mismatch means a test escaped isolation. The suite fails loudly on
 #   mismatch regardless of individual test outcomes.
 #
-#   Note: auto's ledger lives at <repo>/.claude/auto/, NOT in
+#   Note: auto's run-record lives at <repo>/.claude/auto/, NOT in
 #   $HOME — so dispatch's $HOME surface is small. We hash the ~/.claude/
 #   paths a misbehaving test could plausibly touch (the plugin's hooks could
 #   one day write user-level state). Absent paths hash to "ABSENT" (not an
@@ -39,7 +39,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # inheriting this env get the hatches enabled; a production user who exports a
 # specific hatch by accident does NOT have the sentinel, so the hatch stays
 # inert. The fence is enforced in lib/_bootstrap.py::test_hatch_enabled AND
-# lib/ledger.py::_test_hatch_enabled (local copy avoids a circular import).
+# lib/run_record.py::_test_hatch_enabled (local copy avoids a circular import).
 export CLAUDE_AUTO_TEST_HARNESS=1
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ _hash_path() {
 }
 
 # Paths we hash before+after the suite to detect isolation leaks.
-# Dispatch keeps its ledger in <repo>/.claude/auto/, so the only
+# Dispatch keeps its run-record in <repo>/.claude/auto/, so the only
 # $HOME surface a test could plausibly hit is the user's ~/.claude/ tree.
 ISOLATION_PATHS=(
   "${HOME}/.claude/auto"

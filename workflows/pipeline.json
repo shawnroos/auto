@@ -1,0 +1,15 @@
+{
+  "name": "pipeline",
+  "version": "1",
+  "description": "Brainstorm-rooted creative spine — brainstorm, plan, build, review, fix to P3-only exit. The conversation-entry forward chain (v0.6.0): brainstorm-entry runs auto-advance brainstorm→plan→work.",
+  "default_backend": "ce",
+  "phase_order": ["brainstorm", "plan", "handoff", "work"],
+  "terminal_phase": "work",
+  "phase_transitions": [
+    {"from": "brainstorm", "to": "plan", "producer": "brainstorm_output_to_plan_step"},
+    {"from": "plan", "to": "work", "producer": "plan_output_to_work_steps"}
+  ],
+  "steps": [
+    {"id": "brainstorm", "phase": "brainstorm", "depends_on": [], "invokes": {"backend_op": "brainstorm"}}
+  ]
+}
