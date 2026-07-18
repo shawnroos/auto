@@ -148,9 +148,17 @@ missing="$(bash "$ORCH_SH" digest "$REPO" pacing 2>/dev/null | "$PY" -c '
 import json, sys
 d = json.load(sys.stdin)
 need = ["step_counts", "current_phase", "predicate_met", "total_steps"]
-leaked = [k for k in ("steps", "completed", "in_flight") if k in d]
+# Reject ANY list-valued data anywhere in the digest (not just three known keys):
+# a list is O(steps) and would break the flatness property regardless of its name.
+def list_paths(value, path="$"):
+    if isinstance(value, list):
+        return [path]
+    if isinstance(value, dict):
+        return sum((list_paths(v, "%s.%s" % (path, k)) for k, v in value.items()), [])
+    return []
+leaked = list_paths(d)
 missing = [k for k in need if k not in d]
-print(",".join(missing + ["LEAK:%s" % l for l in leaked]) or "ok")
+print(",".join(missing + ["LIST:%s" % p for p in leaked]) or "ok")
 ')"
 [ "$missing" = "ok" ] && pass || fail "digest shape wrong: $missing (must carry counts, not lists)"
 

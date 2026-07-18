@@ -921,12 +921,19 @@ assert_eq "['w1', 'w2']" "$(pjson "$PROP" 'P["ready_work_steps"]')"
 it "U7: propose carries the READ-ONLY one-advance-per-pulse ordering contract"
 assert_eq "True" "$(pjson "$PROP" "'READ-ONLY' in P['contract'] and 'one advance' in P['contract']")"
 
-it "U7: propose is a pure read (run-record mtime unchanged; no dispatch)"
+it "U7: propose is a pure read (run-record content unchanged; no dispatch)"
+# Content fingerprint, not mtime: mtime is second-resolution, so a same-second
+# mutation could slip past it. A sha256 of the bytes cannot.
+fp() { "$PY" - "$1" <<'PYEOF'
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+PYEOF
+}
 LP="$("$PY" "$RUN_RECORD_PY" path "$REPO" "propose-ready")"
-mt_before="$(stat -f %m "$LP" 2>/dev/null || stat -c %Y "$LP")"
+fp_before="$(fp "$LP")"
 orch_propose_json "propose-ready" >/dev/null
-mt_after="$(stat -f %m "$LP" 2>/dev/null || stat -c %Y "$LP")"
-assert_eq "$mt_before" "$mt_after"
+fp_after="$(fp "$LP")"
+assert_eq "$fp_before" "$fp_after"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

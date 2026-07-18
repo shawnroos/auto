@@ -54,7 +54,10 @@ auto_test::assert_true "! grep -qE '^##[[:space:]]+OUTPUT VOICE' '$SKILL'"
 # longer sets any signal env var on the detector call, and it owns the
 # conversation-vs-stale-plan decision from the transcript instead.
 auto_test::it "auto-driver SKILL.md no longer sets the retired CLAUDE_AUTO_CONVERSATION_SIGNAL (U4)"
-auto_test::assert_true "! grep -qE 'CLAUDE_AUTO_CONVERSATION_SIGNAL=1[[:space:]]+bash.*auto-detect\\.sh' '$SKILL'"
+# Match ANY assignment (inline, exported, or standalone), not just the old
+# `=1 bash` inline form — else a bare `export CLAUDE_AUTO_CONVERSATION_SIGNAL=1`
+# would slip past this guard.
+auto_test::assert_true "! grep -qE '(^|[[:space:]])(export[[:space:]]+)?CLAUDE_AUTO_CONVERSATION_SIGNAL=' '$SKILL'"
 
 auto_test::it "auto-driver SKILL.md owns conversation-context as a driver decision (U4)"
 auto_test::assert_true "grep -qiF 'driver-owned' '$SKILL'"

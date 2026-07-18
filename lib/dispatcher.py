@@ -300,13 +300,20 @@ def propose_surface(repo_root, run_id):
     """
     pg = load_lib_module("phase-grammar")
     rr = read_run_record(repo_root, run_id)
+    # Compute readiness from THIS snapshot (not a fresh ready_steps() re-read) so the
+    # whole proposal is internally consistent — a concurrent dispatch/steering write
+    # between two reads can't produce a proposal whose ready set disagrees with its
+    # phase/predicate. Same readiness predicate ready_steps() applies.
+    by_id = _steps_by_id(rr)
+    scale = rr.get("backend_scale", "three-tier")
+    ready = [u["id"] for u in rr.get("steps", []) if _is_ready(u, by_id, scale)]
     pred = rr.get("exit_predicate_result") or {}
     met = bool(pred.get("met"))
     is_terminal = pg.is_terminal_phase(rr)
     return {
         "run": run_id,
         "current_phase": pg.current_phase(rr),
-        "ready_work_steps": ready_steps(repo_root, run_id),
+        "ready_work_steps": ready,
         "eligible_plan_steps": [
             u["id"] for u in rr.get("steps", [])
             if u.get("phase") == "plan" and u.get("state") == "dispatched"

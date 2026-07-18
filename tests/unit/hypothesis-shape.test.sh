@@ -478,6 +478,12 @@ shape_setup() {
 keys="$(json_field shape_setup 'sorted(H.keys())')"
 assert_eq "['ambiguity', 'git', 'in_flight', 'multi_plan', 'plans', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
 
+# Assert the U4 facts are correctly SHAPED, not merely present: `plans` is a list
+# and `git` carries exactly {branch, dirty, diff_summary} with a boolean `dirty`.
+it "envelope shape: U4 facts are typed — plans is a list; git is {branch,dirty,diff_summary}"
+shape_ok="$(json_field shape_setup 'isinstance(H["plans"], list) and sorted(H["git"].keys()) == ["branch", "diff_summary", "dirty"] and isinstance(H["git"]["dirty"], bool)')"
+assert_eq "True" "$shape_ok"
+
 # ── Scenario 10b: workspace_action correctly derived
 # v0.4.1 (plan 004): action routing rules per KTD-4
 #   * raw situation → action=none (workspace not relevant)

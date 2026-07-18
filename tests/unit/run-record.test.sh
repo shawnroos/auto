@@ -1181,12 +1181,19 @@ PYEOF
 )"
 assert_eq "no" "$has_rp"
 
-it "describe <run>: is a pure read (run-record mtime unchanged)"
+it "describe <run>: is a pure read (run-record content unchanged)"
+# Content fingerprint, not mtime (second-resolution mtime could miss a same-second
+# write): a sha256 of the bytes cannot.
+ov_fp() { "$PY" - "$1" <<'PYEOF'
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+PYEOF
+}
 ovpath="$("$PY" "$RUN_RECORD_PY" path "$REPO" "describe-overlay")"
-mt_before="$(stat -f %m "$ovpath" 2>/dev/null || stat -c %Y "$ovpath")"
+fp_before="$(ov_fp "$ovpath")"
 CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_PY" describe "describe-overlay" >/dev/null 2>&1
-mt_after="$(stat -f %m "$ovpath" 2>/dev/null || stat -c %Y "$ovpath")"
-assert_eq "$mt_before" "$mt_after"
+fp_after="$(ov_fp "$ovpath")"
+assert_eq "$fp_before" "$fp_after"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
