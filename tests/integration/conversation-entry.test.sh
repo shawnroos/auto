@@ -9,19 +9,19 @@
 # SELF-CONTAINED inline harness mirroring tests/integration/hooks.test.sh and
 # the run.sh summary-line format ("<name>.test.sh: N passed, M failed").
 #
-# Scenarios:
-#   U1 — detector / envelope:
-#     1. signal SET + no run + no plan -> situation=conversation-context
-#     2. conversation-context envelope carries ALL nine canonical keys
-#     3. conversation-context recommendation is null (driver fills it, not detect)
-#     4. signal UNSET -> falls through to raw (existing situation), byte-unchanged
-#        in the existing-field subset; recommendation present + null on raw too
+# Scenarios (U4 — the detector emits FACTS; the driver owns conversation routing):
+#   U1/U4 — detector / envelope:
+#     1. no run + no plan -> situation=raw (no detector conversation-context)
+#     2. envelope carries ALL eleven canonical keys (U4 adds plans + git facts)
+#     3. raw: recommendation null (driver fills it) + an OPEN ambiguity
+#     4. raw carries the open "what should we work on?" ambiguity; rec present+null
 #     5. recommendation present on EVERY path incl. the catastrophic-error fallback
-#     6. signal SET but a plan exists -> reviewed-plan still wins (no override)
-#     7. signal SET but an in-flight run exists -> in-flight still wins
-#     8. READ-ONLY: detector writes nothing (hash .claude/auto + worktree
-#        before/after, signal SET)
-#     9. exit 0 on the conversation-context path AND on a forced internal error
+#     6. a plan exists -> reviewed-plan (carries freshness for the driver)
+#     7. an in-flight run exists -> in-flight wins
+#     8. READ-ONLY: detector writes nothing (hash .claude/auto + worktree)
+#     9. exit 0 on the raw path AND on a forced internal error
+#   Retired: the CLAUDE_AUTO_CONVERSATION_SIGNAL backchannel (U4). The `detect`
+#   helper still accepts a `signal` arg but it is a no-op — nothing reads it.
 #   U2 — recommender taxonomy:
 #    10. each taxonomy row maps to its expected (step, workflow/entry, is_spine, kind)
 #    11. off-spine states never return a spine workflow or an auto-advance entry
@@ -183,23 +183,27 @@ mkrepo_fresh_among_stale() {
 # U1 — detector / envelope
 # ════════════════════════════════════════════════════════════════════════════
 
-# ─── Scenario 1: signal SET + no run + no plan -> conversation-context ────────
-it "U1: signal SET + no run + no plan -> situation=conversation-context"
+# ─── Scenario 1: no run + no plan -> raw (detector does NOT route conversation) ─
+# U4: the detector no longer classifies the conversation — it has no transcript.
+# No run + no plan is `raw`; the DRIVER (which HAS the transcript) decides whether
+# to run a conversation-context flow. The retired CLAUDE_AUTO_CONVERSATION_SIGNAL
+# env var is a no-op (the `signal` arg below still sets it, but nothing reads it).
+it "U4: no run + no plan -> situation=raw (detector emits facts, not a conversation route)"
 REPO="$(mkrepo conv)"
 RAW="$(detect "$REPO" signal)"
-assert_eq "conversation-context" "$(hfield "$RAW" 'H["situation"]')"
+assert_eq "raw" "$(hfield "$RAW" 'H["situation"]')"
 
-# ─── Scenario 2: envelope carries all nine canonical keys ─────────────────────
-it "U1: conversation-context envelope has all nine canonical keys"
-assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" \
+# ─── Scenario 2: envelope carries all ELEVEN canonical keys (U4 adds plans+git) ─
+it "U4: envelope has all eleven canonical keys (adds the plans + git facts)"
+assert_eq "['ambiguity', 'git', 'in_flight', 'multi_plan', 'plans', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" \
   "$(hfield "$RAW" 'sorted(H.keys())')"
 
-# ─── Scenario 3: recommendation is null on conversation-context ───────────────
-it "U1: conversation-context recommendation is null (driver fills it, not detect)"
+# ─── Scenario 3: raw carries a null recommendation + an OPEN ambiguity ─────────
+it "U4: recommendation is null on raw (driver fills it, not detect)"
 assert_eq "None" "$(hfield "$RAW" 'H["recommendation"]')"
 
-it "U1: conversation-context ambiguity is null (driver computes the route)"
-assert_eq "None" "$(hfield "$RAW" 'H["ambiguity"]')"
+it "U4: raw carries the open 'what should we work on?' ambiguity (driver decides)"
+assert_eq "open" "$(hfield "$RAW" 'H["ambiguity"]["kind"]')"
 
 # ─── Scenario 4: signal UNSET -> raw; existing fields unchanged + rec present ─
 # Per the U1 contract (recommendation lands on EVERY envelope), "byte-unchanged"
@@ -225,17 +229,18 @@ assert_eq "None" "$(hfield "$RAW_RAW" 'H["recommendation"]')"
 # fallback dict in the source emits `recommendation`, and (b) confirm the key is
 # present on a degraded-repo envelope at runtime. Together these pin the
 # "recommendation on EVERY path incl. the error fallback" contract.
-it "U1: the catastrophic-error fallback dict in the source carries ALL nine keys"
+it "U4: the catastrophic-error fallback dict in the source carries ALL eleven keys"
 # Pull the literal fallback dict (the `except BaseException` json.dump block) and
-# assert it includes EVERY envelope key — the nine-key contract holds on the
+# assert it includes EVERY envelope key — the full-key contract holds on the
 # error path too (it bypasses _safe_envelope, so it must hand-carry them). The
-# fallback is the ONLY json.dump of a literal dict in the file.
+# fallback is the ONLY json.dump of a literal dict in the file. U4 adds plans+git.
 ERR_BLOCK="$("$PY" - "$DET_PY" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1]).read()
 m = re.search(r'json\.dump\(\{.*?"detector error.*?\}, sys\.stdout\)', src, re.S)
 keys = ["situation", "summary", "ambiguity", "single_plan", "multi_plan",
-        "in_flight", "workspace", "workspace_action", "recommendation"]
+        "in_flight", "workspace", "workspace_action", "recommendation",
+        "plans", "git"]
 block = m.group(0) if m else ""
 missing = [k for k in keys if ('"%s"' % k) not in block]
 print("present" if (m and not missing) else ("MISSING:%s" % ",".join(missing)))
@@ -264,15 +269,17 @@ REPO="$(mkrepo conv-run)"
 setup_inflight "$REPO"
 assert_eq "in-flight" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
 
-# ─── Scenario 7b (U3): conversation PREEMPTS an all-stale plan set ────────────
-# The reworked precedence: a rich session beats stale docs/plans/ clutter, but
-# only when the driver signals it — and a FRESH plan still wins over both.
-it "U3: signal SET + all-stale plans -> conversation-context preempts the stale ask"
+# ─── Scenario 7b (U4): all-stale plan set -> multi-plan ask; the DRIVER preempts ─
+# U4: the detector no longer senses the conversation to preempt a stale set. It
+# emits the plan FACTS as a staleness-marked multi-plan ask; the DRIVER, which has
+# the transcript, decides whether to run conversation-context instead. Same result
+# whether or not the retired signal env var is set — the detector is fact-only.
+it "U4: all-stale plans -> multi-plan ask (driver owns conversation preemption)"
 REPO="$(mkrepo_stale_plans convstale)"
-assert_eq "conversation-context" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+assert_eq "multi-plan" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
 
-it "U3: signal UNSET + all-stale plans -> multi-plan ask (no preemption without the signal)"
-assert_eq "multi-plan" "$(hfield "$(detect "$REPO")" 'H["situation"]')"
+it "U4: the stale multi-plan ask still carries every plan as a staleness fact"
+assert_eq "2" "$(hfield "$(detect "$REPO")" 'len(H["plans"])')"
 
 it "U3: all-stale multi-plan ask suppresses the fan-out-all footgun (no null-path option)"
 assert_eq "0" "$(hfield "$(detect "$REPO")" 'len([o for o in H["ambiguity"]["options"] if o.get("path") is None])')"
@@ -305,15 +312,16 @@ mkrepo_one_stale() {
   setup_one_stale_plan "$repo"
   printf '%s' "$repo"
 }
-it "U3: signal SET + ONE lone stale plan -> conversation-context (preempted at N=1)"
+it "U4: ONE lone stale plan -> reviewed-plan carrying freshness=stale (driver decides)"
 REPO="$(mkrepo_one_stale convlone)"
-assert_eq "conversation-context" "$(hfield "$(detect "$REPO" signal)" 'H["situation"]')"
+LONE="$(detect "$REPO" signal)"
+assert_eq "reviewed-plan" "$(hfield "$LONE" 'H["situation"]')"
 
-it "U3: signal UNSET + ONE lone stale plan -> reviewed-plan (run it; no conversation to prefer)"
-assert_eq "reviewed-plan" "$(hfield "$(detect "$REPO")" 'H["situation"]')"
+it "U4: the lone reviewed-plan surfaces single_plan.freshness=stale for the driver"
+assert_eq "stale" "$(hfield "$LONE" 'H["single_plan"]["freshness"]')"
 
-# ─── Scenario 8: READ-ONLY — detector writes nothing on the signal path ───────
-it "U1: detector is READ-ONLY on the conversation-context path (hash unchanged)"
+# ─── Scenario 8: READ-ONLY — detector writes nothing ──────────────────────────
+it "U4: detector is READ-ONLY (writes nothing; hash unchanged)"
 REPO="$(mkrepo readonly)"
 # Seed a file so the hash has content to compare.
 echo "seed" > "$REPO/.claude/auto/seed.txt"
@@ -322,8 +330,8 @@ detect "$REPO" signal >/dev/null
 hash_after="$(find "$REPO" -type f -exec shasum {} \; | sort | shasum)"
 assert_eq "$hash_before" "$hash_after"
 
-# ─── Scenario 9: exit 0 on the conversation-context path AND on internal error ─
-it "U1: exit 0 on the conversation-context path"
+# ─── Scenario 9: exit 0 on the raw path AND on internal error ──────────────────
+it "U4: exit 0 on the raw path"
 REPO="$(mkrepo exit0)"
 detect "$REPO" signal >/dev/null 2>&1
 assert_eq "0" "$?"

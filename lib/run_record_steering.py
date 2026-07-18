@@ -323,3 +323,68 @@ def register_session(repo_root, run_id, session_id):
         return list(existing)
 
     return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
+
+
+def set_retry_budget(repo_root, run_id, step_id, budget):
+    """Agent-set the per-step retry/escalation budget (R3 — per-run policy the driver
+    owns, not a hardcoded constant).
+
+    ``dispatcher.should_escalate`` reads ``step["retry_budget"]`` where present, else
+    the settled default of 2 — so this verb lets the driver raise patience on a step
+    it expects to need more attempts, or lower it on one that must not loop. It sets
+    the BUDGET only; the attempt counter and the escalation *enforcement* stay
+    mechanism (KTD4). ``budget`` must be a non-negative int.
+
+    I-1 (KTD-2): validate + mutate + recompute inside ONE ``_with_locked_run_record``
+    call — a write against a stale snapshot is rejected, not merged. No run-record
+    read or write happens outside the closure.
+    """
+    try:
+        clean_budget = int(budget)
+    except (TypeError, ValueError):
+        raise run_record_core.RunRecordError(
+            f"set_retry_budget requires an integer budget for step {step_id!r}: {budget!r}"
+        )
+    if clean_budget < 0:
+        raise run_record_core.RunRecordError(
+            f"set_retry_budget requires a non-negative budget for step {step_id!r}: {clean_budget}"
+        )
+
+    def mutate(run_record):
+        step = run_record_core._find_step(run_record, step_id)
+        step["retry_budget"] = clean_budget
+        return clean_budget
+
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
+
+
+def set_stall_threshold(repo_root, run_id, step_id, seconds):
+    """Agent-set the per-step stall threshold in seconds (R3).
+
+    The stall *clock* already reads ``step["stall_threshold_seconds"]`` per-step
+    (``pulse.py``, ``pulse_advance.py``, ``watch_tree.py``), defaulting to
+    ``DEFAULT_STALL_THRESHOLD_SECONDS`` — this verb lets the driver set that field so
+    a step known to be slow is not marked stalled prematurely, or a step that must
+    fail fast is watched tightly. It sets the THRESHOLD only; the stall detection
+    clock stays mechanism. ``seconds`` must be a positive int.
+
+    I-1 (KTD-2): validate + mutate + recompute inside ONE ``_with_locked_run_record``
+    call. No run-record read or write happens outside the closure.
+    """
+    try:
+        clean_seconds = int(seconds)
+    except (TypeError, ValueError):
+        raise run_record_core.RunRecordError(
+            f"set_stall_threshold requires an integer seconds for step {step_id!r}: {seconds!r}"
+        )
+    if clean_seconds <= 0:
+        raise run_record_core.RunRecordError(
+            f"set_stall_threshold requires a positive seconds for step {step_id!r}: {clean_seconds}"
+        )
+
+    def mutate(run_record):
+        step = run_record_core._find_step(run_record, step_id)
+        step["stall_threshold_seconds"] = clean_seconds
+        return clean_seconds
+
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)

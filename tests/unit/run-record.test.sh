@@ -1153,6 +1153,48 @@ PYEOF
 )"
 assert_eq "ok" "$rej"
 
+# ── U2: the run-scoped `describe <run>` overlay ─────────────────────────────
+# `describe <run>` overlays THIS run's phase model (phase_order + current phase)
+# onto the static surface — a PURE READ. No-arg describe stays byte-identical.
+run_record_init "describe-overlay" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+
+it "describe <run>: overlays this run's phase_order and current_phase"
+ov="$(CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_PY" describe "describe-overlay" 2>/dev/null)"
+ov_ok="$("$PY" - "$ov" <<'PYEOF'
+import json, sys
+d = json.loads(sys.argv[1])
+rp = d.get("run_phase") or {}
+ok = (rp.get("current_phase") == "plan"
+      and isinstance(rp.get("phase_order"), list) and rp["phase_order"]
+      and rp.get("run") == "describe-overlay")
+print("ok" if ok else f"bad: {rp}")
+PYEOF
+)"
+assert_eq "ok" "$ov_ok"
+
+it "describe (no arg): emits no run_phase overlay (static surface unchanged)"
+noarg="$("$PY" "$RUN_RECORD_PY" describe 2>/dev/null)"
+has_rp="$("$PY" - "$noarg" <<'PYEOF'
+import json, sys
+print("yes" if "run_phase" in json.loads(sys.argv[1]) else "no")
+PYEOF
+)"
+assert_eq "no" "$has_rp"
+
+it "describe <run>: is a pure read (run-record content unchanged)"
+# Content fingerprint, not mtime (second-resolution mtime could miss a same-second
+# write): a sha256 of the bytes cannot.
+ov_fp() { "$PY" - "$1" <<'PYEOF'
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+PYEOF
+}
+ovpath="$("$PY" "$RUN_RECORD_PY" path "$REPO" "describe-overlay")"
+fp_before="$(ov_fp "$ovpath")"
+CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_PY" describe "describe-overlay" >/dev/null 2>&1
+fp_after="$(ov_fp "$ovpath")"
+assert_eq "$fp_before" "$fp_after"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "run-record.test.sh: ${PASS} passed, ${FAIL} failed"

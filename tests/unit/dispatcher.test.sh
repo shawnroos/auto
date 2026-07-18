@@ -902,6 +902,39 @@ assert_eq "w1" "$(livelock_chain forward-ref)"
 it "U14 combined: cycle+forward-ref batch → cycle broken (w2 ready), w3's valid edge still enforced"
 assert_eq "w2" "$(livelock_chain mixed)"
 
+# ── U7: propose — the READ-ONLY candidate-advance set ─────────────────────────
+# The driver reads the grammar-legal candidates and picks which advance fires; the
+# engine still validates the pick and keeps one-advance-per-pulse. Pure read.
+orch_propose_json() { bash "$ORCH_SH" propose "$REPO" "$1" 2>/dev/null; }
+pjson() {  # pjson <raw-json> <expr-on-parsed-P>
+  "$PY" - "$1" "$2" <<'PYEOF'
+import json, sys
+P = json.loads(sys.argv[1]); print(eval(sys.argv[2]))
+PYEOF
+}
+
+it "U7: propose surfaces the ready_work_steps for the driver to pick from"
+run_record_init "propose-ready" '[{"id":"w1","state":"pending","phase":"work"},{"id":"w2","state":"pending","phase":"work"}]'
+PROP="$(orch_propose_json "propose-ready")"
+assert_eq "['w1', 'w2']" "$(pjson "$PROP" 'P["ready_work_steps"]')"
+
+it "U7: propose carries the READ-ONLY one-advance-per-pulse ordering contract"
+assert_eq "True" "$(pjson "$PROP" "'READ-ONLY' in P['contract'] and 'one advance' in P['contract']")"
+
+it "U7: propose is a pure read (run-record content unchanged; no dispatch)"
+# Content fingerprint, not mtime: mtime is second-resolution, so a same-second
+# mutation could slip past it. A sha256 of the bytes cannot.
+fp() { "$PY" - "$1" <<'PYEOF'
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+PYEOF
+}
+LP="$("$PY" "$RUN_RECORD_PY" path "$REPO" "propose-ready")"
+fp_before="$(fp "$LP")"
+orch_propose_json "propose-ready" >/dev/null
+fp_after="$(fp "$LP")"
+assert_eq "$fp_before" "$fp_after"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "dispatcher.test.sh: ${PASS} passed, ${FAIL} failed"

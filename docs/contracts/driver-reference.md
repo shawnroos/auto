@@ -60,8 +60,12 @@ context runs out, the routine continuation is a normal `/auto-resume`
   not CLI). YOU read the intent and, when `action == "rearm"`, issue
   the `ScheduleWakeup(delay, prompt)` call.
 - **`lib/dispatcher.py`** — `ready_steps`, `dispatch_batch`,
-  `converge`. Surfaces ready-and-independent steps; YOU decide the
-  cap. Never hardcodes concurrency.
+  `converge`, `propose`. Surfaces ready-and-independent steps; YOU decide the
+  cap. Never hardcodes concurrency. `bash lib/dispatcher.sh propose <run>` (U7)
+  is a READ-ONLY view of the grammar-legal candidate advances THIS beat
+  (ready work steps, eligible plan steps + the round-robin pick, phase-advance
+  eligibility) so YOU can steer *which* advance fires — the engine still validates
+  the pick and keeps one-advance-per-pulse. No mutation, no dispatch.
 - **`lib/run_record.py`** — disk-persisted per-step run-record. Read
   `exit_predicate_result.met` from it; never re-derive.
 
@@ -478,10 +482,11 @@ not the raw count:
   (fanning out over genuinely-live plans is legitimate);
 - **all stale** → `multi-plan` ask with each option staleness-marked and the
   fan-out-all footgun **suppressed** (never offer to spawn N worktrees on old
-  clutter) — OR, when the driver set `CLAUDE_AUTO_CONVERSATION_SIGNAL`, the stale
-  ask is **preempted** by `conversation-context` (§11): a live session beats a
-  stale plan set. A single lone plan (fresh or stale) stays `reviewed-plan` —
-  one plan carries no fan-out footgun.
+  clutter). The detector no longer preempts this with `conversation-context` — U4
+  moved that call to the DRIVER, which sees the transcript: the ask carries the
+  `plans` facts (freshness-marked), and the driver may run conversation-context
+  itself (§11) instead of acting on stale clutter. A single lone plan (fresh or
+  stale) stays `reviewed-plan`, carrying its `freshness` for the same driver call.
 
 So `multi-plan` now fires only for genuinely-competing plans, and a
 `path: null` fan-out-all option appears only when the target set is fresh.
@@ -543,24 +548,21 @@ See `docs/contracts/batch-sidecar-schema.md` for the sidecar format.
 - **Always goaled.** No `/auto` run proceeds without an active
   deliberate-stop goal/status engaging the Stop hook.
 
-## 11. Conversation-driven entry (v0.6.0 — `conversation-context`; wired v0.7.x U3)
+## 11. Conversation-driven entry (driver-owned since U4)
 
-The `conversation-context` situation (lib/auto-detect.sh) fires when there is no
-in-flight run and no **live** plan, but the driver judged the **current
-conversation** rich enough to route on and set `CLAUDE_AUTO_CONVERSATION_SIGNAL`
-before loading the hypothesis. The envelope's `recommendation` is null — the
-driver computes it.
+Conversation-context is a **driver decision**, not a detector situation (U4). The
+detector has no transcript access, so it emits deterministic facts only; the
+DRIVER, which has the transcript, decides whether to route on the conversation.
 
-**v0.7.x U3 — the signal is now actually set, and it can preempt stale plans.**
-v0.6.0 shipped this branch but specified the signal-set only as prose; no
-production code ever set the env var (only an integration test did), so the
-branch was dead — a context-rich bare `/auto` always fell through to `raw` or a
-plan ask. The auto-driver now sets it **inline** on the detector call
-(`CLAUDE_AUTO_CONVERSATION_SIGNAL=1 bash …/auto-detect.sh`) whenever the session
-is worth routing on. And the precedence changed: "no live plan" now includes the
-case where **every discovered plan is stale** (§9) — a stale plan set no longer
-blocks conversation-context. A **fresh** plan (`reviewed-plan`) still wins over
-conversation; only stale clutter yields to it.
+**U4 retired the `CLAUDE_AUTO_CONVERSATION_SIGNAL` backchannel.** v0.6.0/v0.7.x had
+the detector honour an env var the driver set — the detector reaching for a signal
+it structurally couldn't sense. That is gone. Now: when the facts show no in-flight
+run and no **live** plan (`raw`, or a `reviewed-plan`/`multi-plan` whose plans are
+all `freshness: stale`) AND the driver judges the current conversation worth routing
+on, the driver runs the conversation-context flow itself — classify state → author
+goal → dispatch — instead of acting on stale/absent plans. A **fresh** plan still
+wins over conversation; only stale clutter yields to it. The envelope's
+`recommendation` is null (the driver computes it via `lib/recommender.py`).
 
 **Context sources (D2 — the split that keeps the classification honest):**
 - **Current conversation** = the driver reflecting on its OWN live transcript.
@@ -1124,6 +1126,29 @@ every pulse (the pulse's `beat=True` write); `lib/on-stop.py` treats a chain sta
 past `DRIVER_SELF_STALE_SECONDS` (3900s) as dead. The sub-agent prompt-builder
 sources its operating contract from the `describe` CLI verb (U4), not a line-range
 citation into this file, so R6/R7 hold where the work actually runs.
+
+### Thin pacing shell — the context-flatness spike outcome (Stage C)
+
+The agent-native goal is a `fable` main session whose context stays FLAT across a
+long run. The residual question was the per-beat READ-BACK: the tree runtime
+already converges off the run-record (not sub-agent prose), but if the boss reads
+the FULL run-record — or `converge`, which returns growing `completed`/`in_flight`
+LISTS — its context is O(N) after N beats. A harness probe
+(`tests/integration/pacing-shell.test.sh`) settled it deterministically:
+
+- **The bounded digest is the answer.** `bash lib/dispatcher.sh digest <run>` is a
+  per-beat summary carrying state COUNTS + phase + predicate — never the step/verdict
+  lists. Measured across 12 beats it stays ~120 B (O(1)) while the full run-record
+  grows 4.6 KB → 5.2 KB (O(N)). A boss that reads only the digest each beat keeps a
+  flat resident context. This is what U9's live pacing shell must read.
+- **The fork collapsed.** The plan offered spawn-per-beat vs. a long-lived driver
+  sub-agent. Both are sub-agents; a sub-agent cannot self-pace, so pacing + the
+  Stop-hook stay in the main session either way — the driver logic descends, the
+  clock does not. There is one viable shape: the main session paces and reads the
+  digest each beat, spawning the driver to decide/dispatch.
+- **Still live-gated.** The probe proves the *mechanism* (bounded read ⇒ flat
+  context). Whether a real `fable` main session over a real multi-beat run holds
+  flat in practice is the live follow-up (U9); the harness cannot spawn a real Agent.
 
 ## 17. Goal-aware plan routing — the pre-step detail (v0.11.0)
 

@@ -109,7 +109,45 @@ def _safe_envelope(situation, summary, *, ambiguity=None, single_plan=None,
         "workspace": workspace,
         "workspace_action": _workspace_action(workspace, situation),
         "recommendation": recommendation,
+        # U4: raw facts the DRIVER decides on (it has the transcript the detector
+        # structurally lacks). `plans` is the full freshness-ranked list; `git` is
+        # branch/dirty state. Present on every envelope (safe-degrading to []/nulls)
+        # so a reader never trips on their absence — same shape contract as the
+        # other slots.
+        "plans": _plans_facts_safe(),
+        "git": _git_facts_safe(),
     }
+
+
+def _plans_facts_safe():
+    """The full freshness-ranked plan list for the envelope's `plans` fact (U4).
+
+    Safe-degrading: any failure yields [] (the detector never breaks on plan
+    discovery). The DRIVER reads this to weigh plans against the transcript —
+    the detector emits the facts, not the route.
+    """
+    try:
+        return _rank_plans_safe(resolve_repo())
+    except Exception:
+        return []
+
+
+def _git_facts_safe():
+    """Raw git facts (branch, dirty, short diff summary) for the envelope's `git`
+    fact (U4). Safe-degrading: any git failure yields nulls, never breaks the
+    envelope. Surfaced on every envelope so the driver can factor branch/dirty
+    state into its route decision without re-shelling git itself.
+    """
+    try:
+        repo = resolve_repo()
+        dirty = _has_uncommitted_diff(repo)
+        return {
+            "branch": _current_branch(repo),
+            "dirty": dirty,
+            "diff_summary": _diff_summary(repo) if dirty else None,
+        }
+    except Exception:
+        return {"branch": None, "dirty": False, "diff_summary": None}
 
 
 def _detect_workspace_safe():
@@ -255,14 +293,20 @@ def _rank_plans_safe(repo):
                  "sort_ts": 0.0} for p in _discover_plans(repo)]
 
 
-def _emit_reviewed_plan(plan_path):
-    """Emit the reviewed-plan envelope for a single unambiguous plan."""
+def _emit_reviewed_plan(plan_path, freshness=None):
+    """Emit the reviewed-plan envelope for a single unambiguous plan.
+
+    Carries the plan's `freshness` (fresh/stale) so the DRIVER can decide whether
+    to act on it or — for a STALE lone plan — prefer the conversation-context flow
+    using the transcript the detector can't see (U4). The detector no longer makes
+    that call itself via an env backchannel.
+    """
     _emit(_safe_envelope(
         "reviewed-plan",
         "starting `%s` (workflow w, work-only — reviewed plan goes straight "
         "to the work-loop; pass `--workflow a1` to re-plan from scratch)"
         % plan_path,
-        single_plan={"path": plan_path, "run_id_hint": None},
+        single_plan={"path": plan_path, "run_id_hint": None, "freshness": freshness},
     ))
 
 
@@ -471,51 +515,23 @@ def _route_plans_or_raw(repo):
     # at N>=2, so adding/removing a stale sibling can't flip the outcome. `_emit_*`
     # raise SystemExit, so these guards are mutually exclusive with the block below.
     if len(fresh) == 1:
-        _emit_reviewed_plan(fresh[0]["path"])
-    if len(ranked) == 1 and not os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
-        _emit_reviewed_plan(ranked[0]["path"])
+        _emit_reviewed_plan(fresh[0]["path"], freshness=fresh[0].get("freshness"))
+    if len(ranked) == 1:
+        _emit_reviewed_plan(ranked[0]["path"], freshness=ranked[0].get("freshness"))
 
     if len(ranked) > 1:
         # >=2 fresh → multiple genuinely-live plans: ask over the FRESH set with
-        # fan-out offered (fanning out over live plans is legitimate). fresh==0
-        # (all stale) → [Step 2.5 conversation-context can PREEMPT this when the
-        # driver signals a rich session]; absent the signal, ask over the stale
-        # set with staleness marked and the fan-out-all footgun suppressed.
+        # fan-out offered (fanning out over live plans is legitimate). All-stale
+        # → ask over the stale set with staleness marked and the fan-out-all
+        # footgun suppressed. The detector no longer tries to sense whether the
+        # CURRENT CONVERSATION should preempt a stale plan — it structurally cannot
+        # see the transcript (U4). It emits the plan FACTS (freshness-marked); the
+        # DRIVER, which has the transcript, decides whether to act on a stale plan
+        # or run the conversation-context flow instead. No env backchannel.
         if len(fresh) >= 2:
             _emit_multi_plan(fresh, include_fanout=True)
-        elif not os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
+        else:
             _emit_multi_plan(ranked, include_fanout=False)
-        # else: all stale AND the driver signalled a rich conversation → fall
-        # through to Step 2.5, where conversation-context preempts the stale ask.
-
-    # ── Step 2.5 (v0.6.0 U1; v0.7.x U3): conversation-context. ─────────────
-    # Reached when there is no in-flight run and no LIVE plan to act on — either
-    # no plan at all, OR (v0.7.x U3 preemption) every discovered plan is STALE
-    # and the driver signalled a rich current conversation. The Step-2 plan
-    # branch falls through to here in the all-stale + signal case, so a live
-    # session preempts an ask over old docs/plans/ clutter (the reworked
-    # precedence: conversation beats stale plans, but a FRESH plan — reviewed-
-    # plan, emitted above — still wins over conversation).
-    #
-    # The detector has NO transcript access (the single-quote heredoc disables
-    # shell substitution and carries no conversation), so it cannot self-classify
-    # — it only honours the driver's env-var signal, which the auto-driver sets
-    # inline before loading the hypothesis (U3). An argv signal would carry
-    # unstated invocation-plumbing work (the heredoc forwards only `_det_dir`);
-    # an env var is read cleanly inside the heredoc with no plumbing change.
-    #
-    # The branch emits an EMPTY (null) recommendation + ambiguity null: the
-    # driver computes the recommendation via lib/recommender.py (U2) and either
-    # dispatches the entry workflow or pre-dispatch escalates (U3). When the signal
-    # is UNSET, this branch is skipped and the engine falls through to `raw` (and
-    # an all-stale plan set was already emitted as a multi-plan ask above).
-    if os.environ.get("CLAUDE_AUTO_CONVERSATION_SIGNAL"):
-        _emit(_safe_envelope(
-            "conversation-context",
-            "no live plan, no in-flight run — recommending a ce-family step "
-            "from the current conversation",
-            recommendation=None,
-        ))
 
     # ── Step 3: raw — no run, no plan. ────────────────────────────────────
     # Includes both clean and dirty trees: review round 1 finding C-2/C-3
@@ -577,6 +593,10 @@ def _emit_error_fallback(exc):
         },
         "workspace_action": "none",
         "recommendation": None,
+        # U4 facts: the last-resort handler must not re-shell git/plan discovery
+        # (the subsystem that may have failed), so it carries safe empty facts.
+        "plans": [],
+        "git": {"branch": None, "dirty": False, "diff_summary": None},
     }, sys.stdout)
     sys.stdout.write("\n")
     raise SystemExit(0)

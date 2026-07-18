@@ -400,12 +400,11 @@ Each pulse, on a `rearm` intent in the work phase:
      a sub-agent can only ever add ITSELF to the set (never a third party).
      Omitting this line silently reverts U8: the backstop never reaches the tree.
    - **Source the sub-agent's operating contract from the `describe` CLI verb**
-     (`bash lib/run_record.py describe`, shipping in U4) — NOT a `SKILL.md` line-range
-     citation. Hardcoding line ranges is the orientation tax this runtime removes
-     (R6/R7). **Dependency:** if `describe` is not yet on `lib/run_record.py`, the
-     prompt-builder still CALLS `bash lib/run_record.py describe`; only if the verb is
-     genuinely absent does it fall back to pointing at this section — never to a
-     line range.
+     — run `bash lib/run_record.py describe <run>` so the sub-agent gets the whole
+     operating surface AND this run's phase model (phase_order + current-phase
+     next-action) in one read, NOT a `SKILL.md` line-range citation. Hardcoding line
+     ranges is the orientation tax this runtime removes (R6/R7); the run-scoped
+     overlay is the primer a spawned agent orients by.
 3. **YIELD, then converge from the RUN_RECORD.** End the turn (§4 step 4, plus the
    watchdog heartbeat). On re-invocation, `dispatcher.converge(repo, run)`
    reads landed verdicts off disk — **NEVER from sub-agent return text.** A

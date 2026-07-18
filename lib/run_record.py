@@ -132,6 +132,8 @@ force_skip = run_record_steering.force_skip              # R3/R20 — reason man
 add_step = run_record_steering.add_step                  # R3
 reshape_deps = run_record_steering.reshape_deps          # R3
 register_session = run_record_steering.register_session  # R21 — hook ownership set
+set_retry_budget = run_record_steering.set_retry_budget  # R3 — per-run retry budget
+set_stall_threshold = run_record_steering.set_stall_threshold  # R3 — per-step stall threshold
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from run_record_producers: phase-transition + iteration emission paths.
@@ -205,6 +207,21 @@ _TOOL_SURFACE_PREAMBLE = {
             "noop": '{"action":"noop","reason":"lock-held-by-live-pulse"}',
         },
     },
+    "phase_model": {
+        "doc": (
+            "Phases run in the workflow's phase_order. The CURRENT phase is the "
+            "run-record's loop_phase — never phase_order[0], which is only the "
+            "START phase. When a phase's predicate is met and it is not the "
+            "terminal_phase, the engine advances to the next phase; at the "
+            "terminal_phase the run can exit. Run `describe <run>` for THIS run's "
+            "phase_order and current-phase next-action."
+        ),
+        "default_phase_order": ["plan", "handoff", "work"],
+        "default_terminal_phase": "work",
+        # current_phase_key is injected in _describe_surface() from phase-grammar's
+        # LOOP_PHASE_KEY — never a raw "loop_phase" literal here (phase-grammar-ast-lint
+        # keeps that key's spelling owned by the ONE phase module).
+    },
 }
 
 
@@ -267,10 +284,33 @@ def _json_array(raw, what):
 # ── read / inspection handlers (explicit <repo> <run>; no mutation) ──
 
 
+def _describe_run_overlay(run):
+    """The run-scoped `describe <run>` overlay: this run's phase model on top of the
+    static surface. PURE READ — no lock, no mutation (U2). Resolves the repo the same
+    way the feedback/steering verbs do, then reads the run-record and projects its
+    phase state through phase-grammar (the ONE phase-decision module)."""
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(resolve_repo(), run)
+    surface = _describe_surface()
+    current = pg.current_phase(rr)
+    surface["run_phase"] = {
+        "run": run,
+        "phase_order": pg.phase_order(rr),
+        "current_phase": current,
+        "terminal_phase": pg.terminal_phase(rr),
+        "is_terminal": pg.is_terminal_phase(rr),
+        "next_phase_after_met": pg.next_phase_after_met(rr),
+    }
+    return surface
+
+
 def _h_describe(argv):
     # R6/R7: the whole stable operating contract as ONE JSON object, so an agent
-    # orients without loading the skill corpus. No repo, no mutation.
-    json.dump(_describe_surface(), sys.stdout, indent=2, sort_keys=True)
+    # orients without loading the skill corpus. With no arg: the static surface, no
+    # repo, no mutation. With `<run>`: overlays THIS run's phase model (U2) — still a
+    # pure read.
+    surface = _describe_run_overlay(argv[1]) if len(argv) > 1 else _describe_surface()
+    json.dump(surface, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
@@ -398,9 +438,25 @@ def _h_register_session(argv):
     return 0
 
 
+def _h_set_retry_budget(argv):
+    # set-retry-budget <run> <step> <budget>   (R3 — per-run retry budget; the
+    # mutator rejects a non-integer / negative budget under the lock).
+    run, step, budget = argv[1], argv[2], argv[3]
+    set_retry_budget(resolve_repo(), run, step, budget)
+    return 0
+
+
+def _h_set_stall_threshold(argv):
+    # set-stall-threshold <run> <step> <seconds>   (R3 — per-step stall threshold;
+    # the mutator rejects a non-integer / non-positive seconds under the lock).
+    run, step, seconds = argv[1], argv[2], argv[3]
+    set_stall_threshold(resolve_repo(), run, step, seconds)
+    return 0
+
+
 _VERBS = {
     # read / inspection
-    "describe": _Verb(_h_describe, "(none)", reads=True),
+    "describe": _Verb(_h_describe, "[run]  (with <run>: overlays THIS run's phase model)", reads=True),
     "read": _Verb(_h_read, "<repo> <run>", reads=True),
     "path": _Verb(_h_path, "<repo> <run>", reads=True),
     "is-orphaned": _Verb(_h_is_orphaned, "<repo> <run>", reads=True),
@@ -448,16 +504,34 @@ _VERBS = {
         "<run>  (registers $CLAUDE_CODE_SESSION_ID — the caller's own)",
         rejects="exit 2 if CLAUDE_CODE_SESSION_ID is unset. Idempotent otherwise.",
     ),
+    "set-retry-budget": _Verb(
+        _h_set_retry_budget,
+        "<run> <step> <budget>  (per-run retry budget; should_escalate honors it)",
+        rejects="RunRecordError on a non-integer or negative budget.",
+    ),
+    "set-stall-threshold": _Verb(
+        _h_set_stall_threshold,
+        "<run> <step> <seconds>  (per-step stall threshold the stall clock reads)",
+        rejects="RunRecordError on a non-integer or non-positive seconds.",
+    ),
 }
 
 
 def _describe_surface():
     """The full `describe` payload: the static preamble + the verb catalog derived
-    from `_VERBS`, so dispatch and docs share one source."""
-    return {
+    from `_VERBS`, so dispatch and docs share one source. The phase model's
+    current_phase_key is sourced from phase-grammar (the ONE phase module) rather
+    than a raw literal here — the AST-lint keeps that spelling centralized."""
+    pg = load_lib_module("phase-grammar")
+    surface = {
         **_TOOL_SURFACE_PREAMBLE,
         "verbs": {name: verb.as_doc() for name, verb in _VERBS.items()},
     }
+    surface["phase_model"] = {
+        **surface["phase_model"],
+        "current_phase_key": pg.LOOP_PHASE_KEY,
+    }
+    return surface
 
 
 # ─── the OPERATOR revert command (U10 / KTD-1) ──────────────────────────────

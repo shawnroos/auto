@@ -245,8 +245,15 @@ def should_escalate(step: dict, max_attempts: int = 2) -> bool:
     to the operator rather than looping forever. ``max_attempts`` defaults to 2,
     the settled N=2 escalation budget. A missing/zero attempt reads as 0 (never
     escalates), matching the attempt counter's additive default.
+
+    PER-STEP OVERRIDE (U6): if the driver set ``step["retry_budget"]`` via the
+    ``set-retry-budget`` steering verb, that budget is honored instead of
+    ``max_attempts`` — the driver owns per-run patience. Absent the field, the
+    settled default holds, so this is backward-compatible.
     """
-    return int(step.get("attempt", 0) or 0) >= int(max_attempts)
+    budget = step.get("retry_budget")
+    limit = int(budget) if budget is not None else int(max_attempts)
+    return int(step.get("attempt", 0) or 0) >= limit
 
 
 def pick_next_plan_step_to_advance(run_record: dict):
@@ -278,6 +285,78 @@ def pick_next_plan_step_to_advance(run_record: dict):
         ts = u.get("last_advanced_at")
         return (ts is not None, ts or "")
     return sorted(candidates, key=keyfn)[0]["id"]
+
+
+def propose_surface(repo_root, run_id):
+    """READ-ONLY candidate-advance set for the ``propose`` verb (U7).
+
+    Surfaces the grammar-legal advances available THIS beat so the driving agent can
+    SEE and steer WHICH one fires — the in-loop "what next" that was otherwise
+    code-picked. It only makes the deterministic candidate set legible: the
+    one-advance-per-pulse ORDERING stays mechanism, and the engine still validates
+    any pick (``dispatch_batch`` rejects a not-ready step). Pure read — no lock, no
+    mutation, no dispatch. ``phase-grammar`` is loaded as a consumer (KTD-2: this
+    module already loads siblings via ``load_lib_module``).
+    """
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(repo_root, run_id)
+    # Compute readiness from THIS snapshot (not a fresh ready_steps() re-read) so the
+    # whole proposal is internally consistent — a concurrent dispatch/steering write
+    # between two reads can't produce a proposal whose ready set disagrees with its
+    # phase/predicate. Same readiness predicate ready_steps() applies.
+    by_id = _steps_by_id(rr)
+    scale = rr.get("backend_scale", "three-tier")
+    ready = [u["id"] for u in rr.get("steps", []) if _is_ready(u, by_id, scale)]
+    pred = rr.get("exit_predicate_result") or {}
+    met = bool(pred.get("met"))
+    is_terminal = pg.is_terminal_phase(rr)
+    return {
+        "run": run_id,
+        "current_phase": pg.current_phase(rr),
+        "ready_work_steps": ready,
+        "eligible_plan_steps": [
+            u["id"] for u in rr.get("steps", [])
+            if u.get("phase") == "plan" and u.get("state") == "dispatched"
+        ],
+        "round_robin_plan_pick": pick_next_plan_step_to_advance(rr),
+        "phase_advance_to": (
+            pg.next_phase_after_met(rr) if met and not is_terminal else None
+        ),
+        "predicate_met": met,
+        "contract": (
+            "READ-ONLY. Exactly one advance fires per pulse. The driver MAY pick "
+            "which candidate fires, but the engine validates the pick against "
+            "phase-grammar + the one-advance-per-pulse ordering — an illegal pick "
+            "is rejected, not executed."
+        ),
+    }
+
+
+def digest_surface(repo_root, run_id):
+    """Bounded per-beat digest for the thin pacing shell (Stage C — U8 spike / U9).
+
+    The pacing shell's `fable` boss reads THIS each beat instead of the full
+    run-record. Its size is O(1) in the number of steps and verdicts — it carries
+    state COUNTS, not the step/verdict LISTS — so the boss's resident context stays
+    FLAT across beats even as the run-record grows. That flatness is the property
+    the context-sacred runtime rests on: `converge` returns growing `completed`/
+    `in_flight` LISTS (fine for reconciliation, but O(steps) to read), whereas this
+    digest is the bounded summary a beat needs to pace + decide. Pure read.
+    """
+    pg = load_lib_module("phase-grammar")
+    rr = read_run_record(repo_root, run_id)
+    counts = {}
+    for u in rr.get("steps", []):
+        st = u.get("state", "unknown")
+        counts[st] = counts.get(st, 0) + 1
+    pred = rr.get("exit_predicate_result") or {}
+    return {
+        "run": run_id,
+        "current_phase": pg.current_phase(rr),
+        "predicate_met": bool(pred.get("met")),
+        "step_counts": counts,       # one entry per STATE (<=7), never per step
+        "total_steps": len(rr.get("steps", [])),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -564,6 +643,22 @@ def _cli(argv):
             import json
 
             json.dump(converge(repo, run), sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+            return 0
+        if cmd == "propose":
+            # propose <repo> <run>   (U7 — READ-ONLY candidate-advance set)
+            repo, run = argv[1], argv[2]
+            import json
+
+            json.dump(propose_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+            return 0
+        if cmd == "digest":
+            # digest <repo> <run>   (Stage C — bounded per-beat pacing-shell digest)
+            repo, run = argv[1], argv[2]
+            import json
+
+            json.dump(digest_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
         sys.stderr.write(f"dispatcher.py: unknown subcommand {cmd!r}\n")

@@ -55,7 +55,9 @@ shapes and per-verb rejection modes. In brief:
   run-id), `add-step` (rejects a duplicate id or an unknown dependency),
   `reshape-deps` (rejects a cycle), `force-skip` (requires a reason — R20; cannot
   bury an existing finding — R16), `register-session` (join the PreToolUse
-  ownership set — R21).
+  ownership set — R21), `set-retry-budget` (per-run retry budget the driver owns —
+  `should_escalate` honors it), `set-stall-threshold` (per-step stall threshold the
+  stall clock reads).
 
 This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
 derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb
@@ -67,6 +69,17 @@ or added verb cannot silently leave the contract stale.
 utilities for upgrading a workflow file on disk — deliberately kept out of
 `_VERBS`/`describe` so the locked, set-equality-enforced agent verb surface stays
 the set of verbs an agent actually drives a run with.
+
+## Phase model
+
+`describe` publishes the loop's phase model so an agent orients to phases without
+the skill corpus. Phases run in the workflow's `phase_order`; the default order is
+`plan` → `handoff` → `work`, with `work` the terminal phase. The **current** phase
+is the run-record's `loop_phase` — never `phase_order[0]`, which is only the start
+phase. When a phase's predicate is met and it is not the terminal phase, the engine
+advances to the next phase; at the terminal phase the run can exit. For a live run,
+`describe <run>` overlays THIS run's `phase_order` and current-phase next-action
+onto the static surface above.
 
 ## What stays deterministic
 

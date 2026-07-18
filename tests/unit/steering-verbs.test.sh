@@ -286,6 +286,52 @@ elif op == "status-setup":
     m.record_verdict(repo, "st1", "a", [])
     m.force_skip(repo, "st1", "b", reason="dropped upstream requirement")
     print("ok")
+
+# ── U6: per-run policy steering verbs (set_retry_budget / set_stall_threshold) ─
+elif op == "retry-budget-honored":
+    # set_retry_budget writes step["retry_budget"]; dispatcher.should_escalate reads
+    # it where present, else the settled default of 2 (backward-compatible).
+    disp = m.load_lib_module("dispatcher")
+    fresh("rb1", [U("a")])
+    m.set_retry_budget(repo, "rb1", "a", 1)
+    step = m.read_run_record(repo, "rb1")["steps"][0]
+    step_at1 = {**step, "attempt": 1}          # budget 1, attempt 1 -> escalate
+    default_at1 = {"id": "x", "attempt": 1}    # no budget, attempt 1 -> default 2 holds
+    print(json.dumps({
+        "budget": step["retry_budget"],
+        "escalates_at_budget": disp.should_escalate(step_at1),
+        "default_holds": disp.should_escalate(default_at1),
+    }))
+
+elif op == "retry-budget-rejects":
+    fresh("rb2", [U("a")])
+    try:
+        m.set_retry_budget(repo, "rb2", "a", -1)
+        print("ACCEPTED-BUG")
+    except core.RunRecordError:
+        step = m.read_run_record(repo, "rb2")["steps"][0]
+        print("rejected" if "retry_budget" not in step else "MUTATED")
+
+elif op == "stall-threshold-set":
+    fresh("stt", [U("a")])
+    m.set_stall_threshold(repo, "stt", "a", 999)
+    print(str(m.read_run_record(repo, "stt")["steps"][0]["stall_threshold_seconds"]))
+
+elif op == "stall-threshold-rejects":
+    fresh("stt2", [U("a")])
+    before = m.read_run_record(repo, "stt2")["steps"][0].get("stall_threshold_seconds")
+    try:
+        m.set_stall_threshold(repo, "stt2", "a", 0)
+        print("ACCEPTED-BUG")
+    except core.RunRecordError:
+        after = m.read_run_record(repo, "stt2")["steps"][0].get("stall_threshold_seconds")
+        print("rejected" if after == before else "MUTATED")
+
+elif op == "lock-discipline-retry-budget":
+    print(lock_report(mut.set_retry_budget))
+
+elif op == "lock-discipline-stall-threshold":
+    print(lock_report(mut.set_stall_threshold))
 PYEOF
 }
 
@@ -352,6 +398,26 @@ assert_eq "rejected" "$(driver reshape-unknown-dep)"
 
 it "KTD-2: reshape_deps enters _with_locked_run_record once, leaks no I/O"
 assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline-reshape)"
+
+# ── U6: per-run policy steering verbs ─────────────────────────────────────────
+it "U6: set_retry_budget persists; should_escalate honors it; default holds when unset"
+assert_eq '{"budget": 1, "escalates_at_budget": true, "default_holds": false}' \
+  "$(driver retry-budget-honored)"
+
+it "U6: set_retry_budget rejects a negative budget (run_record unchanged)"
+assert_eq "rejected" "$(driver retry-budget-rejects)"
+
+it "U6: set_stall_threshold persists the per-step threshold"
+assert_eq "999" "$(driver stall-threshold-set)"
+
+it "U6: set_stall_threshold rejects a non-positive seconds (run_record unchanged)"
+assert_eq "rejected" "$(driver stall-threshold-rejects)"
+
+it "KTD-2: set_retry_budget enters _with_locked_run_record once, leaks no I/O"
+assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline-retry-budget)"
+
+it "KTD-2: set_stall_threshold enters _with_locked_run_record once, leaks no I/O"
+assert_eq '{"locked": 1, "leaks": []}' "$(driver lock-discipline-stall-threshold)"
 
 # ── U2 (rest): concurrency — add_step serializes under the shared flock ────────
 # Mirrors run-record.test.sh scenario 4: N concurrent writers each add a DISTINCT

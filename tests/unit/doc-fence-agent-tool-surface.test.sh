@@ -152,6 +152,57 @@ case "$df_missing" in
   *) fail "deliberate-fail: the fence did NOT flag \`add-step\` as missing from the planted doc (got: '${df_missing}') — the fence is vacuous" ;;
 esac
 
+# ─── Scenario 4: the phase model is published by describe AND fenced to the doc ─
+# U1: `describe` composes the phase model (a static schema) so an agent orients to
+# the loop's phases without the skill corpus. Bind each published phase name to the
+# doc with the SAME derive-from-describe discipline as the verb fence above — the
+# required set comes from `describe`, never a hand-kept list here.
+it "describe publishes a phase_model with a non-empty default_phase_order"
+PHASES="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import json, subprocess, sys
+root = sys.argv[1]
+out = subprocess.run(
+    [sys.executable, f"{root}/lib/run_record.py", "describe"],
+    capture_output=True, text=True, check=True,
+).stdout
+pm = json.loads(out).get("phase_model") or {}
+print("\n".join(pm.get("default_phase_order") or []))
+PYEOF
+)"
+if [ -n "$PHASES" ] && [ "$(printf '%s\n' "$PHASES" | wc -l | tr -d ' ')" -ge 2 ]; then
+  pass
+else
+  fail "describe emitted no phase_model.default_phase_order — an agent cannot orient to the phase model from describe"
+fi
+
+# missing_phases <doc> → phase names published by describe but not named in <doc>.
+missing_phases() {
+  local doc="$1" ph out=""
+  while IFS= read -r ph; do
+    [ -z "$ph" ] && continue
+    grep -q -F -- "\`${ph}\`" "$doc" || out+="${ph} "
+  done <<< "$PHASES"
+  printf '%s' "$out"
+}
+
+it "every phase in describe's phase_model is named in agent-tool-surface.md"
+missing_ph="$(missing_phases "$DOC")"
+if [ -z "$missing_ph" ]; then
+  pass
+else
+  fail "these phases are published by describe but NOT named in agent-tool-surface.md: ${missing_ph}
+      the phase model an agent orients by is stale — document them there."
+fi
+
+# Deliberate-fail: re-point the checker at a doc with a phase stripped; it must fire.
+it "deliberate-fail: the phase fence flags a phase stripped from a planted doc"
+sed 's/`work`/`REMOVED-BY-DF-PROBE`/g' "$DOC" > "$tmpdir/doc-ph.md"
+df_missing_ph="$(missing_phases "$tmpdir/doc-ph.md")"
+case "$df_missing_ph" in
+  *work*) pass ;;
+  *) fail "deliberate-fail: the phase fence did NOT flag \`work\` as missing from the planted doc (got: '${df_missing_ph}') — the phase fence is vacuous" ;;
+esac
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "doc-fence-agent-tool-surface.test.sh: ${PASS} passed, ${FAIL} failed"
