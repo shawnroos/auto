@@ -83,6 +83,23 @@ _WORK_ONLY_PHASE_ORDER = ["work"]
 # Only this top-level key is reserved-but-ignored (R3). Every other unknown
 # top-level key is rejected.
 _RESERVED_TOPLEVEL = frozenset({"python_hook"})
+
+# The reserved legible-alias names (→ the stem each shadows) at author time. A
+# recipe authored under one of these names would be silently shadowed by
+# resolve()'s alias→stem rewrite (a file literally named work-only.json resolves
+# to `w`, never itself). validate() rejects them so authoring fails FAST, naming
+# the stem the name would shadow. This is a COPY of lib/recipes.py::_ALIASES (the
+# alias→stem SSOT), not an import, because this module is the validation DAG root
+# and imports no sibling — recipes.py imports THIS module, so importing recipes
+# back would cycle. recipes.py re-exports this map and a drift-guard test asserts
+# `recipes._ALIASES == _RESERVED_ALIAS_STEMS`, so the two copies never diverge
+# (the "keep the literal in sync" pattern ledger_core uses for TICK_COMMAND).
+_RESERVED_ALIAS_STEMS = {
+    "plan-build-review": "a1",
+    "parallel-theories": "a2",
+    "adversarial-pair": "a4",
+    "work-only": "w",
+}
 _KNOWN_TOPLEVEL = frozenset(
     {
         "name",
@@ -249,6 +266,16 @@ def _validate_toplevel(recipe: dict) -> None:
     # filename. validate_and_lint() additionally checks the name matches the
     # filename stem; this regex is the security floor.
     _validate_recipe_name(recipe["name"], source="recipe.name")
+    # A recipe MUST NOT be authored under a reserved legible-alias name: resolve()
+    # rewrites that name to its stem before any file lookup, so the file would be
+    # unreachable (silently shadowed). Reject it here so authoring fails fast.
+    if recipe["name"] in _RESERVED_ALIAS_STEMS:
+        stem = _RESERVED_ALIAS_STEMS[recipe["name"]]
+        _bad(
+            f"recipe name {recipe['name']!r} is a reserved alias for {stem!r} — "
+            f"a recipe under this name would be shadowed by the alias→stem rewrite "
+            f"(lib/recipes.py::_ALIASES); rename it"
+        )
     if not isinstance(recipe["units"], list):
         _bad("units must be a list")
 

@@ -64,6 +64,13 @@ V1_EMITTER_NAMES = recipe_validate.V1_EMITTER_NAMES
 # before the split keep resolving.
 _bad = recipe_validate._bad
 _validate_recipe_name = recipe_validate._validate_recipe_name
+# The reserved-alias-name gate lives in recipe_validate (the DAG root that both
+# validate() and validate_and_lint() funnel through). It holds a copy of the
+# _ALIASES map below; a recipe authored under one of those legible names is
+# rejected at validate time (fail fast) instead of being silently shadowed by
+# resolve()'s alias→stem rewrite. Re-exported so the drift-guard test can assert
+# `_ALIASES == _RESERVED_ALIAS_STEMS` (the two copies never diverge).
+_RESERVED_ALIAS_STEMS = recipe_validate._RESERVED_ALIAS_STEMS
 _check_prompt_template = recipe_validate._check_prompt_template
 _lint_verification_placement = recipe_validate._lint_verification_placement
 _builtin_names = recipe_validate._builtin_names
@@ -92,6 +99,45 @@ A1_BUILTIN = {
         {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {"adapter_op": "next_plan_step"}}
     ],
 }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# U6 (R9): legible names that ALIAS the a1/a2/a4/w shorthand. A PURE alias layer
+# — each legible name resolves to the SAME recipe as its stem. `resolve()`
+# rewrites a legible name to its stem BEFORE the file lookup, so a legible name
+# lands on the stem's recipe at whichever tier it resolves AND inherits the
+# stem's fallback (e.g. `plan-build-review` → `a1`, which still falls back to
+# A1_BUILTIN when no a1.json resolves). The stem files and A1_BUILTIN are NEVER
+# renamed (KTD-6). Each name is confirmed against the recipe's `description`:
+#   a1 "Classic CE Stack — plan, build, review"  → plan-build-review
+#   a2 "Parallel Theories + Judge"               → parallel-theories
+#   a4 "Adversarial Pair + Comparator"           → adversarial-pair
+#   w  "Work-only"                               → work-only
+# RESERVED NAMES: the four legible keys below are rewritten to their stem BEFORE
+# any tier file lookup, so a user recipe literally named e.g. `work-only.json`
+# would be shadowed (it resolves to `w`). These names are reserved aliases — do
+# not author a custom recipe under one of them.
+_ALIASES = {
+    "plan-build-review": "a1",
+    "parallel-theories": "a2",
+    "adversarial-pair": "a4",
+    "work-only": "w",
+}
+
+
+def canonical_name(name):
+    """Rewrite a legible alias to its shorthand stem; identity for a non-alias.
+
+    The SINGLE public accessor for the alias→stem rewrite (SSOT: ``_ALIASES``).
+    ``resolve()`` routes through it, and ``recommender.py --check-agrees``
+    canonicalizes the agent's recommended value through it BEFORE the stem-
+    equality / skip-eligibility comparison — so an alias-form recommendation
+    (`plan-build-review`) resolves to its stem (`a1`) and can reach the skip tier
+    exactly where the bare stem would. Keeping this one function the only rewrite
+    site is what lets ``launch-gate.SKIP_ELIGIBLE_RECIPES`` hold STEMS ONLY (no
+    dead alias entries): aliases are folded to stems here, upstream of the check.
+    """
+    return _ALIASES.get(name, name)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -131,6 +177,12 @@ def resolve(name: str, repo_root: str):
     path construction (fail closed before touching the filesystem).
     """
     _validate_recipe_name(name, source="--recipe argument")
+    # U6 (R9): rewrite a legible alias to its shorthand stem BEFORE any path
+    # construction or the `name == "a1"` constant fallback — so a legible name
+    # resolves to the stem's recipe at every tier AND inherits the stem's
+    # A1_BUILTIN fallback. Validation runs on the ORIGINAL name first (defense);
+    # a non-alias name passes through unchanged.
+    name = canonical_name(name)
     for tier, d in _tier_dirs(repo_root):
         path = os.path.join(d, f"{name}.json")
         if os.path.isfile(path):

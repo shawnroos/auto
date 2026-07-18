@@ -19,6 +19,10 @@ The engine is **workflow-blind**: it drives any workflow through a thin adapter
   recovery / continuation path.
 - **`/auto-author-recipe`** — author a new recipe from a plain-language
   description (you never write JSON).
+- **`/auto-preset <name> <target>`** — run one **preset** (a named, reusable
+  step payload — a tuned review, a scoped build) one-shot against a target: no
+  flow, no loop. The agent proposes a context-fit check you accept or edit, runs
+  it once, and returns a `pass` / `fail` / `unverified` verdict.
 
 ## Recipes (v0.3.0)
 
@@ -59,6 +63,15 @@ for the format.
 loop the tick blind — run the prepared invocation and report back. For an
 already-reviewed plan, `--recipe w` skips the plan-loop so it doesn't re-derive
 finished work.
+
+## Concepts
+
+`CONCEPTS.md` is the canonical vocabulary. The plain terms map to the historical
+code identifiers, which stay as-is (referenced in the thousands + pinned by locked
+contracts): **workflow** ← `recipe`, **step** ← `unit`, **preset** ← `content`,
+**backend** ← `adapter`, **dispatcher** ← `orchestrator`, **producer** ← `emitter`,
+**pulse** ← `tick`, **handoff** ← `seam`, **run-record** ← `ledger`. The shape in
+one line: **a workflow is an ordered set of steps; each step runs a preset.**
 
 ## Contracts
 

@@ -354,6 +354,43 @@ adapter's `do_unit()` returns `"invocation": "/ce-work %s"` and `review()`
 is the PARSE half (it maps the returned findings onto the shared severity
 scale); the launch label for `review` is `/ce-code-review`, set here.
 
+### One-shot preset verdict (v0.14.0 — driver-orchestrated, READ-ONLY)
+
+The `auto-preset` skill runs a *preset* one-shot: it loads a preset,
+dispatches its op **once**, and produces a terminal pass/fail verdict —
+WITHOUT the tick loop, a `/goal`, or any `ScheduleWakeup`. Two thin
+helpers in `lib/preset_oneshot.py` back this; the skill owns all control
+flow (KTD-3), and drives both through each module's CLI (`_cli`/`__main__`):
+
+- `build_oneshot_launch(preset, repo)` — the driver-side launch
+  descriptor: the preset's `adapter_op`, plus the `prompt_template` body
+  when the preset declares one (KTD-5 — the tuning folds at the DRIVER
+  launch, never via an adapter edit). The template resolves workspace-repo
+  first, then the built-in root.
+- `oneshot_verdict(ratified_criteria, programmatic_results, judge_verdicts)`
+  — the terminal verdict. It takes the ratified criteria list **directly**
+  (there is no synthesized unit). The skill resolves every ratified
+  criterion **inline before** calling it (programmatic in-process;
+  `model_judge` from the dispatched agent; `advisor_judge`/`human` by a
+  blocking resolution), so there are no `pending_judges` at verdict time —
+  a pending judge here is a caller error and raises `OneShotIncomplete`,
+  never a silent pass.
+
+**Boundary from the iteration gate (KTD-1).** `oneshot_verdict` reuses
+ONLY the pure `verification.aggregate` evaluator and re-labels its
+advance/iterate SIGNAL to a terminal `pass`/`fail` (all resolved pass →
+`pass`; any resolved fail → `fail`; **no ratified criteria →
+`unverified`**, never a silent `pass` in a gating mechanism). It is **read-only** over the
+criteria: it does NOT import `lib/iteration.py`, does NOT commit an
+iteration `decision`, and writes no `decision` field. This is
+distinct from §2's *Reading the decision* path — that is the looping
+recipe's gate-decision commit (`iteration.resolve_gate_verification` →
+`set_verdict_decision`); the one-shot verdict is a terminal report that
+touches neither the §11 gate-steering semantics nor the ledger's
+`decision` channel. `tests/unit/import-topology.test.sh` pins the
+no-`iteration`-import boundary; `tests/unit/one-shot-verdict.test.sh`
+pins the no-`decision`-written boundary.
+
 ### When ScheduleWakeup IS the right mechanism
 
 Polling is correct ONLY when activity stopped for a long period

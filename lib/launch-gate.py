@@ -99,6 +99,16 @@ KIND_CUSTOM = "custom"
 # eligibility policy lives WITH the skip decision, not in the router (round-2
 # adversarial: an agent classifying to `vague`/`code-unreviewed` and recommending
 # `pipeline`/`review` must not obtain router_agrees=true and skip the chooser).
+# U6 (R9): this set holds STEMS ONLY. The legible aliases
+# (`plan-build-review`/`work-only`) are skip-eligible wherever their stems are,
+# but that equivalence is realized UPSTREAM of this check, not by extra entries
+# here: `recommender.py --check-agrees` canonicalizes the agent's recommended
+# value to its shorthand stem (recipes.canonical_name / lib/recipes.py::_ALIASES)
+# BEFORE testing `pick in eligible`. So an alias-form recommendation folds to
+# `a1`/`w` and lands in this set as its stem, while the set stays free of alias
+# entries that would otherwise be dead code (the router's `pick` — from
+# recommender._TAXONOMY — is always a bare stem, so an alias key here could never
+# match `pick == stem` and never be consulted).
 SKIP_ELIGIBLE_RECIPES = frozenset({"a1", "w"})
 
 # Gate-type taxonomy (v0.7.0). Only `programmatic` is deterministic enough to be

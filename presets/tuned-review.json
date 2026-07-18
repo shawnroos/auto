@@ -1,0 +1,9 @@
+{
+  "name": "tuned-review",
+  "version": "1",
+  "description": "A tuned code-review preset — runs the `review` adapter op with a focused review prompt. Fire it one-shot against a diff/branch to get a review plus a ratified verdict, no flow armed.",
+  "invokes": {
+    "adapter_op": "review",
+    "prompt_template": "presets/tuned-review.prompt.md"
+  }
+}

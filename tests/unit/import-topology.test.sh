@@ -120,6 +120,40 @@ else
   fail "these consumers bypass the ledger facade: ${violators}— load \"ledger\" instead"
 fi
 
+# ─── presets DAG: the validator stays a light leaf (KTD-2) ─────────────────
+# lib/presets.py (U1, addressable-step-contents) reuses recipe_validate's
+# primitives + the adapter_ops leaf, but MUST NOT import orchestrator.py — that
+# module pulls in the ledger and the whole dispatch surface. Keeping the preset
+# validator off the heavy dispatch module is the KTD-2 boundary.
+it "presets.py does NOT import orchestrator (KTD-2 leaf boundary)"
+if loads_sibling "presets.py" "orchestrator"; then
+  fail "presets.py must not import orchestrator — the preset validator is a light leaf (KTD-2); import adapter_ops for VALID_ADAPTER_OPS instead"
+else
+  pass
+fi
+
+# ─── preset_oneshot DAG: the one-shot verdict stays off the iteration gate ──
+# lib/preset_oneshot.py (U4, addressable-step-contents) is the one-shot
+# terminal-verdict helper. KTD-1 boundary: the one-shot verdict is a
+# READ-ONLY terminal aggregate over the ratified criteria — it reuses ONLY the
+# pure verification evaluator, and MUST NOT import lib/iteration.py (the
+# iteration-decision-commit module). Importing iteration would silently re-acquire
+# the loop's advance/iterate gate semantics and kill the "run once" guarantee
+# (Risk R-A). It may load `verification` (the pure aggregator) but never `iteration`.
+it "preset_oneshot.py does NOT import iteration (KTD-1 boundary — no gate decision-commit)"
+if loads_sibling "preset_oneshot.py" "iteration"; then
+  fail "preset_oneshot.py must not import iteration — the one-shot verdict is a read-only terminal aggregate (KTD-1); reuse verification.aggregate directly, never the iteration decision-commit"
+else
+  pass
+fi
+
+it "adapter_ops.py imports NO sibling lib module (pure-stdlib leaf)"
+if grep -q "load_lib_module(" "$LIB/adapter_ops.py"; then
+  fail "adapter_ops.py must be a pure-stdlib leaf — it is the shared VALID_ADAPTER_OPS source of truth and must import no sibling"
+else
+  pass
+fi
+
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of ledger_mutators.py with a forbidden facade import added;
 # the loads_sibling check MUST flag it. (We test the predicate directly against
