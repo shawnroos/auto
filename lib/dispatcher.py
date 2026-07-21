@@ -85,7 +85,7 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_run_record, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_run_record, load_lib_module, resolve_repo  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 run_record = load_run_record()
 
@@ -185,10 +185,13 @@ def _ancestor_ids(step_id: str, by_id: dict) -> set:
     return ancestors
 
 
-def _is_ready(step: dict, by_id: dict, scale: str = "three-tier") -> bool:
+def _is_ready(step: dict, by_id: dict, scale: str = "three-tier",
+              current_phase: str | None = None) -> bool:
     """A step is READY (dispatchable now) iff:
 
       * state == "pending", AND
+      * its declared ``phase`` is the run's current phase (when ``current_phase``
+        is supplied — see below), AND
       * every DIRECT dependency is *satisfied* (see _dependency_satisfied), AND
       * NO transitive ancestor is in state "stalled".
 
@@ -196,8 +199,24 @@ def _is_ready(step: dict, by_id: dict, scale: str = "three-tier") -> bool:
     (we never dispatch against an unknown predecessor). ``scale`` is threaded into
     the satisfaction check so blocker-only runs treat a major-only predecessor as
     satisfied (Bug #3 — same gating decision as terminality / met).
+
+    U4 (finding #3): the plan step is DELIBERATELY left ``pending`` after plan-done
+    (its advance is tracked in ``run_record["plan_step"]``, not a step state
+    transition — see ``run_record_predicate._compute_terminality``), so without a
+    phase gate ``ready_steps`` returns the phase=plan step during the ``work``
+    phase and a naive driver dispatches ``/ce-work plan``. When ``current_phase``
+    is supplied, a step whose *declared* ``phase`` differs from it is NOT ready.
+    A step with NO ``phase`` field (workflow-blind v0.1.x) is never filtered
+    (``current_phase=None`` also disables the gate) — backward-compatible.
     """
     if step.get("state") != "pending":
+        return False
+
+    # Phase gate (U4 / finding #3): only dispatch steps that belong to the run's
+    # current phase. Gate ONLY when both the caller's current_phase and the step's
+    # own phase are known and differ — a phaseless legacy step stays dispatchable.
+    step_phase = step.get("phase")
+    if current_phase is not None and step_phase is not None and step_phase != current_phase:
         return False
 
     # Direct-dependency satisfaction.
@@ -225,7 +244,14 @@ def ready_steps(repo_root: str, run_id: str):
     run_record = read_run_record(repo_root, run_id)
     by_id = _steps_by_id(run_record)
     scale = run_record.get("backend_scale", "three-tier")
-    return [u["id"] for u in run_record.get("steps", []) if _is_ready(u, by_id, scale)]
+    # U4 (finding #3): phase-scope readiness so a deliberately-pending plan step
+    # is not dispatchable during the work phase. current_phase comes from the ONE
+    # phase-decision module (KTD-2: this module already loads siblings lazily).
+    current_phase = load_lib_module("phase-grammar").current_phase(run_record)
+    return [
+        u["id"] for u in run_record.get("steps", [])
+        if _is_ready(u, by_id, scale, current_phase=current_phase)
+    ]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -306,7 +332,13 @@ def propose_surface(repo_root, run_id):
     # phase/predicate. Same readiness predicate ready_steps() applies.
     by_id = _steps_by_id(rr)
     scale = rr.get("backend_scale", "three-tier")
-    ready = [u["id"] for u in rr.get("steps", []) if _is_ready(u, by_id, scale)]
+    # U4 (finding #3): phase-scope readiness identically to ready_steps() so the
+    # proposal's ready set never disagrees with what ready_steps() would dispatch.
+    _cp = pg.current_phase(rr)
+    ready = [
+        u["id"] for u in rr.get("steps", [])
+        if _is_ready(u, by_id, scale, current_phase=_cp)
+    ]
     pred = rr.get("exit_predicate_result") or {}
     met = bool(pred.get("met"))
     is_terminal = pg.is_terminal_phase(rr)
@@ -620,6 +652,25 @@ def converge(repo_root, run_id):
 # in the .sh shim, never in a command .md body).
 
 
+def _repo_run_optional(argv):
+    """Resolve ``(repo, run)`` for a read subcommand that takes ``[<repo>] <run>``.
+
+    U5 (finding #7): ``digest``/``propose`` were documented as
+    ``bash lib/dispatcher.sh digest <run>`` (one positional) but the CLI did
+    ``repo, run = argv[1], argv[2]`` → an IndexError on the documented form. This
+    mirrors ``run_record.sh``'s convention (repo auto-resolved from cwd, pass only
+    ``<run>``): with TWO positionals ``<repo> <run>`` is honored (back-compat);
+    with ONE, ``<repo>`` resolves from cwd via ``resolve_repo()``. ``argv`` is the
+    full CLI argv including the subcommand at index 0. Raises ``DispatcherError``
+    (a clean usage error, not a stack trace) when no run id is supplied.
+    """
+    if len(argv) >= 3:
+        return argv[1], argv[2]
+    if len(argv) == 2:
+        return resolve_repo(), argv[1]
+    raise DispatcherError(f"usage: dispatcher.py {argv[0]} [<repo>] <run>")
+
+
 def _cli(argv):
     if not argv:
         sys.stderr.write("usage: dispatcher.py <subcommand> ...\n")
@@ -646,16 +697,16 @@ def _cli(argv):
             sys.stdout.write("\n")
             return 0
         if cmd == "propose":
-            # propose <repo> <run>   (U7 — READ-ONLY candidate-advance set)
-            repo, run = argv[1], argv[2]
+            # propose [<repo>] <run>   (U7 — READ-ONLY candidate-advance set)
+            repo, run = _repo_run_optional(argv)
             import json
 
             json.dump(propose_surface(repo, run), sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
         if cmd == "digest":
-            # digest <repo> <run>   (Stage C — bounded per-beat pacing-shell digest)
-            repo, run = argv[1], argv[2]
+            # digest [<repo>] <run>   (Stage C — bounded per-beat pacing-shell digest)
+            repo, run = _repo_run_optional(argv)
             import json
 
             json.dump(digest_surface(repo, run), sys.stdout, indent=2, sort_keys=True)

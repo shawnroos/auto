@@ -935,6 +935,59 @@ orch_propose_json "propose-ready" >/dev/null
 fp_after="$(fp "$LP")"
 assert_eq "$fp_before" "$fp_after"
 
+# ─── U5 (finding #7): digest/propose CLI resolve repo from cwd ────────────────
+# driver-reference.md documents `bash lib/dispatcher.sh digest <run>` (ONE
+# positional), but the CLI did `repo, run = argv[1], argv[2]` (TWO) → an
+# IndexError ("bad arguments: list index out of range"). The fix mirrors
+# run_record.sh's "repo auto-resolved from cwd, pass only <run>" convention:
+# <repo> becomes optional for digest and propose. Run the one-positional form
+# FROM the repo cwd so resolve_repo() finds the run-record.
+orch_cli_from_repo() {
+  # args: <subcommand> <positionals...>  — invoked with cwd == $REPO.
+  ( cd "$REPO" && "$PY" "$ORCH_PY" "$@" )
+}
+
+it "U5 #7: digest <run> (one positional, repo from cwd) → valid JSON, no IndexError"
+run_record_init "digest-1arg" '[{"id":"w1","state":"pending","phase":"work"}]'
+DIG1="$(orch_cli_from_repo digest "digest-1arg" 2>&1)"
+assert_eq "True" "$("$PY" - "$DIG1" <<'PYEOF'
+import json, sys
+try:
+    d = json.loads(sys.argv[1]); print(d.get("run") == "digest-1arg")
+except Exception:
+    print(False)
+PYEOF
+)"
+
+it "U5 #7: digest <repo> <run> (two positionals) → still works (back-compat)"
+DIG2="$("$PY" "$ORCH_PY" digest "$REPO" "digest-1arg" 2>&1)"
+assert_eq "True" "$("$PY" - "$DIG2" <<'PYEOF'
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("run") == "digest-1arg")
+except Exception:
+    print(False)
+PYEOF
+)"
+
+it "U5 #7: propose <run> (one positional, repo from cwd) → valid JSON (same fix)"
+PROP1="$(orch_cli_from_repo propose "digest-1arg" 2>&1)"
+assert_eq "True" "$("$PY" - "$PROP1" <<'PYEOF'
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("run") == "digest-1arg")
+except Exception:
+    print(False)
+PYEOF
+)"
+
+it "U5 #7: digest with NO positionals → clean usage error (non-zero, no traceback)"
+ERR="$(orch_cli_from_repo digest 2>&1 >/dev/null)"; RC=$?
+# DispatcherError channel → exit 1 with a `usage: ...` message (exit 2 is reserved
+# for an unknown subcommand). Either way: non-zero AND no Python traceback.
+if [ "$RC" -ne 0 ] && ! printf '%s' "$ERR" | grep -q "Traceback"; then pass; else \
+  fail "expected clean non-zero error, got rc=$RC err='$ERR'"; fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "dispatcher.test.sh: ${PASS} passed, ${FAIL} failed"

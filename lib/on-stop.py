@@ -280,6 +280,67 @@ def _reason_for(blocking) -> str:
     )
 
 
+def _nag_signature(blocking) -> str:
+    """A deterministic signature of the blocking set (U2 / finding #9).
+
+    Two turn-ends have the "same" block iff the same runs are blocking with the
+    same severity shape — that is what the driver already saw the full guidance
+    for. Sorted so run order can't perturb it.
+    """
+    items = sorted(
+        (
+            rid,
+            int(p.get("blockers", 0) or 0),
+            int(p.get("majors", 0) or 0),
+            bool(p.get("all_steps_terminal")),
+        )
+        for rid, p in blocking
+    )
+    return json.dumps(items, sort_keys=True)
+
+
+def _nag_state_path(repo_root: str) -> str:
+    # A DOTFILE, so the `*.json` run-record glob (glob excludes leading-dot names)
+    # never sweeps it; U1's shape guard is a second backstop.
+    return os.path.join(repo_root, ".claude", "auto", ".stop-nag.json")
+
+
+def _load_last_nag(repo_root: str):
+    try:
+        with open(_nag_state_path(repo_root)) as fh:
+            return json.load(fh).get("sig")
+    except Exception:
+        return None
+
+
+def _store_nag(repo_root: str, sig: str) -> None:
+    try:
+        path = _nag_state_path(repo_root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump({"sig": sig}, fh)
+    except Exception:
+        pass  # rel-001: never let nag-state I/O break the stop machinery.
+
+
+def _clear_nag(repo_root: str) -> None:
+    try:
+        os.remove(_nag_state_path(repo_root))
+    except OSError:
+        pass
+
+
+def _terse_reason_for(blocking) -> str:
+    """The DEDUPED one-liner (U2): the driver already saw the full guidance for
+    this exact blocking state on a prior turn, so just remind — still blocking."""
+    runs = ", ".join(rid for rid, _ in blocking)
+    return (
+        f"auto: still blocked — {runs} (unchanged). Yield for in-flight work "
+        "(the harness re-invokes on a verdict), or `/auto-resume abort <run>` "
+        "to stop early."
+    )
+
+
 def decide(repo_root: str, stdin_raw: str) -> dict | None:
     """Return the decision dict to print, or None to allow stop silently.
 
@@ -300,7 +361,22 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
 
     blocking = _blocking_runs(repo_root)
     if not blocking:
+        _clear_nag(repo_root)  # reset so a future block re-emits full guidance.
         return None  # nothing active+unmet => allow stop silently.
+
+    # U2 (finding #9): de-duplicate the ~10x identical nag across turns. The block
+    # is ALWAYS preserved (deliberate-stop); only the MESSAGE is collapsed to a
+    # terse reminder once the driver has already seen the full guidance for this
+    # exact blocking state. A changed/cleared state re-emits the full guidance.
+    sig = _nag_signature(blocking)
+    repeat = sig == _load_last_nag(repo_root)
+    _store_nag(repo_root, sig)
+
+    if repeat:
+        return {
+            "decision": "block",
+            "reason": _terse_reason_for(blocking),
+        }
 
     return {
         "decision": "block",

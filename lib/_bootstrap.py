@@ -327,6 +327,20 @@ def build_pulse_prompt(run_id) -> str:
     return f"{PULSE_COMMAND} {run_id}"
 
 
+# The repo-relative shell entry that actually fires a pulse (U6 / finding #5). The
+# `/auto:auto-pulse <run>` slash command is not in the skill list and re-invoking
+# `auto:auto` is circular, so the driving model may be unable to fire the pulse
+# from the `prompt` alone. The `arm-pulse` intent therefore ALSO names this exact
+# runnable — `pulse.sh` re-splits its single "$ARGUMENTS" arg into argv, so the
+# run-id and `--auto` flag travel as ONE quoted string (matches the command .md's
+# `bash lib/pulse.sh "$ARGUMENTS"` form).
+def build_pulse_runnable(run_id) -> str:
+    """The exact shell runnable that fires the next pulse: ``bash lib/pulse.sh
+    "<run> --auto"``. The ONE builder of this string (mirrors build_pulse_prompt),
+    so every arm site names the runnable identically."""
+    return f'bash lib/pulse.sh "{run_id} --auto"'
+
+
 def build_arm_intent(run_id, prompt, note, extra=None):
     """The `arm-pulse` INTENT envelope emitted by the non-pulse arm sites.
 
@@ -337,7 +351,16 @@ def build_arm_intent(run_id, prompt, note, extra=None):
     pass them via ``extra`` (an ordered dict) so the emitted key order stays
     byte-identical to the hand-built envelopes the stdout-contract tests assert.
     """
-    intent = {"action": "arm-pulse", "run": run_id, "prompt": prompt}
+    # `runnable` (U6 / finding #5) sits beside `prompt`: the slash-command prompt
+    # is kept for back-compat, and `runnable` names the exact shell entry a driver
+    # can fire directly. Placed before `extra`/`note` so the trailing envelope
+    # shape the stdout-contract tests assert (action == "arm-pulse") is unchanged.
+    intent = {
+        "action": "arm-pulse",
+        "run": run_id,
+        "prompt": prompt,
+        "runnable": build_pulse_runnable(run_id),
+    }
     if extra:
         intent.update(extra)
     intent["note"] = note
@@ -415,9 +438,23 @@ def iter_worktree_run_records(repo_root: str):
     over ``load_run_record_safe``. Never raises: a missing dir yields nothing.
     """
     dispatch_dir = os.path.join(repo_root, ".claude", "auto")
+    # Shape guard (U1 / finding A): a real run-record always carries the loop/phase
+    # machinery; a config or sidecar that merely happens to be a valid JSON dict
+    # (e.g. auto's own ``rules.json``) never does. Skip any loaded dict that has
+    # NONE of these keys so it is not swept up as a phantom run — which would block
+    # stop forever via on-stop.py's ``_is_blocking`` (rules.json has no phase field
+    # → current_phase defaults to "plan", no loop → no carve-out, no predicate →
+    # blocked). Fixing the shared enumerator here fixes every consumer (on-stop,
+    # auto-status, auto-resume, on-pretooluse-action, launch-mode) at once. The
+    # phase-field name comes from phase-grammar's single source (LOOP_PHASE_KEY) —
+    # lazy-loaded like iter_active_runs, keeping the raw field literal out of this
+    # module per the AST-lint's single-source rule.
+    shape_keys = {"loop", "run_id", load_lib_module("phase-grammar").LOOP_PHASE_KEY}
     for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
         led = load_run_record_safe(path)
         if led is None:
+            continue
+        if not (shape_keys & led.keys()):
             continue
         run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
         yield run_id, led

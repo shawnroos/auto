@@ -190,12 +190,32 @@ def _compute_terminality(run_record: dict) -> dict:
     current_phase_steps = [
         u for u in run_record.get("steps", []) if u.get("phase") == current_phase
     ]
+    # U4 (finding #4): the eval-phase-scoped terminality — the ONE terminality
+    # fact that gates `met` in the work/handoff/done branch. Computed HERE (was
+    # inline in _evaluate_met) so both the met decision AND the reported
+    # `all_steps_terminal` draw from the same value and can never contradict
+    # (met:true beside all_steps_terminal:false was the field-notes #4 bug — the
+    # report used the GLOBAL value, which includes the deliberately-pending plan
+    # step). "done" is treated as terminal-equivalent: it remaps to terminal_phase
+    # steps, mirroring _evaluate_met's post-terminal handling.
+    eval_phase = terminal_phase if current_phase == "done" else current_phase
+    eval_phase_steps = (
+        current_phase_steps
+        if current_phase != "done"
+        else [u for u in run_record.get("steps", []) if u.get("phase") == terminal_phase]
+    )
+    all_terminal_in_eval_phase = all(
+        step_is_terminal(u, scale) for u in eval_phase_steps
+    )
     return {
         "current_phase": current_phase,
         "terminal_phase": terminal_phase,
         "scale": scale,
         "all_steps_terminal_global": all_steps_terminal_global,
         "current_phase_steps": current_phase_steps,
+        "eval_phase": eval_phase,
+        "eval_phase_steps": eval_phase_steps,
+        "all_terminal_in_eval_phase": all_terminal_in_eval_phase,
     }
 
 
@@ -281,15 +301,11 @@ def _evaluate_met(run_record: dict, counts: tuple, gaps_open, term: dict) -> boo
         # treatment here; today "done" is the only post-terminal value.
         # For v0.2.0's workflows terminal_phase is always "work"; v0.2.1's A3 will
         # have non-work terminal phases and this gate becomes load-bearing.
-        eval_phase = terminal_phase if current_phase == "done" else current_phase
-        eval_phase_steps = (
-            current_phase_steps
-            if current_phase != "done"
-            else [u for u in run_record.get("steps", []) if u.get("phase") == terminal_phase]
-        )
-        all_terminal_in_eval_phase = all(
-            step_is_terminal(u, scale) for u in eval_phase_steps
-        )
+        # eval-phase terminality is computed ONCE in _compute_terminality (U4) so
+        # `met` here and the reported `all_steps_terminal` cannot diverge.
+        eval_phase = term["eval_phase"]
+        eval_phase_steps = term["eval_phase_steps"]
+        all_terminal_in_eval_phase = term["all_terminal_in_eval_phase"]
         has_steps_in_phase = bool(eval_phase_steps)
         met = (
             eval_phase == terminal_phase
@@ -345,7 +361,15 @@ def recompute_predicate(run_record: dict) -> dict:
         "majors": majors,
         "minors": minors,
         "gaps_open": gaps_open,
-        "all_steps_terminal": bool(term["all_steps_terminal_global"]),
+        # U4 (finding #4): report the EVAL-phase-scoped terminality — the same
+        # value that gates `met` — so the exit report is never self-contradictory
+        # (met:true beside all_steps_terminal:false). The GLOBAL value (which
+        # includes the deliberately-pending plan step) is retained under an
+        # explicit key for any consumer that genuinely wants cross-phase
+        # terminality; all current consumers use this field only for reason/display
+        # text, so phase-scoping makes those messages accurate.
+        "all_steps_terminal": bool(term["all_terminal_in_eval_phase"]),
+        "all_steps_terminal_global": bool(term["all_steps_terminal_global"]),
         "iteration_pending": iteration_pending,
     }
 
