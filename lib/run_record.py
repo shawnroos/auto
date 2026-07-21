@@ -111,6 +111,7 @@ read_run_record = run_record_core.read_run_record
 
 transition = run_record_mutators.transition
 record_verdict = run_record_mutators.record_verdict
+record_spawned_agent = run_record_mutators.record_spawned_agent
 set_loop = run_record_mutators.set_loop
 set_gaps_open = run_record_mutators.set_gaps_open
 set_enumerated_steps = run_record_mutators.set_enumerated_steps
@@ -365,6 +366,13 @@ def _h_record_verdict(argv):
     return 0
 
 
+def _h_record_spawned_agent(argv):
+    # record-spawned-agent <run> <step> <agent-id>
+    run, step, agent_id = argv[1], argv[2], argv[3]
+    record_spawned_agent(resolve_repo(), run, step, agent_id)
+    return 0
+
+
 def _h_set_verdict_decision(argv):
     # set-verdict-decision <run> <gate-step> <decision> [json-payload]
     run, gate_step, decision = argv[1], argv[2], argv[3]
@@ -472,6 +480,11 @@ _VERBS = {
         "<run> <step> <findings-json> [attempt]",
         rejects="StaleVerdict if attempt is older than the step's current dispatch "
         "generation; InvalidTransition from a non-verdict-writable state.",
+    ),
+    "record-spawned-agent": _Verb(
+        _h_record_spawned_agent,
+        "<run> <step> <agent-id>",
+        rejects="RunRecordError on a blank agent-id; the named step must exist.",
     ),
     "set-gaps-open": _Verb(_h_set_gaps_open, "<run> <n>"),
     "set-enumerated-steps": _Verb(_h_set_enumerated_steps, "<run> <step> <payload-json>"),

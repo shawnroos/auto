@@ -173,6 +173,23 @@ try:
             # A dict run-record with no run_id key → run_id falls back to the stem.
             write(os.path.join(adir, "stemname.json"), '{"loop_phase": "work"}')
             print(" ".join(rid for rid, _ in b.iter_worktree_run_records(tmp)))
+        elif scenario == "iter_config_only":
+            # U1 (finding A): the dir holds ONLY auto's own rules.json config —
+            # a valid JSON dict lacking loop/loop_phase/run_id. It must NOT be
+            # yielded as a run (else on-stop blocks stop forever from any session
+            # under ~). Expect ZERO runs.
+            write(os.path.join(adir, "rules.json"),
+                  '{"format": "auto-rules/v1", "rules": [{"name": "honest"}]}')
+            got = list(b.iter_worktree_run_records(tmp))
+            print("RUNS:%d" % len(got))
+        elif scenario == "iter_config_mixed":
+            # A real run-record (has loop_phase) beside the rules.json config →
+            # only the real run is yielded; the config is skipped by shape.
+            write(os.path.join(adir, "rules.json"),
+                  '{"format": "auto-rules/v1", "rules": []}')
+            write(os.path.join(adir, "realrun.json"),
+                  '{"run_id": "real-run", "loop_phase": "work"}')
+            print(" ".join(rid for rid, _ in b.iter_worktree_run_records(tmp)))
         else:
             sys.exit("unknown scan scenario: %s" % scenario)
 finally:
@@ -206,6 +223,12 @@ assert_eq "good-run" "$(probe_scan iter_skip)"
 
 it "iter_worktree_run_records: run_id falls back to the filename stem when run_record has no run_id"
 assert_eq "stemname" "$(probe_scan iter_runid_fallback)"
+
+it "iter_worktree_run_records: U1 finding A — a lone rules.json config yields ZERO runs (shape guard)"
+assert_eq "RUNS:0" "$(probe_scan iter_config_only)"
+
+it "iter_worktree_run_records: U1 finding A — real run beside rules.json → only the real run"
+assert_eq "real-run" "$(probe_scan iter_config_mixed)"
 
 # ── coerce_confidence (U6: the shared confidence clamp) ─────────────────────
 # One clamp consolidated from two byte-identical private copies — a SAFETY gate

@@ -157,6 +157,51 @@ def aggregate(criteria, programmatic_results: dict, judge_verdicts: dict) -> dic
     return {"signal": signal, "pending_judges": []}
 
 
+# ── Baseline-health precheck + verification-deferred-to-CI (U10 / finding D) ──
+# Runs BEFORE a run arms so a baseline-RED signal (e.g. an ungenerated env file
+# breaking `typecheck`) surfaces as an arm-time blocker, not inside U1's verdict
+# where every "typecheck passes" gate would read meaninglessly. Split for
+# testability: baseline_health() is the fuzzy check (I/O); baseline_blocks_arm()
+# is the crisp decision. A check marked ``defer_to_ci`` is CI-owned — NOT run
+# inline (so a known-flaky/slow local suite like Karma can't strand the run) and
+# never a baseline blocker; that is a DIFFERENT signal from baseline breakage.
+
+
+def baseline_health(criterion: dict, cwd: Optional[str] = None) -> dict:
+    """Evaluate one baseline-health check. Reuses ``evaluate_programmatic`` (so it
+    inherits the never-raises + timeout contract). Returns
+    ``{"check", "healthy": bool, "deferred": bool, "evidence": str}``.
+
+    ``defer_to_ci`` short-circuits: the check is NOT executed inline (verification
+    is CI-owned), so ``healthy`` is reported True (it is not a baseline failure)
+    and ``deferred`` is True — the crisp decision below never counts it as a block.
+    """
+    cid = criterion.get("id")
+    if criterion.get("defer_to_ci"):
+        return {
+            "check": cid,
+            "healthy": True,
+            "deferred": True,
+            "evidence": "verification deferred to CI (not run inline)",
+        }
+    result = evaluate_programmatic(criterion, cwd=cwd)
+    return {
+        "check": cid,
+        "healthy": result["status"] == "pass",
+        "deferred": False,
+        "evidence": result["evidence"],
+    }
+
+
+def baseline_blocks_arm(results) -> bool:
+    """The crisp arm-gate decision: block the run iff any baseline check ran inline
+    (not deferred) and failed. Pure over the ``baseline_health`` result list."""
+    return any(
+        (not r.get("healthy")) and (not r.get("deferred"))
+        for r in (results or [])
+    )
+
+
 # ── op-dispatch CLI (exercised by tests/unit/verification.test.sh) ───────────
 def _cli(argv) -> int:
     import json

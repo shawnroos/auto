@@ -92,6 +92,17 @@ pause), never the fuzzy judgment. Full contract: `driver-reference.md`.
 
 ## 2. Arm the pulse chain
 
+**Baseline-health precheck (U10 / finding D) — before you arm.** Run the repo's
+baseline signal (typecheck / the configured gate) via
+`verification.baseline_health(check)` and, if `verification.baseline_blocks_arm(...)`
+is True, surface it as an arm-time blocker and do NOT arm — a baseline-RED repo
+(e.g. an ungenerated env file) makes every step's "typecheck passes" gate
+meaningless, and this catches it before U1 instead of inside U1's verdict. A check
+whose config sets `defer_to_ci: true` is CI-owned: it is NOT run inline (so a
+known-flaky/slow local suite can't strand the run) and never counts as a baseline
+failure. Measure the baseline BEFORE any step runs — a pre-existing red is the
+finding, not a step regression.
+
 Fire the first pulse. The command is NAMESPACED (`/auto:auto-pulse`) — a plugin
 slash command fired programmatically (ScheduleWakeup / loop) only resolves in
 its `/<plugin>:<command>` form; the bare `/auto-pulse` is "Unknown command":
@@ -164,7 +175,19 @@ IS the wake signal. Per wave:
    off-spine step, U11). `dispatch_batch` never consults the backend, so
    THIS mapping is the driver's job — see `driver-reference.md` §7.
    Each agent self-writes its verdict via `run_record.record_verdict` —
-   durable independent of this session.
+   durable independent of this session. **Build each agent's prompt from the
+   canonical template** — `dispatch_prompt.build_dispatch_prompt(run, step,
+   attempt, goal=…)` (U7) — rather than hand-wiring it: it renders the step
+   packet, the R21 register-session line, the record-before-yield mandate, and
+   the `run_record.sh record-verdict` contract with the attempt tag, so every
+   wave wires identically. **Record-before-yield (finding #2):** an agent MUST
+   write its verdict BEFORE any long-running background wait (a >120s suite, a
+   slow build) — never yield to wait for background work with the verdict still
+   unwritten, or the step strands at `dispatched` and forces a wasteful re-run.
+   At dispatch, record the spawned agent-id on the step —
+   `run_record.record_spawned_agent(run, step, agent_id)` (U9) — so a later reap
+   can correlate a wedged `dispatched` step to the exact agent(s) launched for it
+   (the spawns otherwise live outside the run-record and are invisible to reconcile).
 4. YIELD for verdicts — end the turn — AND arm ONE watchdog-heartbeat
    `ScheduleWakeup(watchdog_wakeup_delay(run_record), "/auto:auto-pulse <run>")`
    at dispatch. This single long wakeup (~the soonest in-flight stall
@@ -387,10 +410,10 @@ Each pulse, on a `rearm` intent in the work phase:
    step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
    two-handoff constraints — question routing, destructive-action avoidance,
    self-termination on no-progress); and the instruction to **self-write its
-   verdict on completion** via `bash lib/run_record.py record-verdict <run> <step>
+   verdict on completion** via `bash lib/run_record.sh record-verdict <run> <step>
    '<json-findings>' <attempt>`.
    - **FIRST line of every phase sub-agent prompt (R21 — LOAD-BEARING SAFETY):**
-     `bash lib/run_record.py register-session <run>`. A dispatched sub-agent carries
+     `bash lib/run_record.sh register-session <run>`. A dispatched sub-agent carries
      its OWN `session_id`, so until it registers into the run's ownership set the
      destructive-command backstop and the advisor gate are DARK for it —
      including the `fix` phase, which writes code and runs Bash. Registration MUST
@@ -400,7 +423,7 @@ Each pulse, on a `rearm` intent in the work phase:
      a sub-agent can only ever add ITSELF to the set (never a third party).
      Omitting this line silently reverts U8: the backstop never reaches the tree.
    - **Source the sub-agent's operating contract from the `describe` CLI verb**
-     — run `bash lib/run_record.py describe <run>` so the sub-agent gets the whole
+     — run `bash lib/run_record.sh describe <run>` so the sub-agent gets the whole
      operating surface AND this run's phase model (phase_order + current-phase
      next-action) in one read, NOT a `SKILL.md` line-range citation. Hardcoding line
      ranges is the orientation tax this runtime removes (R6/R7); the run-scoped

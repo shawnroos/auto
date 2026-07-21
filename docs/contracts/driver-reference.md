@@ -1105,7 +1105,7 @@ untouched by U5.
 ### Convergence reads the RUN_RECORD, never sub-agent return text
 
 Each dispatched sub-agent self-writes its verdict via
-`bash lib/run_record.py record-verdict <run> <step> '<findings>' <attempt>` — the I-1
+`bash lib/run_record.sh record-verdict <run> <step> '<findings>' <attempt>` — the I-1
 atomic write chokepoint — on completion. The verdict is durable the moment that
 (separate) process writes it, independent of whether the boss turn that
 dispatched it is still alive. `dispatcher.converge` is a pure READER (§7): a

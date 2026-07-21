@@ -50,7 +50,9 @@ shapes and per-verb rejection modes. In brief:
 - **State change**: `transition` (grammar-checked step state change — rejects any
   edge not in `ALLOWED_TRANSITIONS`; will not write findings, use `record-verdict`).
 - **Verdict feedback**: `record-verdict` (rejects a stale-attempt verdict),
-  `set-gaps-open`, `set-enumerated-steps`, `set-verdict-decision`.
+  `set-gaps-open`, `set-enumerated-steps`, `set-verdict-decision`,
+  `record-spawned-agent` (append a spawned agent-id to a step so a died agent is
+  auditable against it for reap — U9).
 - **Steering** (reshape a live run): `init` (create a run — rejects an existing
   run-id), `add-step` (rejects a duplicate id or an unknown dependency),
   `reshape-deps` (rejects a cycle), `force-skip` (requires a reason — R20; cannot

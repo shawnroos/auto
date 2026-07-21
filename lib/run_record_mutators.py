@@ -503,6 +503,35 @@ def set_enumerated_steps(repo_root, run_id, step_id, enumerated):
     return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
 
 
+def record_spawned_agent(repo_root, run_id, step_id, agent_id):
+    """Append a spawned agent-id to a step's ``spawned_agent_ids`` (U9 / finding #8).
+
+    The loop has no awareness of the boss's ``Agent`` spawns — they live outside
+    the run-record — so a died/zombie sub-agent is invisible to reap/reconcile.
+    Recording the agent-id the driver spawned for this step (at dispatch) makes
+    cleanup auditable against the run-record: a reaper can correlate a wedged
+    ``dispatched`` step to the exact agent(s) that were launched for it.
+
+    APPEND, not replace: a re-dispatch (retry, a new attempt) spawns a fresh
+    agent, and keeping the full history is the audit value — the reap sequence
+    (TaskStop → SIGTERM → ``ps``-verify, SKILL.md §4) may need to chase a prior
+    attempt's agent too. Duplicate ids are collapsed (idempotent re-record of the
+    same spawn). Raises if the step doesn't exist. Atomic (I-1 flock); the
+    predicate recompute is a no-op — no step state changes.
+    """
+    if not agent_id:
+        raise run_record_core.RunRecordError("agent_id must be non-empty")
+
+    def mutate(run_record):
+        step = run_record_core._find_step(run_record, step_id)
+        ids = step.setdefault("spawned_agent_ids", [])
+        if agent_id not in ids:
+            ids.append(agent_id)
+        return list(ids)
+
+    return run_record_core._with_locked_run_record(repo_root, run_id, mutate)
+
+
 def set_winner_step_id(repo_root, run_id, judge_step_id, winner_id):
     """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_step_id``
     (v0.2.0 round-2 P0 fix — fix-pass I).
